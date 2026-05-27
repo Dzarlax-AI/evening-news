@@ -831,8 +831,39 @@ window.refreshArticle = async function() {
         alert('Ошибка: ID статьи не найден');
         return;
     }
+
+    if (window.adminAccessVerified === false) {
+        updateAdminAccessIndicator();
+        alert('Обновление статьи доступно только после входа в админ-режим');
+        window.location.href = '/admin/';
+        return;
+    }
+
+    try {
+        const adminResponse = await fetch('/api/public/admin-check', {
+            credentials: 'include',
+            cache: 'no-cache'
+        });
+        const adminData = adminResponse.ok ? await adminResponse.json() : { admin: false };
+        if (!adminData.admin) {
+            window.adminAccessVerified = false;
+            updateAdminAccessIndicator();
+            alert('Админ-сессия не активна. Сначала войдите в админ-режим.');
+            window.location.href = '/admin/';
+            return;
+        }
+    } catch (error) {
+        window.adminAccessVerified = false;
+        updateAdminAccessIndicator();
+        alert('Не удалось проверить админ-доступ. Сначала войдите в админ-режим.');
+        window.location.href = '/admin/';
+        return;
+    }
     
     const refreshBtn = document.getElementById('modalRefreshBtn');
+    if (!refreshBtn) {
+        return;
+    }
     const originalText = refreshBtn.innerHTML;
     
     try {
@@ -843,7 +874,7 @@ window.refreshArticle = async function() {
         console.log('Refreshing article:', currentArticleId);
         
         // Call reprocess API with content refetch
-        const response = await fetch(`/api/v1/articles/${currentArticleId}/reprocess`, {
+        const response = await fetch(`/api/public/article/${currentArticleId}/reprocess`, {
             method: 'POST',
             headers: {
                 'Content-Type': 'application/json'

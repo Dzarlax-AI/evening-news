@@ -1,12 +1,15 @@
 """Shared browser pool — connects to a remote Chrome instance via CDP (nodriver)."""
 
 import asyncio
+import json
 import logging
 import os
+import urllib.parse
+import urllib.request
 from typing import Optional
 
 import nodriver as uc
-from nodriver.core.browser import Browser
+from nodriver.core.browser import Browser, HTTPApi
 
 logger = logging.getLogger(__name__)
 
@@ -18,6 +21,37 @@ _lock = asyncio.Lock()
 # Opening multiple tabs concurrently overwhelms both, causing CDP commands
 # (including tab.close()) to hang indefinitely.
 _tab_semaphore = asyncio.Semaphore(1)
+
+
+async def _httpapi_request_uppercase_method(self, endpoint, method: str = "get", data: dict = None):
+    """Patch nodriver HTTPApi for strict CDP proxies such as CloakBrowser.
+
+    nodriver 0.38 sends lowercase HTTP methods ("get"/"post"). Chrome accepts
+    that, but aiohttp-based CDP multiplexers reject it before routing.
+    """
+    url = urllib.parse.urljoin(
+        self.api,
+        f"json/{endpoint}" if endpoint else "/json",
+    )
+    if data and method.lower() == "get":
+        raise ValueError("get requests cannot contain data")
+
+    request = urllib.request.Request(url)
+    request.method = method.upper()
+    request.data = json.dumps(data).encode("utf-8") if data else None
+
+    def _open_and_read():
+        with urllib.request.urlopen(request, timeout=10) as response:
+            return response.read()
+
+    body = await asyncio.get_running_loop().run_in_executor(
+        None,
+        _open_and_read,
+    )
+    return json.loads(body)
+
+
+HTTPApi._request = _httpapi_request_uppercase_method
 
 
 async def get_browser() -> uc.Browser:

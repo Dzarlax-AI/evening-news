@@ -1,0 +1,3052 @@
+/* dzarlax.dev Design System — Color Tokens */
+/* Generated from tokens/tokens.json by bin/gen-tokens.py — do not hand-edit. */
+
+:root {
+    /* Brand core */
+    --brand-dark: #2B2B2B;
+    --brand-light: #F5F0E8;
+
+    /* Backgrounds */
+    --bg: #FCFAF7;
+    --surface: #FFFFFF;
+    --surface-2: #E8E6E3;
+    --surface-3: #DCDAD7;
+
+    /* Text */
+    --text: #1A1A1E;
+    --text-secondary: rgba(26, 26, 30, 0.7);
+    --text-tertiary: rgba(26, 26, 30, 0.5);
+
+    /* Accent */
+    --accent: #18181B;
+    --accent-hover: #25282D;
+    --accent-foreground: #FFFFFF;
+
+    /* Borders */
+    --border: rgba(0, 0, 0, 0.08);
+    --border-hover: rgba(0, 0, 0, 0.12);
+    --border-light: rgba(26, 26, 30, 0.04);
+
+    /* Status */
+    --good: #16a34a;
+    --good-bg: #f0fdf4;
+    --warn: #d97706;
+    --warn-bg: #fffbeb;
+    --danger: #dc2626;
+    --danger-bg: #fef2f2;
+
+    /* Category (for dashboards) */
+    --heart: #e11d48;
+    --activity: #059669;
+    --sleep: #7c3aed;
+    --cardio: #0284c7;
+}
+/* dzarlax.dev Design System — Typography Tokens */
+
+:root {
+    --font: -apple-system, BlinkMacSystemFont, "SF Pro Display", "SF Pro Text", system-ui, sans-serif;
+    --font-serif: Georgia, 'Times New Roman', serif;
+    --font-mono: "SF Mono", "Fira Code", "Fira Mono", "Roboto Mono", monospace;
+
+    --text-xs:   0.75rem;  /* 12px */
+    --text-sm:   0.875rem; /* 14px */
+    --text-base: 1rem;     /* 16px */
+    --text-lg:   1.125rem; /* 18px */
+    --text-xl:   1.25rem;  /* 20px */
+    --text-2xl:  1.5rem;   /* 24px */
+    --text-3xl:  1.875rem; /* 30px */
+    --text-4xl:  2.25rem;  /* 36px */
+    --text-5xl:  3rem;     /* 48px */
+
+    --leading-tight: 1.3;
+    --leading-normal: 1.5;
+    --leading-relaxed: 1.6;
+
+    --tracking-tight: -0.3px;
+    --tracking-normal: 0;
+    --tracking-wide: 0.5px;
+    --tracking-caps: 1px;
+}
+/* dzarlax.dev Design System — Spacing & Radius Tokens */
+/* Note: shadow tokens live in tokens/shadows.css (generated from tokens.json). */
+
+:root {
+    /* Border radius */
+    --radius-xs: 2px;
+    --radius-sm: 4px;
+    --radius: 8px;
+    --radius-lg: 12px;
+    --radius-full: 9999px;
+
+    /* Transition */
+    --transition: 0.18s ease;
+
+    /* Navbar */
+    --navbar-height: 56px;
+
+    /* Container widths */
+    --container-sm: 720px;
+    --container-md: 960px;
+    --container-lg: 1200px;
+    --container-xl: 1400px;
+}
+/* dzarlax.dev Design System — Shadow Tokens (light) */
+/* Generated from tokens/tokens.json by bin/gen-tokens.py — do not hand-edit. */
+/* Dark-mode overrides live in themes/dark.css. */
+
+:root {
+    --shadow-sm: 0 1px 2px 0 rgba(0, 0, 0, 0.04);
+    --shadow: 0 4px 6px -1px rgba(0, 0, 0, 0.07);
+    --shadow-lg: 0 8px 30px rgba(0, 0, 0, 0.08);
+    --shadow-xl: 0 20px 25px -5px rgba(0, 0, 0, 0.08);
+}
+/* dzarlax.dev Design System — Dark Theme */
+/* Generated from tokens/tokens.json by bin/gen-tokens.py — do not hand-edit. */
+
+/* Explicit dark mode (via HTML attribute) */
+[dark-mode] {
+    /* Backgrounds */
+    --bg: #1A1D21;
+    --surface: #22252A;
+    --surface-2: #2A2D32;
+    --surface-3: #33363B;
+
+    /* Text */
+    --text: #F5F5F5;
+    --text-secondary: rgba(245, 245, 245, 0.7);
+    --text-tertiary: rgba(245, 245, 245, 0.5);
+
+    /* Accent (inverted) */
+    --accent: #F5F5F5;
+    --accent-hover: #E0E0E0;
+    --accent-foreground: #1A1A1E;
+
+    /* Borders */
+    --border: rgba(255, 255, 255, 0.08);
+    --border-hover: rgba(255, 255, 255, 0.12);
+    --border-light: rgba(255, 255, 255, 0.05);
+
+    /* Shadows (deeper for dark) */
+    --shadow-sm: 0 1px 2px 0 rgba(0, 0, 0, 0.15);
+    --shadow: 0 4px 6px -1px rgba(0, 0, 0, 0.3);
+    --shadow-lg: 0 8px 30px rgba(0, 0, 0, 0.4);
+    --shadow-xl: 0 20px 25px -5px rgba(0, 0, 0, 0.4);
+
+    /* Status — foregrounds brightened, bgs muted */
+    --good: #22c55e;
+    --good-bg: rgba(22, 163, 74, 0.15);
+    --warn: #f59e0b;
+    --warn-bg: rgba(217, 119, 6, 0.15);
+    --danger: #ef4444;
+    --danger-bg: rgba(220, 38, 38, 0.15);
+
+    /* Category (brightened for dark) */
+    --heart: #fb7185;
+    --activity: #34d399;
+    --sleep: #a78bfa;
+    --cardio: #38bdf8;
+}
+
+/* System preference fallback (respects OS dark mode when no explicit choice) */
+@media (prefers-color-scheme: dark) {
+    :root:not([light-mode]) {
+        /* Backgrounds */
+        --bg: #1A1D21;
+        --surface: #22252A;
+        --surface-2: #2A2D32;
+        --surface-3: #33363B;
+
+        /* Text */
+        --text: #F5F5F5;
+        --text-secondary: rgba(245, 245, 245, 0.7);
+        --text-tertiary: rgba(245, 245, 245, 0.5);
+
+        /* Accent (inverted) */
+        --accent: #F5F5F5;
+        --accent-hover: #E0E0E0;
+        --accent-foreground: #1A1A1E;
+
+        /* Borders */
+        --border: rgba(255, 255, 255, 0.08);
+        --border-hover: rgba(255, 255, 255, 0.12);
+        --border-light: rgba(255, 255, 255, 0.05);
+
+        /* Shadows (deeper for dark) */
+        --shadow-sm: 0 1px 2px 0 rgba(0, 0, 0, 0.15);
+        --shadow: 0 4px 6px -1px rgba(0, 0, 0, 0.3);
+        --shadow-lg: 0 8px 30px rgba(0, 0, 0, 0.4);
+        --shadow-xl: 0 20px 25px -5px rgba(0, 0, 0, 0.4);
+
+        /* Status — foregrounds brightened, bgs muted */
+        --good: #22c55e;
+        --good-bg: rgba(22, 163, 74, 0.15);
+        --warn: #f59e0b;
+        --warn-bg: rgba(217, 119, 6, 0.15);
+        --danger: #ef4444;
+        --danger-bg: rgba(220, 38, 38, 0.15);
+
+        /* Category (brightened for dark) */
+        --heart: #fb7185;
+        --activity: #34d399;
+        --sleep: #a78bfa;
+        --cardio: #38bdf8;
+    }
+}
+/* dzarlax.dev Design System — Reset */
+
+*, *::before, *::after {
+    box-sizing: border-box;
+    margin: 0;
+    padding: 0;
+}
+
+html {
+    font-size: 16px;
+    line-height: var(--leading-relaxed);
+    -webkit-font-smoothing: antialiased;
+    -moz-osx-font-smoothing: grayscale;
+    -webkit-text-size-adjust: 100%;
+}
+
+body {
+    font-family: var(--font);
+    background: var(--bg);
+    color: var(--text);
+    min-height: 100vh;
+}
+
+img, picture, video, canvas, svg {
+    display: block;
+    max-width: 100%;
+}
+
+input, button, textarea, select {
+    font: inherit;
+    color: inherit;
+}
+
+a {
+    color: inherit;
+}
+
+table {
+    border-collapse: collapse;
+}
+
+/* The browser's UA rule `[hidden] { display: none }` is not `!important` and
+   loses to any component rule that sets `display` — e.g. `.btn { display:
+   inline-flex }`. Toggling the `hidden` HTML attribute on a styled element
+   would then have no visible effect. Forcing `!important` here restores the
+   expected semantics. */
+[hidden] { display: none !important; }
+
+/* Inputs must render at ≥16px to stop iOS Safari from auto-zooming the page
+   on focus. `max(16px, 1rem)` keeps the 16px floor while still scaling up
+   if the user has bumped the browser's base font size for accessibility. */
+input, select, textarea {
+    font-size: max(16px, 1rem);
+}
+/* dzarlax.dev Design System — Base Typography */
+
+h1, h2, h3 {
+    font-family: var(--font-serif);
+    font-weight: 700;
+    letter-spacing: var(--tracking-tight);
+    line-height: var(--leading-tight);
+}
+
+h1 {
+    font-size: var(--text-4xl);
+}
+
+h2 {
+    font-size: var(--text-3xl);
+}
+
+h3 {
+    font-size: var(--text-2xl);
+}
+
+h4 {
+    font-size: var(--text-xl);
+}
+
+h5 {
+    font-size: var(--text-lg);
+}
+
+h6 {
+    font-size: var(--text-base);
+}
+
+p {
+    line-height: var(--leading-relaxed);
+}
+
+small {
+    font-size: var(--text-xs);
+}
+
+code, pre {
+    font-family: var(--font-mono);
+    font-size: 0.9em;
+}
+
+pre {
+    background: var(--surface);
+    border: 1px solid var(--border);
+    border-radius: var(--radius);
+    padding: 16px;
+    overflow-x: auto;
+}
+
+.label {
+    display: block;
+    font-weight: 500;
+    font-size: var(--text-sm);
+    color: var(--text-secondary);
+    text-transform: uppercase;
+    letter-spacing: var(--tracking-wide);
+}
+
+.text-secondary {
+    color: var(--text-secondary);
+}
+
+.text-tertiary {
+    color: var(--text-tertiary);
+}
+
+.text-serif {
+    font-family: var(--font-serif);
+}
+/* dzarlax.dev Design System — Layout */
+
+.container {
+    max-width: var(--container-sm);
+    margin: 0 auto;
+    padding: 0 24px;
+}
+
+.container--md {
+    max-width: var(--container-md);
+}
+
+.container--lg {
+    max-width: var(--container-lg);
+}
+
+.container--xl {
+    max-width: var(--container-xl);
+}
+
+/* Section spacing */
+
+.section {
+    padding: 32px 0;
+}
+
+.section + .section {
+    border-top: 1px solid var(--border);
+}
+
+/* Responsive */
+
+@media (max-width: 768px) {
+    .container,
+    .container--md,
+    .container--lg,
+    .container--xl {
+        padding: 0 16px;
+        max-width: 100%;
+    }
+}
+/* dzarlax.dev Design System — Utilities */
+
+/* ── Scroll progress bar ── */
+
+.scroll-progress {
+    position: fixed;
+    top: 0;
+    left: 0;
+    width: 0%;
+    height: 3px;
+    background: var(--accent);
+    z-index: 9999;
+    transition: width 0.1s linear;
+    pointer-events: none;
+}
+
+/* ── Scroll-to-top button ── */
+
+.scroll-top {
+    position: fixed;
+    bottom: 32px;
+    right: 32px;
+    width: 44px;
+    height: 44px;
+    background: var(--accent);
+    color: var(--bg);
+    border: none;
+    border-radius: 50%;
+    cursor: pointer;
+    box-shadow: var(--shadow);
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    font-size: 1.1rem;
+    opacity: 0;
+    visibility: hidden;
+    transform: translateY(20px) scale(0.8);
+    transition: all var(--transition);
+    z-index: 99;
+    pointer-events: none;
+}
+
+.scroll-top.visible {
+    opacity: 1;
+    visibility: visible;
+    transform: none;
+    pointer-events: auto;
+}
+
+.scroll-top:hover {
+    background: var(--accent-hover);
+    box-shadow: var(--shadow-lg);
+}
+
+/* ── Skeleton loader ── */
+
+.skeleton {
+    background: linear-gradient(
+        90deg,
+        var(--surface-2) 0%,
+        var(--border) 50%,
+        var(--surface-2) 100%
+    );
+    background-size: 200% 100%;
+    animation: ds-skeleton 1.5s ease-in-out infinite;
+    border-radius: var(--radius-sm);
+}
+
+.skeleton--text {
+    height: 16px;
+    width: 100%;
+    margin-bottom: 8px;
+}
+
+.skeleton--text:last-child { width: 75%; }
+
+.skeleton--title {
+    height: 24px;
+    width: 65%;
+    margin-bottom: 16px;
+}
+
+.skeleton--button {
+    height: 38px;
+    width: 120px;
+}
+
+.skeleton--avatar {
+    width: 48px;
+    height: 48px;
+    border-radius: 50%;
+    flex-shrink: 0;
+}
+
+/* ── Reveal on scroll ── */
+
+.reveal {
+    opacity: 0;
+    transform: translateY(16px);
+    transition: opacity 0.6s ease, transform 0.6s ease;
+}
+
+.reveal.visible {
+    opacity: 1;
+    transform: none;
+}
+
+/* ── Stagger children ── */
+/* Usage: add class="stagger" to container; CSS var --i sets per-child delay  */
+
+.stagger > * {
+    opacity: 0;
+    animation: ds-stagger-in 0.5s ease forwards;
+    animation-delay: calc(var(--i, 0) * 0.08s);
+}
+
+/* ── Language switcher button group ── */
+
+.lang-switcher {
+    display: flex;
+    gap: 4px;
+    align-items: center;
+}
+
+.lang-btn {
+    background: transparent;
+    border: none;
+    cursor: pointer;
+    padding: 4px 8px;
+    border-radius: var(--radius-sm);
+    font-size: var(--text-base);
+    color: var(--text-secondary);
+    line-height: 1;
+    transition: all var(--transition);
+}
+
+.lang-btn:hover,
+.lang-btn.active {
+    background: var(--surface-2);
+    color: var(--text);
+}
+
+/* ── Popover ── */
+
+.popover {
+    position: absolute;
+    background: var(--surface);
+    border: 1px solid var(--border);
+    border-radius: var(--radius);
+    padding: 14px 16px;
+    box-shadow: var(--shadow-lg);
+    max-width: 280px;
+    z-index: 200;
+    font-size: var(--text-sm);
+    line-height: var(--leading-normal);
+    animation: ds-fade-in 0.18s ease;
+}
+
+/* ── Skip navigation (accessibility) ── */
+
+.skip-nav {
+    position: fixed;
+    top: -100px;
+    left: 6px;
+    background: var(--accent);
+    color: var(--bg);
+    padding: 8px 16px;
+    border-radius: var(--radius-sm);
+    text-decoration: none;
+    font-weight: 600;
+    z-index: 10000;
+    transition: top 0.2s ease;
+}
+
+.skip-nav:focus {
+    top: 6px;
+}
+
+/* ── Keyframes ── */
+
+@keyframes ds-skeleton {
+    0%   { background-position: 200% 0; }
+    100% { background-position: -200% 0; }
+}
+
+@keyframes ds-stagger-in {
+    to { opacity: 1; }
+}
+
+@keyframes ds-fade-in {
+    from { opacity: 0; transform: translateY(4px); }
+    to   { opacity: 1; transform: none; }
+}
+
+@keyframes ds-fade-in-up {
+    from { opacity: 0; transform: translateY(20px); }
+    to   { opacity: 1; transform: none; }
+}
+
+/* ── Reduced motion ── */
+
+@media (prefers-reduced-motion: reduce) {
+    .reveal,
+    .stagger > * {
+        animation: none !important;
+        opacity: 1 !important;
+        transform: none !important;
+        transition-duration: 0.01ms !important;
+    }
+
+    .skeleton {
+        animation: none !important;
+    }
+}
+/* dzarlax.dev Design System — Buttons */
+
+.btn {
+    display: inline-flex;
+    align-items: center;
+    justify-content: center;
+    gap: 8px;
+    padding: 10px 20px;
+    border-radius: var(--radius-sm);
+    border: none;
+    font-family: var(--font);
+    font-size: var(--text-base);
+    font-weight: 500;
+    cursor: pointer;
+    transition: all var(--transition);
+    text-decoration: none;
+    line-height: 1;
+}
+
+.btn:disabled {
+    opacity: 0.4;
+    cursor: not-allowed;
+    pointer-events: none;
+}
+
+/* Variants */
+
+.btn--primary {
+    background: var(--accent);
+    color: var(--bg);
+}
+
+.btn--primary:hover {
+    background: var(--accent-hover);
+}
+
+.btn--secondary {
+    background: var(--surface-2);
+    color: var(--text);
+}
+
+.btn--secondary:hover {
+    background: var(--border);
+}
+
+.btn--ghost {
+    background: transparent;
+    color: var(--text-secondary);
+}
+
+.btn--ghost:hover {
+    background: var(--surface-2);
+    color: var(--text);
+}
+
+.btn--danger {
+    background: var(--danger);
+    color: #fff;
+}
+
+.btn--danger:hover {
+    opacity: 0.9;
+}
+
+.btn--success {
+    background: var(--good);
+    color: #fff;
+}
+
+.btn--success:hover {
+    opacity: 0.9;
+}
+
+.btn--warning {
+    background: var(--warn);
+    color: #fff;
+}
+
+.btn--warning:hover {
+    opacity: 0.9;
+}
+
+/* Loading state */
+
+.btn--loading {
+    position: relative;
+    color: transparent !important;
+    pointer-events: none;
+}
+
+.btn--loading::after {
+    content: '';
+    position: absolute;
+    top: 50%;
+    left: 50%;
+    transform: translate(-50%, -50%);
+    width: 14px;
+    height: 14px;
+    border: 2px solid transparent;
+    border-top-color: currentColor;
+    border-radius: 50%;
+    animation: ds-btn-spin 0.7s linear infinite;
+    color: #fff;
+}
+
+@keyframes ds-btn-spin {
+    to { transform: translate(-50%, -50%) rotate(360deg); }
+}
+
+/* Sizes */
+
+.btn--small {
+    padding: 6px 12px;
+    font-size: var(--text-xs);
+}
+
+.btn--large {
+    padding: 14px 28px;
+    font-size: var(--text-lg);
+}
+
+.btn--block {
+    width: 100%;
+}
+
+/* Icon-only button */
+
+.btn--icon {
+    width: 36px;
+    height: 36px;
+    padding: 0;
+    border-radius: 50%;
+}
+
+@media (max-width: 768px) {
+    .btn--small {
+        padding: 4px 8px;
+        font-size: 0.75rem;
+    }
+}
+/* dzarlax.dev Design System — Cards */
+
+.card {
+    background: var(--surface);
+    border: 1px solid var(--border);
+    border-radius: var(--radius);
+    padding: 24px;
+    box-shadow: var(--shadow);
+    transition: transform var(--transition), box-shadow var(--transition);
+}
+
+.card--hover:hover {
+    transform: translateY(-2px);
+    box-shadow: var(--shadow-lg);
+}
+
+/* ── Editorial card (portfolio / blog post preview) ─────────────────
+   Subtle inset border + pronounced hover lift. Pairs well with a serif
+   .card__title and a small caps .card__eyebrow above it. */
+
+.card--editorial {
+    box-shadow:
+        inset 0 0 0 1px rgba(0, 0, 0, 0.05),
+        var(--shadow);
+    border: none;
+    transition: transform var(--transition), box-shadow var(--transition);
+}
+
+.card--editorial:hover {
+    box-shadow:
+        inset 0 0 0 1px rgba(0, 0, 0, 0.1),
+        var(--shadow-lg);
+    transform: translateY(-2px);
+}
+
+[dark-mode] .card--editorial {
+    box-shadow:
+        inset 0 0 0 1px rgba(255, 255, 255, 0.06),
+        var(--shadow);
+}
+[dark-mode] .card--editorial:hover {
+    box-shadow:
+        inset 0 0 0 1px rgba(255, 255, 255, 0.12),
+        var(--shadow-lg);
+}
+
+@media (prefers-color-scheme: dark) {
+    :root:not([light-mode]) .card--editorial {
+        box-shadow:
+            inset 0 0 0 1px rgba(255, 255, 255, 0.06),
+            var(--shadow);
+    }
+    :root:not([light-mode]) .card--editorial:hover {
+        box-shadow:
+            inset 0 0 0 1px rgba(255, 255, 255, 0.12),
+            var(--shadow-lg);
+    }
+}
+
+/* Clickable card variant — when the whole card is wrapped in <a>. */
+
+a.card,
+.card--link {
+    color: inherit;
+    text-decoration: none;
+    display: block;
+}
+
+a.card:hover,
+.card--link:hover { color: inherit; }
+
+/* Eyebrow — small caps label above the card title (category, topic). */
+
+.card__eyebrow {
+    font-size: var(--text-xs);
+    text-transform: uppercase;
+    letter-spacing: var(--tracking-caps);
+    color: var(--text-tertiary);
+    margin: 0 0 8px;
+}
+
+.card__title {
+    font-size: var(--text-lg);
+    font-weight: 600;
+    margin-bottom: 6px;
+}
+
+.card__description {
+    color: var(--text-secondary);
+    font-size: var(--text-base);
+    line-height: var(--leading-normal);
+    margin-bottom: 12px;
+}
+
+.card__meta {
+    display: flex;
+    gap: 16px;
+    color: var(--text-tertiary);
+    font-size: var(--text-xs);
+    text-transform: uppercase;
+    letter-spacing: var(--tracking-caps);
+}
+
+.card__footer {
+    margin-top: 16px;
+    padding-top: 16px;
+    border-top: 1px solid var(--border);
+}
+
+/* Grid */
+
+.card-grid {
+    display: grid;
+    gap: 16px;
+}
+
+.card-grid--2 {
+    grid-template-columns: repeat(2, 1fr);
+}
+
+.card-grid--3 {
+    grid-template-columns: repeat(3, 1fr);
+}
+
+.card-grid--auto {
+    grid-template-columns: repeat(auto-fill, minmax(280px, 1fr));
+}
+
+@media (max-width: 768px) {
+    .card-grid--2,
+    .card-grid--3 {
+        grid-template-columns: 1fr;
+    }
+}
+
+/* ── Project card (with tags + link) ── */
+
+.card--project {
+    display: flex;
+    flex-direction: column;
+    height: 100%;
+}
+
+.card__tags {
+    display: flex;
+    flex-wrap: wrap;
+    gap: 8px;
+    margin-bottom: 16px;
+}
+
+.card__tag {
+    background: rgba(0, 0, 0, 0.06);
+    color: var(--text-secondary);
+    padding: 3px 10px;
+    border-radius: var(--radius-sm);
+    font-size: var(--text-xs);
+    font-weight: 600;
+}
+
+[dark-mode] .card__tag {
+    background: rgba(255, 255, 255, 0.1);
+}
+
+@media (prefers-color-scheme: dark) {
+    :root:not([light-mode]) .card__tag {
+        background: rgba(255, 255, 255, 0.1);
+    }
+}
+
+.card__link {
+    margin-top: auto;
+    padding-top: 12px;
+    display: inline-flex;
+    align-items: center;
+    gap: 6px;
+    color: var(--text);
+    font-weight: 500;
+    font-size: var(--text-sm);
+    text-decoration: none;
+    transition: all var(--transition);
+}
+
+.card__link:hover {
+    color: var(--text-secondary);
+    gap: 10px;
+}
+
+/* ── Icon card (education / achievement) ── */
+
+.card--icon {
+    display: flex;
+    gap: 20px;
+    align-items: flex-start;
+}
+
+.card__icon {
+    flex-shrink: 0;
+    width: 52px;
+    height: 52px;
+    background: var(--accent);
+    color: var(--bg);
+    border-radius: var(--radius);
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    font-size: 1.25rem;
+    transition: transform var(--transition);
+}
+
+.card--icon:hover .card__icon {
+    transform: scale(1.05);
+}
+
+.card__icon--soft {
+    background: var(--surface-2);
+    color: var(--text);
+    font-size: 1.5rem;
+    width: 72px;
+    height: 72px;
+    border-radius: var(--radius);
+}
+
+.card__body {
+    flex: 1;
+    min-width: 0;
+}
+/* dzarlax.dev Design System — Forms */
+
+.form-group {
+    margin-bottom: 16px;
+}
+
+.form-group label {
+    display: block;
+    font-weight: 500;
+    font-size: var(--text-sm);
+    margin-bottom: 6px;
+    color: var(--text-secondary);
+    text-transform: uppercase;
+    letter-spacing: var(--tracking-wide);
+}
+
+.form-group input,
+.form-group select,
+.form-group textarea {
+    width: 100%;
+    padding: 10px 14px;
+    border: 1px solid var(--border);
+    border-radius: var(--radius-sm);
+    background: var(--surface);
+    color: var(--text);
+    font-family: var(--font);
+    font-size: var(--text-base);
+    transition: border-color var(--transition);
+}
+
+.form-group input:focus-visible,
+.form-group select:focus-visible,
+.form-group textarea:focus-visible {
+    outline: none;
+    border-color: var(--accent);
+}
+
+.form-group input::placeholder,
+.form-group textarea::placeholder {
+    color: var(--text-tertiary);
+}
+
+.form-group textarea {
+    resize: vertical;
+    min-height: 80px;
+}
+
+.form-row {
+    display: grid;
+    grid-template-columns: 1fr 1fr;
+    gap: 16px;
+}
+
+/* Standalone field classes (without .form-group wrapper) */
+
+.form-label {
+    display: block;
+    font-weight: 500;
+    font-size: var(--text-sm);
+    margin-bottom: 6px;
+    color: var(--text-secondary);
+    text-transform: uppercase;
+    letter-spacing: var(--tracking-wide);
+}
+
+.form-input,
+.form-select {
+    width: 100%;
+    padding: 10px 14px;
+    border: 1px solid var(--border);
+    border-radius: var(--radius-sm);
+    background: var(--surface);
+    color: var(--text);
+    font-family: var(--font);
+    font-size: var(--text-base);
+    transition: border-color var(--transition);
+}
+
+.form-input:focus-visible,
+.form-select:focus-visible {
+    outline: none;
+    border-color: var(--accent);
+}
+
+.form-input::placeholder {
+    color: var(--text-tertiary);
+}
+
+.form-hint {
+    font-size: var(--text-xs);
+    color: var(--text-tertiary);
+    margin-top: 4px;
+}
+
+.form-error {
+    font-size: var(--text-xs);
+    color: var(--danger);
+    margin-top: 4px;
+}
+
+/* Checkbox / radio row */
+
+.check-row {
+    display: flex;
+    align-items: center;
+    gap: 10px;
+    padding: 5px 0;
+    cursor: pointer;
+    font-size: var(--text-base);
+}
+
+.check-row input[type="checkbox"],
+.check-row input[type="radio"] {
+    width: auto;
+    min-width: auto;
+    max-width: none;
+    flex-shrink: 0;
+    cursor: pointer;
+    padding: 0;
+}
+
+@media (max-width: 768px) {
+    .form-row {
+        grid-template-columns: 1fr;
+    }
+}
+/* dzarlax.dev Design System — Combobox */
+
+.ds-combobox {
+    position: relative;
+    display: inline-block;
+    width: 100%;
+}
+
+.ds-combobox__input {
+    width: 100%;
+    padding: 10px 56px 10px 14px; /* room for clear + caret */
+    border: 1px solid var(--border);
+    border-radius: var(--radius-sm);
+    background: var(--surface);
+    color: var(--text);
+    font-family: var(--font);
+    font-size: var(--text-base);
+    cursor: pointer;
+    transition: border-color var(--transition), border-radius var(--transition);
+}
+
+.ds-combobox__input::placeholder {
+    color: var(--text-tertiary);
+}
+
+.ds-combobox__input:focus-visible {
+    outline: none;
+    border-color: var(--accent);
+}
+
+.ds-combobox--open .ds-combobox__input {
+    border-color: var(--accent);
+    border-bottom-left-radius: 0;
+    border-bottom-right-radius: 0;
+}
+
+/* ── Clear button ── */
+
+.ds-combobox__clear {
+    position: absolute;
+    right: 30px;
+    top: 50%;
+    transform: translateY(-50%);
+    background: none;
+    border: none;
+    cursor: pointer;
+    color: var(--text-tertiary);
+    font-size: 16px;
+    line-height: 1;
+    padding: 2px 4px;
+    display: none;
+    transition: color var(--transition);
+}
+
+.ds-combobox__clear:hover {
+    color: var(--text);
+}
+
+.ds-combobox--has-value .ds-combobox__clear {
+    display: block;
+}
+
+/* ── Caret arrow ── */
+
+.ds-combobox::after {
+    content: '';
+    position: absolute;
+    right: 13px;
+    top: 50%;
+    transform: translateY(-50%);
+    width: 0;
+    height: 0;
+    border-left: 4px solid transparent;
+    border-right: 4px solid transparent;
+    border-top: 5px solid var(--text-tertiary);
+    pointer-events: none;
+    transition: transform var(--transition);
+}
+
+.ds-combobox--open::after {
+    transform: translateY(-50%) rotate(180deg);
+}
+
+/* ── Menu ── */
+
+.ds-combobox__menu {
+    display: none;
+    position: absolute;
+    top: 100%;
+    left: 0;
+    right: 0;
+    z-index: 500;
+    background: var(--surface);
+    border: 1px solid var(--accent);
+    border-top: none;
+    border-bottom-left-radius: var(--radius-sm);
+    border-bottom-right-radius: var(--radius-sm);
+    max-height: 240px;
+    overflow-y: auto;
+    list-style: none;
+    padding: 4px 0;
+    margin: 0;
+    box-shadow: var(--shadow);
+    scrollbar-width: thin;
+    scrollbar-color: var(--border) transparent;
+}
+
+.ds-combobox--open .ds-combobox__menu {
+    display: block;
+}
+
+/* ── Items ── */
+
+.ds-combobox__item {
+    list-style: none;
+    padding: 9px 14px;
+    font-size: var(--text-base);
+    cursor: pointer;
+    transition: background var(--transition);
+    white-space: nowrap;
+    overflow: hidden;
+    text-overflow: ellipsis;
+}
+
+.ds-combobox__item:hover,
+.ds-combobox__item--active {
+    background: var(--surface-2);
+}
+
+.ds-combobox__item--selected {
+    color: var(--accent);
+    font-weight: 600;
+}
+
+.ds-combobox__item--selected::after {
+    content: ' ✓';
+    font-size: 0.8em;
+}
+
+.ds-combobox__empty {
+    padding: 9px 14px;
+    color: var(--text-tertiary);
+    font-size: var(--text-sm);
+    cursor: default;
+    font-style: italic;
+}
+/* dzarlax.dev Design System — Tables */
+
+.table-wrap {
+    overflow-x: auto;
+}
+
+table {
+    width: 100%;
+}
+
+th {
+    text-align: left;
+    padding: 10px 12px;
+    font-size: var(--text-xs);
+    text-transform: uppercase;
+    letter-spacing: var(--tracking-caps);
+    color: var(--text-tertiary);
+    border-bottom: 1px solid var(--border);
+}
+
+td {
+    padding: 12px;
+    border-bottom: 1px solid var(--border);
+    font-size: var(--text-base);
+}
+
+tr:hover {
+    background: var(--surface-2);
+}
+
+@media (max-width: 768px) {
+    table {
+        font-size: var(--text-xs);
+    }
+
+    th, td {
+        padding: 8px 6px;
+    }
+}
+/* dzarlax.dev Design System — Badges */
+
+.badge {
+    display: inline-block;
+    padding: 2px 10px;
+    border-radius: var(--radius-full);
+    font-size: var(--text-xs);
+    font-weight: 600;
+    text-transform: uppercase;
+    letter-spacing: var(--tracking-wide);
+}
+
+.badge--success {
+    background: var(--good-bg);
+    color: var(--good);
+}
+
+.badge--warning {
+    background: var(--warn-bg);
+    color: var(--warn);
+}
+
+.badge--danger {
+    background: var(--danger-bg);
+    color: var(--danger);
+}
+
+.badge--neutral {
+    background: var(--surface-2);
+    color: var(--text-secondary);
+}
+/* dzarlax.dev Design System — Navigation */
+
+/* Top navbar */
+
+.navbar {
+    background: var(--surface);
+    border-bottom: 1px solid var(--border);
+    backdrop-filter: blur(12px);
+    -webkit-backdrop-filter: blur(12px);
+    height: var(--navbar-height);
+    display: flex;
+    align-items: center;
+    padding: 0 24px;
+    position: sticky;
+    top: 0;
+    z-index: 100;
+}
+
+/* ── Floating pill nav ─────────────────────────────────────────────
+   Centered glassy pill at the top of the viewport. Use for marketing /
+   editorial pages where the navbar should feel decorative, not utility.
+   Goes on the same <nav> element as .navbar — `.navbar.navbar--pill`. */
+
+.navbar--pill {
+    position: fixed;
+    top: 16px;
+    left: 0;
+    right: 0;
+    margin: 0 auto;
+    width: fit-content;
+    max-width: calc(100% - 40px);
+    height: auto;
+    padding: 6px 16px;
+    background: rgba(255, 255, 255, 0.75);
+    border: 1px solid rgba(255, 255, 255, 0.6);
+    border-bottom: 1px solid rgba(255, 255, 255, 0.6);
+    border-radius: var(--radius-full);
+    backdrop-filter: blur(20px) saturate(180%);
+    -webkit-backdrop-filter: blur(20px) saturate(180%);
+    box-shadow: 0 8px 32px rgba(0, 0, 0, 0.12), 0 2px 8px rgba(0, 0, 0, 0.06);
+    transition: all var(--transition);
+}
+
+.navbar--pill:hover {
+    background: rgba(255, 255, 255, 0.85);
+    box-shadow: 0 12px 40px rgba(0, 0, 0, 0.15), 0 4px 12px rgba(0, 0, 0, 0.08);
+}
+
+[dark-mode] .navbar--pill {
+    background: rgba(22, 27, 34, 0.75);
+    border: 1px solid rgba(255, 255, 255, 0.15);
+    box-shadow: 0 8px 32px rgba(0, 0, 0, 0.5), 0 2px 8px rgba(0, 0, 0, 0.3);
+}
+[dark-mode] .navbar--pill:hover {
+    background: rgba(22, 27, 34, 0.85);
+}
+
+@media (prefers-color-scheme: dark) {
+    :root:not([light-mode]) .navbar--pill {
+        background: rgba(22, 27, 34, 0.75);
+        border: 1px solid rgba(255, 255, 255, 0.15);
+        box-shadow: 0 8px 32px rgba(0, 0, 0, 0.5), 0 2px 8px rgba(0, 0, 0, 0.3);
+    }
+    :root:not([light-mode]) .navbar--pill:hover {
+        background: rgba(22, 27, 34, 0.85);
+    }
+}
+
+.navbar--pill ul {
+    list-style: none;
+    display: flex;
+    gap: 4px;
+    margin: 0;
+    padding: 0;
+}
+
+.navbar--pill ul li a {
+    text-decoration: none;
+    color: var(--text);
+    font-weight: 500;
+    font-size: 1rem;
+    padding: 6px 12px;
+    border-radius: var(--radius-full);
+    transition: all 0.2s ease;
+    display: block;
+    border: none;
+    background: transparent;
+    cursor: pointer;
+}
+
+@media (hover: hover) {
+    .navbar--pill ul li a:hover {
+        color: var(--text);
+        background: var(--bg);
+    }
+}
+
+.navbar--pill ul li a.active {
+    color: var(--text);
+    background: var(--bg);
+}
+
+[dark-mode] .navbar--pill ul li a.active {
+    background: rgba(255, 255, 255, 0.1);
+}
+@media (hover: hover) {
+    [dark-mode] .navbar--pill ul li a:hover {
+        background: rgba(255, 255, 255, 0.1);
+    }
+}
+
+/* ── Mobile: turn the pill nav into a slide-out drawer ──────────────
+   On narrow viewports the floating pill collapses into a 280px-wide
+   side drawer triggered by `.active`. Pair with the `.hamburger` button
+   (defined below) — wire its click to toggle `.active` on the navbar. */
+
+@media (max-width: 768px) {
+    .navbar--pill {
+        position: fixed;
+        inset-block-start: 0;
+        inset-inline-start: -100%;
+        inset-inline-end: auto;
+        margin: 0;
+        inline-size: 280px;
+        max-inline-size: 80vw;
+        block-size: 100vh;
+        border-radius: 0;
+        padding-block: 80px 24px;
+        padding-inline: 16px;
+        background: var(--surface);
+        border: none;
+        box-shadow: 2px 0 20px rgba(0, 0, 0, 0.1);
+        backdrop-filter: none;
+        -webkit-backdrop-filter: none;
+        transition: inset-inline-start 0.3s ease;
+        visibility: hidden;
+        z-index: 999;
+    }
+
+    .navbar--pill.active {
+        inset-inline-start: 0;
+        visibility: visible;
+    }
+
+    .navbar--pill ul {
+        flex-direction: column;
+        gap: 0;
+        inline-size: 100%;
+    }
+
+    .navbar--pill ul li {
+        inline-size: 100%;
+    }
+
+    .navbar--pill ul li a {
+        display: block;
+        padding: 12px 16px;
+        inline-size: 100%;
+        border-radius: var(--radius);
+        font-size: 1rem;
+    }
+
+    /* Controls pill: tighter so it doesn't crowd the hamburger button. */
+    .navbar-controls {
+        inset-block-start: 10px;
+        inset-inline-end: 10px;
+        padding: 6px 10px;
+    }
+}
+
+/* Floating controls pill — companion to .navbar--pill, sits on the right
+   side of the viewport. Use for theme toggle / lang switcher. */
+
+.navbar-controls {
+    position: fixed;
+    top: 16px;
+    right: 20px;
+    z-index: 1000;
+    display: flex;
+    align-items: center;
+    gap: 8px;
+    padding: 6px 12px;
+    background: rgba(255, 255, 255, 0.75);
+    border: 1px solid rgba(255, 255, 255, 0.6);
+    border-radius: var(--radius-full);
+    backdrop-filter: blur(20px) saturate(180%);
+    -webkit-backdrop-filter: blur(20px) saturate(180%);
+    box-shadow: 0 8px 32px rgba(0, 0, 0, 0.12), 0 2px 8px rgba(0, 0, 0, 0.06);
+    transition: all var(--transition);
+}
+
+[dark-mode] .navbar-controls {
+    background: rgba(22, 27, 34, 0.75);
+    border: 1px solid rgba(255, 255, 255, 0.15);
+    box-shadow: 0 8px 32px rgba(0, 0, 0, 0.5), 0 2px 8px rgba(0, 0, 0, 0.3);
+}
+@media (prefers-color-scheme: dark) {
+    :root:not([light-mode]) .navbar-controls {
+        background: rgba(22, 27, 34, 0.75);
+        border: 1px solid rgba(255, 255, 255, 0.15);
+        box-shadow: 0 8px 32px rgba(0, 0, 0, 0.5), 0 2px 8px rgba(0, 0, 0, 0.3);
+    }
+}
+
+.navbar__brand {
+    display: flex;
+    align-items: center;
+    gap: 10px;
+    text-decoration: none;
+    font-family: var(--font-serif);
+    font-weight: 700;
+    font-size: var(--text-lg);
+    color: var(--text);
+}
+
+.navbar__brand img,
+.navbar__brand svg {
+    height: 28px;
+    width: auto;
+}
+
+.navbar__actions {
+    display: flex;
+    align-items: center;
+    gap: 8px;
+    margin-left: auto;
+}
+
+/* Tab navigation (admin panels) */
+
+.tab-nav {
+    display: flex;
+    gap: 4px;
+    margin-bottom: 32px;
+    border-bottom: 1px solid var(--border);
+    padding-bottom: 12px;
+}
+
+.tab-nav a {
+    padding: 8px 16px;
+    border-radius: var(--radius-sm);
+    text-decoration: none;
+    color: var(--text-secondary);
+    font-size: var(--text-base);
+    font-weight: 500;
+    transition: all var(--transition);
+}
+
+.tab-nav a:hover,
+.tab-nav a.active {
+    background: var(--surface-2);
+    color: var(--text);
+}
+
+@media (max-width: 768px) {
+    .tab-nav {
+        flex-wrap: wrap;
+    }
+
+    .tab-nav a {
+        font-size: var(--text-xs);
+        padding: 6px 10px;
+    }
+}
+
+/* ── Hamburger button ── */
+
+.hamburger {
+    display: none;
+    flex-direction: column;
+    gap: 5px;
+    background: transparent;
+    border: none;
+    cursor: pointer;
+    padding: 8px;
+    border-radius: var(--radius-sm);
+    transition: background var(--transition);
+    z-index: 101;
+}
+
+.hamburger:hover {
+    background: var(--surface-2);
+}
+
+.hamburger__line {
+    display: block;
+    width: 20px;
+    height: 2px;
+    background: var(--text);
+    border-radius: 2px;
+    transition: all var(--transition);
+}
+
+.hamburger.active .hamburger__line:nth-child(1) {
+    transform: rotate(45deg) translate(5px, 5px);
+}
+
+.hamburger.active .hamburger__line:nth-child(2) {
+    opacity: 0;
+}
+
+.hamburger.active .hamburger__line:nth-child(3) {
+    transform: rotate(-45deg) translate(5px, -5px);
+}
+
+/* ── Mobile nav drawer ── */
+
+.nav-drawer {
+    position: fixed;
+    top: 0;
+    left: -280px;
+    width: 280px;
+    height: 100vh;
+    background: var(--surface);
+    border-right: 1px solid var(--border);
+    box-shadow: var(--shadow-lg);
+    z-index: 100;
+    padding-top: var(--navbar-height);
+    transition: left 0.3s ease;
+    visibility: hidden;
+}
+
+.nav-drawer.active {
+    left: 0;
+    visibility: visible;
+}
+
+.nav-drawer__list {
+    list-style: none;
+    padding: 16px;
+}
+
+.nav-drawer__list a {
+    display: block;
+    padding: 12px 16px;
+    border-radius: var(--radius);
+    text-decoration: none;
+    color: var(--text-secondary);
+    font-size: var(--text-base);
+    font-weight: 500;
+    transition: all var(--transition);
+}
+
+.nav-drawer__list a:hover,
+.nav-drawer__list a.active {
+    background: var(--surface-2);
+    color: var(--text);
+}
+
+/* ── Menu overlay (backdrop) ── */
+
+.menu-overlay {
+    position: fixed;
+    inset: 0;
+    background: rgba(0, 0, 0, 0.4);
+    z-index: 98;
+    opacity: 0;
+    visibility: hidden;
+    pointer-events: none;
+    transition: opacity 0.3s ease, visibility 0.3s ease;
+}
+
+.menu-overlay.active {
+    opacity: 1;
+    visibility: visible;
+    pointer-events: auto;
+}
+
+@media (max-width: 768px) {
+    .hamburger {
+        display: flex;
+    }
+
+    .navbar__nav {
+        display: none;
+    }
+}
+/* v1.2.1: bump trigger — jsdelivr CDN cache-poisoned v1.2.0 on release race. */
+/* dzarlax.dev Design System — Theme toggle (switch track)
+ *
+ * 44×24 pill switch with a 18px circular thumb that slides on [dark-mode].
+ * Use for site-level light/dark theme toggles in headers / nav controls.
+ *
+ *   <button class="theme-toggle" aria-label="Toggle dark mode"></button>
+ *
+ * The toggle has no internal text — the visual is purely the track + thumb.
+ * Pair with a JS handler that flips [dark-mode]/[light-mode] on the root
+ * (see CLAUDE.md "Dark mode" section for the canonical two-attribute toggle).
+ */
+
+.theme-toggle {
+    position: relative;
+    inline-size: 44px;
+    block-size: 24px;
+    background: var(--border-hover);
+    border-radius: 12px;
+    border: none;
+    cursor: pointer;
+    padding: 4px;
+    transition: background var(--transition), transform var(--transition);
+    flex-shrink: 0;
+}
+
+.theme-toggle::after {
+    content: '';
+    position: absolute;
+    inset-block-start: 4px;
+    inset-inline-start: 4px;
+    inline-size: 18px;
+    block-size: 18px;
+    background: var(--surface);
+    border-radius: 50%;
+    transition: inset-inline-start var(--transition), background var(--transition);
+    box-shadow: 0 1px 2px rgba(0, 0, 0, 0.2);
+}
+
+[dark-mode] .theme-toggle::after {
+    inset-inline-start: calc(100% - 22px);
+    background: var(--text);
+}
+
+@media (prefers-color-scheme: dark) {
+    :root:not([light-mode]) .theme-toggle::after {
+        inset-inline-start: calc(100% - 22px);
+        background: var(--text);
+    }
+}
+
+@media (hover: hover) {
+    .theme-toggle:hover {
+        transform: scale(1.05);
+    }
+}
+
+.theme-toggle:focus-visible {
+    outline: 2px solid var(--accent);
+    outline-offset: 3px;
+}
+/* dzarlax.dev Design System — Language switcher
+ *
+ * Inline row of pill buttons for switching between language variants.
+ *
+ *   <div class="lang-switcher">
+ *     <a href="/en/" class="lang-btn active">EN</a>
+ *     <a href="/ru/" class="lang-btn">RU</a>
+ *   </div>
+ *
+ * `.lang-btn` works on <a>, <button>, and <input type="button">. The pill is
+ * 42×30, rounded to a full radius, with a tinted background on hover / .active.
+ */
+
+.lang-switcher {
+    display: flex;
+    gap: 4px;
+}
+
+.lang-btn {
+    text-decoration: none;
+    color: var(--text);
+    font-weight: 500;
+    font-size: var(--text-lg);
+    line-height: 1;
+    padding: 6px 12px;
+    border-radius: var(--radius-full);
+    transition: background var(--transition), color var(--transition);
+    display: block;
+    border: none;
+    background: transparent;
+    cursor: pointer;
+}
+
+@media (hover: hover) {
+    .lang-btn:hover {
+        background: var(--border);
+        color: var(--text);
+    }
+}
+
+.lang-btn.active {
+    background: var(--border);
+    color: var(--text);
+}
+
+[dark-mode] .lang-btn:hover,
+[dark-mode] .lang-btn.active {
+    background: rgba(255, 255, 255, 0.1);
+    color: var(--text);
+}
+
+@media (prefers-color-scheme: dark) {
+    :root:not([light-mode]) .lang-btn:hover,
+    :root:not([light-mode]) .lang-btn.active {
+        background: rgba(255, 255, 255, 0.1);
+        color: var(--text);
+    }
+}
+
+.lang-btn:focus-visible {
+    outline: 2px solid var(--accent);
+    outline-offset: 3px;
+}
+/* dzarlax.dev Design System — Toggle Switch */
+
+.toggle {
+    -webkit-appearance: none;
+    appearance: none;
+    border: none;
+    outline: none;
+    width: 40px;
+    min-width: 40px;
+    max-width: 40px;
+    height: 22px;
+    background: var(--surface-2);
+    border-radius: 11px;
+    position: relative;
+    cursor: pointer;
+    transition: background var(--transition);
+    flex-shrink: 0;
+}
+
+.toggle::after {
+    content: '';
+    position: absolute;
+    width: 18px;
+    height: 18px;
+    border-radius: 50%;
+    background: white;
+    top: 2px;
+    left: 2px;
+    transition: transform var(--transition);
+    box-shadow: 0 1px 3px rgba(0, 0, 0, 0.2);
+}
+
+.toggle:checked {
+    background: var(--good);
+}
+
+.toggle:checked::after {
+    transform: translateX(18px);
+}
+
+/* `.theme-toggle` moved to components/theme-toggle.css in v1.2.0 (44×24
+   switch track with a sliding thumb on [dark-mode]). The old 36×36 circle-
+   button variant that used to live here was overriding the new component
+   because of concat order — fixed by removal in v1.2.2. */
+/* dzarlax.dev Design System — Footer */
+
+/* Page footer */
+
+.footer {
+    padding: 32px 0;
+    margin-top: 60px;
+    border-top: 1px solid var(--border);
+    color: var(--text-tertiary);
+    font-size: var(--text-xs);
+    text-align: center;
+}
+
+/* ── Editorial footer ──────────────────────────────────────────────
+   Dark background, two-column grid (main + social), bottom row with
+   tagline. For lander / blog pages. Apply as `class="footer footer--editorial"`
+   on the <footer> element. */
+
+.footer--editorial {
+    background: #1A1A1E;
+    color: rgba(255, 255, 255, 0.8);
+    padding: clamp(24px, 8vh, 72px) 0 32px;
+    margin-top: clamp(40px, 10vh, 120px);
+    text-align: left;
+    border-top: none;
+    position: relative;
+    overflow: hidden;
+    font-size: var(--text-sm);
+}
+
+[dark-mode] .footer--editorial {
+    background: #0F1012;
+}
+@media (prefers-color-scheme: dark) {
+    :root:not([light-mode]) .footer--editorial {
+        background: #0F1012;
+    }
+}
+
+.footer--editorial h4,
+.footer--editorial .footer__heading {
+    font-family: var(--font-serif);
+    font-size: var(--text-sm);
+    text-transform: uppercase;
+    letter-spacing: var(--tracking-caps);
+    color: rgba(255, 255, 255, 0.6);
+    margin: 0 0 16px;
+    font-weight: 600;
+}
+
+.footer__content {
+    max-width: 1100px;
+    margin: 0 auto;
+    padding: 0 24px;
+    display: grid;
+    grid-template-columns: 1fr 1fr;
+    gap: 40px;
+    align-items: center;
+}
+
+.footer__main p {
+    margin: 0;
+    line-height: var(--leading-relaxed);
+    color: rgba(255, 255, 255, 0.8);
+}
+.footer__main p:first-child {
+    font-weight: 700;
+    color: rgba(255, 255, 255, 1);
+    margin-bottom: 8px;
+}
+
+.footer__social {
+    display: flex;
+    flex-direction: column;
+    gap: 12px;
+}
+
+/* Row of icon-only social links inside .footer__social. */
+
+.social-icons {
+    display: flex;
+    gap: 12px;
+    flex-wrap: wrap;
+}
+
+.social-icons a {
+    display: inline-flex;
+    align-items: center;
+    justify-content: center;
+    width: 40px;
+    height: 40px;
+    border-radius: var(--radius);
+    background: rgba(255, 255, 255, 0.08);
+    color: rgba(255, 255, 255, 0.8);
+    text-decoration: none;
+    transition: all var(--transition);
+    font-size: 1rem;
+}
+
+.social-icons a:hover {
+    background: rgba(255, 255, 255, 0.15);
+    color: rgba(255, 255, 255, 1);
+    transform: translateY(-1px);
+}
+
+/* Footer bottom row — tagline + tech credit etc. */
+
+.footer__bottom {
+    max-width: 1100px;
+    margin: 32px auto 0;
+    padding: 24px 24px 0;
+    border-top: 1px solid rgba(255, 255, 255, 0.1);
+    text-align: center;
+    color: rgba(255, 255, 255, 0.6);
+    font-size: 13px;
+}
+.footer__bottom p { margin: 0; }
+.footer__bottom a {
+    color: rgba(255, 255, 255, 0.8);
+    text-decoration: underline;
+    text-decoration-thickness: 1px;
+    text-underline-offset: 0.18em;
+}
+.footer__bottom a:hover { color: rgba(255, 255, 255, 1); }
+
+@media (max-width: 640px) {
+    .footer__content {
+        grid-template-columns: 1fr;
+        gap: 32px;
+        text-align: center;
+    }
+    .footer__social {
+        align-items: center;
+    }
+}
+
+/* Brand footer link */
+
+.dzarlax-footer {
+    display: inline-flex;
+    align-items: center;
+    gap: 10px;
+    font-family: var(--font-serif);
+    font-size: 14px;
+    color: var(--text);
+    text-decoration: none;
+    opacity: 0.6;
+    transition: opacity var(--transition);
+}
+
+.dzarlax-footer:hover {
+    opacity: 1;
+}
+
+.dzarlax-footer-icon {
+    width: 24px;
+    height: 24px;
+    background: var(--brand-dark);
+    color: var(--brand-light);
+    border-radius: 5px;
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    font-weight: bold;
+    font-size: 13px;
+    font-family: var(--font-serif);
+}
+
+[dark-mode] .dzarlax-footer-icon {
+    background: var(--brand-light);
+    color: var(--brand-dark);
+}
+
+@media (prefers-color-scheme: dark) {
+    :root:not([light-mode]) .dzarlax-footer-icon {
+        background: var(--brand-light);
+        color: var(--brand-dark);
+    }
+}
+/* dzarlax.dev Design System — Spinner / Loading */
+
+.spinner {
+    display: inline-block;
+    width: 16px;
+    height: 16px;
+    border: 2px solid var(--border);
+    border-top-color: var(--accent);
+    border-radius: 50%;
+    animation: dz-spin 0.6s linear infinite;
+}
+
+.spinner--large {
+    width: 32px;
+    height: 32px;
+    border-width: 3px;
+}
+
+@keyframes dz-spin {
+    to { transform: rotate(360deg); }
+}
+
+/* HTMX integration */
+
+.htmx-indicator {
+    display: none;
+}
+
+.htmx-request .htmx-indicator {
+    display: inline-block;
+}
+
+.htmx-request.htmx-indicator {
+    display: inline-block;
+}
+/* dzarlax.dev Design System — Hero */
+
+.hero {
+    min-height: 100vh;
+    display: flex;
+    flex-direction: column;
+    justify-content: center;
+    align-items: center;
+    text-align: center;
+    padding: 160px 24px 120px;
+    position: relative;
+    overflow: hidden;
+    background: var(--bg);
+}
+
+/* ── Editorial hero (no min-height, large serif title with clamp) ────
+   For article headers and content-first lander intros where the hero
+   should shrink to its content instead of filling the viewport. */
+
+.hero--editorial {
+    min-height: 0;
+    padding: clamp(40px, 10vh, 120px) 24px;
+}
+
+.hero--editorial .hero__title {
+    font-family: var(--font-serif);
+    font-size: clamp(2.5rem, 8vw, 4.5rem);
+    letter-spacing: -0.03em;
+    line-height: 1.1;
+    margin-bottom: 24px;
+}
+
+.hero--editorial .hero__subtitle,
+.hero--editorial .hero__lede {
+    font-size: clamp(1.15rem, 2vw, 1.4rem);
+    line-height: var(--leading-normal);
+    color: var(--text-secondary);
+    max-width: 620px;
+    margin: 0 auto 32px;
+}
+
+.hero--editorial .hero__meta {
+    font-size: var(--text-sm);
+    color: var(--text-tertiary);
+    margin: 0;
+}
+
+.hero--editorial .hero__eyebrow {
+    font-size: var(--text-sm);
+    text-transform: uppercase;
+    letter-spacing: var(--tracking-caps);
+    color: var(--text-secondary);
+    margin: 0 0 16px;
+}
+
+.hero--editorial .hero__eyebrow a {
+    color: inherit;
+    text-decoration: none;
+}
+.hero--editorial .hero__eyebrow a:hover {
+    color: var(--accent);
+}
+
+/* Profile avatar with badge */
+
+.hero__profile {
+    position: relative;
+    margin-bottom: 40px;
+    z-index: 2;
+}
+
+.hero__avatar {
+    width: 150px;
+    height: 150px;
+    border-radius: 50%;
+    object-fit: cover;
+    border: 4px solid var(--surface);
+    box-shadow: var(--shadow-lg);
+}
+
+.hero__badge {
+    position: absolute;
+    bottom: 0;
+    right: 0;
+    background: var(--accent);
+    color: var(--bg);
+    border-radius: 50%;
+    width: 45px;
+    height: 45px;
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    font-size: 1.25rem;
+    box-shadow: var(--shadow);
+    animation: hero-badge-float 3s ease-in-out infinite;
+}
+
+/* Text content */
+
+.hero__title {
+    font-family: var(--font-serif);
+    font-size: var(--text-2xl);
+    letter-spacing: var(--tracking-tight);
+    color: var(--text);
+    margin-bottom: 16px;
+}
+
+.hero__subtitle {
+    font-size: var(--text-xl);
+    color: var(--text-secondary);
+    margin-bottom: 24px;
+    font-weight: 500;
+}
+
+.hero__description {
+    max-width: 700px;
+    margin: 0 auto 40px;
+    color: var(--text-secondary);
+    font-size: var(--text-lg);
+    line-height: var(--leading-relaxed);
+}
+
+/* Action buttons row */
+
+.hero__actions {
+    display: flex;
+    gap: 12px;
+    justify-content: center;
+    flex-wrap: wrap;
+}
+
+/* Typing cursor effect */
+
+.hero__typing {
+    border-right: 2px solid var(--text);
+    animation: hero-cursor 0.8s step-end infinite;
+    white-space: nowrap;
+    overflow: hidden;
+}
+
+@keyframes hero-badge-float {
+    0%, 100% { transform: translateY(0); }
+    50%       { transform: translateY(-8px); }
+}
+
+@keyframes hero-cursor {
+    50% { border-right-color: transparent; }
+}
+
+@media (max-width: 768px) {
+    .hero {
+        padding: 100px 16px 80px;
+        min-height: auto;
+    }
+
+    .hero__avatar {
+        width: 120px;
+        height: 120px;
+    }
+
+    .hero__typing {
+        white-space: normal;
+        border-right: none;
+        animation: none;
+    }
+}
+/* dzarlax.dev Design System — Timeline */
+
+/* Center-column vertical timeline (for experience, history) */
+
+.timeline {
+    list-style: none;
+    padding: 0;
+    margin: 0 auto;
+    position: relative;
+    max-width: 1000px;
+}
+
+/* Vertical center line */
+
+.timeline::before {
+    content: '';
+    position: absolute;
+    top: 0;
+    bottom: 0;
+    left: 50%;
+    width: 1px;
+    background: var(--border);
+    transform: translateX(-50%);
+}
+
+/* Item — alternates left / right */
+
+.timeline__item {
+    position: relative;
+    width: 50%;
+    padding: 0 40px 48px;
+}
+
+.timeline__item:nth-child(odd) {
+    left: 0;
+    text-align: right;
+}
+
+.timeline__item:nth-child(even) {
+    left: 50%;
+    text-align: left;
+}
+
+/* Dot on the center line */
+
+.timeline__item::before {
+    content: '';
+    position: absolute;
+    top: 6px;
+    width: 12px;
+    height: 12px;
+    background: var(--bg);
+    border: 2px solid var(--accent);
+    border-radius: 50%;
+    z-index: 1;
+    transition: all var(--transition);
+    box-shadow: 0 0 0 4px var(--bg);
+}
+
+.timeline__item:nth-child(odd)::before {
+    right: -6px;
+}
+
+.timeline__item:nth-child(even)::before {
+    left: -6px;
+}
+
+.timeline__item:hover::before {
+    background: var(--accent);
+    transform: scale(1.2);
+}
+
+/* Content elements */
+
+.timeline__date {
+    display: inline-block;
+    padding: 2px 12px;
+    background: var(--bg);
+    color: var(--text-secondary);
+    border: 1px solid var(--border);
+    border-radius: var(--radius-full);
+    font-size: var(--text-xs);
+    font-weight: 500;
+    margin-bottom: 12px;
+}
+
+.timeline__item:nth-child(odd) .timeline__date {
+    float: right;
+    clear: right;
+    margin-bottom: 8px;
+}
+
+.timeline__title {
+    font-size: var(--text-lg);
+    font-weight: 700;
+    color: var(--text);
+    margin-bottom: 4px;
+    clear: both;
+}
+
+.timeline__company {
+    font-weight: 600;
+    color: var(--text-secondary);
+    margin-bottom: 8px;
+    font-size: var(--text-base);
+}
+
+.timeline__description {
+    color: var(--text-secondary);
+    font-size: var(--text-base);
+    line-height: var(--leading-normal);
+}
+
+/* Simple list variant (no center line) */
+
+.timeline--list {
+    max-width: 720px;
+}
+
+.timeline--list::before {
+    display: none;
+}
+
+.timeline--list .timeline__item,
+.timeline--list .timeline__item:nth-child(even) {
+    width: 100%;
+    left: 0;
+    text-align: left;
+    padding-left: 28px;
+    padding-right: 0;
+    border-left: 2px solid var(--border);
+}
+
+.timeline--list .timeline__item::before,
+.timeline--list .timeline__item:nth-child(odd)::before,
+.timeline--list .timeline__item:nth-child(even)::before {
+    left: -7px;
+    right: auto;
+}
+
+.timeline--list .timeline__item:nth-child(odd) .timeline__date {
+    float: none;
+}
+
+/* Responsive — collapse to left-aligned list */
+
+@media (max-width: 768px) {
+    .timeline::before {
+        left: 20px;
+    }
+
+    .timeline__item,
+    .timeline__item:nth-child(even) {
+        width: 100%;
+        left: 0;
+        text-align: left;
+        padding-left: 52px;
+        padding-right: 0;
+    }
+
+    .timeline__item::before,
+    .timeline__item:nth-child(odd)::before,
+    .timeline__item:nth-child(even)::before {
+        left: 14px;
+        right: auto;
+    }
+
+    .timeline__item:nth-child(odd) .timeline__date {
+        float: none;
+        margin-bottom: 12px;
+    }
+}
+/* dzarlax.dev Design System — Empty State / Confirmation */
+
+/*
+  Usage:
+  <div class="empty-state">
+    <div class="empty-state__icon empty-state__icon--success">✓</div>
+    <h2 class="empty-state__title">All done!</h2>
+    <p class="empty-state__text">Your booking has been confirmed.</p>
+    <a href="/" class="btn btn--primary">Back home</a>
+  </div>
+
+  Modifiers:
+    .empty-state__icon--success   green tint
+    .empty-state__icon--error     red tint
+    .empty-state__icon--warning   amber tint
+    .empty-state__icon--info      neutral tint
+*/
+
+.empty-state {
+    text-align: center;
+    padding: 64px 24px;
+}
+
+.empty-state__icon {
+    width: 72px;
+    height: 72px;
+    border-radius: 50%;
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    margin: 0 auto 24px;
+    font-size: 2rem;
+    background: var(--surface-2);
+    color: var(--text-secondary);
+}
+
+.empty-state__icon--success {
+    background: rgba(22, 163, 74, 0.1);
+    color: var(--good);
+}
+
+.empty-state__icon--error {
+    background: rgba(220, 38, 38, 0.1);
+    color: var(--danger);
+}
+
+.empty-state__icon--warning {
+    background: rgba(217, 119, 6, 0.1);
+    color: var(--warn);
+}
+
+.empty-state__icon--info {
+    background: rgba(59, 130, 246, 0.1);
+    color: #3b82f6;
+}
+
+.empty-state__title {
+    font-family: var(--font-serif);
+    font-size: var(--text-3xl);
+    font-weight: 700;
+    letter-spacing: var(--tracking-tight);
+    margin-bottom: 8px;
+}
+
+.empty-state__text {
+    color: var(--text-secondary);
+    font-size: var(--text-base);
+    line-height: var(--leading-relaxed);
+    max-width: 400px;
+    margin: 0 auto 24px;
+}
+
+/* Compact variant */
+.empty-state--sm {
+    padding: 32px 16px;
+}
+
+.empty-state--sm .empty-state__icon {
+    width: 48px;
+    height: 48px;
+    font-size: 1.4rem;
+    margin-bottom: 16px;
+}
+
+.empty-state--sm .empty-state__title {
+    font-size: var(--text-xl);
+}
+/* dzarlax.dev Design System — Alert / Callout */
+
+.alert {
+    display: flex;
+    align-items: flex-start;
+    gap: 10px;
+    padding: 12px 16px;
+    border-radius: var(--radius);
+    font-size: var(--text-sm);
+    line-height: 1.5;
+    border: 1px solid transparent;
+}
+
+.alert__icon {
+    font-size: 1rem;
+    flex-shrink: 0;
+    line-height: 1.5;
+}
+
+.alert__text {
+    flex: 1;
+}
+
+.alert__title {
+    font-weight: 700;
+    margin-bottom: 2px;
+}
+
+/* Variants */
+
+.alert--success {
+    background: var(--good-bg);
+    color: #166534;
+    border-color: var(--good);
+}
+
+.alert--warning {
+    background: var(--warn-bg);
+    color: #92400e;
+    border-color: #fcd34d;
+}
+
+.alert--danger {
+    background: var(--danger-bg);
+    color: #991b1b;
+    border-color: #fca5a5;
+}
+
+.alert--info {
+    background: #eff6ff;
+    color: #1e40af;
+    border-color: #93c5fd;
+}
+
+[dark-mode] .alert--success { color: var(--good); }
+[dark-mode] .alert--warning { color: var(--warn); }
+[dark-mode] .alert--danger  { color: var(--danger); }
+[dark-mode] .alert--info    { color: #60a5fa; }
+/* dzarlax.dev Design System — Stat Chip */
+
+/* A compact label + big-number display for inline stats/metrics */
+
+.stat-chip {
+    background: var(--surface);
+    border: 1px solid var(--border);
+    border-radius: var(--radius-sm);
+    padding: 14px 20px;
+    display: inline-flex;
+    flex-direction: column;
+    gap: 2px;
+}
+
+.stat-chip__label {
+    font-size: var(--text-xs);
+    color: var(--text-tertiary);
+    font-weight: 700;
+    text-transform: uppercase;
+    letter-spacing: var(--tracking-caps);
+}
+
+.stat-chip__value {
+    font-size: 1.5rem;
+    font-weight: 800;
+    color: var(--accent);
+    letter-spacing: -0.03em;
+    line-height: 1.1;
+}
+
+.stat-chip__note {
+    font-size: var(--text-xs);
+    color: var(--text-tertiary);
+    margin-top: 2px;
+}
+
+/* Row helper for grouping chips */
+
+.stat-chips {
+    display: flex;
+    flex-wrap: wrap;
+    gap: 12px;
+}
+/* dzarlax.dev Design System — KPI Bar */
+
+/* Horizontal row of key metrics separated by vertical dividers.
+   Common in dashboards and admin overview pages. */
+
+.kpi-bar {
+    display: flex;
+    flex-wrap: wrap;
+    border-top: 1px solid var(--border);
+    border-bottom: 1px solid var(--border);
+    padding: 24px 0;
+}
+
+.kpi-item {
+    flex: 1;
+    min-width: 150px;
+    padding: 0 24px;
+    border-right: 1px solid var(--border);
+    display: flex;
+    flex-direction: column;
+    gap: 4px;
+}
+
+.kpi-item:first-child { padding-left: 0; }
+.kpi-item:last-child  { border-right: none; padding-right: 0; }
+
+.kpi-item__label {
+    font-size: var(--text-xs);
+    font-weight: 700;
+    color: var(--text-secondary);
+    text-transform: uppercase;
+    letter-spacing: var(--tracking-caps);
+    display: flex;
+    align-items: center;
+    gap: 6px;
+}
+
+.kpi-item__value {
+    font-size: 2rem;
+    font-weight: 800;
+    color: var(--text);
+    letter-spacing: -0.03em;
+    line-height: 1.1;
+}
+
+.kpi-item__note {
+    font-size: var(--text-sm);
+    color: var(--text-tertiary);
+}
+
+/* Trend indicator dot */
+
+.kpi-indicator {
+    width: 6px;
+    height: 6px;
+    border-radius: 50%;
+    flex-shrink: 0;
+}
+
+.kpi-indicator--up     { background: var(--good); }
+.kpi-indicator--down   { background: var(--danger); }
+.kpi-indicator--stable { background: var(--text-tertiary); }
+
+/* Responsive */
+
+@media (max-width: 600px) {
+    .kpi-bar { flex-direction: column; gap: 16px; padding: 16px 0; }
+    .kpi-item {
+        border-right: none;
+        border-bottom: 1px solid var(--border-light);
+        padding: 0 0 16px;
+    }
+    .kpi-item:first-child { padding-left: 0; }
+    .kpi-item:last-child  { border-bottom: none; padding-bottom: 0; }
+}
+/* dzarlax.dev Design System — Divider */
+
+/* Plain horizontal rule with consistent spacing and color. Use over <hr>
+   when you want to control margins via the existing token scale. */
+
+.divider {
+    border: none;
+    border-top: 1px solid var(--border);
+    margin: 24px 0;
+}
+
+/* Labeled divider — a horizontal line split by a centered pill. Useful for
+   separating sessions in a chat log, or phases in a timeline. The label
+   content is free-form text inside `.divider__label`. */
+
+.divider--labeled {
+    display: flex;
+    align-items: center;
+    gap: 12px;
+    margin: 16px 0;
+    opacity: 0.8;
+}
+
+.divider--labeled::before,
+.divider--labeled::after {
+    content: '';
+    flex: 1;
+    height: 1px;
+    background: var(--border);
+}
+
+.divider__label {
+    font-size: var(--text-xs);
+    padding: 2px 10px;
+    border-radius: 999px;
+    background: var(--surface-2);
+    color: var(--text-secondary);
+    white-space: nowrap;
+}
+/* dzarlax.dev Design System — Tag chip */
+
+/* Standalone tag pill — typically used at the bottom of an article, or in a
+   tag-cloud listing. For tag chips inside a card, see .card__tag. */
+
+.tag-chip {
+    display: inline-flex;
+    align-items: center;
+    gap: 8px;
+    padding: 8px 16px;
+    background: var(--surface);
+    color: var(--text);
+    border-radius: var(--radius-full);
+    font-size: var(--text-sm);
+    font-weight: 500;
+    text-decoration: none;
+    transition: all var(--transition);
+    box-shadow: inset 0 0 0 1px var(--border);
+}
+
+.tag-chip:hover {
+    background: var(--accent);
+    color: var(--accent-foreground);
+    box-shadow: inset 0 0 0 1px transparent, var(--shadow);
+    transform: translateY(-1px);
+}
+
+[dark-mode] .tag-chip {
+    background: var(--surface);
+}
+
+@media (prefers-color-scheme: dark) {
+    :root:not([light-mode]) .tag-chip {
+        background: var(--surface);
+    }
+}
+
+/* Count badge inside a chip — used in tag-cloud. */
+
+.tag-chip__count {
+    font-size: 0.75em;
+    opacity: 0.55;
+    font-weight: 400;
+    background: rgba(0, 0, 0, 0.06);
+    padding: 2px 8px;
+    border-radius: var(--radius-full);
+    min-width: 18px;
+    text-align: center;
+}
+
+.tag-chip:hover .tag-chip__count {
+    background: rgba(255, 255, 255, 0.2);
+    opacity: 0.9;
+}
+
+[dark-mode] .tag-chip__count {
+    background: rgba(255, 255, 255, 0.08);
+}
+
+@media (prefers-color-scheme: dark) {
+    :root:not([light-mode]) .tag-chip__count {
+        background: rgba(255, 255, 255, 0.08);
+    }
+}
+
+/* ── Tag cloud ─────────────────────────────────────────────────────── */
+
+/* Wraps a list of tag chips; sizes pills proportionally to --tag-weight
+   (0..1) set inline by the template — used to make popular tags stand out. */
+
+.tag-cloud {
+    display: flex;
+    flex-wrap: wrap;
+    gap: 16px;
+    padding: 0;
+    list-style: none;
+    margin: 0 auto;
+    max-width: 900px;
+    justify-content: center;
+}
+
+.tag-chip--cloud {
+    /* 1.0rem (low) → 1.6rem (high). --tag-weight set inline (0..1). */
+    font-size: calc(1rem + var(--tag-weight, 0) * 0.6rem);
+    padding: 10px 20px;
+}
+/* dzarlax.dev Design System — Share buttons
+ *
+ * Inline row of round icon buttons for sharing the current page to common
+ * targets (Telegram, X, LinkedIn, WhatsApp, Reddit, email) plus a copy-link
+ * action. Icons come from your project's icon library — DS does not bundle
+ * them. Font Awesome 6, Lucide, inline SVG all work.
+ *
+ * Usage:
+ *   <nav class="share" data-ds-share aria-label="Share this article">
+ *     <span class="share__label">Share:</span>
+ *     <ul class="share__list">
+ *       <li><button class="share__btn" data-share="telegram" title="Telegram"><i class="fa-brands fa-telegram"></i></button></li>
+ *       <li><button class="share__btn" data-share="x"        title="X"       ><i class="fa-brands fa-twitter"></i></button></li>
+ *       <li><button class="share__btn" data-share="linkedin" title="LinkedIn"><i class="fa-brands fa-linkedin-in"></i></button></li>
+ *       <li><button class="share__btn" data-share="whatsapp" title="WhatsApp"><i class="fa-brands fa-whatsapp"></i></button></li>
+ *       <li><button class="share__btn" data-share="reddit"   title="Reddit"  ><i class="fa-brands fa-reddit-alien"></i></button></li>
+ *       <li><button class="share__btn" data-share="email"    title="Email"   ><i class="fa-regular fa-envelope"></i></button></li>
+ *       <li><button class="share__btn" data-share="copy"     title="Copy link">
+ *             <i class="fa-regular fa-copy"></i>
+ *             <span class="share__copied" aria-live="polite" hidden>Copied!</span>
+ *       </button></li>
+ *     </ul>
+ *   </nav>
+ *
+ * Overrides on the container (optional):
+ *   data-share-url   — share this URL instead of location.href
+ *   data-share-title — share this title instead of document.title
+ *   data-share-text  — extra text body (used by WhatsApp + email)
+ *
+ * JS lives in dist/dzarlax.js — see js/share.js.
+ */
+
+.share {
+    display: flex;
+    align-items: center;
+    flex-wrap: wrap;
+    gap: 12px;
+    margin: 32px 0 24px;
+    padding: 20px 0;
+    border-block-start: 1px solid var(--border);
+    border-block-end: 1px solid var(--border);
+}
+
+.share__label {
+    font-size: var(--text-sm);
+    font-weight: 600;
+    letter-spacing: 0.04em;
+    text-transform: uppercase;
+    color: var(--text-secondary);
+}
+
+.share__list {
+    display: flex;
+    flex-wrap: wrap;
+    gap: 8px;
+    margin: 0;
+    padding: 0;
+    list-style: none;
+}
+
+.share__list > li {
+    margin: 0;
+    padding: 0;
+    list-style: none;
+}
+
+.share__list > li::before,
+.share__list > li::marker {
+    content: none;
+}
+
+.share__btn {
+    position: relative;
+    display: inline-flex;
+    align-items: center;
+    justify-content: center;
+    inline-size: 40px;
+    block-size: 40px;
+    padding: 0;
+    border: 1px solid var(--border);
+    border-radius: var(--radius-full);
+    background: var(--surface);
+    color: var(--text);
+    text-decoration: none;
+    cursor: pointer;
+    font-size: 1rem;
+    line-height: 1;
+    transition: transform var(--transition), background-color var(--transition), border-color var(--transition), color var(--transition);
+}
+
+.share__btn:hover,
+.share__btn:focus-visible {
+    background: var(--accent);
+    color: var(--accent-foreground);
+    border-color: var(--accent);
+    transform: translateY(-2px);
+}
+
+.share__btn:focus-visible {
+    outline: 2px solid var(--accent);
+    outline-offset: 2px;
+}
+
+.share__btn > i,
+.share__btn > svg {
+    inline-size: 1em;
+    block-size: 1em;
+    pointer-events: none;
+}
+
+/* "Copied!" toast — anchored above the copy button, shown via [hidden]. */
+.share__copied {
+    position: absolute;
+    inset-block-end: calc(100% + 8px);
+    inset-inline-start: 50%;
+    transform: translateX(-50%);
+    padding: 4px 8px;
+    border-radius: var(--radius-sm);
+    background: var(--text);
+    color: var(--bg);
+    font-size: var(--text-xs);
+    white-space: nowrap;
+    pointer-events: none;
+}
+/* dzarlax.dev Design System — Prose */
+
+/* Typography for long-form content (articles, posts). Apply .prose to a
+   wrapper around the body markup; descendants get reading-comfortable
+   defaults without polluting global element styles. */
+
+.prose {
+    font-size: clamp(1.05rem, 1.6vw, 1.15rem);
+    line-height: var(--leading-relaxed);
+    max-width: 68ch;
+    margin-left: auto;
+    margin-right: auto;
+}
+
+.prose > * + * {
+    margin-top: 24px;
+}
+
+/* Headings inside prose — left-aligned, larger top spacing for rhythm. */
+
+.prose h2 {
+    font-family: var(--font-serif);
+    font-size: var(--text-2xl);
+    margin-top: 48px;
+    margin-bottom: 16px;
+    letter-spacing: var(--tracking-tight);
+}
+
+.prose h3 {
+    font-family: var(--font-serif);
+    font-size: var(--text-xl);
+    margin-top: 40px;
+    margin-bottom: 12px;
+}
+
+.prose p,
+.prose ul,
+.prose ol {
+    max-width: none;
+}
+
+.prose ul,
+.prose ol {
+    padding-left: 24px;
+}
+
+.prose li + li {
+    margin-top: 8px;
+}
+
+.prose blockquote {
+    border-left: 3px solid var(--accent);
+    padding-left: 20px;
+    margin-left: 0;
+    color: var(--text-secondary);
+    font-style: italic;
+}
+
+.prose code {
+    font-family: var(--font-mono);
+    font-size: 0.9em;
+    padding: 0.15em 0.4em;
+    background: var(--surface-2);
+    border-radius: var(--radius-sm);
+}
+
+.prose pre {
+    overflow-x: auto;
+    padding: 20px;
+    border-radius: var(--radius);
+    background: var(--surface-2);
+    font-size: 0.95em;
+    line-height: var(--leading-normal);
+    font-family: var(--font-mono);
+}
+
+.prose pre code {
+    background: none;
+    padding: 0;
+}
+
+.prose a {
+    color: inherit;
+    text-decoration: underline;
+    text-decoration-thickness: 1px;
+    text-underline-offset: 0.18em;
+}
+
+.prose a:hover {
+    color: var(--accent);
+}
+
+.prose strong,
+.prose b {
+    font-weight: 700;
+}
+
+.prose hr {
+    border: none;
+    border-top: 1px solid var(--border);
+    margin: 40px 0;
+}
+
+.prose img,
+.prose figure {
+    margin-left: auto;
+    margin-right: auto;
+    max-width: 100%;
+}
+
+.prose figcaption {
+    font-size: var(--text-sm);
+    color: var(--text-secondary);
+    text-align: center;
+    margin-top: 8px;
+}
+
+/* Table of contents card — companion to prose. */
+
+.prose-toc {
+    background: var(--surface);
+    border-radius: var(--radius);
+    padding: 24px;
+    margin-bottom: 40px;
+    box-shadow: inset 0 0 0 1px var(--border);
+}
+
+.prose-toc__title {
+    font-weight: 700;
+    font-size: var(--text-sm);
+    text-transform: uppercase;
+    letter-spacing: var(--tracking-caps);
+    margin: 0 0 12px;
+    color: var(--text-secondary);
+}
+
+.prose-toc ul {
+    list-style: disc;
+    padding-left: 20px;
+    margin: 0;
+}
+
+.prose-toc li + li {
+    margin-top: 8px;
+}
+
+.prose-toc a {
+    color: var(--text);
+    text-decoration: underline;
+    text-decoration-thickness: 1px;
+    text-underline-offset: 0.18em;
+    text-decoration-color: var(--border-hover);
+}
+
+.prose-toc a:hover {
+    color: var(--accent);
+    text-decoration-color: var(--accent);
+}

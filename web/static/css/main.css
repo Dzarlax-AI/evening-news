@@ -1,4 +1,4 @@
-/* Evening News — app-specific styles (base from dzarlax.css CDN) */
+/* Evening News — app-specific styles (base from local dzarlax.css) */
 
 /* ── Legacy variable bridges (used across templates and admin.css) ──
    Maps old naming to DS tokens so nothing breaks during migration   */
@@ -19,11 +19,8 @@
     --text-muted:       var(--text-secondary);
     --text-light:       var(--text-tertiary);
     --border-color:     var(--border);
-    --border-hover:     var(--border-hover);
 
-    --shadow-sm:  var(--shadow-sm);
     --shadow-md:  var(--shadow);
-    --shadow-xl:  var(--shadow-xl);
 
     --gradient-primary: linear-gradient(135deg, var(--accent) 0%, var(--accent-hover) 100%);
     --gradient-success: linear-gradient(135deg, var(--good)   0%, #15803d 100%);

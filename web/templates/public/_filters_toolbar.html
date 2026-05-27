@@ -86,6 +86,14 @@ function toggleSearch() {
   const toggle = document.getElementById('search-toggle');
   const expanded = document.getElementById('search-expanded');
   const input = document.getElementById('search-input');
+
+  if (!container || !input) return;
+
+  if (!toggle || !expanded) {
+    container.classList.add('search-active');
+    input.focus();
+    return;
+  }
   
   const isExpanded = !toggle.style.display || toggle.style.display === 'block';
   
@@ -112,13 +120,13 @@ function closeSearch() {
   const input = document.getElementById('search-input');
   
   // Hide elements
-  toggle.style.display = 'block';
-  expanded.style.display = 'none';
-  results.style.display = 'none';
-  container.classList.remove('search-active');
+  if (toggle) toggle.style.display = 'block';
+  if (expanded) expanded.style.display = 'none';
+  if (results) results.style.display = 'none';
+  if (container) container.classList.remove('search-active');
   
   // Clear input
-  input.value = '';
+  if (input) input.value = '';
   
   // Clear any pending search
   if (searchTimeout) {
@@ -129,6 +137,7 @@ function closeSearch() {
 
 function performSearch() {
   const input = document.getElementById('search-input');
+  if (!input) return;
   const query = input.value.trim();
   
   if (query.length >= 2) {
@@ -177,6 +186,7 @@ function performLiveSearch(query) {
 function showSearchResults(articles) {
   const results = document.getElementById('search-results');
   const content = document.getElementById('search-results-content');
+  if (!results || !content) return;
   
   if (!articles || articles.length === 0) {
     content.innerHTML = '<div class="search-no-results">Ничего не найдено</div>';
@@ -198,6 +208,7 @@ function showSearchResults(articles) {
 function showSearchLoading() {
   const results = document.getElementById('search-results');
   const content = document.getElementById('search-results-content');
+  if (!results || !content) return;
   
   content.innerHTML = '<div class="search-loading">⏳ Поиск...</div>';
   results.style.display = 'block';
@@ -206,6 +217,7 @@ function showSearchLoading() {
 function showSearchError(message) {
   const results = document.getElementById('search-results');
   const content = document.getElementById('search-results-content');
+  if (!results || !content) return;
   
   content.innerHTML = `<div class="search-error">❌ ${message}</div>`;
   results.style.display = 'block';
@@ -213,7 +225,7 @@ function showSearchError(message) {
 
 function hideSearchResults() {
   const results = document.getElementById('search-results');
-  results.style.display = 'none';
+  if (results) results.style.display = 'none';
 }
 
 function openArticleFromSearch(articleId) {

@@ -1,0 +1,240 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <title>Implementation Plan: CloakBrowser Infra Browser</title>
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <style>
+    body {
+      margin: 0;
+      font-family: system-ui, -apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif;
+      background: #f6f7f9;
+      color: #1f2937;
+      line-height: 1.5;
+    }
+    main { max-width: 1080px; margin: 0 auto; padding: 32px; }
+    section {
+      background: #fff;
+      border: 1px solid #e5e7eb;
+      border-radius: 8px;
+      padding: 20px;
+      margin: 16px 0;
+    }
+    h1, h2 { line-height: 1.2; }
+    h1 { margin-bottom: 8px; }
+    code {
+      background: #f3f4f6;
+      padding: 2px 5px;
+      border-radius: 4px;
+      font-size: 0.95em;
+    }
+    pre {
+      background: #111827;
+      color: #f9fafb;
+      padding: 14px;
+      border-radius: 8px;
+      overflow-x: auto;
+    }
+    .badge {
+      display: inline-block;
+      padding: 4px 10px;
+      border-radius: 999px;
+      background: #fef3c7;
+      color: #92400e;
+      font-size: 12px;
+      font-weight: 700;
+      text-transform: uppercase;
+      letter-spacing: 0.04em;
+    }
+    .risk { border-left: 4px solid #dc2626; }
+    .approval { border-left: 4px solid #d97706; }
+    .note { border-left: 4px solid #2563eb; }
+    ul, ol { padding-left: 24px; }
+  </style>
+</head>
+<body>
+<main>
+  <h1>Implementation Plan: CloakBrowser Infra Browser</h1>
+  <p class="badge">Approval required before implementation</p>
+
+  <section>
+    <h2>Task Summary</h2>
+    <p>
+      Evaluate and wire CloakBrowser as the separate browser infrastructure service for Evening News,
+      preserving the current app contract of connecting to a Chrome DevTools Protocol endpoint at
+      <code>BROWSER_WS_ENDPOINT=ws://browser:9222</code>.
+    </p>
+  </section>
+
+  <section>
+    <h2>Current Behavior</h2>
+    <ul>
+      <li><code>docker-compose.example.yml</code> defines a <code>browser</code> service using <code>gcr.io/zenika-hub/alpine-chrome:123</code>.</li>
+      <li>The web app depends on <code>browser</code> and connects through <code>BROWSER_WS_ENDPOINT=ws://browser:9222</code>.</li>
+      <li><code>news_aggregator/core/browser_pool.py</code> uses <code>nodriver</code> to connect to a remote CDP endpoint and serializes tab use with a single-tab semaphore.</li>
+      <li><code>docker-compose.dev.yml</code> currently leaves browser support commented out for dev.</li>
+      <li>Relevant tests already exist around the browser pool and extraction: <code>tests/test_browser_pool.py</code>, <code>tests/test_extraction_browser.py</code>, and <code>tests/test_website_extraction.py</code>.</li>
+    </ul>
+  </section>
+
+  <section>
+    <h2>Upstream Facts Checked</h2>
+    <ul>
+      <li>CloakBrowser ships a Docker image with <code>EXPOSE 9222</code>.</li>
+      <li>The image includes a <code>cloakserve</code> command, described upstream as a CDP multiplexer.</li>
+      <li><code>cloakserve</code> defaults to port <code>9222</code>, serves <code>/json/version</code>, and launches patched Chromium processes behind that endpoint.</li>
+      <li>The upstream Dockerfile pre-downloads the Chromium binary during image build, but production should still pin the image tag and avoid floating <code>latest</code>.</li>
+    </ul>
+  </section>
+
+  <section>
+    <h2>Desired Behavior</h2>
+    <p>
+      The application should keep using the same CDP endpoint shape, while the browser container runs CloakBrowser instead of Alpine Chrome.
+      The first implementation should be reversible and isolated, preferably through a Compose override or clearly scoped browser service change.
+    </p>
+  </section>
+
+  <section>
+    <h2>Recommended Approach</h2>
+    <p>
+      Start with an infra-only spike: add a CloakBrowser compose override and verify that <code>nodriver</code> can connect to
+      <code>cloakserve</code> without changing Python extraction code. Only replace the default production browser service after the smoke test passes.
+    </p>
+    <pre><code>browser:
+  image: cloakhq/cloakbrowser:&lt;pinned-version&gt;
+  command: ["cloakserve", "--port=9222"]
+  environment:
+    - CLOAKBROWSER_AUTO_UPDATE=false
+  networks:
+    - news_network
+  restart: unless-stopped
+  healthcheck:
+    test: ["CMD-SHELL", "curl -fsS http://localhost:9222/json/version &gt;/dev/null"]
+    interval: 30s
+    timeout: 10s
+    retries: 3
+    start_period: 30s</code></pre>
+  </section>
+
+  <section>
+    <h2>Files Likely to Change</h2>
+    <ul>
+      <li><code>docker-compose.cloak.yml</code> - new local/prod-like override for the CloakBrowser browser service spike.</li>
+      <li><code>docker-compose.example.yml</code> - after validation, optionally replace the default browser image/command and add a healthcheck.</li>
+      <li><code>README.md</code> and <code>CLAUDE.md</code>/<code>AGENTS.md</code> - update browser infrastructure notes if the migration is accepted.</li>
+      <li><code>tests/</code> - only if <code>nodriver</code> needs a small endpoint compatibility adjustment.</li>
+      <li><code>news_aggregator/core/browser_pool.py</code> - only if <code>cloakserve</code> requires HTTP endpoint handling that the current host/port parsing cannot support.</li>
+    </ul>
+  </section>
+
+  <section>
+    <h2>Implementation Steps</h2>
+    <ol>
+      <li>Create a Compose override that replaces only the <code>browser</code> service with CloakBrowser running <code>cloakserve --port=9222</code>.</li>
+      <li>Use a pinned image tag or digest if one is available locally from Docker metadata; do not ship <code>latest</code> as the final default.</li>
+      <li>Set <code>CLOAKBROWSER_AUTO_UPDATE=false</code> for deterministic runtime behavior.</li>
+      <li>Start only the browser service and verify <code>/json/version</code> returns a CDP WebSocket URL.</li>
+      <li>Start the app with <code>BROWSER_WS_ENDPOINT=ws://browser:9222</code> and verify <code>browser_pool.get_browser()</code> connects.</li>
+      <li>Run focused browser/extraction tests and inspect logs for CDP connection, tab open, content fetch, and tab close behavior.</li>
+      <li>If the override works, update the default production example compose and docs.</li>
+      <li>If it does not work, keep the override as an experimental artifact or delete it and document the blocker.</li>
+    </ol>
+  </section>
+
+  <section>
+    <h2>Test Plan</h2>
+    <ul>
+      <li><code>docker compose -f docker-compose.example.yml -f docker-compose.cloak.yml up -d browser</code></li>
+      <li><code>docker compose -f docker-compose.example.yml -f docker-compose.cloak.yml exec browser curl -fsS http://localhost:9222/json/version</code></li>
+      <li><code>docker compose -f docker-compose.example.yml -f docker-compose.cloak.yml logs --tail 120 browser</code></li>
+      <li><code>pytest tests/test_browser_pool.py -q</code></li>
+      <li><code>pytest tests/test_extraction_browser.py tests/test_website_extraction.py -q</code></li>
+      <li>Manual extraction smoke test against one JS-heavy page, one Telegram public channel page, and one custom page-monitor source if credentials/data are available.</li>
+    </ul>
+  </section>
+
+  <section>
+    <h2>Deployment and Runtime Impact</h2>
+    <ul>
+      <li>No database schema or API contract changes are expected.</li>
+      <li>The browser container image will likely be larger than Alpine Chrome and may use more memory.</li>
+      <li>The app remains isolated from browser binaries; the Python app container continues to depend only on <code>nodriver</code>.</li>
+      <li>Network exposure should remain internal to the Compose network unless a test explicitly publishes port <code>9222</code> locally.</li>
+    </ul>
+  </section>
+
+  <section class="risk">
+    <h2>Risks and Edge Cases</h2>
+    <ul>
+      <li><code>nodriver</code> may not fully tolerate <code>cloakserve</code>'s rewritten CDP WebSocket URLs.</li>
+      <li>CloakBrowser image tags and binary licensing need a final pinning/licensing check before production deployment.</li>
+      <li>CloakBrowser may spawn one Chromium process per fingerprint seed; we should keep the current single-tab behavior until resource usage is measured.</li>
+      <li>Auto-update or first-run downloads at runtime would make production less deterministic if not disabled or pinned.</li>
+      <li>The existing checkout has corrupt/missing Git objects; committing this work from the current clone may require repairing or recreating the repository first.</li>
+    </ul>
+  </section>
+
+  <section>
+    <h2>Rollback Plan</h2>
+    <p>
+      Remove the CloakBrowser override or revert the <code>browser</code> service back to
+      <code>gcr.io/zenika-hub/alpine-chrome:123</code>. Because the app contract stays
+      <code>ws://browser:9222</code>, rollback should not require application code changes.
+    </p>
+  </section>
+
+  <section>
+    <h2>Open Questions</h2>
+    <ul>
+      <li>Which image tag or digest should be pinned after Docker metadata is inspected?</li>
+      <li>Should the first change stay as an optional <code>docker-compose.cloak.yml</code> override, or replace <code>docker-compose.example.yml</code> after smoke testing?</li>
+      <li>Do we want persistent fingerprint seeds for specific sources, or should the default random identity per browser process remain for now?</li>
+    </ul>
+  </section>
+
+  <section class="approval">
+    <h2>Approval Gate</h2>
+    <p>
+      Implementation must not start until this plan is explicitly approved. Approval means creating the CloakBrowser Compose override first,
+      running the CDP smoke checks, then deciding whether to promote the change into the default production Compose file.
+    </p>
+  </section>
+
+  <section class="note">
+    <h2>Implementation Update - 2026-05-27</h2>
+    <ul>
+      <li>Created <code>docker-compose.cloak.yml</code> as an optional Compose override for the browser service.</li>
+      <li>Pinned the CloakBrowser image to the linux/amd64 manifest digest from <code>cloakhq/cloakbrowser:latest</code>: <code>sha256:61dee1b490ee8f74b040bc02c3d5384c7f64420b87ccaa26a33f213d07df3f73</code>.</li>
+      <li>Configured the service to run <code>cloakserve --port=9222</code>, set <code>CLOAKBROWSER_AUTO_UPDATE=false</code>, added <code>shm_size: 1gb</code>, and added a <code>/json/version</code> healthcheck.</li>
+      <li>Verified the merged Compose configuration with <code>docker compose -f docker-compose.example.yml -f docker-compose.cloak.yml config browser</code>.</li>
+      <li>Could not run the container smoke test because Docker Desktop / the Linux Docker engine is not running on this machine. Docker returned: <code>open //./pipe/dockerDesktopLinuxEngine: The system cannot find the file specified</code>.</li>
+    </ul>
+  </section>
+
+  <section class="note">
+    <h2>Production Smoke Update - 2026-05-27</h2>
+    <ul>
+      <li>Uploaded a production override to <code>/root/infra/docker-compose.cloak.yml</code> and used it to run only the shared <code>infra-chrome</code> service on CloakBrowser.</li>
+      <li>Confirmed <code>cloakserve</code> is healthy and serves <code>/json/version</code> on port <code>9222</code>.</li>
+      <li>Found a <code>nodriver</code> compatibility issue: <code>nodriver.core.browser.HTTPApi</code> sends lowercase HTTP methods (<code>get</code>/<code>post</code>), which Chrome accepts but CloakBrowser's aiohttp server rejects as HTTP 400.</li>
+      <li>Added a local source patch in <code>news_aggregator/core/browser_pool.py</code> that preserves <code>nodriver</code>'s HTTPApi behavior but uppercases the HTTP method before sending requests.</li>
+      <li>Hot-patched the running <code>news_web</code> container for smoke testing, after saving the original file to <code>/root/news/browser_pool.py.before-cloak-hotpatch</code>.</li>
+      <li>Restarted only <code>news_web</code>. The app became healthy and connected to CloakBrowser successfully; <code>infra-chrome</code> logged successful <code>/json/version</code> and WebSocket <code>101</code> traffic from <code>news_web</code>.</li>
+      <li>Local automated tests were not run because neither <code>uv run pytest</code> nor system <code>python -m pytest</code> has <code>pytest</code> available in the current Windows environment.</li>
+    </ul>
+  </section>
+  <section class="note">
+    <h2>Follow-up Hotfix Update - 2026-05-27</h2>
+    <ul>
+      <li>Added a same-origin public admin reprocess endpoint so the public modal does not fetch Authentik-protected <code>/api/v1</code> routes and trigger cross-origin OAuth redirects.</li>
+      <li>Guarded the modal refresh flow with an app-level admin check before calling reprocess.</li>
+      <li>Guarded legacy search helper functions against missing DOM nodes to avoid null <code>style</code> errors on the current public layout.</li>
+      <li>Baked the dzarlax design-system CSS into <code>web/static/css/dzarlax.css</code> and switched templates to same-origin CSS instead of a runtime jsDelivr dependency.</li>
+      <li>Created a fresh local clone at <code>D:\Projects\Code\Personal\RSS-summuriser-1-gitfixed</code> because the original checkout has missing objects reachable from <code>main</code>; copied all local dirty files into the fresh clone before preparing this PR.</li>
+      <li>Verification run after the hotfix: <code>python -m py_compile news_aggregator/core/browser_pool.py news_aggregator/public.py</code> and <code>git diff --check</code> for the staged source/template files.</li>
+    </ul>
+  </section>
+</main>
+</body>
+</html>
