@@ -832,7 +832,7 @@ window.refreshArticle = async function() {
         return;
     }
 
-    if (window.adminAccessVerified !== true) {
+    if (window.adminAccessVerified === false) {
         updateAdminAccessIndicator();
         alert('Обновление статьи доступно только после входа в админ-режим');
         window.location.href = '/admin/';

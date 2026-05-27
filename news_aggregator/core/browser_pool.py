@@ -40,11 +40,15 @@ async def _httpapi_request_uppercase_method(self, endpoint, method: str = "get",
     request.method = method.upper()
     request.data = json.dumps(data).encode("utf-8") if data else None
 
-    response = await asyncio.get_running_loop().run_in_executor(
+    def _open_and_read():
+        with urllib.request.urlopen(request, timeout=10) as response:
+            return response.read()
+
+    body = await asyncio.get_running_loop().run_in_executor(
         None,
-        lambda: urllib.request.urlopen(request, timeout=10),
+        _open_and_read,
     )
-    return json.loads(response.read())
+    return json.loads(body)
 
 
 HTTPApi._request = _httpapi_request_uppercase_method

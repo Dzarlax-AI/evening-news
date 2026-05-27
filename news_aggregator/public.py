@@ -40,10 +40,6 @@ _FEED_CACHE_LOCK = asyncio.Lock()
 
 
 def _has_public_admin_access(request: Request) -> bool:
-    settings = get_settings()
-    if settings.trust_forward_auth and request.headers.get("X-authentik-username"):
-        return True
-
     cookie_token = request.cookies.get("admin_token")
     if not cookie_token:
         return False
