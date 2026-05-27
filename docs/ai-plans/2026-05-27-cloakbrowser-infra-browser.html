@@ -187,8 +187,8 @@
   <section>
     <h2>Open Questions</h2>
     <ul>
-      <li>Which image tag or digest should be pinned after Docker metadata is inspected?</li>
-      <li>Should the first change stay as an optional <code>docker-compose.cloak.yml</code> override, or replace <code>docker-compose.example.yml</code> after smoke testing?</li>
+      <li>Resolved: pinned the linux/amd64 CloakBrowser manifest digest <code>sha256:61dee1b490ee8f74b040bc02c3d5384c7f64420b87ccaa26a33f213d07df3f73</code>.</li>
+      <li>Resolved for production: promoted the CloakBrowser service into <code>personal_ai_stack/deploy/infra/docker-compose.yml</code>; the app-repo override remains documentation/test scaffolding.</li>
       <li>Do we want persistent fingerprint seeds for specific sources, or should the default random identity per browser process remain for now?</li>
     </ul>
   </section>
@@ -233,6 +233,18 @@
       <li>Baked the dzarlax design-system CSS into <code>web/static/css/dzarlax.css</code> and switched templates to same-origin CSS instead of a runtime jsDelivr dependency.</li>
       <li>Created a fresh local clone at <code>D:\Projects\Code\Personal\RSS-summuriser-1-gitfixed</code> because the original checkout has missing objects reachable from <code>main</code>; copied all local dirty files into the fresh clone before preparing this PR.</li>
       <li>Verification run after the hotfix: <code>python -m py_compile news_aggregator/core/browser_pool.py news_aggregator/public.py</code> and <code>git diff --check</code> for the staged source/template files.</li>
+    </ul>
+  </section>
+  <section class="note">
+    <h2>Permanent Infra Update - 2026-05-27</h2>
+    <ul>
+      <li>Promoted the CloakBrowser configuration from the temporary VPS override into the source-of-truth infra file: <code>D:\Projects\Code\Personal\personal_ai_stack\deploy\infra\docker-compose.yml</code>.</li>
+      <li>Synchronized that file to <code>/root/infra/docker-compose.yml</code> on the VPS, so future infra deploys keep <code>infra-chrome</code> on CloakBrowser without requiring <code>docker-compose.cloak.yml</code>.</li>
+      <li>Kept the same internal CDP contract for consumers: service name <code>infra-chrome</code>, port <code>9222</code>, and <code>/json/version</code> health checks.</li>
+      <li>Verified the permanent configuration with <code>docker compose config chrome</code> locally and on the VPS.</li>
+      <li>Applied the permanent config with <code>docker compose up -d chrome</code>; the container was already aligned with the CloakBrowser runtime and remained healthy.</li>
+      <li>Verified live runtime with <code>docker compose exec -T chrome curl -fsS http://localhost:9222/json/version</code>, <code>docker compose ps chrome</code>, <code>docker compose ps app</code>, and <code>curl https://news.dzarlax.dev/health</code>.</li>
+      <li>The temporary <code>/root/infra/docker-compose.cloak.yml</code> is now redundant and can be removed in a later cleanup after the next normal infra deploy confirms no one is still using it manually.</li>
     </ul>
   </section>
 </main>
