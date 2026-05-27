@@ -24,6 +24,8 @@ from .database_helpers import fetch_raw_all, count_query, execute_custom_read
 from .models import Article, Category, ArticleCategory
 from .config import get_settings
 from .services.data_service import DataService, get_data_service
+from .security import verify_jwt_token
+from .api.articles_router import ReprocessRequest, reprocess_article
 
 logger = logging.getLogger(__name__)
 
@@ -35,6 +37,19 @@ _FEED_CACHE_TTL_SECONDS = int(os.getenv("PUBLIC_FEED_CACHE_TTL_SECONDS", "30"))
 _FEED_CACHE_MAX_ENTRIES = int(os.getenv("PUBLIC_FEED_CACHE_MAX_ENTRIES", "200"))
 _FEED_CACHE: dict[tuple, tuple[float, dict]] = {}
 _FEED_CACHE_LOCK = asyncio.Lock()
+
+
+def _has_public_admin_access(request: Request) -> bool:
+    settings = get_settings()
+    if settings.trust_forward_auth and request.headers.get("X-authentik-username"):
+        return True
+
+    cookie_token = request.cookies.get("admin_token")
+    if not cookie_token:
+        return False
+
+    payload = verify_jwt_token(cookie_token)
+    return bool(payload and payload.get("level") == "admin")
 
 
 def _make_feed_cache_key(
@@ -268,6 +283,25 @@ async def get_public_article(
             "primary_image": None,
             "ai_categories": []
         }
+
+
+@router.post("/api/public/article/{article_id}/reprocess")
+async def reprocess_public_article(
+    article_id: int,
+    payload: ReprocessRequest,
+    request: Request,
+    db: AsyncSession = Depends(get_db),
+):
+    """Reprocess an article from the public modal using app-level admin auth.
+
+    The public page cannot fetch Traefik/Authentik-protected /api/v1 routes
+    without cross-origin redirects. This endpoint keeps the request same-origin
+    and relies on the admin JWT cookie set after visiting /admin/.
+    """
+    if not _has_public_admin_access(request):
+        raise HTTPException(status_code=401, detail="Admin access required")
+
+    return await reprocess_article(article_id, payload, db)
 
 
 @router.get("/api/public/categories/config")
@@ -529,5 +563,4 @@ async def search_articles(
 
 
 # Media caching endpoint removed - functionality disabled
-
 
