@@ -85,6 +85,10 @@ class NewsOrchestrator:
 
         # Legacy queue for backward compatibility (will be removed)
         self.db_queue = None
+
+    def _daily_digest_url(self, date) -> str:
+        base_url = (settings.site_base_url or "https://news.dzarlax.dev").rstrip("/")
+        return f"{base_url}/digest/{date.strftime('%Y-%m-%d')}"
     
     async def start(self):
         """Start the orchestrator and its database queue."""
@@ -226,6 +230,7 @@ class NewsOrchestrator:
         try:
             logger.info("📱 Generating and sending Telegram digest...")
             today = datetime.utcnow().date()
+            digest_url = self._daily_digest_url(today)
 
             # Reload telegram service with DB overrides so admin UI changes take effect
             self.telegram_service = await self._get_telegram_service_with_db_overrides()
@@ -251,6 +256,10 @@ class NewsOrchestrator:
                 logger.info(f"📊 Using existing {summaries_count} daily summaries for today")
             # Step 3: Build digest (read-only operation)
             async def build_digest_operation(db):
+                rich_digest = None
+                if settings.telegram_rich_messages_enabled:
+                    rich_digest = await self.digest_builder.create_rich_digest(db, today, digest_url)
+
                 digest_content = await self.digest_builder.create_combined_digest(db, today)
 
                 if digest_content == "SPLIT_NEEDED":
@@ -260,41 +269,22 @@ class NewsOrchestrator:
                     if not digest_parts or digest_parts[0] == "Сводки новостей пока не готовы.":
                         return {'error': 'No valid summaries found'}
 
-                    return {'digest_parts': digest_parts, 'split': True}
+                    return {'digest_parts': digest_parts, 'split': True, 'rich_digest': rich_digest}
 
-                return {'digest_content': digest_content, 'split': False}
+                return {'digest_content': digest_content, 'split': False, 'rich_digest': rich_digest}
 
             digest_result = await self.db_queue_manager.execute_read(build_digest_operation, timeout=30.0)
 
-            # Step 4: Build Telegraph page (read-only operation)
-            async def build_telegraph_payload(db):
-                grouped = await self._group_articles_by_category(db, today)
-                articles_by_category = {}
-                for category_name, articles in grouped.items():
-                    articles_by_category[category_name] = [
-                        {
-                            "headline": a.title,
-                            "description": a.summary or a.content or "",
-                            "links": [a.url] if a.url else [],
-                            "image_url": a.primary_image or a.image_url,
-                        }
-                        for a in articles[:10]
-                    ]
-                return articles_by_category
+            if settings.telegram_rich_messages_enabled and digest_result.get('rich_digest'):
+                if await self.telegram_service.send_rich_message(digest_result['rich_digest']):
+                    return {'success': True, 'parts_sent': 1, 'rich_message': True}
 
-            telegraph_url = None
-            try:
-                from .services.telegraph_service import TelegraphService
-                telegraph_service = TelegraphService()
-                telegraph_payload = await self.db_queue_manager.execute_read(build_telegraph_payload, timeout=30.0)
-                telegraph_url = await telegraph_service.create_news_page(telegraph_payload)
-            except Exception as e:
-                logger.warning(f"⚠️ Telegraph generation failed: {e}")
+                logger.warning("⚠️ Rich Telegram digest failed; sending regular HTML digest fallback")
+
+            link_line = f"\n<b>Полная версия:</b> <a href=\"{digest_url}\">Evening News</a>"
             if digest_result.get('split'):
                 # Send multiple parts
-                if telegraph_url:
-                    link_line = f"\n<b>Полная версия:</b> <a href=\"{telegraph_url}\">Telegraph</a>"
-                    digest_result['digest_parts'][0] = digest_result['digest_parts'][0] + link_line
+                digest_result['digest_parts'][0] = digest_result['digest_parts'][0] + link_line
 
                 sent_ok = 0
                 for part in digest_result['digest_parts']:
@@ -303,9 +293,7 @@ class NewsOrchestrator:
                 return {'success': sent_ok == len(digest_result['digest_parts']), 'parts_sent': sent_ok}
             else:
                 # Send single message
-                digest_content = digest_result['digest_content']
-                if telegraph_url:
-                    digest_content += f"\n<b>Полная версия:</b> <a href=\"{telegraph_url}\">Telegraph</a>"
+                digest_content = digest_result['digest_content'] + link_line
                 ok = await self.telegram_service.send_message(digest_content)
                 return {'success': bool(ok), 'parts_sent': 1 if ok else 0}
                 

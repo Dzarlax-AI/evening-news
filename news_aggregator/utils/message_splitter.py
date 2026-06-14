@@ -306,6 +306,6 @@ class TelegramMessageSplitter(MessageSplitter):
         Initialize Telegram message splitter.
 
         Args:
-            safety_margin: Safety margin for Telegraph button overhead
+            safety_margin: Safety margin for link or keyboard overhead
         """
         super().__init__(max_length=4096, safety_margin=safety_margin)

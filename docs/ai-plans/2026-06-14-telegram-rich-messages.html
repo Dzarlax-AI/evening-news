@@ -1,0 +1,341 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <title>Implementation Plan: Telegram Rich Messages for Evening News</title>
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <style>
+    :root {
+      --bg: #f6f7f9;
+      --paper: #ffffff;
+      --text: #1f2937;
+      --muted: #5b6472;
+      --border: #d8dee8;
+      --accent: #2563eb;
+      --warn: #d97706;
+      --risk: #dc2626;
+      --ok: #15803d;
+    }
+    body {
+      margin: 0;
+      font-family: system-ui, -apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif;
+      background: var(--bg);
+      color: var(--text);
+      line-height: 1.55;
+    }
+    main {
+      max-width: 1120px;
+      margin: 0 auto;
+      padding: 32px;
+    }
+    header {
+      margin-bottom: 22px;
+    }
+    section {
+      background: var(--paper);
+      border: 1px solid var(--border);
+      border-radius: 8px;
+      padding: 20px;
+      margin: 16px 0;
+    }
+    h1, h2, h3 {
+      line-height: 1.2;
+      margin-top: 0;
+    }
+    h1 {
+      margin-bottom: 8px;
+      font-size: 30px;
+    }
+    h2 {
+      font-size: 20px;
+      margin-bottom: 12px;
+    }
+    p {
+      margin: 8px 0;
+    }
+    ul, ol {
+      margin: 8px 0 0;
+      padding-left: 22px;
+    }
+    li {
+      margin: 6px 0;
+    }
+    code {
+      background: #f3f4f6;
+      padding: 2px 5px;
+      border-radius: 4px;
+      font-size: 0.95em;
+    }
+    .badge {
+      display: inline-block;
+      padding: 4px 10px;
+      border-radius: 999px;
+      background: #dbeafe;
+      color: #1e40af;
+      font-size: 12px;
+      font-weight: 700;
+      text-transform: uppercase;
+      letter-spacing: 0.04em;
+    }
+    .meta {
+      color: var(--muted);
+      margin-top: 6px;
+    }
+    .grid {
+      display: grid;
+      grid-template-columns: repeat(auto-fit, minmax(250px, 1fr));
+      gap: 12px;
+    }
+    .card {
+      border: 1px solid var(--border);
+      border-radius: 8px;
+      padding: 14px;
+      background: #fbfcfe;
+    }
+    .card h3 {
+      font-size: 16px;
+      margin-bottom: 6px;
+    }
+    .callout {
+      border-left: 4px solid var(--accent);
+    }
+    .risk {
+      border-left: 4px solid var(--risk);
+    }
+    .approval {
+      border-left: 4px solid var(--warn);
+    }
+    .ok {
+      border-left: 4px solid var(--ok);
+    }
+  </style>
+</head>
+<body>
+<main>
+  <header>
+    <span class="badge">Approval required before implementation</span>
+    <h1>Implementation Plan: Telegram Rich Messages for Evening News</h1>
+    <p class="meta">Created 2026-06-14 for <code>D:\Projects\Code\Personal\RSS-summuriser-1</code>.</p>
+  </header>
+
+  <section>
+    <h2>Task Summary</h2>
+    <p>
+      Add support for Telegram Bot API 10.1 Rich Messages to improve the Evening News channel digest formatting.
+      The goal is to send a richer, more readable digest to the main Telegram channel while keeping the current
+      plain HTML <code>sendMessage</code> path as a fallback.
+    </p>
+    <p>
+      Official Telegram documentation says Rich Messages were added in Bot API 10.1 on 2026-06-11 and can be sent
+      with <code>sendRichMessage</code> using an <code>InputRichMessage</code> that contains either <code>html</code>
+      or <code>markdown</code>.
+    </p>
+  </section>
+
+  <section>
+    <h2>Current Behavior</h2>
+    <div class="grid">
+      <div class="card">
+        <h3>Telegram sending</h3>
+        <p>
+          <code>news_aggregator/services/telegram_service.py</code> sends all channel and service messages through
+          <code>sendMessage</code> with <code>parse_mode="HTML"</code> and <code>disable_web_page_preview=True</code>.
+          HTML is cleaned through <code>validate_telegram_html()</code>.
+        </p>
+      </div>
+      <div class="card">
+        <h3>Digest generation</h3>
+        <p>
+          <code>news_aggregator/processing/digest_builder.py</code> builds a compact HTML digest from
+          <code>DailySummary.summary_text</code>, ordered by <code>articles_count</code>. It uses
+          <code>TelegramMessageSplitter</code> with a configured effective limit of <code>DIGEST_TELEGRAM_LIMIT</code>,
+          currently defaulting to 3600.
+        </p>
+      </div>
+      <div class="card">
+        <h3>Full version today</h3>
+        <p>
+          <code>news_aggregator/orchestrator.py</code> currently builds a Telegraph payload from articles grouped by
+          category, creates an external Telegraph page, and appends a "Полная версия: Telegraph" link to the Telegram
+          digest when the page is available. The app also already has first-party public pages at <code>/list</code>
+          and <code>/search</code>, backed by <code>/api/public/feed</code> and related public APIs.
+        </p>
+      </div>
+      <div class="card">
+        <h3>Admin trigger</h3>
+        <p>
+          <code>POST /api/v1/telegram/send-digest</code> calls <code>NewsOrchestrator.send_telegram_digest()</code>.
+          Scheduler tasks also call the same orchestrator method, so this change affects manual and scheduled sends.
+        </p>
+      </div>
+    </div>
+  </section>
+
+  <section>
+    <h2>Desired Behavior</h2>
+    <ul>
+      <li>Add an opt-in Rich Message path for the main news digest using <code>sendRichMessage</code>.</li>
+      <li>Keep existing service alerts and test messages on regular <code>sendMessage</code> unless explicitly expanded later.</li>
+      <li>Keep current HTML digest behavior as a reliable fallback when Rich Messages are disabled or rejected by Telegram.</li>
+      <li>Remove Telegraph from the digest flow and use the first-party site as the full-version destination.</li>
+      <li>Do not add external dependencies; use the existing async HTTP client and HTML utilities.</li>
+    </ul>
+  </section>
+
+  <section>
+    <h2>Proposed Rich Digest Format</h2>
+    <ul>
+      <li><code>&lt;h2&gt;</code> or <code>&lt;h3&gt;</code> title for the digest date.</li>
+      <li>A short intro paragraph with total article and category counts.</li>
+      <li>A category table of contents using in-message anchors if Telegram clients render them reliably.</li>
+      <li>Category sections with <code>&lt;h3&gt;</code>, article counts, and separators via <code>&lt;hr/&gt;</code>.</li>
+      <li>Summaries rendered as paragraphs and lists instead of dense newline text.</li>
+      <li>Optional <code>&lt;details&gt;</code> blocks for lower-priority category detail if the message becomes long.</li>
+      <li>Optional media blocks only after a guarded second pass, because media URL validity and Bot API media rights need live validation.</li>
+    </ul>
+  </section>
+
+  <section>
+    <h2>Assumptions and Unknowns</h2>
+    <ul>
+      <li>Assumption: Telegram allows <code>sendRichMessage</code> to target the configured channel chat ID in the same way as <code>sendMessage</code>.</li>
+      <li>Assumption: Bot API accepts long rich messages beyond the regular 4096 text limit, but the exact practical limit must be tested live.</li>
+      <li>Unknown: how consistently current Telegram clients render <code>&lt;details&gt;</code>, anchors, tables, and media blocks in channels.</li>
+      <li>Unknown: whether all existing digest summary text can be safely converted to rich HTML without accidental unsupported tags or malformed entities.</li>
+      <li>Unknown: whether image URLs stored as <code>primary_image</code> or <code>image_url</code> are stable enough for Rich Message media blocks.</li>
+    </ul>
+  </section>
+
+  <section>
+    <h2>Files Likely to Change</h2>
+    <ul>
+      <li><code>news_aggregator/config.py</code> - add feature flag such as <code>TELEGRAM_RICH_MESSAGES_ENABLED</code> and possibly a conservative rich-message limit.</li>
+      <li><code>news_aggregator/services/telegram_service.py</code> - add <code>send_rich_message()</code>, fallback handling, and logging around Bot API errors.</li>
+      <li><code>news_aggregator/processing/digest_builder.py</code> - add a method that builds rich digest HTML from daily summaries without disrupting the current splitter path.</li>
+      <li><code>news_aggregator/orchestrator.py</code> - choose rich vs existing digest path, remove Telegraph generation, and append a site link instead.</li>
+      <li><code>news_aggregator/utils/html_utils.py</code> - add a separate sanitizer/validator for Rich Message HTML tags instead of widening the existing regular Telegram HTML validator.</li>
+      <li><code>news_aggregator/services/telegraph_service.py</code> - delete if no remaining runtime callers exist.</li>
+      <li><code>tests/</code> - add focused tests for rich digest HTML generation, fallback behavior, and Telegram payload construction.</li>
+      <li><code>README.md</code>, <code>docs/QUICKSTART.md</code>, and Docker docs - remove Telegraph setup references and document the site link behavior.</li>
+    </ul>
+  </section>
+
+  <section>
+    <h2>Implementation Steps</h2>
+    <ol>
+      <li>Add config fields with defaults that keep production behavior unchanged: Rich Messages disabled by default.</li>
+      <li>Add a Rich Message sanitizer that allows only the tags Telegram documents for rich HTML and strips or escapes unsupported content.</li>
+      <li>Add <code>DigestBuilder.create_rich_digest()</code> using existing <code>DailySummary</code> data and keeping all DB access inside the existing read operation.</li>
+      <li>Add <code>TelegramService.send_rich_message()</code> that posts to <code>/sendRichMessage</code> with <code>{"rich_message": {"html": ...}}</code>.</li>
+      <li>Add fallback: if rich sending fails, log the Telegram API response and send the current compact HTML digest with <code>sendMessage</code>.</li>
+      <li>Wire the orchestrator so only the main digest path can use rich messages; service messages remain unchanged.</li>
+      <li>Remove the Telegraph payload/read/API call from <code>send_telegram_digest()</code>.</li>
+      <li>Append a first-party site link in both rich and fallback formats, preferably to a stable daily/full digest URL if implemented, otherwise to the existing public list with suitable filters.</li>
+      <li>Remove unused Telegraph configuration, dependency, service file, README entries, and docs once callers are gone.</li>
+      <li>Add unit tests for payload shape, disabled feature flag behavior, sanitizer behavior, and fallback on non-200 Telegram response.</li>
+      <li>After local tests, run one manual send to a service/test channel before enabling for the production channel.</li>
+    </ol>
+  </section>
+
+  <section>
+    <h2>Impact</h2>
+    <ul>
+      <li><strong>API:</strong> outgoing Telegram API call changes only when the new feature flag is enabled.</li>
+      <li><strong>Database:</strong> no schema changes expected.</li>
+      <li><strong>Auth and permissions:</strong> no app auth changes. Bot must already have posting rights in the target channel; media blocks may require media-send rights.</li>
+      <li><strong>Deployment:</strong> remove <code>TELEGRAPH_ACCESS_TOKEN</code> from required/optional runtime configuration after deploy configs are checked.</li>
+      <li><strong>UX:</strong> channel posts become more structured and easier to scan; worst case should fall back to today's compact digest.</li>
+    </ul>
+  </section>
+
+  <section>
+    <h2>Test Plan</h2>
+    <ul>
+      <li><code>python -m pytest tests/ -q</code> if local dependencies are available outside Docker.</li>
+      <li><code>docker-compose -f docker-compose.dev.yml exec app pytest tests/ -q</code> in the dev container, matching the repo's Makefile test path.</li>
+      <li>Focused unit tests for <code>DigestBuilder.create_rich_digest()</code> using synthetic <code>DailySummary</code> rows.</li>
+      <li>Focused unit tests for <code>TelegramService.send_rich_message()</code> by mocking the async HTTP client response.</li>
+      <li>Manual API smoke to a non-production channel or service channel with <code>TELEGRAM_RICH_MESSAGES_ENABLED=true</code>.</li>
+      <li>Production smoke only after test-channel rendering looks correct on desktop and mobile Telegram clients.</li>
+    </ul>
+  </section>
+
+  <section>
+    <h2>Manual QA Checklist</h2>
+    <ul>
+      <li>Feature flag off: manual digest send produces the same regular Telegram message path as today.</li>
+      <li>Feature flag on: manual digest send posts a Rich Message to a test channel.</li>
+      <li>Fallback: forced Rich Message API failure still sends the regular HTML digest.</li>
+      <li>Full-version link points to the first-party Evening News site, not Telegraph.</li>
+      <li>Channel post renders cleanly on Telegram desktop and mobile.</li>
+      <li>No category summary text is lost or visibly mangled by the rich HTML sanitizer.</li>
+      <li>Scheduler-triggered digest uses the same behavior as the admin button.</li>
+    </ul>
+  </section>
+
+  <section class="risk">
+    <h2>Risks and Edge Cases</h2>
+    <ul>
+      <li>Bot API 10.1 is very fresh, so client rendering may lag behind the server API.</li>
+      <li>Rich Message tags are not the same as regular <code>parse_mode=HTML</code>; reusing the current validator would silently strip the most useful blocks.</li>
+      <li>Large rich digests may hit undocumented or poorly documented Telegram limits.</li>
+      <li>Media blocks can fail if article image URLs are blocked, temporary, wrong MIME type, or Telegram cannot fetch them.</li>
+      <li>Generated summary text can contain characters that need escaping before embedding in rich HTML.</li>
+      <li>The current repository has unrelated uncommitted changes; implementation should avoid touching them and review diffs carefully.</li>
+    </ul>
+  </section>
+
+  <section>
+    <h2>Rollback Plan</h2>
+    <ul>
+      <li>Immediate rollback: set <code>TELEGRAM_RICH_MESSAGES_ENABLED=false</code> or remove the env override and restart the app.</li>
+      <li>Code rollback: revert the Rich Message and Telegraph-removal commit, restoring the current <code>sendMessage</code> plus Telegraph behavior.</li>
+      <li>Operational fallback: if rich send fails at runtime, code should automatically use the existing regular HTML digest path.</li>
+      <li>Config rollback: keep the previous <code>TELEGRAPH_ACCESS_TOKEN</code> value available outside the app until the post-deploy smoke confirms site links work.</li>
+    </ul>
+  </section>
+
+  <section>
+    <h2>Open Questions</h2>
+    <ul>
+      <li><strong>Resolved:</strong> first implementation avoids media blocks and sends structured text only.</li>
+      <li><strong>Resolved:</strong> the feature flag defaults to enabled, with <code>TELEGRAM_RICH_MESSAGES_ENABLED=false</code> available as the immediate rollback switch.</li>
+      <li>Which chat should be used for the first live smoke: service channel, a dedicated test channel, or the production channel during a quiet window?</li>
+      <li><strong>Resolved:</strong> a dedicated <code>/digest/YYYY-MM-DD</code> public page was added for the full-version link.</li>
+    </ul>
+  </section>
+
+  <section class="ok">
+    <h2>Implementation Update - 2026-06-14</h2>
+    <ul>
+      <li>Added rich digest rendering from <code>DailySummary</code> rows, including headings, paragraphs, bullet lists, and a first-party full-version link.</li>
+      <li>Added <code>TelegramService.send_rich_message()</code> using Telegram Bot API <code>sendRichMessage</code> with <code>rich_message.html</code>.</li>
+      <li>Removed the Telegraph runtime path, dependency, environment variable, service file, and setup docs.</li>
+      <li>Added the public <code>/digest/YYYY-MM-DD</code> page and wired Telegram fallback messages to that URL.</li>
+      <li>Added focused tests for rich HTML validation, rich digest text rendering, payload shape, and regular-message fallback.</li>
+    </ul>
+    <h3>Checks Run</h3>
+    <ul>
+      <li><code>python -m compileall news_aggregator</code> passed.</li>
+      <li><code>uv run --with-requirements requirements.txt python -m pytest tests/test_telegram_rich_messages.py -q</code> passed: 4 tests.</li>
+      <li><code>uv run --with-requirements requirements.txt python -c "from jinja2 import Environment, FileSystemLoader; ..."</code> parsed <code>public/digest.html</code> successfully.</li>
+      <li><code>rg "Telegraph|telegraph|TELEGRAPH|create_telegraph"</code> finds only this plan, not runtime Telegraph integration.</li>
+    </ul>
+    <h3>Remaining QA</h3>
+    <ul>
+      <li>Run the focused pytest file in an environment with project test dependencies installed.</li>
+      <li>Send one manual Rich Message to a service or test channel before enabling the production digest path.</li>
+      <li>After deploy, verify <code>/digest/YYYY-MM-DD</code> is reachable through the production site URL.</li>
+    </ul>
+  </section>
+
+  <section class="approval">
+    <h2>Approval Gate</h2>
+    <p>
+      Implementation must not start until the user explicitly approves this plan or gives revised scope.
+      No production code should be modified before approval.
+    </p>
+  </section>
+</main>
+</body>
+</html>

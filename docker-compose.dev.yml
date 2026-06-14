@@ -26,6 +26,8 @@ services:
       # Telegram (use test values or prod)
       - TELEGRAM_TOKEN=6987235886:AAEsgXDyjaW6N5g7xjTmq2e_CGCUQqSJ_O8
       - TELEGRAM_CHAT_ID=388128
+      - TELEGRAM_RICH_MESSAGES_ENABLED=true
+      - SITE_BASE_URL=http://localhost:8000
 
       # Admin
       - ADMIN_USERNAME=dzarlax

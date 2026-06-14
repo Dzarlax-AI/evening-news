@@ -21,9 +21,10 @@ except ImportError:
     logger.warning("⚠️ python-magic not available - MIME type detection disabled")
 from .database import get_db
 from .database_helpers import fetch_raw_all, count_query, execute_custom_read
-from .models import Article, Category, ArticleCategory
+from .models import Article, Category, ArticleCategory, DailySummary
 from .config import get_settings
 from .services.data_service import DataService, get_data_service
+from .services.database_queue import get_database_queue
 from .security import verify_jwt_token
 from .api.articles_router import ReprocessRequest, reprocess_article
 
@@ -119,6 +120,82 @@ async def public_search_view(request: Request):
     """Public search page."""
     return templates.TemplateResponse(request, "public/search.html", {
         "title": "Поиск новостей"
+    })
+
+
+@router.get("/digest/{digest_date}", response_class=HTMLResponse)
+async def public_digest_view(
+    digest_date: str,
+    request: Request,
+):
+    """Daily digest permalink used by Telegram full-version links."""
+    try:
+        parsed_date = datetime.strptime(digest_date, "%Y-%m-%d").date()
+    except ValueError:
+        raise HTTPException(status_code=404, detail="Digest not found")
+
+    async def read_digest_data(db):
+        summary_result = await db.execute(
+            select(DailySummary)
+            .where(DailySummary.date == parsed_date)
+            .order_by(DailySummary.articles_count.desc())
+        )
+        article_result = await db.execute(
+            select(Article, Category.name, ArticleCategory.confidence)
+            .options(
+                selectinload(Article.source),
+                selectinload(Article.article_categories).selectinload(ArticleCategory.category),
+            )
+            .join(ArticleCategory, Article.id == ArticleCategory.article_id)
+            .join(Category, Category.id == ArticleCategory.category_id)
+            .where(func.date(Article.fetched_at) == parsed_date)
+            .where(Article.is_advertisement.is_not(True))
+            .order_by(Article.fetched_at.desc())
+        )
+        return summary_result.scalars().all(), article_result.all()
+
+    summaries, article_rows = await get_database_queue().execute_read(read_digest_data, timeout=30.0)
+
+    best_by_article = {}
+    for article, category_name, confidence in article_rows:
+        current = best_by_article.get(article.id)
+        if current is None or (confidence or 0) > (current["confidence"] or 0):
+            best_by_article[article.id] = {
+                "article": article,
+                "category": category_name or "Other",
+                "confidence": confidence or 0,
+            }
+
+    articles_by_category = {}
+    for item in best_by_article.values():
+        article = item["article"]
+        articles_by_category.setdefault(item["category"], []).append({
+            "id": article.id,
+            "title": article.title,
+            "summary": article.summary,
+            "url": article.url,
+            "source_name": article.source.name if article.source else "Unknown",
+            "fetched_at": article.fetched_at,
+            "published_at": article.published_at,
+            "image_url": article.primary_image or article.image_url,
+        })
+
+    summary_categories = [summary.category for summary in summaries]
+    ordered_categories = summary_categories + [
+        category for category in articles_by_category
+        if category not in summary_categories
+    ]
+
+    if not summaries and not articles_by_category:
+        raise HTTPException(status_code=404, detail="Digest not found")
+
+    return templates.TemplateResponse(request, "public/digest.html", {
+        "title": f"Сводка новостей за {parsed_date.strftime('%d.%m.%Y')}",
+        "digest_date": parsed_date,
+        "summaries": summaries,
+        "articles_by_category": articles_by_category,
+        "ordered_categories": ordered_categories,
+        "total_articles": sum(len(items) for items in articles_by_category.values()),
     })
 
 

@@ -1,6 +1,8 @@
 """Digest builder for creating combined daily news digests."""
 
 import datetime
+import html
+import re
 from typing import List, Dict, Any
 from sqlalchemy.ext.asyncio import AsyncSession
 from sqlalchemy import select
@@ -24,6 +26,109 @@ class DigestBuilder:
         safety_margin = 4096 - self.settings.digest_telegram_limit
         self.splitter = TelegramMessageSplitter(safety_margin=safety_margin)
         self.summary_generator = SummaryGenerator()
+
+    def _valid_summaries(self, summaries: List[DailySummary]) -> List[DailySummary]:
+        return [
+            s for s in summaries
+            if s.summary_text and len(s.summary_text.strip()) >= self.settings.digest_min_summary_length
+        ]
+
+    def _summary_to_rich_blocks(self, summary_text: str) -> str:
+        """Render generated summary text as safe Rich Message paragraphs/list items."""
+        lines = [line.strip() for line in summary_text.strip().splitlines() if line.strip()]
+        if not lines:
+            return ""
+
+        rendered: List[str] = []
+        list_items: List[str] = []
+
+        def flush_list() -> None:
+            nonlocal list_items
+            if list_items:
+                rendered.append("<ul>" + "".join(list_items) + "</ul>")
+                list_items = []
+
+        for line in lines:
+            normalized = re.sub(r"^[-*•]\s+", "", line).strip()
+            if normalized != line:
+                list_items.append(f"<li>{html.escape(normalized)}</li>")
+                continue
+
+            flush_list()
+            rendered.append(f"<p>{html.escape(line)}</p>")
+
+        flush_list()
+        return "\n".join(rendered)
+
+    async def create_rich_digest(
+        self,
+        db: AsyncSession,
+        date: datetime.date,
+        full_url: str
+    ) -> str:
+        """Create a Telegram Rich Message digest from ready category summaries."""
+        log_operation(
+            logger,
+            'create_rich_digest',
+            'started',
+            date=date.strftime('%Y-%m-%d')
+        )
+
+        try:
+            result = await db.execute(
+                select(DailySummary)
+                .where(DailySummary.date == date)
+                .order_by(DailySummary.articles_count.desc())
+            )
+            valid_summaries = self._valid_summaries(result.scalars().all())
+
+            if not valid_summaries:
+                logger.warning(f"No valid summaries found for {date}")
+                return ""
+
+            total_articles = sum(s.articles_count for s in valid_summaries)
+            categories_count = len(valid_summaries)
+            date_label = date.strftime('%d.%m.%Y')
+
+            blocks = [
+                f"<h2>Сводка новостей за {html.escape(date_label)}</h2>",
+                (
+                    f"<p><strong>Всего:</strong> {total_articles} новостей "
+                    f"в {categories_count} категориях.</p>"
+                ),
+            ]
+
+            if full_url:
+                blocks.append(
+                    f'<p><a href="{html.escape(full_url, quote=True)}">Открыть полную версию на сайте</a></p>'
+                )
+
+            for summary in valid_summaries:
+                category = html.escape(summary.category or "Other")
+                blocks.extend([
+                    "<hr>",
+                    f"<h3>{category} <em>({summary.articles_count})</em></h3>",
+                    self._summary_to_rich_blocks(summary.summary_text),
+                ])
+
+            log_operation(
+                logger,
+                'create_rich_digest',
+                'completed',
+                categories=categories_count,
+                articles=total_articles
+            )
+            return "\n".join(block for block in blocks if block)
+
+        except Exception as e:
+            log_operation(
+                logger,
+                'create_rich_digest',
+                'failed',
+                error=str(e),
+                date=date.strftime('%Y-%m-%d')
+            )
+            return ""
 
     async def create_combined_digest(
         self,
@@ -57,10 +162,7 @@ class DigestBuilder:
             summaries = result.scalars().all()
 
             # Filter out empty summaries
-            valid_summaries = [
-                s for s in summaries
-                if s.summary_text and len(s.summary_text.strip()) >= self.settings.digest_min_summary_length
-            ]
+            valid_summaries = self._valid_summaries(summaries)
 
             if not valid_summaries:
                 logger.warning(f"No valid summaries found for {date}")
@@ -161,10 +263,7 @@ class DigestBuilder:
             summaries = result.scalars().all()
 
             # Filter out empty summaries
-            valid_summaries = [
-                s for s in summaries
-                if s.summary_text and len(s.summary_text.strip()) >= self.settings.digest_min_summary_length
-            ]
+            valid_summaries = self._valid_summaries(summaries)
 
             if not valid_summaries:
                 logger.warning(f"No valid summaries found for {date}")
