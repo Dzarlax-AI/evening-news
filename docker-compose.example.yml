@@ -28,7 +28,8 @@ services:
       - TELEGRAM_TOKEN=1234567890:AAExxxxxxxxxxxxxxxxxxxxxxxxxxxxx
       - TELEGRAM_CHAT_ID=123456789             # основной канал — дайджесты с новостями
       - TELEGRAM_SERVICE_CHAT_ID=              # сервисный канал — ошибки и алерты (если пусто — используется TELEGRAM_CHAT_ID)
-      - TELEGRAPH_ACCESS_TOKEN=your_telegraph_token_here
+      - TELEGRAM_RICH_MESSAGES_ENABLED=true
+      - SITE_BASE_URL=https://your-domain.com
       
       # Application Settings
       - LOG_LEVEL=INFO
@@ -175,5 +176,5 @@ networks:
 # - TELEGRAM_TOKEN на токен вашего бота
 # - TELEGRAM_CHAT_ID на ID основного канала (дайджесты)
 # - TELEGRAM_SERVICE_CHAT_ID на ID сервисного канала (ошибки/алерты, опционально)
+# - SITE_BASE_URL на публичный URL сайта для ссылок полной версии
 # - ADMIN_PASSWORD на надежный пароль для админки
-# - TELEGRAPH_ACCESS_TOKEN на ваш Telegraph токен (опционально)

@@ -1,0 +1,220 @@
+{% extends "base.html" %}
+
+{% block title %}{{ title }} — Evening News{% endblock %}
+
+{% block content %}
+<main class="digest-page">
+  <div class="digest-shell">
+    <header class="digest-header">
+      <p class="digest-kicker">Evening News</p>
+      <h1>{{ title }}</h1>
+      <p class="digest-meta">{{ total_articles }} новостей{% if summaries %}, {{ summaries|length }} категорий{% endif %}</p>
+    </header>
+
+    {% if summaries %}
+    <nav class="digest-toc" aria-label="Категории">
+      {% for summary in summaries %}
+      <a href="#category-{{ loop.index }}">{{ summary.category }} <span>{{ summary.articles_count }}</span></a>
+      {% endfor %}
+    </nav>
+    {% endif %}
+
+    {% for category in ordered_categories %}
+    {% set summary = summaries | selectattr("category", "equalto", category) | first %}
+    {% set articles = articles_by_category.get(category, []) %}
+    <section class="digest-section" id="category-{{ loop.index }}">
+      <div class="digest-section-header">
+        <h2>{{ category }}</h2>
+        <span>{{ articles|length }} статей</span>
+      </div>
+
+      {% if summary %}
+      <div class="digest-summary">
+        {% for paragraph in summary.summary_text.split('\n') if paragraph.strip() %}
+        <p>{{ paragraph }}</p>
+        {% endfor %}
+      </div>
+      {% endif %}
+
+      {% if articles %}
+      <div class="digest-articles">
+        {% for article in articles %}
+        <article class="digest-article">
+          {% if article.image_url %}
+          <a class="digest-article-image" href="{{ article.url }}" target="_blank" rel="noopener noreferrer">
+            <img src="{{ article.image_url }}" alt="">
+          </a>
+          {% endif %}
+          <div class="digest-article-body">
+            <h3><a href="{{ article.url }}" target="_blank" rel="noopener noreferrer">{{ article.title }}</a></h3>
+            {% if article.summary %}
+            <p>{{ article.summary }}</p>
+            {% endif %}
+            <div class="digest-article-meta">
+              <span>{{ article.source_name }}</span>
+              {% if article.fetched_at %}
+              <time datetime="{{ article.fetched_at.isoformat() }}">{{ article.fetched_at.strftime('%d.%m.%Y %H:%M') }}</time>
+              {% endif %}
+            </div>
+          </div>
+        </article>
+        {% endfor %}
+      </div>
+      {% endif %}
+    </section>
+    {% endfor %}
+  </div>
+</main>
+
+<style>
+.digest-page {
+  min-height: 100vh;
+  padding: 32px 20px 64px;
+}
+.digest-shell {
+  max-width: 980px;
+  margin: 0 auto;
+}
+.digest-header {
+  padding: 28px 0 20px;
+  border-bottom: 1px solid var(--border);
+}
+.digest-kicker {
+  margin: 0 0 8px;
+  color: var(--text-tertiary);
+  font-size: 0.75rem;
+  font-weight: 700;
+  letter-spacing: 0.08em;
+  text-transform: uppercase;
+}
+.digest-header h1 {
+  margin: 0;
+  font-family: var(--font-serif);
+  font-size: clamp(2rem, 5vw, 3.4rem);
+  line-height: 1.05;
+}
+.digest-meta {
+  margin: 14px 0 0;
+  color: var(--text-secondary);
+}
+.digest-toc {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 8px;
+  padding: 18px 0;
+  border-bottom: 1px solid var(--border);
+}
+.digest-toc a {
+  display: inline-flex;
+  align-items: center;
+  gap: 8px;
+  padding: 7px 11px;
+  border: 1px solid var(--border);
+  border-radius: var(--radius-sm);
+  color: var(--text-secondary);
+  text-decoration: none;
+  background: var(--surface);
+  font-size: 0.85rem;
+}
+.digest-toc a:hover {
+  color: var(--text);
+  border-color: var(--accent);
+}
+.digest-toc span {
+  color: var(--text-tertiary);
+  font-variant-numeric: tabular-nums;
+}
+.digest-section {
+  padding: 28px 0;
+  border-bottom: 1px solid var(--border);
+}
+.digest-section-header {
+  display: flex;
+  align-items: baseline;
+  justify-content: space-between;
+  gap: 16px;
+  margin-bottom: 14px;
+}
+.digest-section-header h2 {
+  margin: 0;
+  font-family: var(--font-serif);
+  font-size: 1.7rem;
+}
+.digest-section-header span {
+  color: var(--text-tertiary);
+  font-size: 0.85rem;
+  white-space: nowrap;
+}
+.digest-summary {
+  margin-bottom: 18px;
+  color: var(--text-secondary);
+  font-size: 1rem;
+  line-height: 1.65;
+}
+.digest-summary p {
+  margin: 0 0 10px;
+}
+.digest-articles {
+  display: flex;
+  flex-direction: column;
+  gap: 12px;
+}
+.digest-article {
+  display: grid;
+  grid-template-columns: 96px 1fr;
+  gap: 14px;
+  padding: 14px 0;
+}
+.digest-article-image {
+  display: block;
+  width: 96px;
+  height: 72px;
+  border-radius: var(--radius-sm);
+  overflow: hidden;
+  background: var(--surface-2);
+}
+.digest-article-image img {
+  width: 100%;
+  height: 100%;
+  object-fit: cover;
+}
+.digest-article-body h3 {
+  margin: 0 0 6px;
+  font-family: var(--font-serif);
+  font-size: 1.1rem;
+  line-height: 1.3;
+}
+.digest-article-body h3 a {
+  color: var(--text);
+  text-decoration: none;
+}
+.digest-article-body h3 a:hover {
+  color: var(--text-secondary);
+}
+.digest-article-body p {
+  margin: 0 0 8px;
+  color: var(--text-secondary);
+  font-size: 0.92rem;
+  line-height: 1.5;
+}
+.digest-article-meta {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 10px;
+  color: var(--text-tertiary);
+  font-size: 0.78rem;
+}
+@media (max-width: 640px) {
+  .digest-page {
+    padding: 20px 14px 48px;
+  }
+  .digest-article {
+    grid-template-columns: 64px 1fr;
+  }
+  .digest-article-image {
+    width: 64px;
+    height: 64px;
+  }
+}
+</style>
+{% endblock %}

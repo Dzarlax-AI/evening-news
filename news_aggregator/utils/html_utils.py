@@ -66,6 +66,63 @@ def validate_telegram_html(html: str) -> Optional[str]:
             return None
 
 
+def validate_telegram_rich_html(html: str) -> Optional[str]:
+    """
+    Validate and clean HTML for Telegram Rich Messages.
+
+    Rich Message HTML supports block-level structure that regular
+    parse_mode=HTML does not. Keep this separate from validate_telegram_html()
+    so regular Telegram messages stay constrained to their older tag subset.
+    """
+    if not html or not html.strip():
+        return None
+
+    try:
+        soup = BeautifulSoup(html, 'html.parser')
+
+        allowed_tags = {
+            'a', 'b', 'blockquote', 'br', 'cite', 'code', 'details', 'em',
+            'figcaption', 'figure', 'h1', 'h2', 'h3', 'h4', 'h5', 'h6',
+            'hr', 'i', 'li', 'ol', 'p', 'pre', 's', 'strong', 'sub',
+            'summary', 'sup', 'tg-reference', 'u', 'ul',
+        }
+        allowed_attrs = {
+            'a': {'href', 'name'},
+            'details': {'open'},
+            'tg-reference': {'name'},
+        }
+
+        for tag in soup.find_all():
+            if tag.name not in allowed_tags:
+                tag.unwrap()
+                continue
+
+            allowed = allowed_attrs.get(tag.name, set())
+            for attr in list(tag.attrs):
+                if attr not in allowed:
+                    del tag[attr]
+
+            if tag.name == 'a' and tag.get('href'):
+                href = str(tag['href']).strip()
+                if not (
+                    href.startswith('http://')
+                    or href.startswith('https://')
+                    or href.startswith('#')
+                    or href.startswith('mailto:')
+                    or href.startswith('tel:')
+                    or href.startswith('tg://user?id=')
+                ):
+                    del tag['href']
+
+        clean_html = str(soup)
+        clean_html = re.sub(r'\n\s*\n\s*\n+', '\n\n', clean_html)
+        clean_html = re.sub(r' +', ' ', clean_html)
+        return clean_html.strip()
+
+    except Exception:
+        return None
+
+
 def smart_truncate_html(html: str, max_length: int) -> str:
     """
     Smart truncation of HTML that preserves structure.

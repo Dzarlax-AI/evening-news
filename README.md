@@ -14,7 +14,7 @@ A self-hosted news digest service that collects articles from RSS feeds, Telegra
 4. **Summarizes** each article with AI (Google Gemini), extracting the key points in a consistent format.
 5. **Categorizes** articles automatically. The more you correct the AI via the admin panel, the better it gets over time — corrections accumulate as examples and are injected into future prompts.
 6. **Generates** a per-category daily summary across all collected articles.
-7. **Publishes** a digest to your Telegram channel: a brief summary per category as a Telegram message, plus a full-length Telegraph article with titles, summaries, images, and source links organized by category with a table of contents.
+7. **Publishes** a digest to your Telegram channel as a Rich Message, with a first-party full version available on the public site.
 
 Everything runs on a schedule you control, or you can trigger any step manually from the admin panel.
 
@@ -60,8 +60,8 @@ flowchart TD
     end
 
     subgraph delivery["5 · Deliver"]
-        Telegraph[Telegraph<br/>full article]
-        TGBot[Telegram Bot<br/>digest message]
+        Site[Public site<br/>daily digest page]
+        TGBot[Telegram Bot<br/>rich digest message]
         Channel[Your Telegram<br/>channel]
     end
 
@@ -87,8 +87,8 @@ flowchart TD
     DB --> DGen
     DGen <--> AI2
     DGen --> DB
-    DB --> Telegraph
-    Telegraph --> TGBot
+    DB --> Site
+    Site --> TGBot
     TGBot --> Channel
     UI --> DB
     Scheduler -->|triggers| Fetcher
@@ -119,6 +119,7 @@ The app serves a public news reader at `/` (no login required):
 
 - **List view** (`/`) — the only view, with sidebar filtering by category and source, sticky toolbar with search and time period filters
 - **Search** (`/search`) — full-text search across collected articles
+- **Daily digest** (`/digest/YYYY-MM-DD`) — a stable full-version page linked from Telegram digests
 - **Article modal** — click any article to read its AI summary and full text in a modal
 
 Design follows the [dzarlax.dev](https://dzarlax.dev) brand system: warm ivory background, Georgia serif headings, dark graphite accents, full dark mode support. Mobile-optimized with compact cards and horizontal category chips.
@@ -207,9 +208,8 @@ GEMINI_API_KEY=your_gemini_api_key
 # Telegram (where digests are published)
 TELEGRAM_TOKEN=your_bot_token
 TELEGRAM_CHAT_ID=your_channel_id
-
-# Telegraph (for full-length digest articles)
-TELEGRAPH_ACCESS_TOKEN=your_telegraph_token
+TELEGRAM_RICH_MESSAGES_ENABLED=true
+SITE_BASE_URL=https://news.example.com
 
 # Admin panel
 ADMIN_USERNAME=admin

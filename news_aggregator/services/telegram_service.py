@@ -7,7 +7,7 @@ from datetime import datetime
 from ..config import settings
 from ..core.http_client import get_http_client
 from ..core.exceptions import TelegramError
-from ..utils.html_utils import validate_telegram_html, strip_html_tags
+from ..utils.html_utils import validate_telegram_html, validate_telegram_rich_html, strip_html_tags
 
 
 class TelegramService:
@@ -110,6 +110,18 @@ class TelegramService:
         """Send message to the main news channel (HTML formatted)."""
         return await self._send_to_chat(text, self.chat_id)
 
+    async def send_rich_message(self, html: str, fallback_text: Optional[str] = None) -> bool:
+        """Send a Rich Message to the main news channel, falling back to sendMessage."""
+        sent = await self._send_rich_to_chat(html, self.chat_id)
+        if sent:
+            return True
+
+        if fallback_text:
+            logging.warning("Telegram Rich Message failed; falling back to regular HTML message")
+            return await self.send_message(fallback_text)
+
+        return False
+
     async def send_service_message(self, text: str) -> bool:
         """Send message to the service channel (errors, alerts)."""
         return await self._send_to_chat(text, self.service_chat_id)
@@ -143,6 +155,38 @@ class TelegramService:
                     return False
         except Exception as e:
             logging.error(f"Telegram request failed: {e}")
+            return False
+
+    async def _send_rich_to_chat(self, html: str, chat_id: str) -> bool:
+        """Low-level Rich Message send to a specific chat_id."""
+        if not html or not str(html).strip():
+            logging.warning("Telegram _send_rich_to_chat called with empty HTML")
+            return False
+
+        cleaned_html = validate_telegram_rich_html(html)
+        if cleaned_html is None:
+            logging.warning("Telegram Rich Message HTML validation failed")
+            return False
+
+        url = f"{self.api_url}/sendRichMessage"
+        data = {
+            "chat_id": chat_id,
+            "rich_message": {
+                "html": cleaned_html,
+            },
+        }
+
+        try:
+            async with get_http_client() as client:
+                response = await client.post(url, json=data)
+                async with response:
+                    if response.status == 200:
+                        return True
+                    error_text = await response.text()
+                    logging.error(f"Telegram Rich Message API error {response.status}: {error_text}")
+                    return False
+        except Exception as e:
+            logging.error(f"Telegram Rich Message request failed: {e}")
             return False
     
     async def test_connection(self) -> bool:

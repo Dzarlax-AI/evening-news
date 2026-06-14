@@ -91,8 +91,7 @@ v2/
 │   ├── services/            # ✅ Бизнес-логика
 │   │   ├── ai_client.py     # Constructor KM API
 │   │   ├── source_manager.py # Управление источниками
-│   │   ├── telegram_*.py    # Telegram интеграция
-│   │   └── telegraph_service.py # Telegraph публикация
+│   │   └── telegram_*.py    # Telegram интеграция
 │   ├── sources/             # ✅ Система источников
 │   │   ├── rss_source.py    # RSS обработка
 │   │   ├── telegram_source.py # Telegram каналы
@@ -146,9 +145,8 @@ CONSTRUCTOR_KM_API_KEY=your_api_key_here
 # Telegram Integration
 TELEGRAM_TOKEN=your_bot_token
 TELEGRAM_CHAT_ID=your_chat_id
-
-# Telegraph (optional)
-TELEGRAPH_ACCESS_TOKEN=your_telegraph_token
+TELEGRAM_RICH_MESSAGES_ENABLED=true
+SITE_BASE_URL=https://news.example.com
 ```
 
 ## 🎯 Статус системы
@@ -158,8 +156,8 @@ TELEGRAPH_ACCESS_TOKEN=your_telegraph_token
 - **База данных** - PostgreSQL с 9 таблицами
 - **Веб-интерфейс** - Админ-панель + публичный API
 - **AI интеграция** - Constructor KM с rate limiting
-- **Telegram бот** - Уведомления и публикация
-- **Telegraph** - Автоматическая публикация статей
+- **Telegram бот** - Уведомления и Rich Message публикация
+- **Публичный дайджест** - Полная версия на собственном сайте
 - **Backup система** - Полные бэкапы БД
 - **Docker deployment** - Готово к продакшн
 

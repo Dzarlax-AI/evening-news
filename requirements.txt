@@ -57,9 +57,6 @@ rich>=13.7.0
 
 # Legacy dependencies removed (already specified above)
 
-# Telegraph integration
-telegraph>=2.2.0
-
 # Process monitoring
 psutil>=5.9.6                 # System and process monitoring
 

@@ -38,6 +38,9 @@ class Settings(BaseSettings):
     telegram_token: Optional[SecretStr] = Field(default=None, alias="TELEGRAM_TOKEN")
     telegram_chat_id: Optional[str] = Field(default=None, alias="TELEGRAM_CHAT_ID")
     telegram_service_chat_id: Optional[str] = Field(default=None, alias="TELEGRAM_SERVICE_CHAT_ID")
+    telegram_rich_messages_enabled: bool = Field(default=True, alias="TELEGRAM_RICH_MESSAGES_ENABLED")
+    site_base_url: str = Field(default="https://news.dzarlax.dev", alias="SITE_BASE_URL")
+    # Deprecated: accepted so older .env files do not break settings loading after Telegraph removal.
     telegraph_access_token: Optional[str] = Field(default=None, alias="TELEGRAPH_ACCESS_TOKEN")
     
     # Application
@@ -131,7 +134,6 @@ class Settings(BaseSettings):
             "TELEGRAM_TOKEN": self.telegram_token.get_secret_value() if self.telegram_token else None,
             "TELEGRAM_CHAT_ID": self.telegram_chat_id,
             "TELEGRAM_SERVICE_CHAT_ID": self.telegram_service_chat_id or self.telegram_chat_id,
-            "TELEGRAPH_ACCESS_TOKEN": self.telegraph_access_token,
         }
         return legacy_mapping.get(key)
 
