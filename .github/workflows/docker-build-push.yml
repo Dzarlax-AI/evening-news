@@ -6,13 +6,21 @@ on:
       - 'news_aggregator/**'
       - 'web/**'
       - 'docker/**'
+      - 'db/**'
       - 'requirements.txt'
+      - 'pytest.ini'
+      - 'tests/**'
       - '.github/workflows/docker-build-push.yml'
   pull_request:
     paths:
       - 'news_aggregator/**'
       - 'web/**'
       - 'docker/**'
+      - 'db/**'
+      - 'requirements.txt'
+      - 'pytest.ini'
+      - 'tests/**'
+      - '.github/workflows/docker-build-push.yml'
   release:
     types: [published]
   workflow_dispatch:
@@ -27,7 +35,34 @@ env:
   IMAGE_NAME: dzarlax-ai/rss-summarizer
 
 jobs:
+  test:
+    runs-on: ubuntu-latest
+    permissions:
+      contents: read
+
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v4
+
+      - name: Set up Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: '3.12'
+          cache: pip
+
+      - name: Install dependencies
+        run: |
+          python -m pip install --upgrade pip
+          python -m pip install -r requirements.txt
+
+      - name: Run test suite
+        env:
+          CI: 'true'
+          NO_BROWSER: '1'
+        run: python -m pytest tests/ -q
+
   build-and-push:
+    needs: test
     runs-on: ubuntu-latest
     permissions:
       contents: read
@@ -83,4 +118,3 @@ jobs:
         if: github.event_name == 'pull_request'
         run: |
           docker run --rm ${{ env.REGISTRY }}/${{ env.IMAGE_NAME }}:${{ steps.meta.outputs.version }} python -c "import news_aggregator; print('✅ Import test passed')"
-

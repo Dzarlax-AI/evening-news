@@ -392,10 +392,11 @@
       <li>Scheduler runs persist start/finish/success timestamps, status, redacted error, and duration. Failures do not overwrite the previous successful timestamp.</li>
       <li>Task failures, timeouts, stuck recovery, aggregated processing warnings, scheduler-loop/capacity problems, and Chrome unavailable/recovered transitions use a deduplicated service-chat alert manager.</li>
       <li>Backup script absence and non-zero exit status no longer disappear as successful scheduled runs.</li>
+      <li>The Docker workflow now runs the full deterministic pytest suite in Python 3.12 first; <code>build-and-push</code> has an explicit <code>needs: test</code> gate.</li>
     </ul>
     <p>
       Verification: <code>python -m py_compile</code> passed for changed Python modules;
-      <code>pytest tests/ -q</code> completed with <code>43 passed, 4 skipped</code> in the final review.
+      <code>pytest tests/ -q</code> completed with <code>43 passed, 4 skipped</code> in the final local review.
       The four skipped tests are real external Chrome/network smoke checks and now require
       <code>RUN_REAL_BROWSER_TESTS=1</code>. Production CDP smoke, descriptor soak, migration execution,
       image build, and deployment remain intentionally pending.
