@@ -125,10 +125,10 @@ async def _resolve_host(host: str) -> str:
 
 
 async def _check_remote_port(host: str, port: int) -> None:
-    reader = None
+    _reader = None
     writer = None
     try:
-        reader, writer = await asyncio.wait_for(
+        _reader, writer = await asyncio.wait_for(
             asyncio.open_connection(host, port),
             timeout=3.0,
         )

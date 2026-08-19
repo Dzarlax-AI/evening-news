@@ -563,6 +563,8 @@ class TaskScheduler:
         try:
             logger.info("Starting news processing cycle...")
             stats = await self.orchestrator.run_full_cycle()
+            if stats.get('fatal_error'):
+                raise RuntimeError(str(stats['fatal_error']))
             processed = stats.get('articles_processed', 0)
             logger.info(f"News processing completed: {processed} articles processed")
             errors = stats.get('errors') or []
@@ -584,6 +586,8 @@ class TaskScheduler:
             # Step 1: Run full news processing cycle (if enabled)
             if config.get('run_processing', True):
                 processing_stats = await self.orchestrator.run_full_cycle()
+                if processing_stats.get('fatal_error'):
+                    raise RuntimeError(str(processing_stats['fatal_error']))
                 logger.info(f"News processing completed: {processing_stats.get('articles_processed', 0)} articles processed")
             
             # Step 2: Send digest using unified logic (if enabled)

@@ -232,3 +232,9 @@ def test_endpoint_parsing_variants():
 
     for endpoint, expected_host, expected_port in cases:
         assert bp._parse_endpoint(endpoint) == (expected_host, expected_port)
+
+
+@pytest.mark.parametrize("endpoint", ["", "ws://:9222", "ws://chrome:notaport"])
+def test_endpoint_parsing_rejects_invalid_values(endpoint):
+    with pytest.raises(ValueError):
+        bp._parse_endpoint(endpoint)

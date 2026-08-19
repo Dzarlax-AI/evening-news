@@ -70,7 +70,7 @@
       <li>The last user-observed successful channel digest was 24 July 2026.</li>
       <li>Article ingestion, processing, scheduling, and daily-summary generation continued; on 19 August the service generated eight daily summaries before attempting delivery.</li>
       <li>The rich-message request failed with Telegram HTTP 400 <code>Bad Request: chat not found</code>, and the regular HTML fallback failed with the same response.</li>
-      <li>The configured production channel ID exactly matched <code>-1002135459842</code>, was a clean string, and had not changed since 7 March.</li>
+      <li>The configured production channel ID matched the expected value, was a clean string, and had not changed since 7 March.</li>
       <li>The production token belonged to <code>@evening_news_bot</code>. A different bot with the same display name had been granted channel administrator rights, so the production bot could not address the channel.</li>
       <li>After the correct bot was added, Bot API verification reported <code>administrator</code> with <code>can_post_messages=true</code>, and a short message sent through the production <code>TelegramService</code> succeeded.</li>
       <li>The separate service chat was verified as reachable during diagnosis, but the digest failure path did not use it to notify the user.</li>
@@ -379,8 +379,8 @@
   <section class="approval">
     <h2>Implementation Record</h2>
     <p>
-      Implemented on branch <code>fix/evening-news-reliability</code> in the isolated worktree
-      <code>/private/tmp/rss-summariser-worktrees/fix-evening-news-reliability</code>. No production
+      Implemented on branch <code>fix/evening-news-reliability</code> in an isolated local worktree.
+      No production
       container, database, compose file, bot permission, or deployed image was changed by this implementation.
     </p>
     <ul>
@@ -391,12 +391,14 @@
       <li>Scheduled digest delivery now raises on final delivery failure instead of logging a false success. Manual delivery returns HTTP 502 with a safe structured body.</li>
       <li>Scheduler runs persist start/finish/success timestamps, status, redacted error, and duration. Failures do not overwrite the previous successful timestamp.</li>
       <li>Task failures, timeouts, stuck recovery, aggregated processing warnings, scheduler-loop/capacity problems, and Chrome unavailable/recovered transitions use a deduplicated service-chat alert manager.</li>
+      <li>Review follow-up made failed alerts retry immediately without phantom recovery, added environment-backed service-chat fallback when the database is unavailable, and classified top-level processing failures as failed scheduler runs.</li>
+      <li>The required scheduler outcome migration now blocks startup when its application cannot be guaranteed; the browser monitor sends alerts without constructing the full orchestrator.</li>
       <li>Backup script absence and non-zero exit status no longer disappear as successful scheduled runs.</li>
       <li>The Docker workflow now runs the full deterministic pytest suite in Python 3.12 first; <code>build-and-push</code> has an explicit <code>needs: test</code> gate.</li>
     </ul>
     <p>
       Verification: <code>python -m py_compile</code> passed for changed Python modules;
-      <code>pytest tests/ -q</code> completed with <code>43 passed, 4 skipped</code> in the final local review.
+      <code>pytest tests/ -q</code> completed with <code>51 passed, 4 skipped</code> in the final local review.
       The four skipped tests are real external Chrome/network smoke checks and now require
       <code>RUN_REAL_BROWSER_TESTS=1</code>. Production CDP smoke, descriptor soak, migration execution,
       image build, and deployment remain intentionally pending.

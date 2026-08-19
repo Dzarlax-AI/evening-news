@@ -8,6 +8,24 @@ from sqlalchemy.ext.asyncio import AsyncSession
 from .base_migration import BaseMigration
 
 
+REQUIRED_MIGRATION_ID = "007_scheduler_run_outcomes"
+
+
+def ensure_scheduler_outcome_migration(results: Dict[str, Any]) -> None:
+    """Fail startup when required scheduler outcome fields are not guaranteed."""
+    errors = [str(error) for error in results.get("errors", [])]
+    blocking_errors = [
+        error
+        for error in errors
+        if REQUIRED_MIGRATION_ID in error or error.startswith("Migration system error:")
+    ]
+    if blocking_errors:
+        raise RuntimeError(
+            f"Required migration {REQUIRED_MIGRATION_ID} was not applied: "
+            + "; ".join(blocking_errors)
+        )
+
+
 class SchedulerRunOutcomesMigration(BaseMigration):
     """Idempotently add fields required to distinguish success from failure."""
 
@@ -21,7 +39,7 @@ class SchedulerRunOutcomesMigration(BaseMigration):
 
     def __init__(self):
         super().__init__(
-            migration_id="007_scheduler_run_outcomes",
+            migration_id=REQUIRED_MIGRATION_ID,
             description="Persist scheduler success, failure, timeout, and error details",
             version="2.1.0",
         )

@@ -11,9 +11,9 @@ logger = logging.getLogger(__name__)
 
 
 async def _send_service_alert(title: str, message: str):
-    from ..orchestrator import NewsOrchestrator
+    from .telegram_service import get_telegram_service
 
-    return await NewsOrchestrator().send_operational_alert(title, message)
+    return await get_telegram_service().send_alert(title, message)
 
 
 class ProcessMonitor:
@@ -94,7 +94,7 @@ class ProcessMonitor:
         except Exception as e:
             logger.error(f"Error during browser health check: {e}")
 
-    async def manual_cleanup(self) -> dict:
+    async def get_status_snapshot(self) -> dict:
         """Return a passive status snapshot without mutating the pool."""
         from ..core.browser_pool import get_browser_pool_status
 

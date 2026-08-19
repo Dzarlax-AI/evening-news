@@ -33,7 +33,10 @@ migration_manager = create_migration_manager(AsyncSessionLocal, "Evening News v2
 
 # Register performance optimization migration
 from .migrations.feed_performance_optimization import FeedPerformanceOptimization
-from .migrations.scheduler_run_outcomes import SchedulerRunOutcomesMigration
+from .migrations.scheduler_run_outcomes import (
+    SchedulerRunOutcomesMigration,
+    ensure_scheduler_outcome_migration,
+)
 migration_manager.register_migration(FeedPerformanceOptimization())
 migration_manager.register_migration(SchedulerRunOutcomesMigration())
 
@@ -54,6 +57,7 @@ async def lifespan(app: FastAPI):
     try:
         logger.info("🔍 Checking for database migrations...")
         migration_results = await migration_manager.check_and_run_migrations()
+        ensure_scheduler_outcome_migration(migration_results)
         
         if migration_results['migrations_run']:
             logger.info(f"✅ Applied {len(migration_results['migrations_run'])} migrations")
@@ -63,7 +67,7 @@ async def lifespan(app: FastAPI):
             logger.warning(f"⚠️ Migration errors: {migration_results['errors']}")
     except Exception as e:
         logger.error(f"❌ Migration system error: {e}")
-        # Don't prevent app startup on migration errors
+        raise
     
     # Start universal database queue system
     from .services.database_queue import get_database_queue

@@ -53,10 +53,13 @@ class OperationalAlertManager:
             except Exception as exc:
                 logger.error("Operational alert sender failed for %s: %s", key, exc)
                 sent = False
-            state.last_sent_at = now
             if sent:
+                state.last_sent_at = now
                 state.suppressed = 0
             else:
+                # Retry the next observation and never announce recovery for an
+                # incident that the service chat did not receive.
+                state.active = False
                 logger.error("Could not deliver operational alert %s", key)
             return sent
 

@@ -115,6 +115,7 @@ class NewsOrchestrator:
             'categories_found': set(),
             'api_calls_made': 0,
             'errors': [],
+            'fatal_error': None,
             'performance': {}
         }
         
@@ -205,6 +206,7 @@ class NewsOrchestrator:
             logger.error(f"❌ {error_msg}")
             logger.info(f"📍 Traceback:\n{traceback.format_exc()}")
             stats['errors'].append(error_msg)
+            stats['fatal_error'] = error_msg
             return stats
     
     async def _get_telegram_service_with_db_overrides(self) -> TelegramService:
@@ -322,8 +324,16 @@ class NewsOrchestrator:
             return {'success': False, 'error': error_msg}
 
     async def send_operational_alert(self, title: str, message: str):
-        """Send an operational alert using current DB-backed service-chat settings."""
-        self.telegram_service = await self._get_telegram_service_with_db_overrides()
+        """Send an alert, falling back to environment config when DB is unavailable."""
+        try:
+            self.telegram_service = await self._get_telegram_service_with_db_overrides()
+        except Exception as exc:
+            logger.warning(
+                "Could not load Telegram overrides from the database; "
+                "using environment configuration for operational alert: %s",
+                exc,
+            )
+            self.telegram_service = get_telegram_service()
         return await self.telegram_service.send_alert(title, message)
     
     async def _process_unprocessed_articles(self, stats: Dict[str, Any]) -> Dict[str, Any]:

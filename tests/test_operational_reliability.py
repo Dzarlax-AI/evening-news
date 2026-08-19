@@ -30,6 +30,20 @@ async def test_operational_alerts_deduplicate_and_send_one_recovery():
 
 
 @pytest.mark.asyncio
+async def test_failed_alert_delivery_is_retried_and_has_no_phantom_recovery():
+    sender = AsyncMock(side_effect=[False, True])
+    alerts = OperationalAlertManager(sender, repeat_interval_seconds=3600)
+
+    assert await alerts.failure("database", "Database down", "first") is False
+    assert alerts.is_active("database") is False
+    assert await alerts.recovery("database", "Database up", "never announced") is False
+
+    assert await alerts.failure("database", "Database down", "retry") is True
+    assert sender.await_count == 2
+    assert alerts.is_active("database") is True
+
+
+@pytest.mark.asyncio
 async def test_process_monitor_is_passive_and_alerts_on_failure_and_recovery():
     alerts = MagicMock()
     alerts.failure = AsyncMock(return_value=True)
@@ -88,6 +102,32 @@ async def test_digest_delivery_failure_is_not_reported_as_success():
 
 
 @pytest.mark.asyncio
+async def test_operational_alert_falls_back_to_environment_when_db_is_down():
+    from news_aggregator.orchestrator import NewsOrchestrator
+
+    orchestrator = NewsOrchestrator.__new__(NewsOrchestrator)
+    orchestrator.db_queue_manager = MagicMock()
+    orchestrator.db_queue_manager.execute_read = AsyncMock(
+        side_effect=RuntimeError("database unavailable")
+    )
+    fallback_service = MagicMock()
+    fallback_service.send_alert = AsyncMock(return_value=True)
+
+    with patch(
+        "news_aggregator.orchestrator.get_telegram_service",
+        return_value=fallback_service,
+    ):
+        result = await NewsOrchestrator.send_operational_alert(
+            orchestrator, "Database error", "queue unavailable"
+        )
+
+    assert result is True
+    fallback_service.send_alert.assert_awaited_once_with(
+        "Database error", "queue unavailable"
+    )
+
+
+@pytest.mark.asyncio
 async def test_scheduler_persists_failed_run_and_sends_alert():
     scheduler = make_scheduler_for_unit_test()
     scheduler._run_telegram_digest = AsyncMock(
@@ -116,6 +156,39 @@ async def test_scheduler_aggregates_processing_errors_as_one_warning():
     kwargs = scheduler._update_task_schedule.await_args.kwargs
     assert kwargs["status"] == "warning"
     assert kwargs["error"] == "Ошибок источников/обработки: 3"
+
+
+@pytest.mark.asyncio
+async def test_fatal_processing_cycle_raises_instead_of_returning_warning():
+    scheduler = make_scheduler_for_unit_test()
+    scheduler.orchestrator.run_full_cycle = AsyncMock(
+        return_value={
+            "articles_processed": 0,
+            "errors": ["Error in full processing cycle: database unavailable"],
+            "fatal_error": "Error in full processing cycle: database unavailable",
+        }
+    )
+
+    with pytest.raises(RuntimeError, match="database unavailable"):
+        await TaskScheduler._run_news_processing(scheduler, {})
+
+
+@pytest.mark.asyncio
+async def test_fatal_digest_cycle_stops_before_telegram_delivery():
+    scheduler = make_scheduler_for_unit_test()
+    scheduler.orchestrator.run_full_cycle = AsyncMock(
+        return_value={
+            "articles_processed": 0,
+            "errors": ["Error in full processing cycle: database unavailable"],
+            "fatal_error": "Error in full processing cycle: database unavailable",
+        }
+    )
+    scheduler.orchestrator.send_telegram_digest = AsyncMock()
+
+    with pytest.raises(RuntimeError, match="database unavailable"):
+        await TaskScheduler._run_news_digest_cycle(scheduler, {})
+
+    scheduler.orchestrator.send_telegram_digest.assert_not_awaited()
 
 
 @pytest.mark.asyncio
@@ -240,3 +313,21 @@ async def test_scheduler_check_failure_reaches_service_alert():
     scheduler.alerts.failure.assert_awaited_once()
     assert scheduler.alerts.failure.await_args.args[0] == "scheduler-task-check"
     assert "database queue unavailable" in scheduler.alerts.failure.await_args.args[2]
+
+
+def test_required_scheduler_migration_failure_blocks_startup():
+    from news_aggregator.migrations.scheduler_run_outcomes import (
+        ensure_scheduler_outcome_migration,
+    )
+
+    with pytest.raises(RuntimeError, match="007_scheduler_run_outcomes"):
+        ensure_scheduler_outcome_migration(
+            {"errors": ["Migration 007_scheduler_run_outcomes failed: permission denied"]}
+        )
+
+    with pytest.raises(RuntimeError, match="007_scheduler_run_outcomes"):
+        ensure_scheduler_outcome_migration(
+            {"errors": ["Migration system error: database unavailable"]}
+        )
+
+    ensure_scheduler_outcome_migration({"errors": []})
