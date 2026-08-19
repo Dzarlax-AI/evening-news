@@ -5,6 +5,7 @@ from datetime import datetime
 from typing import Optional
 
 from fastapi import APIRouter, Depends, HTTPException
+from fastapi.responses import JSONResponse
 from pydantic import BaseModel
 from sqlalchemy.ext.asyncio import AsyncSession
 
@@ -109,10 +110,11 @@ async def test_telegram_connection(db: AsyncSession = Depends(get_db)):
     """Send a test message to the service channel."""
     try:
         service = await _get_telegram_service_with_db_overrides(db)
-        ok = await service.test_connection()
+        result = await service.test_connection()
         return {
-            "success": ok,
-            "message": "Тест отправлен" if ok else "Ошибка отправки",
+            "success": bool(result),
+            "message": "Тест отправлен" if result else "Ошибка отправки",
+            "error": None if result else result.error_summary(),
             "timestamp": datetime.utcnow().isoformat(),
         }
     except Exception as e:
@@ -122,6 +124,7 @@ async def test_telegram_connection(db: AsyncSession = Depends(get_db)):
 @router.post("/send-digest")
 async def send_telegram_digest():
     """Generate and send Telegram digest."""
+    orchestrator = None
     try:
         logger.info("📱 Generating Telegram digest...")
         orchestrator = NewsOrchestrator()
@@ -129,17 +132,20 @@ async def send_telegram_digest():
 
         result = await orchestrator.send_telegram_digest()
 
-        await orchestrator.stop()
-
         success = result.get('success', False)
-        return {
+        response_body = {
             "success": success,
             "message": "Telegram digest sent successfully" if success else "Digest generation failed",
             "result": result,
             "timestamp": datetime.utcnow().isoformat(),
         }
+        if not success:
+            return JSONResponse(status_code=502, content=response_body)
+        return response_body
 
     except Exception as e:
         logger.error(f"Error sending Telegram digest: {e}")
         raise HTTPException(status_code=500, detail=f"Failed to send digest: {str(e)}")
-
+    finally:
+        if orchestrator is not None:
+            await orchestrator.stop()

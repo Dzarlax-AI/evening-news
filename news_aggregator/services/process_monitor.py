@@ -5,16 +5,29 @@ import logging
 from typing import Optional
 from datetime import datetime
 
+from .operational_alerts import OperationalAlertManager
+
 logger = logging.getLogger(__name__)
 
 
-class ProcessMonitor:
-    """Monitor browser connection health and trigger reconnection if needed."""
+async def _send_service_alert(title: str, message: str):
+    from ..orchestrator import NewsOrchestrator
 
-    def __init__(self, check_interval: int = 300):  # 5 minutes
+    return await NewsOrchestrator().send_operational_alert(title, message)
+
+
+class ProcessMonitor:
+    """Observe browser pool health without opening replacement CDP sessions."""
+
+    def __init__(
+        self,
+        check_interval: int = 300,
+        alerts: Optional[OperationalAlertManager] = None,
+    ):  # 5 minutes
         self.check_interval = check_interval
         self.cleanup_task: Optional[asyncio.Task] = None
         self.is_running = False
+        self.alerts = alerts or OperationalAlertManager(_send_service_alert)
 
     async def start(self):
         """Start periodic health monitoring."""
@@ -53,41 +66,44 @@ class ProcessMonitor:
                 await asyncio.sleep(10)
 
     async def _check_browser_health(self):
-        """Check browser connection and reconnect if needed."""
+        """Log passive browser state; content requests own reconnection attempts."""
         try:
-            from ..core.browser_pool import get_browser, close_browser
+            from ..core.browser_pool import get_browser_pool_status
 
-            browser = await get_browser()
-            if browser is None or (hasattr(browser, 'connection') and
-                                   (browser.connection is None or browser.connection.closed)):
-                logger.warning("Browser connection unhealthy, resetting...")
-                await close_browser()
-                await self._force_content_extractor_cleanup()
+            status = get_browser_pool_status()
+            if status.connected:
+                logger.debug("Browser pool connection is healthy")
+                await self.alerts.recovery(
+                    "browser-pool",
+                    "Chrome снова доступен",
+                    "CDP-соединение успешно восстановлено.",
+                )
+            elif status.last_error:
+                logger.warning(
+                    "Browser pool unavailable: %s (cooldown %.1fs)",
+                    status.last_error,
+                    status.cooldown_remaining_seconds,
+                )
+                await self.alerts.failure(
+                    "browser-pool",
+                    "Chrome/CDP недоступен",
+                    f"{status.last_error}. Cooldown: {status.cooldown_remaining_seconds:.1f} с.",
+                )
+            else:
+                logger.debug("Browser pool is idle; no connection has been requested")
         except Exception as e:
             logger.error(f"Error during browser health check: {e}")
 
-    async def _force_content_extractor_cleanup(self):
-        """Force cleanup of ContentExtractor after connection loss."""
-        try:
-            from ..extraction import cleanup_content_extractor
-            await cleanup_content_extractor()
-            logger.info("Forced ContentExtractor cleanup after browser reset")
-        except Exception as e:
-            logger.error(f"Error during forced ContentExtractor cleanup: {e}")
-
     async def manual_cleanup(self) -> dict:
-        """Manually trigger health check and return status."""
-        from ..core.browser_pool import _browser
+        """Return a passive status snapshot without mutating the pool."""
+        from ..core.browser_pool import get_browser_pool_status
 
-        connected = False
-        if _browser is not None:
-            try:
-                connected = _browser.connection and not _browser.connection.closed
-            except Exception:
-                pass
+        status = get_browser_pool_status()
 
         return {
-            "browser_connected": connected,
+            "browser_connected": status.connected,
+            "last_error": status.last_error,
+            "cooldown_remaining_seconds": status.cooldown_remaining_seconds,
             "timestamp": datetime.utcnow().isoformat()
         }
 

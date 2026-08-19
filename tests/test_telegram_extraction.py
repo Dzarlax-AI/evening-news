@@ -126,11 +126,13 @@ async def test_parse_telegram_empty_html(telegram_source):
 async def test_fetch_with_browser_yields_articles(telegram_source, mock_browser, mock_tab):
     """_fetch_with_browser should yield Article objects from rendered page."""
     mock_browser.get = AsyncMock(return_value=mock_tab)
-    telegram_source.browser = mock_browser
-
-    articles = []
-    async for article in telegram_source._fetch_with_browser():
-        articles.append(article)
+    with patch(
+        "news_aggregator.core.browser_pool.get_browser",
+        AsyncMock(return_value=mock_browser),
+    ):
+        articles = []
+        async for article in telegram_source._fetch_with_browser():
+            articles.append(article)
 
     assert len(articles) >= 2
     # Tab should be closed
@@ -141,11 +143,13 @@ async def test_fetch_with_browser_yields_articles(telegram_source, mock_browser,
 async def test_fetch_with_browser_scrolls(telegram_source, mock_browser, mock_tab):
     """Browser fetch should perform scrolling to load more messages."""
     mock_browser.get = AsyncMock(return_value=mock_tab)
-    telegram_source.browser = mock_browser
-
-    articles = []
-    async for article in telegram_source._fetch_with_browser():
-        articles.append(article)
+    with patch(
+        "news_aggregator.core.browser_pool.get_browser",
+        AsyncMock(return_value=mock_browser),
+    ):
+        articles = []
+        async for article in telegram_source._fetch_with_browser():
+            articles.append(article)
 
     # Should have called evaluate for scrolling (scrollTo, scrollBy)
     scroll_calls = [
@@ -158,10 +162,6 @@ async def test_fetch_with_browser_scrolls(telegram_source, mock_browser, mock_ta
 @pytest.mark.asyncio
 async def test_fetch_with_browser_tries_multiple_urls(telegram_source, mock_browser):
     """Should try alternative URLs if first one fails."""
-    fail_tab = AsyncMock()
-    fail_tab.wait_for = AsyncMock(side_effect=Exception("Timeout"))
-    fail_tab.close = AsyncMock()
-
     success_tab = AsyncMock()
     success_tab.wait_for = AsyncMock()
     success_tab.get_content = AsyncMock(return_value=SAMPLE_TELEGRAM_HTML)
@@ -169,12 +169,14 @@ async def test_fetch_with_browser_tries_multiple_urls(telegram_source, mock_brow
     success_tab.close = AsyncMock()
 
     # First call fails, second succeeds
-    mock_browser.get = AsyncMock(side_effect=[fail_tab, success_tab])
-    telegram_source.browser = mock_browser
-
-    articles = []
-    async for article in telegram_source._fetch_with_browser():
-        articles.append(article)
+    mock_browser.get = AsyncMock(side_effect=[Exception("CDP navigation failed"), success_tab])
+    with patch(
+        "news_aggregator.core.browser_pool.get_browser",
+        AsyncMock(return_value=mock_browser),
+    ):
+        articles = []
+        async for article in telegram_source._fetch_with_browser():
+            articles.append(article)
 
     assert len(articles) >= 2
     assert mock_browser.get.call_count == 2

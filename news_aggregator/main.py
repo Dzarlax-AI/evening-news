@@ -33,7 +33,9 @@ migration_manager = create_migration_manager(AsyncSessionLocal, "Evening News v2
 
 # Register performance optimization migration
 from .migrations.feed_performance_optimization import FeedPerformanceOptimization
+from .migrations.scheduler_run_outcomes import SchedulerRunOutcomesMigration
 migration_manager.register_migration(FeedPerformanceOptimization())
+migration_manager.register_migration(SchedulerRunOutcomesMigration())
 
 
 

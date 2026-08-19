@@ -276,10 +276,14 @@ class NewsOrchestrator:
             digest_result = await self.db_queue_manager.execute_read(build_digest_operation, timeout=30.0)
 
             if settings.telegram_rich_messages_enabled and digest_result.get('rich_digest'):
-                if await self.telegram_service.send_rich_message(digest_result['rich_digest']):
+                rich_result = await self.telegram_service.send_rich_message(digest_result['rich_digest'])
+                if rich_result:
                     return {'success': True, 'parts_sent': 1, 'rich_message': True}
 
-                logger.warning("⚠️ Rich Telegram digest failed; sending regular HTML digest fallback")
+                logger.warning(
+                    "⚠️ Rich Telegram digest failed (%s); sending regular HTML digest fallback",
+                    rich_result.error_summary(),
+                )
 
             link_line = f"\n<b>Полная версия:</b> <a href=\"{digest_url}\">Evening News</a>"
             if digest_result.get('split'):
@@ -287,20 +291,40 @@ class NewsOrchestrator:
                 digest_result['digest_parts'][0] = digest_result['digest_parts'][0] + link_line
 
                 sent_ok = 0
+                errors = []
                 for part in digest_result['digest_parts']:
-                    if await self.telegram_service.send_message(part):
+                    send_result = await self.telegram_service.send_message(part)
+                    if send_result:
                         sent_ok += 1
-                return {'success': sent_ok == len(digest_result['digest_parts']), 'parts_sent': sent_ok}
+                    else:
+                        errors.append(send_result.error_summary())
+                success = sent_ok == len(digest_result['digest_parts'])
+                return {
+                    'success': success,
+                    'parts_sent': sent_ok,
+                    'parts_total': len(digest_result['digest_parts']),
+                    'error': '; '.join(errors) if errors else None,
+                }
             else:
                 # Send single message
                 digest_content = digest_result['digest_content'] + link_line
-                ok = await self.telegram_service.send_message(digest_content)
-                return {'success': bool(ok), 'parts_sent': 1 if ok else 0}
+                send_result = await self.telegram_service.send_message(digest_content)
+                return {
+                    'success': bool(send_result),
+                    'parts_sent': 1 if send_result else 0,
+                    'parts_total': 1,
+                    'error': None if send_result else send_result.error_summary(),
+                }
                 
         except Exception as e:
             error_msg = f"Error sending Telegram digest ({type(e).__name__}): {e}"
             logger.error(f"❌ {error_msg}")
             return {'success': False, 'error': error_msg}
+
+    async def send_operational_alert(self, title: str, message: str):
+        """Send an operational alert using current DB-backed service-chat settings."""
+        self.telegram_service = await self._get_telegram_service_with_db_overrides()
+        return await self.telegram_service.send_alert(title, message)
     
     async def _process_unprocessed_articles(self, stats: Dict[str, Any]) -> Dict[str, Any]:
         """Process unprocessed articles using specialized processors."""
