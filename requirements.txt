@@ -62,7 +62,7 @@ psutil>=5.9.6                 # System and process monitoring
 
 # Content extraction improvements
 readability-lxml>=0.8.1       # Mozilla readability algorithm
-nodriver>=0.38                # Chrome CDP browser automation (replaces Playwright)
+nodriver==0.50.3              # Chrome CDP browser automation; lifecycle behavior is version-sensitive
 chardet>=5.2.0                # Character encoding detection
 
 # Testing

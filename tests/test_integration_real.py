@@ -1,7 +1,7 @@
 """Integration tests — real browser, real websites.
 
 Run with: pytest tests/test_integration_real.py -v -s
-Requires Chrome installed locally. Skipped in CI.
+Requires Chrome, network access, and explicit opt-in.
 """
 
 import asyncio
@@ -10,10 +10,10 @@ import os
 import pytest
 import nodriver as uc
 
-# Skip entire module if in CI
+# Real network/browser checks are intentionally outside the deterministic suite.
 pytestmark = pytest.mark.skipif(
-    os.environ.get("CI") == "true" or os.environ.get("NO_BROWSER") == "1",
-    reason="Requires a real browser — skipped in CI",
+    os.environ.get("RUN_REAL_BROWSER_TESTS") != "1",
+    reason="Set RUN_REAL_BROWSER_TESTS=1 to run real browser/network checks",
 )
 
 

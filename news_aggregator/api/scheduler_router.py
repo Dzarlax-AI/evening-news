@@ -64,6 +64,11 @@ async def get_schedule_settings(db: AsyncSession = Depends(get_db)):
                     "timezone": setting.timezone,
                     "task_config": setting.task_config or {},  # Added task_config
                     "last_run": setting.last_run.isoformat() if setting.last_run else None,
+                    "last_finished_at": setting.last_finished_at.isoformat() if setting.last_finished_at else None,
+                    "last_success_at": setting.last_success_at.isoformat() if setting.last_success_at else None,
+                    "last_status": setting.last_status,
+                    "last_error": setting.last_error,
+                    "last_duration_seconds": float(setting.last_duration_seconds) if setting.last_duration_seconds is not None else None,
                     "next_run": setting.next_run.isoformat() if setting.next_run else None,
                     "is_running": setting.is_running,
                     "created_at": setting.created_at.isoformat() if setting.created_at else None,
@@ -143,6 +148,11 @@ async def create_schedule_setting(
                 "timezone": new_setting.timezone,
                 "task_config": new_setting.task_config or {},
                 "last_run": None,
+                "last_finished_at": None,
+                "last_success_at": None,
+                "last_status": None,
+                "last_error": None,
+                "last_duration_seconds": None,
                 "next_run": new_setting.next_run.isoformat() if new_setting.next_run else None,
                 "is_running": new_setting.is_running,
                 "created_at": new_setting.created_at.isoformat() if new_setting.created_at else None,
@@ -252,6 +262,11 @@ async def update_schedule_setting(
                 "timezone": updated_setting.timezone,
                 "task_config": updated_setting.task_config or {},
                 "last_run": updated_setting.last_run.isoformat() if updated_setting.last_run else None,
+                "last_finished_at": updated_setting.last_finished_at.isoformat() if updated_setting.last_finished_at else None,
+                "last_success_at": updated_setting.last_success_at.isoformat() if updated_setting.last_success_at else None,
+                "last_status": updated_setting.last_status,
+                "last_error": updated_setting.last_error,
+                "last_duration_seconds": float(updated_setting.last_duration_seconds) if updated_setting.last_duration_seconds is not None else None,
                 "next_run": updated_setting.next_run.isoformat() if updated_setting.next_run else None,
                 "is_running": updated_setting.is_running,
                 "created_at": updated_setting.created_at.isoformat() if updated_setting.created_at else None,
@@ -325,6 +340,11 @@ async def get_schedule_status(db: AsyncSession = Depends(get_db)):
                     "enabled": task.enabled,
                     "is_running": task.is_running,
                     "last_run": task.last_run.isoformat() if task.last_run else None,
+                    "last_finished_at": task.last_finished_at.isoformat() if task.last_finished_at else None,
+                    "last_success_at": task.last_success_at.isoformat() if task.last_success_at else None,
+                    "last_status": task.last_status,
+                    "last_error": task.last_error,
+                    "last_duration_seconds": float(task.last_duration_seconds) if task.last_duration_seconds is not None else None,
                     "next_run": task.next_run.isoformat() if task.next_run else None
                 }
                 for task in enabled_tasks
@@ -334,4 +354,3 @@ async def get_schedule_status(db: AsyncSession = Depends(get_db)):
         
     except Exception as e:
         raise HTTPException(status_code=500, detail=f"Failed to get status: {str(e)}")
-

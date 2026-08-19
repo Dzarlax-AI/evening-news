@@ -53,3 +53,9 @@ class S3Error(NewsAggregatorError):
 class ContentExtractionError(NewsAggregatorError):
     """Content extraction errors."""
     pass
+
+
+class BrowserUnavailableError(ContentExtractionError):
+    """Shared browser is unavailable or reconnecting is temporarily throttled."""
+
+    pass

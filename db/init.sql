@@ -98,6 +98,11 @@ CREATE TABLE schedule_settings (
     task_config JSONB DEFAULT '{}',
     
     last_run TIMESTAMP,
+    last_finished_at TIMESTAMP,
+    last_success_at TIMESTAMP,
+    last_status VARCHAR(20),
+    last_error TEXT,
+    last_duration_seconds NUMERIC(12, 3),
     next_run TIMESTAMP,
     is_running BOOLEAN DEFAULT FALSE,
     

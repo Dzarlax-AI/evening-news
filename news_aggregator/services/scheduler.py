@@ -14,6 +14,7 @@ from sqlalchemy.ext.asyncio import AsyncSession
 from ..database_helpers import fetch_all, execute_custom_write
 from ..models import ScheduleSettings
 from ..orchestrator import NewsOrchestrator
+from .operational_alerts import OperationalAlertManager
 
 
 logger = logging.getLogger(__name__)
@@ -96,6 +97,7 @@ class TaskScheduler:
     
     def __init__(self):
         self.orchestrator = NewsOrchestrator()
+        self.alerts = OperationalAlertManager(self.orchestrator.send_operational_alert)
         self.running = False
         self._tasks: Dict[str, asyncio.Task] = {}
         self._check_interval = max(
@@ -174,6 +176,11 @@ class TaskScheduler:
                 break
             except Exception as e:
                 logger.error(f"Error in scheduler loop: {e}", exc_info=True)
+                await self.alerts.failure(
+                    "scheduler-loop",
+                    "Ошибка цикла scheduler",
+                    f"{type(e).__name__}: {e}",
+                )
                 await asyncio.sleep(self._check_interval)
 
     async def _reset_stuck_tasks(self, startup: bool = False):
@@ -234,7 +241,12 @@ class TaskScheduler:
                     if startup:
                         stmt = update(ScheduleSettings).where(
                             ScheduleSettings.is_running == True
-                        ).values(is_running=False)
+                        ).values(
+                            is_running=False,
+                            last_finished_at=datetime.utcnow(),
+                            last_status="interrupted",
+                            last_error="Service restarted while task was marked running",
+                        )
                     else:
                         stmt = update(ScheduleSettings).where(
                             ScheduleSettings.is_running == True,
@@ -242,18 +254,38 @@ class TaskScheduler:
                                 ScheduleSettings.last_run < cutoff_time,
                                 ScheduleSettings.last_run.is_(None),
                             )
-                        ).values(is_running=False, next_run=retry_next_run)
+                        ).values(
+                            is_running=False,
+                            next_run=retry_next_run,
+                            last_finished_at=datetime.utcnow(),
+                            last_status="stuck",
+                            last_error=f"Task exceeded {self._stuck_hours} hour stuck threshold",
+                        )
 
                     await session.execute(stmt)
                     # No explicit commit — execute_custom_write commits automatically
                     logger.warning(f"Reset {len(stuck_tasks)} stuck tasks")
+                    return [(task.task_name, task.id) for task in stuck_tasks]
                 else:
                     logger.info("No stuck tasks found")
+                    return []
 
-            await execute_custom_write(reset_operation)
+            stuck_tasks = await execute_custom_write(reset_operation)
+            if not startup:
+                for task_name, setting_id in stuck_tasks or []:
+                    await self.alerts.failure(
+                        f"scheduler-task-{setting_id}",
+                        f"Зависла задача {task_name}",
+                        f"Задача выполнялась более {self._stuck_hours} ч. Она остановлена и будет повторена позже.",
+                    )
 
         except Exception as e:
             logger.error(f"Error checking stuck tasks: {e}", exc_info=True)
+            await self.alerts.failure(
+                "scheduler-stuck-check",
+                "Ошибка проверки зависших задач",
+                f"{type(e).__name__}: {e}",
+            )
 
                 
     async def _check_and_run_tasks(self):
@@ -298,6 +330,11 @@ class TaskScheduler:
                             self._max_concurrent_tasks,
                             setting.task_name,
                         )
+                        await self.alerts.failure(
+                            "scheduler-capacity",
+                            "Scheduler достиг лимита задач",
+                            f"Задача {setting.task_name} отложена: одновременно выполняется максимум {self._max_concurrent_tasks}.",
+                        )
                         continue
 
                     logger.info(f"Running scheduled task: {setting.task_name}")
@@ -334,6 +371,11 @@ class TaskScheduler:
                         
         except Exception as e:
             logger.error(f"Error checking tasks: {e}", exc_info=True)
+            await self.alerts.failure(
+                "scheduler-task-check",
+                "Ошибка проверки расписания",
+                f"{type(e).__name__}: {e}",
+            )
             
     async def _should_run_task(self, setting: ScheduleSettings, now_utc: datetime) -> bool:
         """Check if a task should run based on its schedule."""
@@ -366,6 +408,8 @@ class TaskScheduler:
         start_time = datetime.utcnow()
         timed_out = False
         cancelled = False
+        status = "success"
+        error_message = None
         try:
             logger.info(f"Executing task: {task_name}")
 
@@ -398,16 +442,30 @@ class TaskScheduler:
             elif task_name == "news_digest":
                 task_coro = self._run_news_digest_cycle(task_config)
             else:
-                logger.warning(f"Unknown task type: {task_name}")
+                raise ValueError(f"Unknown task type: {task_name}")
 
-            if task_coro is not None:
-                if timeout_seconds > 0:
-                    await asyncio.wait_for(task_coro, timeout=timeout_seconds)
-                else:
-                    await task_coro
+            if timeout_seconds > 0:
+                task_result = await asyncio.wait_for(task_coro, timeout=timeout_seconds)
+            else:
+                task_result = await task_coro
+
+            if isinstance(task_result, dict) and task_result.get("status") == "warning":
+                status = "warning"
+                error_message = str(task_result.get("error") or "Task completed with warnings")
+                await self.alerts.failure(
+                    f"scheduler-warning-{setting_id}",
+                    f"Задача {task_name} завершилась с предупреждениями",
+                    error_message,
+                )
+            else:
+                await self.alerts.recovery(
+                    f"scheduler-warning-{setting_id}",
+                    f"Задача {task_name} восстановилась",
+                    "Последний запуск завершился без предупреждений.",
+                )
 
             duration = (datetime.utcnow() - start_time).total_seconds()
-            logger.info(f"Task completed successfully: {task_name} (took {duration:.1f}s)")
+            logger.info(f"Task completed with status {status}: {task_name} (took {duration:.1f}s)")
 
         except asyncio.CancelledError:
             duration = (datetime.utcnow() - start_time).total_seconds()
@@ -416,6 +474,8 @@ class TaskScheduler:
                 f"(stuck-task recovery)"
             )
             cancelled = True
+            status = "cancelled"
+            error_message = "Task was cancelled by stuck-task recovery"
             raise
 
         except asyncio.TimeoutError:
@@ -425,10 +485,24 @@ class TaskScheduler:
                 f"(limit={timeout_seconds}s); will retry in 10 minutes"
             )
             timed_out = True
+            status = "timeout"
+            error_message = f"Timed out after {duration:.1f}s (limit={timeout_seconds}s)"
+            await self.alerts.failure(
+                f"scheduler-task-{setting_id}",
+                f"Таймаут задачи {task_name}",
+                error_message,
+            )
 
         except Exception as e:
             duration = (datetime.utcnow() - start_time).total_seconds()
             logger.error(f"Error running task {task_name} after {duration:.1f}s: {e}", exc_info=True)
+            status = "failed"
+            error_message = f"{type(e).__name__}: {e}"
+            await self.alerts.failure(
+                f"scheduler-task-{setting_id}",
+                f"Ошибка задачи {task_name}",
+                error_message,
+            )
 
         finally:
             self._task_handles.pop(setting_id, None)
@@ -440,11 +514,26 @@ class TaskScheduler:
             else:
                 try:
                     await self._update_task_schedule(
-                        setting_id, retry_immediately=timed_out
+                        setting_id,
+                        retry_immediately=timed_out,
+                        status=status,
+                        error=error_message,
+                        duration_seconds=(datetime.utcnow() - start_time).total_seconds(),
                     )
+                    if status in {"success", "warning"}:
+                        await self.alerts.recovery(
+                            f"scheduler-task-{setting_id}",
+                            f"Задача {task_name} восстановилась",
+                            f"Последний запуск завершён со статусом {status}.",
+                        )
                 except Exception as e:
                     logger.error(
                         f"Error updating schedule for {task_name}: {e}", exc_info=True
+                    )
+                    await self.alerts.failure(
+                        f"scheduler-persistence-{setting_id}",
+                        f"Не сохранён статус задачи {task_name}",
+                        f"{type(e).__name__}: {e}",
                     )
                 finally:
                     self._task_semaphore.release()
@@ -461,7 +550,9 @@ class TaskScheduler:
                 parts_sent = result.get('parts_sent', 0)
                 logger.info(f"Telegram digest sent successfully ({parts_sent} parts)")
             else:
-                logger.warning(f"Failed to send telegram digest: {result.get('error', 'unknown error')}")
+                error = result.get('error') or 'unknown Telegram error'
+                raise RuntimeError(f"Telegram digest was not delivered: {error}")
+            return result
                 
         except Exception as e:
             logger.error(f"Error in telegram digest task: {e}", exc_info=True)
@@ -472,8 +563,17 @@ class TaskScheduler:
         try:
             logger.info("Starting news processing cycle...")
             stats = await self.orchestrator.run_full_cycle()
+            if stats.get('fatal_error'):
+                raise RuntimeError(str(stats['fatal_error']))
             processed = stats.get('articles_processed', 0)
             logger.info(f"News processing completed: {processed} articles processed")
+            errors = stats.get('errors') or []
+            if errors:
+                return {
+                    "status": "warning",
+                    "error": f"Ошибок источников/обработки: {len(errors)}. " + "; ".join(map(str, errors[:5])),
+                }
+            return {"status": "success"}
         except Exception as e:
             logger.error(f"News processing failed: {e}", exc_info=True)
             raise
@@ -486,6 +586,8 @@ class TaskScheduler:
             # Step 1: Run full news processing cycle (if enabled)
             if config.get('run_processing', True):
                 processing_stats = await self.orchestrator.run_full_cycle()
+                if processing_stats.get('fatal_error'):
+                    raise RuntimeError(str(processing_stats['fatal_error']))
                 logger.info(f"News processing completed: {processing_stats.get('articles_processed', 0)} articles processed")
             
             # Step 2: Send digest using unified logic (if enabled)
@@ -495,15 +597,30 @@ class TaskScheduler:
                 if digest_result.get('success'):
                     logger.info(f"Digest sent successfully ({digest_result.get('parts_sent', 0)} parts)")
                 else:
-                    logger.warning(f"Failed to send telegram digest: {digest_result.get('error', 'unknown error')}")
+                    error = digest_result.get('error') or 'unknown Telegram error'
+                    raise RuntimeError(f"Telegram digest was not delivered: {error}")
             
             logger.info("Complete news digest cycle finished successfully")
+            processing_errors = (processing_stats.get('errors') or []) if config.get('run_processing', True) else []
+            if processing_errors:
+                return {
+                    "status": "warning",
+                    "error": f"Ошибок источников/обработки: {len(processing_errors)}. " + "; ".join(map(str, processing_errors[:5])),
+                }
+            return {"status": "success"}
                 
         except Exception as e:
             logger.error(f"Error in news digest cycle: {e}", exc_info=True)
             raise
 
-    async def _update_task_schedule(self, setting_id: int, retry_immediately: bool = False):
+    async def _update_task_schedule(
+        self,
+        setting_id: int,
+        retry_immediately: bool = False,
+        status: str = "success",
+        error: Optional[str] = None,
+        duration_seconds: Optional[float] = None,
+    ):
         """Update task schedule after completion.
 
         retry_immediately=True: schedule next_run 10 minutes from now
@@ -521,6 +638,12 @@ class TaskScheduler:
                     return
 
                 setting.is_running = False
+                setting.last_finished_at = datetime.utcnow()
+                if status == "success":
+                    setting.last_success_at = setting.last_finished_at
+                setting.last_status = status
+                setting.last_error = error[:4000] if error else None
+                setting.last_duration_seconds = duration_seconds
 
                 if setting.enabled:
                     if retry_immediately:
@@ -549,6 +672,7 @@ class TaskScheduler:
             
         except Exception as e:
             logger.error(f"Error updating task schedule: {e}", exc_info=True)
+            raise
             
     async def _calculate_next_run(self, setting: ScheduleSettings) -> Optional[datetime]:
         """Calculate the next run time for a task."""
@@ -581,8 +705,7 @@ class TaskScheduler:
             backup_script = project_root / "scripts" / "backup.sh"
             
             if not backup_script.exists():
-                logger.error("Backup script not found")
-                return
+                raise FileNotFoundError(f"Backup script not found: {backup_script}")
             
             # Run backup script
             process = await asyncio.create_subprocess_exec(
@@ -600,12 +723,16 @@ class TaskScheduler:
                 # Cleanup old backups if configured
                 keep_days = config.get('keep_days', 30)
                 await self._cleanup_old_backups(project_root, keep_days)
+                return {"status": "success"}
                 
             else:
-                logger.error(f"Scheduled backup failed: {stderr.decode()}")
+                raise RuntimeError(
+                    f"Backup exited with code {process.returncode}: {stderr.decode()[:1000]}"
+                )
                 
         except Exception as e:
             logger.error(f"Error running backup task: {e}", exc_info=True)
+            raise
     
     async def _cleanup_old_backups(self, project_root: Path, keep_days: int):
         """Clean up old backup files."""
@@ -656,6 +783,11 @@ class TaskScheduler:
                     logger.info(f"  {len(errors)} errors during reprocessing")
                     for error in errors:
                         logger.warning(f"Reprocessing error: {error}")
+                    return {
+                        "status": "warning",
+                        "error": f"Ошибок повторной обработки: {len(errors)}. " + "; ".join(map(str, errors[:5])),
+                    }
+            return {"status": "success"}
                         
         except Exception as e:
             logger.error(f"Error in failed extraction reprocessing task: {e}", exc_info=True)
@@ -675,7 +807,12 @@ class TaskScheduler:
                 {
                     "task_name": s.task_name,
                     "next_run": s.next_run.isoformat() if s.next_run else None,
-                    "enabled": s.enabled
+                    "enabled": s.enabled,
+                    "last_status": s.last_status,
+                    "last_error": s.last_error,
+                    "last_finished_at": s.last_finished_at.isoformat() if s.last_finished_at else None,
+                    "last_success_at": s.last_success_at.isoformat() if s.last_success_at else None,
+                    "last_duration_seconds": float(s.last_duration_seconds) if s.last_duration_seconds is not None else None,
                 }
                 for s in settings
             ]

@@ -1,0 +1,420 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>Implementation Plan: Restore Evening News Collection and Telegram Delivery Reliability</title>
+  <style>
+    :root { color-scheme: light; }
+    body {
+      margin: 0;
+      background: #f4f5f7;
+      color: #20242a;
+      font: 16px/1.55 system-ui, -apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif;
+    }
+    main { max-width: 1040px; margin: 0 auto; padding: 32px 20px 56px; }
+    section {
+      margin: 16px 0;
+      padding: 20px 24px;
+      background: #fff;
+      border: 1px solid #dfe3e8;
+      border-radius: 8px;
+    }
+    h1, h2 { line-height: 1.25; }
+    h1 { margin: 0 0 8px; }
+    h2 { margin-top: 0; }
+    code { padding: 2px 5px; background: #eef1f4; border-radius: 4px; }
+    pre { overflow-x: auto; padding: 14px; color: #f7f7f7; background: #1f2933; border-radius: 6px; }
+    .status { color: #8a4b00; font-weight: 700; }
+    .finding { border-left: 4px solid #b42318; }
+    .recommendation { border-left: 4px solid #1769aa; }
+    .approval { border-left: 4px solid #b26a00; }
+    table { width: 100%; border-collapse: collapse; }
+    th, td { padding: 9px; border: 1px solid #dfe3e8; text-align: left; vertical-align: top; }
+    th { background: #f7f8fa; }
+  </style>
+</head>
+<body>
+<main>
+  <h1>Implementation Plan: Restore Evening News Collection and Telegram Delivery Reliability</h1>
+  <p class="status">Implementation completed in an isolated worktree; production deployment remains pending.</p>
+
+  <section>
+    <h2>Task Summary</h2>
+    <p>
+      Restore the shared <code>infra-chrome</code> service safely, prevent Evening News from leaking
+      Chrome DevTools Protocol connections, and make Telegram delivery failures visible and
+      actionable. The work has two independent reliability tracks: browser-backed collection and
+      delivery of the already-generated daily digest.
+    </p>
+  </section>
+
+  <section class="finding">
+    <h2>Confirmed Current Behavior</h2>
+    <ul>
+      <li><code>infra-chrome</code> is running but unhealthy; its <code>/json/version</code> health check returns HTTP 502.</li>
+      <li>The CloakBrowser server process has 1,023 file descriptors against a soft limit of 1,024; 1,019 are sockets.</li>
+      <li>There are 1,524 established TCP entries in the browser network namespace.</li>
+      <li><code>news_web</code> owns 508 established connections to <code>infra-chrome:9222</code>. <code>personal_assistant</code> owns none.</li>
+      <li>Each leaked client connection causes CloakBrowser to retain two loopback socket endpoints to Chromium on port 5100.</li>
+      <li><code>news_web</code> itself retains 512 sockets and logged 3,453 remote-browser connection attempts in the retained log window.</li>
+      <li>The deployed client repeatedly reaches the TCP preflight, then <code>Browser.create()</code> fails without releasing the partially opened WebSocket.</li>
+      <li>The periodic process monitor calls <code>get_browser()</code> every five minutes, so it actively creates more failed connections while the browser is unavailable.</li>
+      <li>The previous repair restarted only <code>infra-chrome</code>. That reset its descriptor count but did not repair the client reconnect lifecycle, so the failure accumulated again.</li>
+    </ul>
+  </section>
+
+  <section class="finding">
+    <h2>Confirmed Telegram Delivery Incident</h2>
+    <ul>
+      <li>The last user-observed successful channel digest was 24 July 2026.</li>
+      <li>Article ingestion, processing, scheduling, and daily-summary generation continued; on 19 August the service generated eight daily summaries before attempting delivery.</li>
+      <li>The rich-message request failed with Telegram HTTP 400 <code>Bad Request: chat not found</code>, and the regular HTML fallback failed with the same response.</li>
+      <li>The configured production channel ID matched the expected value, was a clean string, and had not changed since 7 March.</li>
+      <li>The production token belonged to <code>@evening_news_bot</code>. A different bot with the same display name had been granted channel administrator rights, so the production bot could not address the channel.</li>
+      <li>After the correct bot was added, Bot API verification reported <code>administrator</code> with <code>can_post_messages=true</code>, and a short message sent through the production <code>TelegramService</code> succeeded.</li>
+      <li>The separate service chat was verified as reachable during diagnosis, but the digest failure path did not use it to notify the user.</li>
+      <li><code>send_telegram_digest()</code> returned only <code>success=false</code> after fallback failure, losing the Telegram error detail; the scheduler logged <code>unknown error</code> and then unconditionally logged that the complete cycle finished successfully.</li>
+    </ul>
+  </section>
+
+  <section>
+    <h2>Root Causes</h2>
+    <h3>Chrome/CDP resource exhaustion</h3>
+    <p>
+      The primary defect is in the Evening News remote-browser connection lifecycle. A failed or
+      interrupted <code>nodriver</code> connection is abandoned without awaiting
+      <code>Connection.aclose()</code>. CloakBrowser correctly sees the client socket as still open
+      and keeps the corresponding proxy connection to Chromium. Repeated application and monitor
+      retries eventually exhaust the server's file-descriptor limit.
+    </p>
+    <p>
+      CloakBrowser's multiplexer amplifies the resource cost, but raising <code>nofile</code> or
+      restarting only Chrome would merely delay recurrence. The client must close partial and stale
+      sessions and bound its reconnect rate.
+    </p>
+    <h3>Telegram delivery reported as success</h3>
+    <p>
+      The immediate Telegram outage was an operational identity mismatch: the configured channel
+      ID was correct, but administrator access had been granted to a different bot. The software
+      defect was the handling of that external failure. Low-level send methods collapsed Telegram's
+      structured HTTP error into <code>False</code>; the orchestrator therefore returned no useful
+      error, and both scheduler paths treated an unsuccessful result as a warning rather than a
+      failed task. The final unconditional success log made a multi-week delivery outage invisible.
+    </p>
+  </section>
+
+  <section>
+    <h2>Desired Behavior</h2>
+    <ul>
+      <li>One shared CDP connection is reused while healthy.</li>
+      <li>A failed, timed-out, stale, or cancelled connection is explicitly and asynchronously closed.</li>
+      <li>Only a fully started browser object is published to the global pool.</li>
+      <li>Reconnect attempts have a finite timeout and cooldown, preventing retry storms.</li>
+      <li>The process monitor observes and cleans state without creating an unbounded stream of connections.</li>
+      <li>A Chrome restart is followed by a successful client reconnect, and descriptor counts return near baseline.</li>
+      <li>Every Telegram attempt returns structured success or failure details without exposing bot tokens or chat IDs.</li>
+      <li>If both rich delivery and regular fallback fail, the digest task is marked failed and cannot emit a success completion log.</li>
+      <li>A single non-recursive alert is sent to the independently configured service chat when channel delivery fails.</li>
+      <li>The service chat is the standard operational channel for scheduler failures, task timeouts, stuck-task recovery, Chrome unavailability, and digest-delivery failures.</li>
+      <li>Repeated instances of the same problem are deduplicated and summarized; isolated per-source extraction errors do not create one alert per article.</li>
+      <li>Scheduler status exposes the last outcome, last error, and last successful completion instead of only <code>last_run</code>.</li>
+      <li>Manual digest API requests return a failure status when generation succeeds but delivery does not.</li>
+    </ul>
+  </section>
+
+  <section>
+    <h2>Assumptions and Boundaries</h2>
+    <ul>
+      <li>The production channel ID and bot token remain unchanged; no credential rotation is planned.</li>
+      <li>The verified service chat remains a distinct, reachable notification target.</li>
+      <li>Generated summaries remain valid when delivery fails, so recovery may resend an existing digest without regenerating it.</li>
+      <li>Delivery failures will not trigger an unbounded automatic retry loop; the normal next schedule remains authoritative unless a manual resend is requested.</li>
+      <li>The expired Tailscale node key for <code>wireguard</code> is a separate infrastructure issue. Direct SSH access works and the Tailscale repair is not bundled into this application deployment.</li>
+      <li>No unrelated <code>AGENTS.md</code> or existing working-tree changes are part of this implementation.</li>
+    </ul>
+  </section>
+
+  <section class="recommendation">
+    <h2>Recommended Implementation</h2>
+    <h3>Chrome/CDP lifecycle</h3>
+    <ol>
+      <li>
+        Refactor <code>news_aggregator/core/browser_pool.py</code> to create a candidate
+        <code>Browser</code>, await its startup with a bounded timeout, and call
+        <code>await candidate.aclose()</code> on every exception or cancellation before re-raising.
+      </li>
+      <li>
+        Do not assign the candidate to <code>_browser</code> until startup, attach, and target discovery
+        have all completed.
+      </li>
+      <li>
+        Replace fire-and-forget <code>browser.stop()</code> cleanup with an awaited, timeout-bounded
+        asynchronous close for remote connections. Clear the global reference before awaiting close
+        so concurrent callers cannot reuse a closing object.
+      </li>
+      <li>
+        When an existing connection is stale, close it before reconnecting instead of setting
+        <code>_browser = None</code> and losing the cleanup handle.
+      </li>
+      <li>
+        Add a reconnect cooldown after failures. Calls during the cooldown fail fast with the last
+        typed error rather than opening another socket. A successful connection resets the cooldown.
+      </li>
+      <li>
+        Change the process monitor to inspect the pool state and invoke the same bounded reset path;
+        it must not bypass the cooldown or create parallel reconnect attempts.
+      </li>
+      <li>
+        Log the exception type as well as its message so empty <code>TimeoutError</code> messages are diagnosable.
+      </li>
+      <li>
+        Pin the tested <code>nodriver</code> version in <code>requirements.txt</code> instead of the current
+        open-ended lower bound. The exact version will be selected by the isolated compatibility test,
+        not guessed in production.
+      </li>
+    </ol>
+    <h3>Telegram delivery and scheduler truthfulness</h3>
+    <ol>
+      <li>
+        Introduce an internal <code>TelegramDeliveryResult</code> value containing success,
+        transport, HTTP status, Telegram error code/description, and message ID when available.
+        Keep tokens and chat IDs out of logs and API responses.
+      </li>
+      <li>
+        Make regular, rich, split-part, and service-message paths preserve their actual result.
+        When rich delivery and regular fallback both fail, retain both attempts and surface the
+        final actionable Telegram description instead of <code>unknown error</code>.
+      </li>
+      <li>
+        Have <code>send_telegram_digest()</code> return the expected and delivered part counts plus
+        structured attempt details. Partial split delivery is a failure, not success.
+      </li>
+      <li>
+        In both scheduler digest paths, treat an unsuccessful delivery as a task exception after
+        attempting one service-chat alert. The alert failure is logged but never recursively alerts
+        or hides the original channel failure.
+      </li>
+      <li>
+        Centralize operational alerts for all scheduler task exceptions, timeouts, stuck-task
+        recovery, and Chrome unhealthy/recovered state transitions. Use a bounded deduplication
+        window and send a recovery notification after a previously alerted condition clears.
+      </li>
+      <li>
+        Aggregate source-level processing failures into the task summary. Do not send one Telegram
+        alert for every failed article or retry attempt.
+      </li>
+      <li>
+        Persist generic scheduler outcome fields: <code>last_status</code>,
+        <code>last_error</code>, and <code>last_success_at</code>. Update them centrally in the task
+        executor so no task can be logged as successful after raising or returning a failed result.
+      </li>
+      <li>
+        Return an appropriate non-2xx response from the manual send-digest endpoint when delivery
+        fails, while retaining a safe structured body for the admin UI.
+      </li>
+    </ol>
+  </section>
+
+  <section>
+    <h2>Likely File Changes</h2>
+    <table>
+      <thead><tr><th>File</th><th>Change</th></tr></thead>
+      <tbody>
+        <tr><td><code>news_aggregator/core/browser_pool.py</code></td><td>Candidate lifecycle, awaited cleanup, timeout, cooldown, typed errors.</td></tr>
+        <tr><td><code>news_aggregator/services/process_monitor.py</code></td><td>Passive/bounded health behavior using the pool's single reconnect policy, plus deduplicated unavailable/recovered alerts.</td></tr>
+        <tr><td><code>tests/test_browser_pool.py</code></td><td>Failure, timeout, cancellation, stale connection, cooldown, and successful reconnect tests.</td></tr>
+        <tr><td><code>tests/test_process_monitor.py</code></td><td>Monitor does not create retry storms and respects pool cooldown.</td></tr>
+        <tr><td><code>requirements.txt</code></td><td>Pin the integration-tested nodriver version.</td></tr>
+        <tr><td><code>news_aggregator/services/telegram_service.py</code></td><td>Structured delivery results and preserved Telegram API errors for regular, rich, split, service, and test messages.</td></tr>
+        <tr><td><code>news_aggregator/orchestrator.py</code></td><td>Aggregate rich/fallback/part outcomes and issue one independent service-chat alert on final failure.</td></tr>
+        <tr><td><code>news_aggregator/services/scheduler.py</code></td><td>Propagate delivery failure, remove false-success logging, and record task outcome centrally.</td></tr>
+        <tr><td><code>news_aggregator/api/telegram_router.py</code></td><td>Return truthful HTTP status and safe delivery details for manual digest requests.</td></tr>
+        <tr><td><code>news_aggregator/api/scheduler_router.py</code></td><td>Expose persisted last status, error, and successful completion time.</td></tr>
+        <tr><td><code>news_aggregator/models.py</code></td><td>Add nullable scheduler outcome fields.</td></tr>
+        <tr><td><code>news_aggregator/migrations/scheduler_run_outcomes.py</code></td><td>Add backward-compatible nullable outcome columns through the existing migration manager.</td></tr>
+        <tr><td><code>tests/test_telegram_rich_messages.py</code></td><td>Structured success and preserved Telegram API error tests.</td></tr>
+        <tr><td><code>tests/test_operational_reliability.py</code></td><td>Failure propagation, truthful status persistence, general operational alerts, deduplication, recovery, and absence of false-success completion.</td></tr>
+        <tr><td><code>docs/ai-plans/2026-08-19-infra-chrome-cdp-connection-leak.html</code></td><td>Record actual implementation and verification results.</td></tr>
+      </tbody>
+    </table>
+    <p>
+      A CloakBrowser image update from wrapper 0.5.2 to a newer immutable digest is a separate,
+      optional deployment change. Upstream 0.5.8 exists and mentions interrupted-session cleanup,
+      but it must pass an isolated reconnect test before production promotion. It is not required for
+      the client cleanup fix.
+    </p>
+  </section>
+
+  <section>
+    <h2>Implementation Steps</h2>
+    <ol>
+      <li>Add focused failing unit tests for partial connection cleanup and reconnect throttling.</li>
+      <li>Implement one private close helper that always awaits <code>aclose()</code> with a timeout and suppresses only cleanup failures.</li>
+      <li>Refactor candidate startup so failed objects remain reachable for cleanup.</li>
+      <li>Add monotonic-time cooldown state protected by the existing connection lock.</li>
+      <li>Route process-monitor cleanup through the same pool functions.</li>
+      <li>Run the focused tests, then the full relevant Python test suite and static checks.</li>
+      <li>Add failing tests that reproduce Telegram HTTP 400, failed rich fallback, partial split delivery, and the scheduler's current false-success log.</li>
+      <li>Implement structured Telegram delivery results and adapt every existing caller.</li>
+      <li>Add a single service-chat failure alert with a recursion guard and safe redaction.</li>
+      <li>Route scheduler exceptions, timeouts, stuck-task recovery, and Chrome state transitions through the same deduplicated operational-alert helper.</li>
+      <li>Add and validate the scheduler outcome migration, then expose the fields through the existing scheduler API.</li>
+      <li>Make scheduled and manual digest entry points propagate failure truthfully.</li>
+      <li>Build an immutable Evening News image and record its digest.</li>
+      <li>Run a non-production CDP smoke test: connect, open/close a tab, interrupt the browser, reconnect, and verify descriptor counts return to baseline.</li>
+      <li>Only after the smoke test, perform the controlled production recovery and deploy the reviewed image.</li>
+    </ol>
+  </section>
+
+  <section>
+    <h2>Controlled Production Recovery</h2>
+    <p>After explicit approval and once the permanent image is ready:</p>
+    <ol>
+      <li>Capture a final read-only snapshot of container identity, descriptors, connections, and health.</li>
+      <li>Stop <code>news_web</code> first so its 508 client sockets are closed.</li>
+      <li>Restart <code>infra-chrome</code> and wait for <code>/json/version</code> to return HTTP 200 with a low descriptor baseline.</li>
+      <li>Deploy/start the reviewed Evening News image by immutable digest.</li>
+      <li>Exercise one real browser-backed extraction path.</li>
+      <li>Verify both containers, the public news health endpoint, CDP connection count, tab cleanup, logs, and descriptor stability over a bounded observation window.</li>
+    </ol>
+    <p>
+      If immediate service restoration is desired before the code fix, the same stop-Chrome-start
+      sequence can be used as a temporary recovery, but recurrence remains possible and must be stated explicitly.
+    </p>
+  </section>
+
+  <section>
+    <h2>Test Plan</h2>
+    <ul>
+      <li>Failed startup closes the candidate WebSocket and leaves <code>_browser</code> unset.</li>
+      <li>Cancelled startup performs the same cleanup.</li>
+      <li>A stale shared browser is closed before replacement.</li>
+      <li>Repeated calls during cooldown do not call the connection factory again.</li>
+      <li>A successful retry resets failure and cooldown state.</li>
+      <li>Shutdown awaits remote connection closure.</li>
+      <li>Browser tab cleanup still runs on success, extraction error, and cancellation.</li>
+      <li>Integration smoke: browser restart followed by reconnect does not increase established sockets on each retry.</li>
+      <li>Production soak: descriptor and connection counts remain stable after scheduled fetch and process-monitor cycles.</li>
+      <li>Telegram HTTP 400 preserves <code>Bad Request: chat not found</code> through service, orchestrator, scheduler, and manual API boundaries.</li>
+      <li>A failed rich message followed by successful HTML fallback is reported as delivered with both attempts recorded.</li>
+      <li>Failure of both rich and HTML delivery marks the scheduled task failed and emits no success completion log.</li>
+      <li>Partial split delivery reports expected and delivered counts and remains failed.</li>
+      <li>Exactly one alert is attempted against the service chat; alert failure does not recurse or replace the primary error.</li>
+      <li>Repeated identical task/Chrome failures inside the deduplication window do not produce repeated alerts.</li>
+      <li>A recovery transition produces one recovery message and resets the deduplication state.</li>
+      <li>Multiple article/source failures are summarized in one task-level alert rather than emitted individually.</li>
+      <li>Successful delivery records <code>last_status=success</code>, clears stale error text, and advances <code>last_success_at</code>.</li>
+      <li>Failed delivery records <code>last_status=failed</code> and a redacted actionable error while preserving the previous successful timestamp.</li>
+      <li>The migration is idempotent on a production-like schema and rollback removes only the newly added nullable fields.</li>
+    </ul>
+  </section>
+
+  <section>
+    <h2>Data, API, and Operational Impact</h2>
+    <ul>
+      <li><strong>Database:</strong> five nullable outcome fields are added to <code>schedule_settings</code>; existing schedules require no backfill and initially report an unknown outcome.</li>
+      <li><strong>API:</strong> scheduler responses gain optional outcome fields. Manual digest delivery changes from HTTP 200 with <code>success=false</code> to a non-2xx delivery error with a safe structured body.</li>
+      <li><strong>Telegram:</strong> no bot, token, channel ID, or permission changes are part of the code deployment. Production access has already been repaired operationally.</li>
+      <li><strong>Notifications:</strong> the service chat becomes the standard operational channel for significant task and infrastructure failures. Alerts are concise, deduplicated, non-recursive, and paired with recovery messages.</li>
+      <li><strong>Deployment:</strong> the application migration runs before the replacement image handles schedules. Chrome recovery retains the controlled stop/restart/start order.</li>
+    </ul>
+  </section>
+
+  <section>
+    <h2>Manual QA Checklist</h2>
+    <ul>
+      <li><code>news_web</code> and <code>infra-chrome</code> report healthy.</li>
+      <li>The public news health endpoint returns the expected success response.</li>
+      <li>One JavaScript-heavy article extraction succeeds.</li>
+      <li>One Telegram browser extraction succeeds if a configured source is available.</li>
+      <li>Open tab count returns to baseline after each extraction.</li>
+      <li>Only one shared client CDP connection remains established during idle operation.</li>
+      <li>No repeating connection or process-monitor errors appear in fresh logs.</li>
+      <li>A manual Telegram test reaches the main channel through the production service.</li>
+      <li>A simulated main-channel failure reaches the service chat exactly once and is visible as failed in scheduler status.</li>
+      <li>A successful digest updates scheduler status and contains the expected full-version link.</li>
+      <li>The next scheduled run uses the normal schedule rather than entering a retry storm.</li>
+    </ul>
+  </section>
+
+  <section>
+    <h2>Risks</h2>
+    <ul>
+      <li>Stopping <code>news_web</code> creates a short production outage during recovery.</li>
+      <li>A cleanup timeout must not leave the connection lock held.</li>
+      <li>An overly long cooldown could delay recovery; an overly short cooldown could recreate the retry storm.</li>
+      <li>CloakBrowser 0.5.8 may change Chromium identity or licensing behavior and therefore requires a separate image/digest review.</li>
+      <li>A malformed service-chat configuration could make alert delivery fail; the primary channel error must remain visible in logs and scheduler status.</li>
+      <li>Changing low-level Telegram methods from booleans to structured results requires auditing every caller to avoid truthiness regressions.</li>
+      <li>A scheduler-status migration must remain backward compatible during image rollback.</li>
+      <li>Including raw Telegram response bodies could leak identifiers; only allowlisted error fields may be persisted or returned.</li>
+      <li>The repository contains an untracked <code>AGENTS.md</code>; it must remain outside the implementation diff unless the user explicitly asks to add it.</li>
+    </ul>
+  </section>
+
+  <section>
+    <h2>Rollback Plan</h2>
+    <ul>
+      <li>Keep the current Evening News image ID and production compose unchanged until the replacement passes smoke tests.</li>
+      <li>If the new client lifecycle regresses extraction, redeploy the previous immutable image and restart the pair in the controlled order.</li>
+      <li>If CloakBrowser remains unstable, revert the browser service to the previously used raw Alpine Chrome image while preserving the same internal CDP contract.</li>
+      <li>Do not use a larger <code>nofile</code> limit as rollback or remediation; it only increases time to exhaustion.</li>
+      <li>If structured Telegram results regress a caller, redeploy the previous image; nullable scheduler fields may safely remain until a reviewed cleanup migration.</li>
+      <li>If service alerts are noisy or misrouted, disable only the alert call while retaining truthful task failure and persisted status.</li>
+    </ul>
+  </section>
+
+  <section>
+    <h2>Open Questions</h2>
+    <ul>
+      <li>Should production be temporarily restored immediately, accepting recurrence risk, or only after the permanent client fix is built?</li>
+      <li>What reconnect cooldown should be used after measurement: 60 seconds or the monitor's current 300 seconds?</li>
+      <li>Should CloakBrowser 0.5.8 be evaluated in this change or tracked as a separate upgrade after lifecycle cleanup?</li>
+      <li>Should the first deployment resend only today's digest, or also publish a clearly labelled catch-up covering the missed period since 24 July?</li>
+      <li>Should the separate expired Tailscale node key be repaired in a follow-up infrastructure task?</li>
+    </ul>
+  </section>
+
+  <section class="approval">
+    <h2>Implementation Record</h2>
+    <p>
+      Implemented on branch <code>fix/evening-news-reliability</code> in an isolated local worktree.
+      No production
+      container, database, compose file, bot permission, or deployed image was changed by this implementation.
+    </p>
+    <ul>
+      <li>Remote nodriver candidates are now retained until startup succeeds, and failed, cancelled, stale, tab, and shutdown paths await bounded cleanup.</li>
+      <li>Reconnect attempts share one lock and a 60-second monotonic cooldown; the process monitor is passive and cannot create sessions merely to check health.</li>
+      <li><code>nodriver</code> is pinned to <code>0.50.3</code>, the version inspected and tested for the lifecycle contract.</li>
+      <li>Telegram sends return a structured result containing safe HTTP/Telegram error fields; <code>Bad Request: chat not found</code> is preserved through digest orchestration.</li>
+      <li>Scheduled digest delivery now raises on final delivery failure instead of logging a false success. Manual delivery returns HTTP 502 with a safe structured body.</li>
+      <li>Scheduler runs persist start/finish/success timestamps, status, redacted error, and duration. Failures do not overwrite the previous successful timestamp.</li>
+      <li>Task failures, timeouts, stuck recovery, aggregated processing warnings, scheduler-loop/capacity problems, and Chrome unavailable/recovered transitions use a deduplicated service-chat alert manager.</li>
+      <li>Review follow-up made failed alerts retry immediately without phantom recovery, added environment-backed service-chat fallback when the database is unavailable, and classified top-level processing failures as failed scheduler runs.</li>
+      <li>The required scheduler outcome migration now blocks startup when its application cannot be guaranteed; the browser monitor sends alerts without constructing the full orchestrator.</li>
+      <li>Backup script absence and non-zero exit status no longer disappear as successful scheduled runs.</li>
+      <li>The Docker workflow now runs the full deterministic pytest suite in Python 3.12 first; <code>build-and-push</code> has an explicit <code>needs: test</code> gate.</li>
+    </ul>
+    <p>
+      Verification: <code>python -m py_compile</code> passed for changed Python modules;
+      <code>pytest tests/ -q</code> completed with <code>51 passed, 4 skipped</code> in the final local review.
+      The four skipped tests are real external Chrome/network smoke checks and now require
+      <code>RUN_REAL_BROWSER_TESTS=1</code>. Production CDP smoke, descriptor soak, migration execution,
+      image build, and deployment remain intentionally pending.
+    </p>
+  </section>
+
+  <section class="approval">
+    <h2>Approval Gate</h2>
+    <p>
+      During diagnosis, the user restored the correct bot's channel administrator access, and one
+      short approved test message was sent through the production service. No production
+      restart, source-code modification, database migration, image build, or deployment has been
+      performed. Approval authorizes both implementation tracks and tests first. Production
+      recovery/deployment will still use the reviewed immutable image and include live verification.
+    </p>
+  </section>
+</main>
+</body>
+</html>

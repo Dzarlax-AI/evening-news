@@ -155,9 +155,11 @@ async def test_browser_snapshot_returns_page_snapshot(page_monitor, mock_browser
     """_take_browser_snapshot should return a PageSnapshot with articles."""
     mock_tab = make_mock_tab(SAMPLE_NEWS_HTML)
     mock_browser.get = AsyncMock(return_value=mock_tab)
-    page_monitor.browser = mock_browser
-
-    snapshot = await page_monitor._take_browser_snapshot()
+    with patch(
+        "news_aggregator.core.browser_pool.get_browser",
+        AsyncMock(return_value=mock_browser),
+    ):
+        snapshot = await page_monitor._take_browser_snapshot()
 
     assert snapshot is not None
     assert isinstance(snapshot, PageSnapshot)
@@ -172,9 +174,11 @@ async def test_browser_snapshot_sets_headers(page_monitor, mock_browser):
     """Browser snapshot should set extra HTTP headers via CDP."""
     mock_tab = make_mock_tab(SAMPLE_NEWS_HTML)
     mock_browser.get = AsyncMock(return_value=mock_tab)
-    page_monitor.browser = mock_browser
-
-    await page_monitor._take_browser_snapshot()
+    with patch(
+        "news_aggregator.core.browser_pool.get_browser",
+        AsyncMock(return_value=mock_browser),
+    ):
+        await page_monitor._take_browser_snapshot()
 
     # Should have called send() for setting headers
     assert mock_tab.send.call_count >= 1
@@ -186,11 +190,14 @@ async def test_browser_snapshot_waits_for_js(page_monitor, mock_browser):
     page_monitor.config.wait_for_js = True
     mock_tab = make_mock_tab(SAMPLE_NEWS_HTML)
     mock_browser.get = AsyncMock(return_value=mock_tab)
-    page_monitor.browser = mock_browser
 
     import time
     start = time.time()
-    await page_monitor._take_browser_snapshot()
+    with patch(
+        "news_aggregator.core.browser_pool.get_browser",
+        AsyncMock(return_value=mock_browser),
+    ):
+        await page_monitor._take_browser_snapshot()
     elapsed = time.time() - start
 
     # Should have waited ~2 seconds for JS
@@ -205,13 +212,16 @@ async def test_browser_snapshot_closes_tab_on_error(page_monitor, mock_browser):
     failing_tab.get_content = AsyncMock(side_effect=Exception("CDP failure"))
     failing_tab.close = AsyncMock()
     mock_browser.get = AsyncMock(return_value=failing_tab)
-    page_monitor.browser = mock_browser
 
     # _take_browser_snapshot propagates the error, _take_page_snapshot catches it
-    try:
-        await page_monitor._take_browser_snapshot()
-    except Exception:
-        pass
+    with patch(
+        "news_aggregator.core.browser_pool.get_browser",
+        AsyncMock(return_value=mock_browser),
+    ):
+        try:
+            await page_monitor._take_browser_snapshot()
+        except Exception:
+            pass
 
     # Tab should still be closed
     failing_tab.close.assert_awaited()

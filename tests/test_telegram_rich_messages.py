@@ -3,7 +3,7 @@ from unittest.mock import AsyncMock
 import pytest
 
 from news_aggregator.processing.digest_builder import DigestBuilder
-from news_aggregator.services.telegram_service import TelegramService
+from news_aggregator.services.telegram_service import TelegramSendResult, TelegramService
 from news_aggregator.utils.html_utils import validate_telegram_rich_html
 
 
@@ -78,7 +78,8 @@ async def test_send_rich_message_uses_sendrichmessage_payload(monkeypatch):
 
     sent = await service.send_rich_message("<h2>Digest</h2><p>Hello</p>")
 
-    assert sent is True
+    assert sent.success is True
+    assert sent.status_code == 200
     assert len(fake_client.posts) == 1
     url, payload = fake_client.posts[0]
     assert url == "https://api.telegram.org/bottoken/sendRichMessage"
@@ -90,11 +91,42 @@ async def test_send_rich_message_uses_sendrichmessage_payload(monkeypatch):
 @pytest.mark.asyncio
 async def test_send_rich_message_falls_back_to_regular_message():
     service = make_service()
-    service._send_rich_to_chat = AsyncMock(return_value=False)
-    service.send_message = AsyncMock(return_value=True)
+    rich_failure = TelegramSendResult(
+        False, "sendRichMessage", "@news", status_code=404, description="not found"
+    )
+    fallback_success = TelegramSendResult(True, "sendMessage", "@news", status_code=200)
+    service._send_rich_to_chat = AsyncMock(return_value=rich_failure)
+    service.send_message = AsyncMock(return_value=fallback_success)
 
     sent = await service.send_rich_message("<h2>Digest</h2>", fallback_text="<b>Digest</b>")
 
-    assert sent is True
+    assert sent is fallback_success
     service._send_rich_to_chat.assert_awaited_once_with("<h2>Digest</h2>", "@news")
     service.send_message.assert_awaited_once_with("<b>Digest</b>")
+
+
+@pytest.mark.asyncio
+async def test_send_message_preserves_telegram_error_details(monkeypatch):
+    service = make_service()
+
+    class FailedResponse(_FakeResponse):
+        status = 400
+
+        async def text(self):
+            return '{"ok":false,"error_code":400,"description":"Bad Request: chat not found"}'
+
+    class FailedClient(_FakeClient):
+        async def post(self, url, json):
+            return FailedResponse()
+
+    monkeypatch.setattr(
+        "news_aggregator.services.telegram_service.get_http_client",
+        lambda: FailedClient(),
+    )
+
+    result = await service.send_message("Digest")
+
+    assert result.success is False
+    assert result.status_code == 400
+    assert result.error_code == 400
+    assert result.description == "Bad Request: chat not found"

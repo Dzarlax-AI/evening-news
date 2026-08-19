@@ -223,6 +223,11 @@ class ScheduleSettings(Base):
     task_config = Column(JSON, default=dict)
     
     last_run = Column(DateTime)
+    last_finished_at = Column(DateTime)
+    last_success_at = Column(DateTime)
+    last_status = Column(String(20))
+    last_error = Column(Text)
+    last_duration_seconds = Column(DECIMAL(12, 3))
     next_run = Column(DateTime)
     is_running = Column(Boolean, default=False)
     
@@ -334,5 +339,3 @@ class CategoryMapping(Base):
     is_active = Column(Boolean, default=True, index=True)  # Can be disabled without deleting
     created_at = Column(DateTime, default=func.now())
     updated_at = Column(DateTime, default=func.now(), onupdate=func.now())
-
-
