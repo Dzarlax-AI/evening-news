@@ -1,0 +1,278 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>Implementation Plan: Bound Chrome Sessions and Add Low-Overhead Self-Healing</title>
+  <style>
+    :root {
+      color-scheme: light;
+      --bg: #f4f6f8;
+      --card: #ffffff;
+      --text: #20252b;
+      --muted: #58636f;
+      --line: #dce2e8;
+      --blue: #145da0;
+      --amber: #9a5b00;
+      --red: #a62b23;
+      --green: #176b45;
+    }
+    * { box-sizing: border-box; }
+    body {
+      margin: 0;
+      background: var(--bg);
+      color: var(--text);
+      font: 16px/1.55 system-ui, -apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif;
+    }
+    main { max-width: 1080px; margin: 0 auto; padding: 32px 20px 64px; }
+    h1, h2, h3 { line-height: 1.25; }
+    h1 { margin: 0 0 8px; }
+    h2 { margin-top: 0; }
+    p { margin: 10px 0; }
+    section {
+      margin: 16px 0;
+      padding: 20px 24px;
+      background: var(--card);
+      border: 1px solid var(--line);
+      border-radius: 9px;
+    }
+    code { padding: 2px 5px; background: #eef2f5; border-radius: 4px; }
+    pre { overflow-x: auto; padding: 14px; color: #f7f7f7; background: #1f2933; border-radius: 6px; }
+    ul, ol { padding-left: 24px; }
+    li + li { margin-top: 6px; }
+    table { width: 100%; border-collapse: collapse; }
+    th, td { padding: 9px; border: 1px solid var(--line); text-align: left; vertical-align: top; }
+    th { background: #f7f9fb; }
+    .status { color: var(--amber); font-weight: 700; }
+    .finding { border-left: 4px solid var(--red); }
+    .decision { border-left: 4px solid var(--blue); }
+    .success { border-left: 4px solid var(--green); }
+    .approval { border-left: 4px solid var(--amber); }
+    .muted { color: var(--muted); }
+  </style>
+</head>
+<body>
+<main>
+  <h1>Implementation Plan: Bound Chrome Sessions and Add Low-Overhead Self-Healing</h1>
+  <p class="status">Status: implemented and locally verified; pull request preparation is in progress.</p>
+  <p class="muted">Prepared 21 August 2026 from <code>origin/main</code> at <code>e60434e</code> in an isolated worktree.</p>
+
+  <section>
+    <h2>Task Summary</h2>
+    <p>
+      Prevent Evening News from silently hanging when the shared CloakBrowser/Chrome process degrades,
+      without adding a second browser container or a permanent helper container. The selected design
+      bounds every browser operation, disconnects the News CDP session after every processing cycle,
+      suppresses retry storms, and gives the existing Chrome container a narrowly scoped self-restart
+      path when recovery cannot be achieved at the client-session level.
+    </p>
+  </section>
+
+  <section class="finding">
+    <h2>Confirmed Current Behavior</h2>
+    <ul>
+      <li>The shared <code>infra-chrome</code> process reached 1,023 open file descriptors against its effective 1,024 limit.</li>
+      <li>At exhaustion, the health endpoint returned HTTP 502 and CloakBrowser repeatedly logged <code>Too many open files</code>.</li>
+      <li>Browser-backed source calls eventually stopped after their existing 120-second source budget, but article extraction later hung in an unbounded <code>browser.get(..., new_tab=True)</code>.</li>
+      <li>The scheduler's outer 3,600-second timeout then killed the cycle and scheduled another attempt ten minutes later, producing repeated hour-long incidents and service-chat timeout alerts.</li>
+      <li><code>browser_pool.py</code> retains one process-global remote connection until application shutdown. A successful processing cycle does not close it.</li>
+      <li><code>nodriver.Browser.aclose()</code> in the deployed version closes the WebSocket and listener only; it does not terminate the remote Chromium process.</li>
+      <li>Previous production evidence showed that disconnecting/restarting only <code>news_web</code> reduced Chrome descriptors from 1,023 to 7, so releasing the News CDP client is an effective first recovery action.</li>
+      <li>After the authorised recovery restart, the next real processing cycle completed in 74.5 seconds and Chrome stabilised at 33 descriptors.</li>
+    </ul>
+  </section>
+
+  <section class="decision">
+    <h2>Selected Design</h2>
+    <p>
+      Keep one shared Chrome container. Treat the CDP connection as a per-processing-cycle resource,
+      not an application-lifetime singleton. Escalate recovery in three bounded stages:
+    </p>
+    <ol>
+      <li><strong>Operation level:</strong> time out the stuck browser step and invalidate the current News session.</li>
+      <li><strong>Cycle level:</strong> always close the complete News CDP connection in a shielded <code>finally</code> block.</li>
+      <li><strong>Infrastructure level:</strong> after three consecutive browser failures, or before FD exhaustion, request one controlled restart of the shared Chrome container.</li>
+    </ol>
+    <p>
+      The application will not receive the Docker socket. A small shared control volume carries only
+      a marker file. Chrome's existing healthcheck consumes the marker and terminates PID 1; the
+      existing <code>restart: always</code> policy recreates the same pinned container. This grants
+      News only the ability to request recovery of this browser, not arbitrary host/container control.
+    </p>
+  </section>
+
+  <section>
+    <h2>Desired Behavior</h2>
+    <ul>
+      <li>No browser command can keep a processing cycle blocked indefinitely.</li>
+      <li>A broken article or source is reported and skipped within a bounded budget; unrelated articles continue.</li>
+      <li>The News CDP WebSocket is closed after every processing cycle, including warning, failure, timeout, and cancellation paths.</li>
+      <li>A new cycle opens a fresh CDP session and does not reuse a socket left by a previous cycle.</li>
+      <li>One successful browser operation resets the consecutive browser-failure streak.</li>
+      <li>Three consecutive browser failures create at most one idempotent Chrome restart request.</li>
+      <li>The Chrome healthcheck restarts the container when the request is present, when its endpoint fails three times consecutively, or when descriptors cross a configurable pre-exhaustion threshold.</li>
+      <li>The existing shared browser consumer may see a brief interruption during the last-resort restart; the user has explicitly accepted this trade-off.</li>
+      <li>Operational Telegram alerts describe the first incident, the automatic recovery action, and final recovery without sending one message per article or retry.</li>
+      <li>No additional Chrome or watchdog container consumes steady-state memory.</li>
+    </ul>
+  </section>
+
+  <section>
+    <h2>Assumptions and Boundaries</h2>
+    <ul>
+      <li>The pinned production CloakBrowser image remains unchanged in this change.</li>
+      <li>Per-seed CloakBrowser processes and <code>--idle-timeout</code> are excluded because separate seeds create separate Chromium processes and would increase memory use.</li>
+      <li>The restart counter concerns browser/CDP failures only. AI, database, RSS, and Telegram failures must never restart Chrome.</li>
+      <li>The control volume contains no credentials, URLs, article content, or user data.</li>
+      <li>The descriptor threshold is configurable. Initial production rollout will use a conservative value below the observed 1,024 ceiling and validate it against normal post-cycle measurements before unattended operation.</li>
+      <li>No database migration is planned. Failure streak state is process-local; the idempotent marker and Chrome healthcheck provide the durable hand-off.</li>
+      <li>Infrastructure configuration under <code>personal_ai_stack/deploy</code> is a separate deployment artifact and will be changed and verified together with the application release, not silently during application tests.</li>
+    </ul>
+  </section>
+
+  <section>
+    <h2>Likely File Changes</h2>
+    <table>
+      <thead><tr><th>File</th><th>Planned change</th></tr></thead>
+      <tbody>
+        <tr><td><code>news_aggregator/core/browser_pool.py</code></td><td>Add bounded tab creation and browser-command helpers, typed timeout errors, session invalidation, browser failure streak, idempotent restart request, and cancellation-safe cycle cleanup.</td></tr>
+        <tr><td><code>news_aggregator/orchestrator.py</code></td><td>Close the complete News CDP session in <code>run_full_cycle()</code> <code>finally</code>; preserve the primary processing outcome if cleanup also fails.</td></tr>
+        <tr><td><code>news_aggregator/extraction/extraction_strategies.py</code></td><td>Apply bounded navigation, CDP command, and rendered-content budgets to article extraction.</td></tr>
+        <tr><td><code>news_aggregator/sources/page_monitor_source.py</code></td><td>Apply the same bounded browser operations to snapshot, monitoring, and connection-test paths.</td></tr>
+        <tr><td><code>news_aggregator/services/scheduler.py</code></td><td>Replace fixed ten-minute timeout retry storms with bounded backoff and aggregate browser-recovery alerts; retain truthful task outcomes.</td></tr>
+        <tr><td><code>news_aggregator/config.py</code></td><td>Add validated environment-backed browser operation budgets, failure threshold, restart-marker path, and scheduler retry limits.</td></tr>
+        <tr><td><code>tests/test_browser_pool.py</code></td><td>Cover open/navigation/content timeout, invalidation, shielded cleanup, streak reset, and single marker creation.</td></tr>
+        <tr><td><code>tests/test_operational_reliability.py</code></td><td>Cover cycle cleanup on every outcome, timeout backoff, deduplicated alerting, restart escalation, and recovery.</td></tr>
+        <tr><td><code>tests/test_website_extraction.py</code></td><td>Verify browser-backed extraction exits within its budget and does not mark a failed article as successfully processed.</td></tr>
+        <tr><td><code>personal_ai_stack/deploy/news/docker-compose.yml</code></td><td>Mount the external browser-control volume read/write and configure the marker path; do not mount Docker socket.</td></tr>
+        <tr><td><code>personal_ai_stack/deploy/infra/docker-compose.yml</code></td><td>Mount the same volume in Chrome and replace the healthcheck command with the reviewed self-healing script.</td></tr>
+        <tr><td><code>personal_ai_stack/deploy/infra/chrome-healthcheck.sh</code></td><td>Check the endpoint, consecutive health failures, restart marker, and PID 1 descriptor count; remove/consume a request before signalling PID 1.</td></tr>
+        <tr><td><code>docs/ai-plans/2026-08-21-chrome-session-lifecycle-and-self-healing.html</code></td><td>Record actual changes, test evidence, deployment observations, limitations, and follow-up recommendations.</td></tr>
+      </tbody>
+    </table>
+  </section>
+
+  <section>
+    <h2>Implementation Steps</h2>
+    <ol>
+      <li>Add failing unit tests for a tab-open call that never returns, a navigation call that never returns, cancellation during connection startup, and cleanup after a failed cycle.</li>
+      <li>Introduce one browser-operation timeout helper that logs operation type and exception class without logging sensitive page content.</li>
+      <li>On browser timeout or transport failure, clear the global connection under the existing lock and await <code>aclose()</code> with the existing bounded cleanup timeout.</li>
+      <li>Track consecutive browser failures centrally. Reset on confirmed browser success; write one marker atomically at the threshold and do not rewrite it until recovery is observed.</li>
+      <li>Wrap the entire <code>run_full_cycle()</code> body in cleanup that closes the News CDP connection on success, warning, exception, cancellation, and outer scheduler timeout.</li>
+      <li>Audit every <code>browser_tab()</code>, <code>tab.get()</code>, <code>tab.send()</code>, <code>tab.evaluate()</code>, and <code>tab.get_content()</code> path and apply the shared bounded helper rather than fixing only the observed extraction call.</li>
+      <li>Change scheduler retry timing to bounded exponential delays and keep one active alert incident with a recovery message.</li>
+      <li>Add the narrow control volume and healthcheck script. The script will validate only a marker file, endpoint response, failure counter, and descriptor count; it will never execute marker contents.</li>
+      <li>Run focused tests, the complete Python test suite, and the same test command used by GitHub Actions before any push.</li>
+      <li>Update this plan with actual values and evidence, then request separate permission for commit/PR and later for production deployment.</li>
+    </ol>
+  </section>
+
+  <section>
+    <h2>Test Plan</h2>
+    <h3>Automated application tests</h3>
+    <ul>
+      <li>Tab creation timeout returns a typed browser failure and closes the session.</li>
+      <li>Navigation, CDP command, evaluation, and content retrieval timeouts cannot escape their configured budgets.</li>
+      <li><code>tab.close()</code> failure does not hide the primary extraction error.</li>
+      <li>Every cycle outcome awaits <code>close_browser()</code> exactly once.</li>
+      <li>Two failures do not request infrastructure recovery; the third writes one atomic marker.</li>
+      <li>A subsequent browser success resets the streak and allows a future independent incident.</li>
+      <li>Non-browser failures never touch the marker.</li>
+      <li>Scheduler retries back off and repeated alerts are suppressed while recovery produces one notification.</li>
+      <li><code>python -m pytest tests/ -q</code> passes, matching the build-and-push workflow gate.</li>
+    </ul>
+    <h3>Infrastructure script checks</h3>
+    <ul>
+      <li>Healthy endpoint, normal descriptors, and no marker exit successfully without a signal.</li>
+      <li>One or two endpoint failures increment state but do not signal PID 1.</li>
+      <li>The third consecutive endpoint failure consumes state and signals PID 1.</li>
+      <li>A restart marker is treated as data only, consumed once, and cannot inject a command.</li>
+      <li>Descriptor count over the configured threshold signals PID 1 before the 1,024 ceiling.</li>
+    </ul>
+  </section>
+
+  <section>
+    <h2>Manual QA and Production Verification</h2>
+    <ol>
+      <li>Record pre-deploy image digest, container health, restart counts, Chrome PID, FD count, active CDP targets, and recent scheduler state.</li>
+      <li>Deploy only CI-built immutable application output and reviewed compose/script changes; preserve production <code>.env</code>, volumes, networks, and the pinned Chrome image.</li>
+      <li>Run one real News processing cycle and verify structured success, article persistence, cycle duration, and a closed News CDP connection afterwards.</li>
+      <li>Confirm Chrome remains healthy and its FD count returns close to the new post-cycle baseline instead of increasing monotonically.</li>
+      <li>Inject a safe test marker, observe exactly one Chrome restart through Docker restart count, and verify the second shared consumer and News reconnect afterwards.</li>
+      <li>Run another real processing cycle after the restart and verify the public News path and scheduler state, not only container health.</li>
+      <li>Monitor at least several scheduled cycles for descriptor growth, timeout alerts, suppressed-repeat counts, and successful recovery notification.</li>
+    </ol>
+  </section>
+
+  <section>
+    <h2>Risks and Mitigations</h2>
+    <table>
+      <thead><tr><th>Risk</th><th>Mitigation</th></tr></thead>
+      <tbody>
+        <tr><td>Closing the News CDP session after every cycle adds reconnect overhead.</td><td>One connection is created per cycle, while the remote Chromium process remains shared and warm; measure the real cycle delta during QA.</td></tr>
+        <tr><td>A restart interrupts the rare second browser consumer.</td><td>Restart is last-resort and explicitly authorised; issue one operational alert and verify both consumers recover.</td></tr>
+        <tr><td>A malformed or hostile marker could execute code.</td><td>The script tests only file existence and never reads or evaluates marker contents.</td></tr>
+        <tr><td>FD threshold is too low and causes unnecessary restarts.</td><td>Make it configurable, compare it with recorded normal baselines, and start well above normal observed usage.</td></tr>
+        <tr><td>Cleanup cancellation leaves another stale socket.</td><td>Run connection cleanup as a task protected with <code>asyncio.shield()</code> and await it before propagating cancellation.</td></tr>
+        <tr><td>More aggressive timeouts reduce extraction completeness.</td><td>Keep existing adaptive page budgets, add only finite upper bounds, record failures as warnings, and validate against real browser-backed sources.</td></tr>
+      </tbody>
+    </table>
+  </section>
+
+  <section>
+    <h2>Rollback Plan</h2>
+    <ol>
+      <li>Roll the News image back to the previously recorded immutable digest.</li>
+      <li>Restore the prior News and infra compose files and remove the healthcheck script mount.</li>
+      <li>Remove the unused control volume only after both compose stacks no longer reference it; it contains no persistent application data.</li>
+      <li>Restart only the affected services, then verify Chrome health, News health, scheduler state, and one real processing path.</li>
+      <li>If automatic recovery misbehaves, disable the marker path and FD threshold first while retaining the operation timeouts and per-cycle CDP cleanup.</li>
+    </ol>
+  </section>
+
+  <section>
+    <h2>Open Questions</h2>
+    <ul>
+      <li>The exact initial FD restart threshold will be selected from a fresh pre-deploy/post-cycle baseline; the observed hard ceiling is 1,024.</li>
+      <li>The exact navigation/content upper bounds will be reconciled with existing adaptive extraction budgets during implementation and captured here before deployment.</li>
+      <li>Upgrading CloakBrowser or adopting per-seed idle cleanup remains a separate future evaluation because it changes memory and compatibility characteristics.</li>
+    </ul>
+  </section>
+
+  <section class="success">
+    <h2>Implementation Record</h2>
+    <ul>
+      <li>Added finite, validated acquisition, tab creation, tab close, and CDP-operation deadlines.</li>
+      <li>Added hard-deadline handling for cancellation-resistant operations, typed transport failure handling, generation-scoped invalidation, and cancellation-safe cleanup.</li>
+      <li>Added cycle and tab leases so a finishing scheduled or manual cycle cannot close another caller's live session.</li>
+      <li>Wrapped browser navigation, CDP commands, evaluation, waits, and content retrieval in website, page-monitor, and Telegram extraction paths.</li>
+      <li>Added browser-only incident counting, success reset, one atomic restart marker per incident, and retry-safe marker I/O.</li>
+      <li>Added a shared data-only control volume and a Chrome healthcheck script with endpoint-failure escalation, a default 800-FD threshold, and an internal HTTP timeout. No Docker socket or extra container was added.</li>
+      <li>Application verification completed with <code>94 passed, 4 skipped</code>; skipped tests are the existing opt-in real-browser/network checks.</li>
+      <li>The healthcheck shell harness passed healthy, failure escalation, reset, marker safety, FD threshold, invalid configuration, and real TERM-delivery cases.</li>
+      <li>Both production compose definitions passed <code>docker compose config --quiet</code> without pulling or starting containers.</li>
+    </ul>
+  </section>
+
+  <section>
+    <h2>Known Limitations and Follow-up</h2>
+    <ul>
+      <li>No production deployment or live failure injection was performed during implementation.</li>
+      <li>The application changes are versioned in the Evening News pull request. The canonical <code>personal_ai_stack</code> deployment files are local operational artifacts and must be applied explicitly during the later deployment gate.</li>
+      <li>Real Chrome validation remains part of post-merge deployment QA: one normal cycle, one controlled marker restart, reconnection of both consumers, and several scheduled-cycle FD observations.</li>
+      <li>CloakBrowser upgrade and per-seed processes remain out of scope.</li>
+    </ul>
+  </section>
+
+  <section class="approval">
+    <h2>Remaining Gates</h2>
+    <p>
+      The user approved implementation and pull-request creation. Merge and production deployment
+      remain separate explicit actions. Deployment must use the CI-built image and the manual QA
+      sequence above.
+    </p>
+  </section>
+</main>
+</body>
+</html>

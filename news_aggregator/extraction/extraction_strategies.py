@@ -15,7 +15,7 @@ import nodriver as uc
 from nodriver import cdp
 
 from ..core.http_client import get_http_client
-from ..core.exceptions import ContentExtractionError
+from ..core.exceptions import BrowserUnavailableError, ContentExtractionError
 from ..services.extraction_memory import get_extraction_memory, ExtractionAttempt
 from ..services.domain_stability_tracker import get_stability_tracker
 from ..services.ai_extraction_optimizer import get_ai_extraction_optimizer
@@ -466,22 +466,30 @@ class ExtractionStrategies:
         Returns:
             Tuple of (content, selector, page_html)
         """
-        from ..core.browser_pool import browser_tab
+        from ..core.browser_pool import browser_tab, run_browser_operation
 
         # Use browser_tab context manager for serialized, safe access
         async with browser_tab("about:blank") as tab:
             try:
                 # Set user agent
-                await tab.send(cdp.network.set_user_agent_override(
-                    user_agent="Mozilla/5.0 (Linux; Android 10; K) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36"
-                ))
+                await run_browser_operation(
+                    tab.send(cdp.network.set_user_agent_override(
+                        user_agent="Mozilla/5.0 (Linux; Android 10; K) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36"
+                    )),
+                    "set user agent",
+                    browser_session=tab,
+                )
 
                 # Block images, media, fonts to speed up loading
-                await tab.send(cdp.network.set_blocked_ur_ls(
-                    urls=["*.png", "*.jpg", "*.jpeg", "*.gif", "*.webp", "*.svg",
-                          "*.mp4", "*.mp3", "*.webm", "*.ogg", "*.wav",
-                          "*.woff", "*.woff2", "*.ttf", "*.eot"]
-                ))
+                await run_browser_operation(
+                    tab.send(cdp.network.set_blocked_ur_ls(
+                        urls=["*.png", "*.jpg", "*.jpeg", "*.gif", "*.webp", "*.svg",
+                              "*.mp4", "*.mp3", "*.webm", "*.ogg", "*.wav",
+                              "*.woff", "*.woff2", "*.ttf", "*.eot"]
+                    )),
+                    "block resource URLs",
+                    browser_session=tab,
+                )
 
                 budget_start = time.time()
                 from urllib.parse import urlparse as _urlparse
@@ -495,23 +503,38 @@ class ExtractionStrategies:
                 def remaining_s() -> float:
                     return max(0.0, adaptive_total_budget / 1000 - (time.time() - budget_start))
 
-                await tab.get(url, new_tab=False)
+                await run_browser_operation(
+                    tab.get(url, new_tab=False),
+                    "navigation",
+                    timeout_seconds=max(0.001, min(adaptive_timeout / 1000, remaining_s())),
+                    browser_session=tab,
+                )
 
                 # Wait for content to appear (poll JS condition)
                 try:
                     deadline = time.time() + min(10, remaining_s())
                     while time.time() < deadline:
-                        result = await tab.evaluate(
-                            "document.body ? document.body.innerText.length : 0"
+                        result = await run_browser_operation(
+                            tab.evaluate("document.body ? document.body.innerText.length : 0"),
+                            "content readiness evaluation",
+                            timeout_seconds=max(0.001, remaining_s()),
+                            browser_session=tab,
                         )
                         if result and int(result) > 500:
                             break
                         await asyncio.sleep(0.5)
+                except BrowserUnavailableError:
+                    raise
                 except Exception:
                     pass  # Continue even if content detection times out
 
                 # Capture rendered HTML once for both content and metadata
-                page_html = await tab.get_content()
+                page_html = await run_browser_operation(
+                    tab.get_content(),
+                    "content retrieval",
+                    timeout_seconds=max(0.001, remaining_s()),
+                    browser_session=tab,
+                )
 
                 # Extract content from rendered HTML using existing logic
                 content = None

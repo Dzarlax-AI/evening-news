@@ -240,30 +240,45 @@ class PageMonitorSource(BaseSource):
     
     async def _take_browser_snapshot(self) -> Optional[PageSnapshot]:
         """Take snapshot using browser rendering."""
-        from ..core.browser_pool import browser_tab
+        from ..core.browser_pool import browser_tab, run_browser_operation
 
         async with browser_tab("about:blank") as tab:
             # Set realistic headers
-            await tab.send(cdp.network.set_extra_http_headers(
-                headers=cdp.network.Headers({
-                    'Accept': 'text/html,application/xhtml+xml,application/xml;q=0.9,image/webp,*/*;q=0.8',
-                    'Accept-Language': 'en-US,en;q=0.9',
-                    'Accept-Encoding': 'gzip, deflate, br',
-                    'DNT': '1',
-                    'Connection': 'keep-alive',
-                    'Upgrade-Insecure-Requests': '1'
-                })
-            ))
+            await run_browser_operation(
+                tab.send(cdp.network.set_extra_http_headers(
+                    headers=cdp.network.Headers({
+                        'Accept': 'text/html,application/xhtml+xml,application/xml;q=0.9,image/webp,*/*;q=0.8',
+                        'Accept-Language': 'en-US,en;q=0.9',
+                        'Accept-Encoding': 'gzip, deflate, br',
+                        'DNT': '1',
+                        'Connection': 'keep-alive',
+                        'Upgrade-Insecure-Requests': '1'
+                    })
+                )),
+                "set page-monitor headers",
+                browser_session=tab,
+            )
 
             # Navigate to page
             logger.info(f"  Loading page: {self.config.url}")
-            await tab.get(self.config.url, new_tab=False)
+            operation_timeout = self.config.wait_timeout_ms / 1000
+            await run_browser_operation(
+                tab.get(self.config.url, new_tab=False),
+                "page-monitor navigation",
+                timeout_seconds=operation_timeout,
+                browser_session=tab,
+            )
 
             if self.config.wait_for_js:
                 await asyncio.sleep(2)  # Let JS finish
 
             # Get page content
-            html = await tab.get_content()
+            html = await run_browser_operation(
+                tab.get_content(),
+                "page-monitor content retrieval",
+                timeout_seconds=operation_timeout,
+                browser_session=tab,
+            )
 
             # Extract articles using various selectors
             articles = await self._extract_articles_from_html(html, tab)

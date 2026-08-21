@@ -59,3 +59,9 @@ class BrowserUnavailableError(ContentExtractionError):
     """Shared browser is unavailable or reconnecting is temporarily throttled."""
 
     pass
+
+
+class BrowserBusyError(BrowserUnavailableError):
+    """Shared browser capacity is busy; this is not a browser health failure."""
+
+    pass

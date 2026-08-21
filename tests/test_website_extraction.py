@@ -228,6 +228,27 @@ async def test_browser_snapshot_closes_tab_on_error(page_monitor, mock_browser):
 
 
 @pytest.mark.asyncio
+@pytest.mark.parametrize("wait_timeout_ms", [0, -1, float("inf"), float("nan")])
+async def test_browser_snapshot_rejects_invalid_wait_timeout_override(
+    page_monitor, mock_browser, wait_timeout_ms
+):
+    page_monitor.config.wait_timeout_ms = wait_timeout_ms
+    mock_tab = make_mock_tab(SAMPLE_NEWS_HTML)
+    mock_browser.get = AsyncMock(return_value=mock_tab)
+
+    with (
+        patch(
+            "news_aggregator.core.browser_pool.get_browser",
+            AsyncMock(return_value=mock_browser),
+        ),
+        pytest.raises(ValueError, match="finite positive"),
+    ):
+        await page_monitor._take_browser_snapshot()
+
+    mock_tab.close.assert_awaited_once()
+
+
+@pytest.mark.asyncio
 async def test_content_change_detection(page_monitor):
     """Should detect new articles between snapshots."""
     import hashlib

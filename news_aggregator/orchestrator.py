@@ -104,6 +104,9 @@ class NewsOrchestrator:
         
     async def run_full_cycle(self) -> Dict[str, Any]:
         """Run complete news processing cycle."""
+        from .core.browser_pool import acquire_browser_cycle
+
+        browser_cycle_lease = await acquire_browser_cycle()
         start_time = datetime.utcnow()
         stats = {
             'start_time': start_time.isoformat(),
@@ -208,6 +211,34 @@ class NewsOrchestrator:
             stats['errors'].append(error_msg)
             stats['fatal_error'] = error_msg
             return stats
+        finally:
+            # News cycles share one CDP client session but never own Chrome itself.
+            # Release this cycle's lease on every outcome; the pool disconnects
+            # only after the last overlapping cycle has exited.
+            from .core.browser_pool import release_browser_cycle
+
+            cleanup_task = asyncio.create_task(
+                release_browser_cycle(browser_cycle_lease)
+            )
+            cancelled = False
+            while not cleanup_task.done():
+                try:
+                    await asyncio.shield(cleanup_task)
+                except asyncio.CancelledError:
+                    cancelled = True
+                except Exception:
+                    break
+            try:
+                await cleanup_task
+            except Exception as cleanup_error:
+                # Cleanup is secondary and must not replace the cycle outcome.
+                logger.warning(
+                    "Browser session cleanup failed (%s): %s",
+                    type(cleanup_error).__name__,
+                    cleanup_error,
+                )
+            if cancelled:
+                raise asyncio.CancelledError
     
     async def _get_telegram_service_with_db_overrides(self) -> TelegramService:
         """Load telegram channel IDs from DB and return a properly configured service."""
