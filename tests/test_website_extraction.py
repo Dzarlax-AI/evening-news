@@ -68,6 +68,16 @@ SAMPLE_BLOG_HTML = """
 """
 
 
+@pytest.mark.parametrize("wait_timeout_ms", [0, -1, float("inf"), float("nan")])
+def test_page_monitor_config_rejects_invalid_browser_timeout(wait_timeout_ms):
+    with pytest.raises(ValueError, match="wait_timeout_ms"):
+        PageMonitorConfig(
+            url="https://example.com",
+            name="Example",
+            wait_timeout_ms=wait_timeout_ms,
+        )
+
+
 @pytest.fixture
 def monitor_config():
     return PageMonitorConfig(

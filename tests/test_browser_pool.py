@@ -1,13 +1,18 @@
 """Tests for the shared browser pool (nodriver + CDP)."""
 
 import asyncio
+import os
 import time
 from unittest.mock import AsyncMock, MagicMock, patch
 
 import pytest
 
 import news_aggregator.core.browser_pool as bp
-from news_aggregator.core.exceptions import BrowserBusyError, BrowserUnavailableError
+from news_aggregator.core.exceptions import (
+    BrowserBusyError,
+    BrowserOperationTimeoutError,
+    BrowserUnavailableError,
+)
 
 
 def make_browser(*, connected: bool = True) -> MagicMock:
@@ -255,7 +260,7 @@ async def test_browser_tab_creation_timeout_invalidates_session(remote_settings)
 
     with (
         patch("news_aggregator.config.settings", remote_settings),
-        pytest.raises(BrowserUnavailableError, match="create tab.*timed out"),
+        pytest.raises(BrowserUnavailableError, match=r"create tab.*timed out"),
     ):
         async with bp.browser_tab("https://example.com"):
             pass
@@ -297,8 +302,13 @@ async def test_bounded_browser_operation_timeout_invalidates_and_closes():
     async def hang():
         await asyncio.Event().wait()
 
-    with pytest.raises(BrowserUnavailableError, match="navigation.*timed out"):
-        await bp.run_browser_operation(hang(), "navigation", timeout_seconds=0.01)
+    with pytest.raises(BrowserUnavailableError, match=r"navigation.*timed out"):
+        await bp.run_browser_operation(
+            hang(),
+            "navigation",
+            timeout_seconds=0.01,
+            invalidate_on_timeout=True,
+        )
 
     assert bp._browser is None
     browser.aclose.assert_awaited_once()
@@ -313,8 +323,47 @@ async def test_each_hanging_cdp_operation_has_a_finite_deadline(operation_name):
     async def hang():
         await asyncio.Event().wait()
 
-    with pytest.raises(BrowserUnavailableError, match=f"{operation_name}.*timed out"):
-        await bp.run_browser_operation(hang(), operation_name, timeout_seconds=0.01)
+    with pytest.raises(BrowserUnavailableError, match=rf"{operation_name}.*timed out"):
+        await bp.run_browser_operation(
+            hang(),
+            operation_name,
+            timeout_seconds=0.01,
+            invalidate_on_timeout=True,
+        )
+
+
+@pytest.mark.asyncio
+async def test_caller_deadline_does_not_invalidate_browser_session():
+    browser = make_browser()
+    bp._browser = browser
+
+    async def hang():
+        await asyncio.Event().wait()
+
+    with pytest.raises(BrowserOperationTimeoutError, match="selector wait"):
+        await bp.run_browser_operation(
+            hang(), "selector wait", timeout_seconds=0.01
+        )
+
+    assert bp._browser is browser
+    assert bp._consecutive_browser_failures == 0
+    browser.aclose.assert_not_awaited()
+
+
+@pytest.mark.asyncio
+async def test_operation_timeout_error_does_not_invalidate_browser_session():
+    browser = make_browser()
+    bp._browser = browser
+
+    async def internal_timeout():
+        raise asyncio.TimeoutError("selector absent")
+
+    with pytest.raises(BrowserOperationTimeoutError, match="selector wait"):
+        await bp.run_browser_operation(internal_timeout(), "selector wait")
+
+    assert bp._browser is browser
+    assert bp._consecutive_browser_failures == 0
+    browser.aclose.assert_not_awaited()
 
 
 @pytest.mark.asyncio
@@ -333,7 +382,25 @@ async def test_transport_failure_invalidates_browser_session():
 
 
 @pytest.mark.asyncio
-async def test_stale_operation_failure_does_not_detach_newer_browser_session():
+async def test_page_error_text_does_not_count_as_transport_failure():
+    browser = make_browser()
+    bp._browser = browser
+
+    async def page_error():
+        raise RuntimeError("page text mentions websocket transport")
+
+    with pytest.raises(RuntimeError, match="websocket transport"):
+        await bp.run_browser_operation(page_error(), "evaluation")
+
+    assert bp._browser is browser
+    assert bp._consecutive_browser_failures == 0
+    browser.aclose.assert_not_awaited()
+
+
+@pytest.mark.asyncio
+async def test_stale_operation_failure_does_not_detach_newer_browser_session(
+    remote_settings,
+):
     old_browser = make_browser()
     new_browser = make_browser()
     stale_session = MagicMock()
@@ -347,21 +414,22 @@ async def test_stale_operation_failure_does_not_detach_newer_browser_session():
         await fail_now.wait()
         raise ConnectionResetError("old websocket reset")
 
-    task = asyncio.create_task(
-        bp.run_browser_operation(
-            stale_operation(),
-            "stale navigation",
-            browser_session=stale_session,
+    with patch("news_aggregator.config.settings", remote_settings):
+        task = asyncio.create_task(
+            bp.run_browser_operation(
+                stale_operation(),
+                "stale navigation",
+                browser_session=stale_session,
+            )
         )
-    )
-    await asyncio.sleep(0)
-    bp._browser = new_browser
-    bp._browser_generation = 2
-    bp.record_browser_success()
-    fail_now.set()
+        await asyncio.sleep(0)
+        bp._browser = new_browser
+        bp._browser_generation = 2
+        bp.record_browser_success()
+        fail_now.set()
 
-    with pytest.raises(BrowserUnavailableError):
-        await task
+        with pytest.raises(BrowserUnavailableError):
+            await task
 
     assert bp._browser is new_browser
     old_browser.aclose.assert_awaited_once()
@@ -371,7 +439,9 @@ async def test_stale_operation_failure_does_not_detach_newer_browser_session():
 
 
 @pytest.mark.asyncio
-async def test_stale_operation_success_does_not_reset_new_generation_failure():
+async def test_stale_operation_success_does_not_reset_new_generation_failure(
+    remote_settings,
+):
     old_browser = make_browser()
     new_browser = make_browser()
     stale_session = MagicMock()
@@ -385,20 +455,21 @@ async def test_stale_operation_success_does_not_reset_new_generation_failure():
         await finish_old.wait()
         return "old result"
 
-    task = asyncio.create_task(
-        bp.run_browser_operation(
-            delayed_old_success(),
-            "old success",
-            browser_session=stale_session,
+    with patch("news_aggregator.config.settings", remote_settings):
+        task = asyncio.create_task(
+            bp.run_browser_operation(
+                delayed_old_success(),
+                "old success",
+                browser_session=stale_session,
+            )
         )
-    )
-    await asyncio.sleep(0)
-    bp._browser = new_browser
-    bp._browser_generation = 2
-    bp.record_browser_failure(ConnectionError("new incident"))
-    finish_old.set()
+        await asyncio.sleep(0)
+        bp._browser = new_browser
+        bp._browser_generation = 2
+        bp.record_browser_failure(ConnectionError("new incident"))
+        finish_old.set()
 
-    assert await task == "old result"
+        assert await task == "old result"
     assert bp._consecutive_browser_failures == 1
     assert bp._last_failure_at is not None
 
@@ -520,16 +591,14 @@ async def test_hard_deadline_does_not_wait_for_cancel_suppressing_operation():
         except asyncio.CancelledError:
             await allow_finish.wait()
 
-    started = time.monotonic()
     with pytest.raises(BrowserUnavailableError, match="timed out"):
         await bp.run_browser_operation(
             suppress_cancellation(),
             "stubborn CDP call",
             timeout_seconds=0.01,
+            invalidate_on_timeout=True,
         )
-    elapsed = time.monotonic() - started
 
-    assert elapsed < 0.2
     assert bp._detached_operation_tasks
     allow_finish.set()
     for _ in range(20):
@@ -591,6 +660,8 @@ async def test_restart_marker_open_error_does_not_latch_incident(
 
     def fail_once(path, flags, mode):
         nonlocal calls
+        if os.fspath(path) != os.fspath(marker):
+            return real_open(path, flags, mode)
         calls += 1
         if calls == 1:
             raise OSError("temporary filesystem error")
@@ -619,13 +690,29 @@ async def test_restart_marker_write_error_is_contained_and_retried(
     remote_settings.browser_restart_marker_path = str(marker)
     browser = make_browser()
     bp._browser = browser
+    real_open = bp.os.open
+    real_write = bp.os.write
+    marker_descriptor = None
+
+    def track_marker_open(path, flags, mode):
+        nonlocal marker_descriptor
+        descriptor = real_open(path, flags, mode)
+        if os.fspath(path) == os.fspath(marker):
+            marker_descriptor = descriptor
+        return descriptor
+
+    def fail_marker_write(descriptor, payload):
+        if descriptor == marker_descriptor:
+            raise OSError("disk full")
+        return real_write(descriptor, payload)
 
     async def disconnect():
         raise ConnectionResetError("primary transport failure")
 
     with (
         patch("news_aggregator.config.settings", remote_settings),
-        patch.object(bp.os, "write", side_effect=OSError("disk full")),
+        patch.object(bp.os, "open", side_effect=track_marker_open),
+        patch.object(bp.os, "write", side_effect=fail_marker_write),
         pytest.raises(BrowserUnavailableError, match="primary transport failure"),
     ):
         await bp.run_browser_operation(disconnect(), "navigation")
@@ -647,17 +734,27 @@ async def test_restart_marker_close_error_is_contained_and_retried(
     remote_settings.browser_failure_threshold = 1
     remote_settings.browser_restart_marker_path = str(marker)
     real_close = bp.os.close
-    calls = 0
+    real_open = bp.os.open
+    marker_descriptor = None
+    failed = False
+
+    def track_marker_open(path, flags, mode):
+        nonlocal marker_descriptor
+        descriptor = real_open(path, flags, mode)
+        if os.fspath(path) == os.fspath(marker):
+            marker_descriptor = descriptor
+        return descriptor
 
     def fail_once(descriptor):
-        nonlocal calls
-        calls += 1
-        if calls == 1:
+        nonlocal failed
+        if descriptor == marker_descriptor and not failed:
+            failed = True
             raise OSError("close interrupted")
         return real_close(descriptor)
 
     with (
         patch("news_aggregator.config.settings", remote_settings),
+        patch.object(bp.os, "open", side_effect=track_marker_open),
         patch.object(bp.os, "close", side_effect=fail_once),
     ):
         bp.record_browser_failure(ConnectionError("first"))
@@ -739,11 +836,22 @@ async def test_non_browser_failure_does_not_touch_restart_marker(tmp_path, remot
     remote_settings.browser_failure_threshold = 1
     remote_settings.browser_restart_marker_path = str(marker)
 
-    with patch("news_aggregator.config.settings", remote_settings):
-        # Ordinary application errors are never fed to the browser failure tracker.
-        await asyncio.sleep(0)
+    browser = make_browser()
+    bp._browser = browser
+
+    async def application_error():
+        raise ValueError("selector not found")
+
+    with (
+        patch("news_aggregator.config.settings", remote_settings),
+        pytest.raises(ValueError, match="selector not found"),
+    ):
+        await bp.run_browser_operation(application_error(), "extraction")
 
     assert not marker.exists()
+    assert bp._consecutive_browser_failures == 0
+    assert bp._browser is browser
+    browser.aclose.assert_not_awaited()
 
 def test_endpoint_parsing_variants():
     cases = [

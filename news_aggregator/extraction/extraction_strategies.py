@@ -503,10 +503,13 @@ class ExtractionStrategies:
                 def remaining_s() -> float:
                     return max(0.0, adaptive_total_budget / 1000 - (time.time() - budget_start))
 
+                navigation_budget = min(adaptive_timeout / 1000, remaining_s())
+                if navigation_budget <= 0:
+                    return None, None, None
                 await run_browser_operation(
                     tab.get(url, new_tab=False),
                     "navigation",
-                    timeout_seconds=max(0.001, min(adaptive_timeout / 1000, remaining_s())),
+                    timeout_seconds=navigation_budget,
                     browser_session=tab,
                 )
 
@@ -514,10 +517,13 @@ class ExtractionStrategies:
                 try:
                     deadline = time.time() + min(10, remaining_s())
                     while time.time() < deadline:
+                        evaluation_budget = remaining_s()
+                        if evaluation_budget <= 0:
+                            break
                         result = await run_browser_operation(
                             tab.evaluate("document.body ? document.body.innerText.length : 0"),
                             "content readiness evaluation",
-                            timeout_seconds=max(0.001, remaining_s()),
+                            timeout_seconds=evaluation_budget,
                             browser_session=tab,
                         )
                         if result and int(result) > 500:
@@ -529,10 +535,13 @@ class ExtractionStrategies:
                     pass  # Continue even if content detection times out
 
                 # Capture rendered HTML once for both content and metadata
+                content_budget = remaining_s()
+                if content_budget <= 0:
+                    return None, None, None
                 page_html = await run_browser_operation(
                     tab.get_content(),
                     "content retrieval",
-                    timeout_seconds=max(0.001, remaining_s()),
+                    timeout_seconds=content_budget,
                     browser_session=tab,
                 )
 

@@ -24,7 +24,11 @@ except ImportError:  # nodriver currently depends on websockets, but keep import
 else:
     _WEBSOCKET_TRANSPORT_ERRORS = (WebSocketConnectionClosed,)
 
-from .exceptions import BrowserBusyError, BrowserUnavailableError
+from .exceptions import (
+    BrowserBusyError,
+    BrowserOperationTimeoutError,
+    BrowserUnavailableError,
+)
 
 logger = logging.getLogger(__name__)
 
@@ -218,28 +222,31 @@ def record_browser_success(
 
 
 def _is_transport_failure(error: BaseException) -> bool:
-    if isinstance(
-        error,
-        (ConnectionError, OSError, EOFError) + _WEBSOCKET_TRANSPORT_ERRORS,
-    ):
+    explicit_types = (
+        ConnectionError,
+        OSError,
+        EOFError,
+        *_WEBSOCKET_TRANSPORT_ERRORS,
+    )
+    if isinstance(error, explicit_types):
         return True
-    detail = f"{type(error).__name__}: {error}".lower()
+    error_type = type(error).__name__.lower()
     return any(
-        token in detail
+        token in error_type
         for token in (
-            "cdp",
-            "connection closed",
-            "connection reset",
+            "connectionclosed",
+            "connectionreset",
             "websocket",
             "transport",
-            "broken pipe",
+            "brokenpipe",
+            "endoffile",
         )
     )
 
 
 def _bounded_timeout_seconds(
     operation: Awaitable[object], timeout_seconds: Optional[float]
-) -> float:
+) -> tuple[float, bool]:
     """Validate a caller override and cap it at the configured finite budget."""
     from ..config import settings
 
@@ -258,7 +265,7 @@ def _bounded_timeout_seconds(
         if callable(close):
             close()
         raise ValueError("Browser operation timeout must be finite positive seconds")
-    return min(candidate, configured_max)
+    return min(candidate, configured_max), candidate >= configured_max
 
 
 async def _resolve_host(host: str) -> str:
@@ -370,9 +377,12 @@ async def run_browser_operation(
     timeout_seconds: Optional[float] = None,
     confirm_success: bool = True,
     browser_session: Optional[object] = None,
+    invalidate_on_timeout: bool = False,
 ) -> T:
     """Run one CDP operation with a finite deadline and session invalidation."""
-    timeout_seconds = _bounded_timeout_seconds(operation, timeout_seconds)
+    timeout_seconds, uses_pool_deadline = _bounded_timeout_seconds(
+        operation, timeout_seconds
+    )
 
     if browser_session is None:
         expected_browser = _browser
@@ -389,18 +399,25 @@ async def run_browser_operation(
         if operation_task not in done:
             operation_task.cancel()
             _track_detached_task(operation_task)
-            raise asyncio.TimeoutError
-        result = operation_task.result()
-    except asyncio.TimeoutError as exc:
-        failure = BrowserUnavailableError(
-            f"Browser {operation_name} timed out after {timeout_seconds:.1f}s"
-        )
-        await invalidate_browser(
-            failure,
-            expected_browser=expected_browser,
-            expected_generation=expected_generation,
-        )
-        raise failure from exc
+            if invalidate_on_timeout or uses_pool_deadline:
+                failure = BrowserUnavailableError(
+                    f"Browser {operation_name} timed out after {timeout_seconds:.1f}s"
+                )
+                await invalidate_browser(
+                    failure,
+                    expected_browser=expected_browser,
+                    expected_generation=expected_generation,
+                )
+                raise failure
+            raise BrowserOperationTimeoutError(
+                f"Browser {operation_name} timed out after {timeout_seconds:.1f}s"
+            )
+        try:
+            result = operation_task.result()
+        except asyncio.TimeoutError as exc:
+            raise BrowserOperationTimeoutError(
+                f"Browser {operation_name} reported a caller-scoped timeout"
+            ) from exc
     except asyncio.CancelledError:
         if not operation_task.done():
             operation_task.cancel()
@@ -667,6 +684,7 @@ async def browser_tab(url: str):
             "create tab",
             timeout_seconds=settings.browser_tab_create_timeout_seconds,
             browser_session=browser,
+            invalidate_on_timeout=True,
         )
         setattr(tab, "_browser_pool_browser", browser)
         setattr(tab, "_browser_pool_generation", _browser_generation)
@@ -681,6 +699,7 @@ async def browser_tab(url: str):
                         timeout_seconds=settings.browser_tab_close_timeout_seconds,
                         confirm_success=False,
                         browser_session=tab,
+                        invalidate_on_timeout=True,
                     )
                 except Exception as exc:
                     logger.warning(

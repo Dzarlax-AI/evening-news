@@ -5,7 +5,33 @@ from unittest.mock import AsyncMock, MagicMock, patch
 
 import pytest
 
+import news_aggregator.core.browser_pool as bp
 from news_aggregator.orchestrator import NewsOrchestrator
+
+
+@pytest.fixture(autouse=True)
+def reset_browser_pool_state():
+    original = {
+        "browser": bp._browser,
+        "generation": bp._browser_generation,
+        "cycle_lock": bp._cycle_lock,
+        "cycle_leases": bp._active_cycle_leases,
+        "tab_leases": bp._active_tab_leases,
+        "close_when_idle": bp._close_when_idle,
+    }
+    bp._browser = None
+    bp._browser_generation = 0
+    bp._cycle_lock = asyncio.Lock()
+    bp._active_cycle_leases = set()
+    bp._active_tab_leases = set()
+    bp._close_when_idle = False
+    yield
+    bp._browser = original["browser"]
+    bp._browser_generation = original["generation"]
+    bp._cycle_lock = original["cycle_lock"]
+    bp._active_cycle_leases = original["cycle_leases"]
+    bp._active_tab_leases = original["tab_leases"]
+    bp._close_when_idle = original["close_when_idle"]
 
 
 def make_orchestrator() -> NewsOrchestrator:
@@ -111,8 +137,6 @@ async def test_full_cycle_closes_browser_session_before_propagating_cancellation
 
 @pytest.mark.asyncio
 async def test_overlapping_full_cycles_keep_session_until_both_exit():
-    import news_aggregator.core.browser_pool as bp
-
     first = make_orchestrator()
     second = make_orchestrator()
     first_entered = asyncio.Event()

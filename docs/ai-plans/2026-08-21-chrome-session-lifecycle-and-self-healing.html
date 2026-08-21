@@ -136,13 +136,15 @@
       <thead><tr><th>File</th><th>Planned change</th></tr></thead>
       <tbody>
         <tr><td><code>news_aggregator/core/browser_pool.py</code></td><td>Add bounded tab creation and browser-command helpers, typed timeout errors, session invalidation, browser failure streak, idempotent restart request, and cancellation-safe cycle cleanup.</td></tr>
+        <tr><td><code>news_aggregator/core/exceptions.py</code></td><td>Distinguish browser unavailability, capacity contention, and caller-scoped operation timeouts.</td></tr>
         <tr><td><code>news_aggregator/orchestrator.py</code></td><td>Close the complete News CDP session in <code>run_full_cycle()</code> <code>finally</code>; preserve the primary processing outcome if cleanup also fails.</td></tr>
         <tr><td><code>news_aggregator/extraction/extraction_strategies.py</code></td><td>Apply bounded navigation, CDP command, and rendered-content budgets to article extraction.</td></tr>
         <tr><td><code>news_aggregator/sources/page_monitor_source.py</code></td><td>Apply the same bounded browser operations to snapshot, monitoring, and connection-test paths.</td></tr>
-        <tr><td><code>news_aggregator/services/scheduler.py</code></td><td>Replace fixed ten-minute timeout retry storms with bounded backoff and aggregate browser-recovery alerts; retain truthful task outcomes.</td></tr>
-        <tr><td><code>news_aggregator/config.py</code></td><td>Add validated environment-backed browser operation budgets, failure threshold, restart-marker path, and scheduler retry limits.</td></tr>
+        <tr><td><code>news_aggregator/telegram/telegram_source.py</code></td><td>Bound Telegram browser waits, scrolling, and rendered-content retrieval.</td></tr>
+        <tr><td><code>news_aggregator/config.py</code></td><td>Add validated environment-backed browser operation budgets, failure threshold, and restart-marker path.</td></tr>
         <tr><td><code>tests/test_browser_pool.py</code></td><td>Cover open/navigation/content timeout, invalidation, shielded cleanup, streak reset, and single marker creation.</td></tr>
-        <tr><td><code>tests/test_operational_reliability.py</code></td><td>Cover cycle cleanup on every outcome, timeout backoff, deduplicated alerting, restart escalation, and recovery.</td></tr>
+        <tr><td><code>tests/test_browser_config.py</code></td><td>Cover finite positive browser settings and restart-marker path validation.</td></tr>
+        <tr><td><code>tests/test_orchestrator_browser_cleanup.py</code></td><td>Cover cleanup on every outcome and overlapping processing cycles.</td></tr>
         <tr><td><code>tests/test_website_extraction.py</code></td><td>Verify browser-backed extraction exits within its budget and does not mark a failed article as successfully processed.</td></tr>
         <tr><td><code>personal_ai_stack/deploy/news/docker-compose.yml</code></td><td>Mount the external browser-control volume read/write and configure the marker path; do not mount Docker socket.</td></tr>
         <tr><td><code>personal_ai_stack/deploy/infra/docker-compose.yml</code></td><td>Mount the same volume in Chrome and replace the healthcheck command with the reviewed self-healing script.</td></tr>
@@ -161,7 +163,7 @@
       <li>Track consecutive browser failures centrally. Reset on confirmed browser success; write one marker atomically at the threshold and do not rewrite it until recovery is observed.</li>
       <li>Wrap the entire <code>run_full_cycle()</code> body in cleanup that closes the News CDP connection on success, warning, exception, cancellation, and outer scheduler timeout.</li>
       <li>Audit every <code>browser_tab()</code>, <code>tab.get()</code>, <code>tab.send()</code>, <code>tab.evaluate()</code>, and <code>tab.get_content()</code> path and apply the shared bounded helper rather than fixing only the observed extraction call.</li>
-      <li>Change scheduler retry timing to bounded exponential delays and keep one active alert incident with a recovery message.</li>
+      <li>Keep the existing scheduler alert deduplication unchanged; scheduler retry backoff is deferred to a follow-up because this implementation prevents the hour-long browser hang before the outer scheduler timeout.</li>
       <li>Add the narrow control volume and healthcheck script. The script will validate only a marker file, endpoint response, failure counter, and descriptor count; it will never execute marker contents.</li>
       <li>Run focused tests, the complete Python test suite, and the same test command used by GitHub Actions before any push.</li>
       <li>Update this plan with actual values and evidence, then request separate permission for commit/PR and later for production deployment.</li>
@@ -249,7 +251,7 @@
       <li>Wrapped browser navigation, CDP commands, evaluation, waits, and content retrieval in website, page-monitor, and Telegram extraction paths.</li>
       <li>Added browser-only incident counting, success reset, one atomic restart marker per incident, and retry-safe marker I/O.</li>
       <li>Added a shared data-only control volume and a Chrome healthcheck script with endpoint-failure escalation, a default 800-FD threshold, and an internal HTTP timeout. No Docker socket or extra container was added.</li>
-      <li>Application verification completed with <code>94 passed, 4 skipped</code>; skipped tests are the existing opt-in real-browser/network checks.</li>
+      <li>Application verification completed with <code>101 passed, 4 skipped</code>; skipped tests are the existing opt-in real-browser/network checks.</li>
       <li>The healthcheck shell harness passed healthy, failure escalation, reset, marker safety, FD threshold, invalid configuration, and real TERM-delivery cases.</li>
       <li>Both production compose definitions passed <code>docker compose config --quiet</code> without pulling or starting containers.</li>
     </ul>
@@ -262,6 +264,7 @@
       <li>The application changes are versioned in the Evening News pull request. The canonical <code>personal_ai_stack</code> deployment files are local operational artifacts and must be applied explicitly during the later deployment gate.</li>
       <li>Real Chrome validation remains part of post-merge deployment QA: one normal cycle, one controlled marker restart, reconnection of both consumers, and several scheduled-cycle FD observations.</li>
       <li>CloakBrowser upgrade and per-seed processes remain out of scope.</li>
+      <li>Scheduler retry backoff remains a follow-up; this change fixes browser lifecycle and self-healing without altering scheduler timing policy.</li>
     </ul>
   </section>
 

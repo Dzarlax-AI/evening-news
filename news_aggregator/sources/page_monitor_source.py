@@ -5,6 +5,7 @@ import re
 import json
 import hashlib
 import asyncio
+import math
 from datetime import datetime, timedelta
 from typing import List, Dict, Optional, Set, Tuple, Any
 from dataclasses import dataclass
@@ -68,6 +69,13 @@ class PageMonitorConfig:
     reanalyze_after_failures: int = 5
     
     def __post_init__(self):
+        try:
+            wait_timeout_ms = float(self.wait_timeout_ms)
+        except (TypeError, ValueError) as exc:
+            raise ValueError("wait_timeout_ms must be finite and positive") from exc
+        if not math.isfinite(wait_timeout_ms) or wait_timeout_ms <= 0:
+            raise ValueError("wait_timeout_ms must be finite and positive")
+
         if self.article_selectors is None:
             self.article_selectors = [
                 # Common article/news item patterns
