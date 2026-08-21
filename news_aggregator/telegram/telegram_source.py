@@ -11,7 +11,7 @@ from bs4 import BeautifulSoup
 
 from ..sources.base import BaseSource, Article
 from ..core.http_client import get_http_client
-from ..core.exceptions import SourceError
+from ..core.exceptions import BrowserUnavailableError, SourceError
 from .message_parser import MessageParser
 from .media_extractor import MediaExtractor
 
@@ -182,14 +182,21 @@ class TelegramSource(BaseSource):
         if not BROWSER_AVAILABLE:
             raise SourceError("nodriver not available for browser access")
 
-        from ..core.browser_pool import browser_tab
+        from ..core.browser_pool import browser_tab, run_browser_operation
 
         for url in self.access_urls:
             try:
                 async with browser_tab(url) as tab:
                     # Wait for content to load, ignoring CDP node resolution errors
                     try:
-                        await tab.wait_for(selector='.tgme_widget_message', timeout=8)
+                        await run_browser_operation(
+                            tab.wait_for(selector='.tgme_widget_message', timeout=8),
+                            "Telegram message wait",
+                            timeout_seconds=8,
+                            browser_session=tab,
+                        )
+                    except BrowserUnavailableError:
+                        raise
                     except Exception as wait_err:
                         logger.warning(f"  wait_for warning (ignoring): {wait_err}")
 
@@ -197,14 +204,24 @@ class TelegramSource(BaseSource):
                     try:
                         logger.info("  Enhanced scrolling to load latest messages...")
                         for _ in range(3):
-                            await tab.evaluate("window.scrollTo(0, document.body.scrollHeight)")
+                            await run_browser_operation(
+                                tab.evaluate("window.scrollTo(0, document.body.scrollHeight)"),
+                                "Telegram scroll",
+                                browser_session=tab,
+                            )
                             await asyncio.sleep(2)
                         logger.info("  Enhanced scrolling completed")
+                    except BrowserUnavailableError:
+                        raise
                     except Exception as scroll_error:
                         logger.warning(f"  Scrolling failed: {scroll_error}")
 
                     # Get HTML content
-                    html = await tab.get_content()
+                    html = await run_browser_operation(
+                        tab.get_content(),
+                        "Telegram content retrieval",
+                        browser_session=tab,
+                    )
                     articles = await self._parse_html(html, url)
 
                     for article in articles:

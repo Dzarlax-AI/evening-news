@@ -33,6 +33,24 @@ class Settings(BaseSettings):
     
     # Browser (Chrome CDP endpoint, e.g. ws://chrome:9222)
     browser_ws_endpoint: Optional[str] = Field(default=None, alias="BROWSER_WS_ENDPOINT")
+    browser_tab_acquire_timeout_seconds: float = Field(
+        default=120.0, gt=0, allow_inf_nan=False, alias="BROWSER_TAB_ACQUIRE_TIMEOUT_SECONDS"
+    )
+    browser_tab_create_timeout_seconds: float = Field(
+        default=30.0, gt=0, allow_inf_nan=False, alias="BROWSER_TAB_CREATE_TIMEOUT_SECONDS"
+    )
+    browser_tab_close_timeout_seconds: float = Field(
+        default=5.0, gt=0, allow_inf_nan=False, alias="BROWSER_TAB_CLOSE_TIMEOUT_SECONDS"
+    )
+    browser_operation_timeout_seconds: float = Field(
+        default=90.0, gt=0, allow_inf_nan=False, alias="BROWSER_OPERATION_TIMEOUT_SECONDS"
+    )
+    browser_failure_threshold: int = Field(
+        default=3, gt=0, alias="BROWSER_FAILURE_THRESHOLD"
+    )
+    browser_restart_marker_path: Optional[str] = Field(
+        default=None, alias="BROWSER_RESTART_MARKER_PATH"
+    )
 
     # Telegram
     telegram_token: Optional[SecretStr] = Field(default=None, alias="TELEGRAM_TOKEN")
@@ -114,6 +132,16 @@ class Settings(BaseSettings):
     class Config:
         env_file = ".env"
         case_sensitive = False
+
+    @field_validator("browser_restart_marker_path")
+    @classmethod
+    def validate_browser_restart_marker_path(cls, value: Optional[str]) -> Optional[str]:
+        if value is None or not value.strip():
+            return None
+        normalized = value.strip()
+        if not os.path.isabs(normalized):
+            raise ValueError("BROWSER_RESTART_MARKER_PATH must be an absolute path")
+        return normalized
     
     def get_allowed_origins_list(self) -> List[str]:
         """Return allowed origins as list."""
