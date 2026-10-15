@@ -93,14 +93,17 @@ async def test_get_browser_local(local_settings):
     with (
         patch("news_aggregator.config.settings", local_settings),
         patch.object(bp.os.path, "exists", return_value=False),
-        patch.object(bp.uc, "start", AsyncMock(return_value=browser)) as start,
+        patch.object(bp, "Browser", return_value=browser) as browser_factory,
+        patch.object(bp, "Config") as config_factory,
     ):
         result = await bp.get_browser()
 
-    start.assert_awaited_once_with(
+    config_factory.assert_called_once_with(
         headless=True,
         browser_args=["--no-sandbox", "--disable-setuid-sandbox"],
     )
+    browser_factory.assert_called_once_with(config_factory.return_value)
+    browser.start.assert_awaited_once()
     assert result is browser
 
 
@@ -234,7 +237,9 @@ async def test_browser_tab_closes_tab_on_success_and_failure():
         assert yielded is tab
     tab.close.assert_awaited_once()
 
-    tab.close.reset_mock()
+    tab = MagicMock()
+    tab.close = AsyncMock()
+    browser.get.return_value = tab
     with pytest.raises(RuntimeError, match="consumer failed"):
         async with bp.browser_tab("https://example.com"):
             raise RuntimeError("consumer failed")

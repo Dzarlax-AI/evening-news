@@ -1,6 +1,7 @@
 """Shared browser pool — connects to a remote Chrome instance via CDP (nodriver)."""
 
 import asyncio
+import inspect
 import json
 import logging
 import math
@@ -10,12 +11,18 @@ import sys
 import time
 import urllib.parse
 import urllib.request
+import weakref
+from contextlib import asynccontextmanager
 from dataclasses import dataclass
 from typing import Awaitable, Optional, TypeVar
 
 import nodriver as uc
-from nodriver.core.browser import Browser, HTTPApi
+from nodriver import cdp
+from nodriver.core import util as nodriver_util
+from nodriver.core.browser import Browser as NodriverBrowser, HTTPApi
 from nodriver.core.config import Config
+from nodriver.core.connection import Connection
+from nodriver.core.tab import Tab
 
 try:
     from websockets.exceptions import ConnectionClosed as WebSocketConnectionClosed
@@ -32,7 +39,7 @@ from .exceptions import (
 
 logger = logging.getLogger(__name__)
 
-_browser: Optional[Browser] = None
+_browser: Optional[NodriverBrowser] = None
 _browser_generation = 0
 _lock = asyncio.Lock()
 _cycle_lock = asyncio.Lock()
@@ -44,18 +51,118 @@ _last_failure_at: Optional[float] = None
 _last_failure_error: Optional[str] = None
 _consecutive_browser_failures = 0
 _restart_marker_latched = False
+_managed_connections: weakref.WeakValueDictionary = weakref.WeakValueDictionary()
 
 _CONNECT_TIMEOUT_SECONDS = 15.0
 _CLOSE_TIMEOUT_SECONDS = 5.0
 _RECONNECT_COOLDOWN_SECONDS = 60.0
 
 # Serializes ALL browser tab usage across the entire app.
-# Remote Chrome has limited RAM (512 MB) and a single WebSocket connection.
-# Opening multiple tabs concurrently overwhelms both, causing CDP commands
+# Remote Chrome has limited RAM and each attached tab owns a WebSocket.
+# Opening multiple tabs concurrently increases memory use and can cause commands
 # (including tab.close()) to hang indefinitely.
 _tab_semaphore = asyncio.Semaphore(1)
 
 T = TypeVar("T")
+
+
+class _OwnedConnection:
+    """Prevent retired pool connections from reopening in late CDP operations."""
+
+    async def aopen(self):
+        if self.__dict__.get("_browser_pool_closing", False):
+            raise ConnectionError("Browser pool connection is closing")
+        tasks = self.__dict__.setdefault("_browser_pool_operations", set())
+        task = asyncio.current_task()
+        outermost = task not in tasks
+        tasks.add(task)
+        try:
+            await super().aopen()
+            if self.__dict__.get("_browser_pool_closing", False):
+                # A third-party connect may suppress cancellation and finish late.
+                await _await_shielded(_close_transport(self, exclude_tasks={task}))
+                raise ConnectionError("Browser closed while its websocket was opening")
+        finally:
+            if outermost:
+                tasks.discard(task)
+
+    async def send(self, command, *args, **kwargs):
+        if self.__dict__.get("_browser_pool_closing", False):
+            command.close()
+            raise ConnectionError("Browser pool connection is closing")
+        tasks = self.__dict__.setdefault("_browser_pool_operations", set())
+        task = asyncio.current_task()
+        outermost = task not in tasks
+        tasks.add(task)
+        try:
+            return await super().send(command, *args, **kwargs)
+        finally:
+            if outermost:
+                tasks.discard(task)
+
+
+class _OwnedTab(_OwnedConnection, Tab):
+    pass
+
+
+class Browser(_OwnedConnection, NodriverBrowser):
+    """Keep ownership before attaching, including tabs missing from targets."""
+
+    async def get(self, url="chrome://welcome", new_tab=False, new_window=False):
+        if not (new_tab or new_window):
+            return await super().get(url, new_tab=new_tab, new_window=new_window)
+        target_id = await self.send(cdp.target.create_target(
+            url, new_window=new_window, enable_begin_frame_control=True,
+        ))
+        tab = _OwnedTab(target=target_id, parent=self, auto_attach=False)
+        _register_tab(self, tab, target_id)
+        self._targets.append(tab)
+        try:
+            if self.__dict__.get("_browser_pool_closing", False):
+                raise ConnectionError("Browser closed during tab creation")
+            await tab.attach()
+        except BaseException:
+            await _await_shielded(_close_tab(tab))
+            raise
+        return tab
+
+
+def _register_tab(browser, tab, target_id=None) -> None:
+    state = browser.__dict__
+    state.setdefault("_browser_pool_tabs", {})[id(tab)] = tab
+    tab._browser_pool_browser = browser
+    tab._browser_pool_generation = _browser_generation
+    if target_id is None and isinstance(tab, Connection):
+        target = tab.target
+        target_id = target.target_id if isinstance(target, cdp.target.TargetInfo) else target
+    tab._browser_pool_target_id = target_id
+    _managed_connections[id(browser)] = browser
+    _managed_connections[id(tab)] = tab
+
+
+def get_browser_resource_stats() -> dict[str, int]:
+    """Return passive process-local counters without keeping connections alive."""
+    connections = list(_managed_connections.values())
+    return {
+        "registered_browsers": sum(
+            browser in nodriver_util.get_registered_instances()
+            for browser in connections if isinstance(browser, NodriverBrowser)
+        ),
+        "owned_tabs": sum(len(c.__dict__.get("_browser_pool_tabs", {})) for c in connections),
+        "open_transports": sum(
+            isinstance(c, Connection) and c.socket is not None
+            and c.socket.close_code is None for c in connections
+        ),
+        "listener_tasks": sum(
+            isinstance(c.__dict__.get("_listener_task"), asyncio.Task)
+            and not c._listener_task.done() for c in connections
+        ),
+        "pending_commands": sum(len(c.__dict__.get("_mapper", {})) for c in connections),
+        "retained_transactions": sum(len(c.__dict__.get("_transactions", [])) for c in connections),
+        "detached_operation_tasks": len(_detached_operation_tasks),
+        "active_cycle_leases": len(_active_cycle_leases),
+        "active_tab_leases": len(_active_tab_leases),
+    }
 
 
 async def _httpapi_request_uppercase_method(self, endpoint, method: str = "get", data: dict = None):
@@ -287,51 +394,204 @@ async def _check_remote_port(host: str, port: int) -> None:
             await writer.wait_closed()
 
 
-async def _close_browser_instance(browser: Optional[Browser]) -> None:
-    """Await connection cleanup and terminate only a locally launched process."""
-    if browser is None:
-        return
-
-    close_error = None
-    aclose = getattr(browser, "aclose", None)
-    if callable(aclose):
-        try:
-            close_task = asyncio.create_task(aclose())
-            done, _ = await asyncio.wait({close_task}, timeout=_CLOSE_TIMEOUT_SECONDS)
-            if close_task not in done:
-                close_task.cancel()
-                _track_detached_task(close_task)
-                raise TimeoutError("browser aclose exceeded its deadline")
-            await close_task
-        except Exception as exc:  # Cleanup must not hide the primary failure.
-            close_error = exc
-
-    if getattr(browser, "_process", None) is not None:
-        try:
-            browser.stop()
-        except Exception as exc:
-            close_error = close_error or exc
-
-    if close_error is not None:
-        logger.warning(
-            "Browser cleanup failed (%s): %s",
-            type(close_error).__name__,
-            close_error,
-        )
-
-
-async def _await_cleanup(browser: Optional[Browser]) -> None:
-    """Finish connection cleanup despite repeated cancellation requests."""
-    cleanup_task = asyncio.create_task(_close_browser_instance(browser))
+async def _await_shielded(operation):
+    """Finish shared cleanup despite repeated cancellation of its caller."""
+    cleanup_task = asyncio.ensure_future(operation)
     cancelled = False
     while not cleanup_task.done():
         try:
             await asyncio.shield(cleanup_task)
         except asyncio.CancelledError:
             cancelled = True
-    await cleanup_task
+    result = await cleanup_task
     if cancelled:
         raise asyncio.CancelledError
+    return result
+
+
+async def _bounded_cleanup(operation, timeout):
+    task = asyncio.ensure_future(operation)
+    done, _ = await asyncio.wait({task}, timeout=max(0.0, timeout))
+    if task not in done:
+        task.cancel()
+        _track_detached_task(task)
+        raise TimeoutError("Browser cleanup exceeded its deadline")
+    return task.result()
+
+
+def _clear_connection_state(connection) -> None:
+    """Release response graphs only after their writers have stopped."""
+    for name in (
+        "_transactions", "_tx_by_id", "_mapper", "handlers", "_targets",
+        "_browser_pool_operations",
+    ):
+        container = connection.__dict__.get(name)
+        if isinstance(container, (dict, list, set)):
+            container.clear()
+    connection.session_id = None
+    if isinstance(connection, Connection):
+        connection.socket = None
+        connection._listener_task = None
+
+
+async def _close_transport(connection, *, exclude_tasks=()) -> None:
+    state = connection.__dict__
+    state["_browser_pool_closing"] = True
+    children = [
+        child for child in state.get("_targets", ())
+        if isinstance(child, Connection) and child.parent is connection
+    ]
+    if children:
+        await asyncio.gather(*(_close_transport(child) for child in children))
+    deadline = asyncio.get_running_loop().time() + _CLOSE_TIMEOUT_SECONDS
+    operations = set(state.get("_browser_pool_operations", ()))
+    operations.discard(asyncio.current_task())
+    operations.difference_update(exclude_tasks)
+    listener = state.get("_listener_task")
+    if isinstance(listener, asyncio.Task):
+        operations.add(listener)
+    for future in list(state.get("_mapper", {}).values()):
+        if not future.done():
+            future.cancel()
+    for task in operations:
+        if not task.done():
+            task.cancel()
+
+    socket_connection = state.get("socket")
+    close_task = None
+    aclose = getattr(connection, "aclose", None)
+    if inspect.iscoroutinefunction(aclose):
+        close_task = asyncio.create_task(aclose())
+        try:
+            await _bounded_cleanup(close_task, _CLOSE_TIMEOUT_SECONDS)
+        except (Exception, asyncio.CancelledError) as exc:
+            logger.warning("Browser transport cleanup failed (%s): %s", type(exc).__name__, exc)
+            # Abort only this websocket when a graceful close is stuck.
+            transport = getattr(socket_connection, "transport", None)
+            if transport is not None:
+                try:
+                    transport.abort()
+                except Exception:
+                    logger.warning("Could not abort the closing websocket", exc_info=True)
+        operations.add(close_task)
+
+    pending = {task for task in operations if not task.done()}
+    if pending:
+        _, pending = await asyncio.wait(
+            pending, timeout=max(0.0, deadline - asyncio.get_running_loop().time()),
+        )
+    if not pending:
+        _clear_connection_state(connection)
+    else:
+        # Cancellation-suppressing third-party tasks must not race a history clear.
+        def clear_when_settled(_):
+            if all(task.done() for task in pending):
+                _clear_connection_state(connection)
+        for task in pending:
+            _track_detached_task(task)
+            task.add_done_callback(clear_when_settled)
+
+
+async def _close_remote_target(tab) -> None:
+    if not isinstance(tab, Connection):
+        await tab.close()
+        return
+    target_id = tab.__dict__.get("_browser_pool_target_id")
+    if not target_id:
+        return
+    browser = tab.__dict__.get("_browser_pool_browser")
+    for connection in (browser, tab):
+        if isinstance(connection, Connection) and _is_browser_connected(connection):
+            # Use an existing websocket only; send() normally auto-attaches.
+            await Connection.send(connection, cdp.target.close_target(target_id), _attach=True)
+            return
+
+
+async def _close_tab_impl(tab):
+    tab.__dict__["_browser_pool_closing"] = True
+    error = None
+    try:
+        from ..config import settings
+        await _bounded_cleanup(_close_remote_target(tab), settings.browser_tab_close_timeout_seconds)
+    except (Exception, asyncio.CancelledError) as exc:
+        error = exc.with_traceback(None)
+        error.__context__ = None
+        error.__cause__ = None
+    finally:
+        await _close_transport(tab)
+        browser = tab.__dict__.get("_browser_pool_browser")
+        if browser is not None:
+            browser.__dict__.get("_browser_pool_tabs", {}).pop(id(tab), None)
+            targets = browser.__dict__.get("_targets", [])
+            targets[:] = [target for target in targets if target is not tab]
+    return error
+
+
+async def _close_tab(tab):
+    task = tab.__dict__.get("_browser_pool_tab_cleanup")
+    if task is None:
+        task = asyncio.create_task(_close_tab_impl(tab))
+        tab.__dict__["_browser_pool_tab_cleanup"] = task
+    return await asyncio.shield(task)
+
+
+async def _close_browser_impl(browser) -> None:
+    browser.__dict__["_browser_pool_closing"] = True
+    for task in tuple(browser.__dict__.get("_browser_pool_operations", ())):
+        if task is not asyncio.current_task() and not task.done():
+            task.cancel()
+    owned_tabs = list(browser.__dict__.get("_browser_pool_tabs", {}).values())
+    try:
+        await asyncio.gather(*(_close_tab(tab) for tab in owned_tabs))
+        # Discovered targets own only local transports; never close their targets.
+        await _close_transport(browser)
+    finally:
+        nodriver_util.get_registered_instances().discard(browser)
+    process = getattr(browser, "_process", None)
+    if process is not None:
+        try:
+            process.terminate()
+            await _bounded_cleanup(process.wait(), _CLOSE_TIMEOUT_SECONDS)
+        except TimeoutError:
+            process.kill()
+            await _bounded_cleanup(process.wait(), _CLOSE_TIMEOUT_SECONDS)
+        except ProcessLookupError:
+            pass
+        except Exception as exc:
+            logger.warning("Local browser process cleanup failed: %s", exc)
+
+
+async def _close_browser_instance(browser: Optional[Browser]) -> None:
+    if browser is None:
+        return
+    _managed_connections[id(browser)] = browser
+    task = browser.__dict__.get("_browser_pool_cleanup")
+    if task is None:
+        task = asyncio.create_task(_close_browser_impl(browser))
+        browser.__dict__["_browser_pool_cleanup"] = task
+    await _await_shielded(task)
+
+
+async def _await_cleanup(browser: Optional[Browser]) -> None:
+    await _close_browser_instance(browser)
+
+
+async def _start_browser(candidate) -> None:
+    """Retain the candidate through partial startup and enforce a hard deadline."""
+    _managed_connections[id(candidate)] = candidate
+    task = asyncio.create_task(candidate.start())
+    operations = candidate.__dict__.setdefault("_browser_pool_operations", set())
+    operations.add(task)
+    task.add_done_callback(operations.discard)
+    try:
+        done, _ = await asyncio.wait({task}, timeout=_CONNECT_TIMEOUT_SECONDS)
+        if task not in done:
+            raise TimeoutError("Browser startup exceeded its deadline")
+        await task
+    finally:
+        if not task.done():
+            task.cancel()
+            _track_detached_task(task)
 
 
 async def invalidate_browser(
@@ -526,10 +786,7 @@ async def get_browser() -> uc.Browser:
                 )
             )
             try:
-                await asyncio.wait_for(
-                    candidate.start(),
-                    timeout=_CONNECT_TIMEOUT_SECONDS,
-                )
+                await _start_browser(candidate)
                 if not _is_browser_connected(candidate):
                     raise ConnectionError("nodriver started without an open CDP socket")
                 _browser = candidate
@@ -565,21 +822,27 @@ async def get_browser() -> uc.Browser:
                 raise BrowserUnavailableError(str(error)) from error
                 
             logger.info("  Launching shared local Chromium...")
+            candidate = None
             try:
-                _browser = await asyncio.wait_for(
-                    uc.start(
-                        headless=True,
-                        browser_args=["--no-sandbox", "--disable-setuid-sandbox"],
-                    ),
-                    timeout=_CONNECT_TIMEOUT_SECONDS,
-                )
+                candidate = Browser(Config(
+                    headless=True,
+                    browser_args=["--no-sandbox", "--disable-setuid-sandbox"],
+                ))
+                await _start_browser(candidate)
+                if not _is_browser_connected(candidate):
+                    raise ConnectionError("nodriver started without an open CDP socket")
+                _browser = candidate
                 _browser_generation += 1
                 record_browser_success(
                     expected_browser=_browser,
                     expected_generation=_browser_generation,
                 )
                 logger.info("  Shared local browser launched")
+            except asyncio.CancelledError:
+                await _await_cleanup(candidate)
+                raise
             except Exception as exc:
+                await _close_browser_instance(candidate)
                 _browser = None
                 record_browser_failure(exc)
                 raise BrowserUnavailableError(
@@ -641,8 +904,6 @@ async def _release_browser_tab_usage(lease: object) -> None:
             await close_browser()
 
 
-from contextlib import asynccontextmanager
-
 @asynccontextmanager
 async def browser_tab(url: str):
     """Open a browser tab with exclusive access to Chrome.
@@ -660,6 +921,7 @@ async def browser_tab(url: str):
     - tab.close() has a timeout so it never hangs
     """
     tab = None
+    creation_task = None
     tab_usage_lease = await _acquire_browser_tab_usage()
     acquired = False
     from ..config import settings
@@ -679,47 +941,46 @@ async def browser_tab(url: str):
             raise failure from exc
 
         browser = await get_browser()
+        creation_task = asyncio.create_task(browser.get(url, new_tab=True))
         tab = await run_browser_operation(
-            browser.get(url, new_tab=True),
+            creation_task,
             "create tab",
             timeout_seconds=settings.browser_tab_create_timeout_seconds,
             browser_session=browser,
             invalidate_on_timeout=True,
         )
-        setattr(tab, "_browser_pool_browser", browser)
-        setattr(tab, "_browser_pool_generation", _browser_generation)
+        _register_tab(browser, tab)
         yield tab
     finally:
-        try:
-            if tab:
-                try:
-                    await run_browser_operation(
-                        tab.close(),
-                        "close tab",
-                        timeout_seconds=settings.browser_tab_close_timeout_seconds,
-                        confirm_success=False,
-                        browser_session=tab,
-                        invalidate_on_timeout=True,
-                    )
-                except Exception as exc:
-                    logger.warning(
-                        "Browser tab cleanup failed for %s (%s): %s",
-                        url[:60],
-                        type(exc).__name__,
-                        exc,
-                    )
-        finally:
-            if acquired:
-                _tab_semaphore.release()
-            release_task = asyncio.create_task(
-                _release_browser_tab_usage(tab_usage_lease)
-            )
-            cancelled = False
-            while not release_task.done():
-                try:
-                    await asyncio.shield(release_task)
-                except asyncio.CancelledError:
-                    cancelled = True
-            await release_task
-            if cancelled:
-                raise asyncio.CancelledError
+        async def finish():
+            nonlocal tab
+            try:
+                if creation_task is not None and tab is None:
+                    # Cancellation may arrive after get() returned but before assignment.
+                    if not creation_task.done():
+                        creation_task.cancel()
+                        await asyncio.wait({creation_task}, timeout=_CLOSE_TIMEOUT_SECONDS)
+                    if creation_task.done() and not creation_task.cancelled():
+                        try:
+                            tab = creation_task.result()
+                        except Exception:
+                            pass
+                        else:
+                            _register_tab(browser, tab)
+                if tab is None:
+                    return
+                error = await _close_tab(tab)
+                if error is not None:
+                    logger.warning("Browser tab cleanup failed for %s (%s): %s", url[:60], type(error).__name__, error)
+                    if isinstance(error, TimeoutError) or _is_transport_failure(error):
+                        await invalidate_browser(
+                            error,
+                            expected_browser=tab.__dict__.get("_browser_pool_browser"),
+                            expected_generation=tab.__dict__.get("_browser_pool_generation"),
+                        )
+            finally:
+                if acquired:
+                    _tab_semaphore.release()
+                await _release_browser_tab_usage(tab_usage_lease)
+
+        await _await_shielded(finish())
