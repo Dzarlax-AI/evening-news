@@ -13,7 +13,7 @@ import sqlalchemy
 
 from ..database import get_db
 from ..models import Article, ArticleCategory
-from ..orchestrator import NewsOrchestrator
+from ..orchestrator import NewsOrchestrator, reserve_processing_cycle, release_processing_cycle
 
 logger = logging.getLogger(__name__)
 
@@ -41,6 +41,9 @@ async def reprocess_article(
     db: AsyncSession = Depends(get_db)
 ):
     """Reprocess a single article with AI."""
+    reservation = reserve_processing_cycle()
+    if reservation is None:
+        raise HTTPException(status_code=409, detail="News processing is already running")
     try:
         # Get article
         result = await db.execute(
@@ -89,9 +92,10 @@ async def reprocess_article(
                     }
                     logger.info(f"📡 HTTP headers: {headers}")
                     async with aiohttp.ClientSession() as session:
-                        async with session.get(article.url, headers=headers, timeout=30) as response:
+                        async with session.get(article.url, headers=headers, timeout=30, auto_decompress=False) as response:
                             if response.status == 200:
-                                html = await response.text()
+                                from ..core.resource_limits import read_page_text
+                                html = await read_page_text(response)
                                 soup = BeautifulSoup(html, 'html.parser')
                                 
                                 # Re-extract media using updated MediaExtractor
@@ -169,32 +173,49 @@ async def reprocess_article(
             article_data['source_type'] = 'rss'
             article_data['source_name'] = 'Unknown'
         
-        # Process with AI
+        # Release the request's read transaction before any AI work.
+        await db.rollback()
         orchestrator = NewsOrchestrator()
-        await orchestrator.start()
-        
-        stats = {'api_calls_made': 0, 'errors': []}
-        processed_data = await orchestrator.ai_processor.process_article_combined(
-            article_data,
-            stats,
-            force_processing=request.force
-        )
-        
-        await orchestrator.stop()
-        
+        stats = await orchestrator.process_selected_articles(
+            [article_id], reservation=reservation, force=request.force)
+        status = stats.get('status', 'incomplete')
+        outcome = next((item for item in stats.get('article_outcomes', [])
+                        if item['article_id'] == article_id), {})
+        reason = outcome.get('reason')
+        if status == 'rejected':
+            if reason == 'advertisement':
+                message = 'Статья распознана как реклама.'
+            elif reason == 'resource_limit':
+                message = 'Страница превышает допустимый размер. Автоматический повтор не запланирован.'
+            else:
+                message = 'Статья исключена из обработки. Автоматический повтор не запланирован.'
+        elif status == 'exhausted':
+            message = 'Лимит попыток обработки исчерпан. Автоматический повтор остановлен.'
+        elif stats.get('success'):
+            message = 'Статья обновлена.'
+        elif stats.get('retryable'):
+            message = 'Обработка временно не завершена. Повторная попытка запланирована.'
+        else:
+            message = 'Обработка статьи не завершена.'
         return {
-            "message": "Article reprocessed successfully",
+            "message": message,
             "article_id": article_id,
-            "success": processed_data.get('success', False),
+            "success": stats.get('success', False),
+            "status": status,
+            "settled": stats.get('settled', False),
+            "retryable": stats.get('retryable', False),
+            "reason": reason,
             "stats": stats,
-            "timestamp": datetime.utcnow().isoformat()
+            "timestamp": datetime.utcnow().isoformat(),
         }
-        
+
     except HTTPException:
         raise
     except Exception as e:
         logger.info(f"Article reprocessing failed: {e}")
-        raise HTTPException(status_code=500, detail=f"Reprocessing failed: {str(e)}")
+        raise HTTPException(status_code=500, detail="Article reprocessing failed") from e
+    finally:
+        release_processing_cycle(reservation)
 
 
 @router.get("/{article_id}")
@@ -233,6 +254,9 @@ async def get_article(
             "published_at": article.published_at.isoformat() if article.published_at else None,
             "fetched_at": article.fetched_at.isoformat() if article.fetched_at else None,
             "processed": article.processed,
+            "processing_state": article.processing_state,
+            "processing_attempts": article.processing_attempts,
+            "next_attempt_at": article.next_attempt_at.isoformat() if article.next_attempt_at else None,
             "summary_processed": article.summary_processed,
             "category_processed": article.category_processed,
             "ad_processed": article.ad_processed,

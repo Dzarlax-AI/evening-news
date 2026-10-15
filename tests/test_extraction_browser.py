@@ -1,6 +1,7 @@
 """Tests for browser-based extraction (nodriver)."""
 
 import asyncio
+import json
 from unittest.mock import AsyncMock, MagicMock, patch
 
 import pytest
@@ -21,7 +22,8 @@ def mock_browser():
 def mock_tab():
     tab = AsyncMock()
     tab.get_content = AsyncMock(return_value="<html><body><article><p>Test article content that is long enough to pass quality checks and extraction validation.</p></article></body></html>")
-    tab.evaluate = AsyncMock(return_value=600)
+    tab.evaluate = AsyncMock(side_effect=lambda expression, **kwargs:
+        json.dumps({"html": tab.get_content.return_value}) if "JSON.stringify" in expression else 600)
     tab.send = AsyncMock()
     tab.get = AsyncMock()
     tab.close = AsyncMock()

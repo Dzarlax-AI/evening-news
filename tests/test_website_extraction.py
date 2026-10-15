@@ -111,6 +111,8 @@ def mock_browser():
 def make_mock_tab(html_content):
     tab = AsyncMock()
     tab.get_content = AsyncMock(return_value=html_content)
+    import json
+    tab.evaluate = AsyncMock(return_value=json.dumps({"html": html_content}))
     tab.send = AsyncMock()
     tab.get = AsyncMock()
     tab.close = AsyncMock()

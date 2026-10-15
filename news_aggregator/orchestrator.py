@@ -8,7 +8,7 @@ from datetime import datetime, timedelta
 from typing import List, Dict, Any, Optional
 
 from sqlalchemy.ext.asyncio import AsyncSession
-from sqlalchemy import select, func, text
+from sqlalchemy import select, func, text, and_, or_, update
 
 from .models import Source, Article, ProcessingStat, DailySummary
 from .services.source_manager import SourceManager
@@ -23,8 +23,51 @@ from .services.database_queue import get_database_queue, DatabaseQueueManager
 from .services.article_limiter import get_article_limiter, ArticleLimiter
 from .core.exceptions import NewsAggregatorError
 from .config import settings
+from .processing.processing_outcome import ProcessingOutcome, outcome_fields
 
 logger = logging.getLogger(__name__)
+
+# All scheduler and manual entry points share this process-local reservation.
+# Deploy one worker process; this is deliberately not a distributed lease.
+_processing_cycle_token = None
+
+
+def reserve_processing_cycle():
+    global _processing_cycle_token
+    if _processing_cycle_token is not None:
+        return None
+    _processing_cycle_token = object()
+    return _processing_cycle_token
+
+
+def release_processing_cycle(token):
+    global _processing_cycle_token
+    if token is _processing_cycle_token:
+        _processing_cycle_token = None
+
+
+def processing_cycle_busy():
+    return _processing_cycle_token is not None
+
+
+async def _release_browser_lease(lease):
+    """Finish resource cleanup despite repeated cancellation of a manual run."""
+    from .core.browser_pool import release_browser_cycle
+    cleanup = asyncio.create_task(release_browser_cycle(lease))
+    cancelled = False
+    while not cleanup.done():
+        try:
+            await asyncio.shield(cleanup)
+        except asyncio.CancelledError:
+            cancelled = True
+        except Exception:
+            break
+    try:
+        await cleanup
+    except Exception:
+        logger.exception('Browser lease cleanup failed')
+    if cancelled:
+        raise asyncio.CancelledError
 
 
 @dataclass
@@ -86,6 +129,15 @@ class NewsOrchestrator:
         # Legacy queue for backward compatibility (will be removed)
         self.db_queue = None
 
+    @classmethod
+    def for_article_processing(cls, ai_processor):
+        """Build the selected-article facade without unrelated integrations."""
+        orchestrator = cls.__new__(cls)
+        orchestrator.ai_processor = ai_processor
+        orchestrator.db_queue_manager = get_database_queue()
+        orchestrator.article_limiter = get_article_limiter()
+        return orchestrator
+
     def _daily_digest_url(self, date) -> str:
         base_url = (settings.site_base_url or "https://news.dzarlax.dev").rstrip("/")
         return f"{base_url}/digest/{date.strftime('%Y-%m-%d')}"
@@ -102,7 +154,20 @@ class NewsOrchestrator:
         """Get database queue statistics."""
         return self.db_queue_manager.get_stats()
         
-    async def run_full_cycle(self) -> Dict[str, Any]:
+    async def run_full_cycle(self, reservation=None) -> Dict[str, Any]:
+        token = reservation or reserve_processing_cycle()
+        if token is None:
+            return {"status": "busy", "articles_processed": 0, "fatal_error": None,
+                    "errors": []}
+        if token is not _processing_cycle_token:
+            raise ValueError("Invalid processing cycle reservation")
+        try:
+            return await self._run_full_cycle()
+        finally:
+            if reservation is None:
+                release_processing_cycle(token)
+
+    async def _run_full_cycle(self) -> Dict[str, Any]:
         """Run complete news processing cycle."""
         from .core.browser_pool import acquire_browser_cycle
 
@@ -367,197 +432,217 @@ class NewsOrchestrator:
             self.telegram_service = get_telegram_service()
         return await self.telegram_service.send_alert(title, message)
     
-    async def _process_unprocessed_articles(self, stats: Dict[str, Any]) -> Dict[str, Any]:
-        """Process unprocessed articles using specialized processors."""
+    def _processing_limits(self):
+        return {
+            'max_attempts': getattr(settings, 'processing_max_attempts', 3),
+            'initial_seconds': getattr(settings, 'processing_retry_initial_seconds', 1800),
+            'later_seconds': getattr(settings, 'processing_retry_later_seconds', 21600),
+        }
+
+    async def _process_unprocessed_articles(self, stats: Dict[str, Any], selected_ids=None,
+                                          max_articles=None, force_refresh=False) -> Dict[str, Any]:
+        """Walk due articles by stable ID in bounded batches, persisting each outcome."""
+        counters = {'articles_processed': 0, 'articles_summarized': 0,
+                    'articles_categorized': 0}
+        limits = self._processing_limits()
+        batch_size = max(1, min(100, getattr(settings, 'processing_batch_size', 25)))
+        attempt_timeout = getattr(settings, 'processing_attempt_timeout_seconds', 600)
+        workers = max(1, settings.max_workers)
+        cursor = 0
+        selected_count = 0
+        cycle_time = datetime.utcnow()
+        cycle_max = self.article_limiter.get_max_articles() if self.article_limiter.is_enabled() else None
+        if max_articles is not None:
+            cycle_max = min(cycle_max, max_articles) if cycle_max is not None else max_articles
+        per_source = self.article_limiter.get_per_source_limit() if self.article_limiter.is_enabled() else None
+        source_counts = {}
         try:
-            # Step 1: Get articles from database (quick transaction)
-            logger.info("  📋 Fetching unprocessed articles from database...")
-            from sqlalchemy.orm import selectinload
+            # A crashed final attempt must become terminal when its recovery deadline is due.
+            async def recover_exhausted(db):
+                await db.execute(update(Article).where(
+                    Article.processing_state.in_(['pending', 'retry_wait']),
+                    Article.processing_attempts >= limits['max_attempts'],
+                    or_(Article.next_attempt_at.is_(None), Article.next_attempt_at <= cycle_time),
+                ).values(processing_state='exhausted', next_attempt_at=None, processed=True))
+            await self.db_queue_manager.execute_write(recover_exhausted)
 
-            async def fetch_articles_operation(db):
-                # Build base query
-                from sqlalchemy import and_ as sa_and
-                unprocessed_query = select(Article).options(
-                    selectinload(Article.source)  # Eager load source
-                ).where(
-                    (Article.processed == False) |
-                    (Article.summary_processed == False) |
-                    (Article.category_processed == False) |
-                    (Article.ad_processed == False) |
-                    # Re-process articles that were marked done but have no summary
-                    sa_and(Article.summary.is_(None), Article.content.isnot(None))
-                )
+            while cycle_max is None or selected_count < cycle_max:
+                remaining = batch_size if cycle_max is None else min(batch_size, cycle_max - selected_count)
+                async def fetch_batch(db):
+                    query = select(
+                        Article.id, Article.title, Article.url, Article.content, Article.summary,
+                        Article.source_id, Source.source_type, Article.published_at,
+                        Article.summary_processed, Article.category_processed, Article.ad_processed,
+                        Article.is_advertisement,
+                        Article.processing_attempts, Article.image_url, Article.media_files,
+                    ).outerjoin(Source, Source.id == Article.source_id).where(
+                        Article.id > cursor,
+                        Article.processing_attempts < limits['max_attempts'],
+                        or_(Article.processing_state == 'pending', and_(
+                            Article.processing_state == 'retry_wait',
+                            Article.next_attempt_at <= cycle_time)),
+                    ).order_by(Article.id).limit(remaining)
+                    if selected_ids is not None:
+                        query = query.where(Article.id.in_(selected_ids))
+                    else:
+                        query = self.article_limiter.apply_date_filters_to_query(query)
+                    result = await db.execute(query)
+                    return [dict(row) for row in result.mappings().all()]
 
-                # Apply limits
-                unprocessed_query = self.article_limiter.apply_limits_to_query(unprocessed_query)
-                unprocessed_query = self.article_limiter.apply_date_filters_to_query(unprocessed_query)
-
-                result = await db.execute(unprocessed_query)
-                articles = result.scalars().all()
-
-                # Convert to list of dicts for processing outside transaction
-                return [
-                    {
-                        'id': a.id,
-                        'title': a.title,
-                        'url': a.url,
-                        'content': a.content,
-                        'summary': a.summary,
-                        'source_id': a.source_id,
-                        'source_type': a.source.source_type if a.source else 'rss',
-                        'published_at': a.published_at,
-                        'summary_processed': a.summary_processed,
-                        'category_processed': a.category_processed,
-                        'ad_processed': a.ad_processed,
-                    }
-                    for a in articles
-                ]
-
-            articles_data = await self.db_queue_manager.execute_read(fetch_articles_operation, timeout=10.0)
-
-            if not articles_data:
-                return {'articles_processed': 0, 'articles_summarized': 0, 'articles_categorized': 0}
-
-            logger.info(f"  🔄 Processing {len(articles_data)} unprocessed articles (transaction closed)...")
-            # Step 2: Process with AI in parallel (NO database transaction - semaphore is free!)
-            processed_count = 0
-            summarized_count = 0
-            categorized_count = 0
-            _lock = asyncio.Lock()
-
-            # Max 5 articles processed concurrently to avoid hammering the AI API
-            _ai_semaphore = asyncio.Semaphore(5)
-
-            async def _process_one(article_data: dict) -> bool:
-                nonlocal processed_count, summarized_count, categorized_count
-                async with _ai_semaphore:
-                    try:
-                        source_type = article_data['source_type']
-                        article_url = article_data['url']
-
-                        if not article_data['summary_processed'] or (not article_data.get('summary') and article_data.get('content')):
-                            async with _lock:
-                                stats['api_calls_made'] += 1
-                            summary_result = await self.ai_processor.get_summary_by_source_type(
-                                ArticleDTO.for_summarization(article_data), source_type, stats
-                            )
-                            summary = summary_result.get('summary') if isinstance(summary_result, dict) else summary_result
-                            optimized_title = summary_result.get('optimized_title') if isinstance(summary_result, dict) else None
-                            if summary:
-                                # Don't save summary if it describes a blocked/error page
-                                _bad_summary_markers = [
-                                    'недоступен', 'защиты от ботов', 'just a moment',
-                                    'access denied', 'cloudflare', 'enable javascript',
-                                    'checking your browser', 'temporarily unavailable',
-                                ]
-                                if not any(m in summary.lower() for m in _bad_summary_markers):
-                                    article_data['summary'] = summary
-                                    async with _lock:
-                                        summarized_count += 1
-                                else:
-                                    logger.warning(f"  ⚠️ Skipped error-page summary for {article_url}")
-                            if optimized_title and optimized_title != article_data.get('title'):
-                                # Don't overwrite good RSS title with error page titles
-                                _bad_title_markers = [
-                                    'ошибка', 'just a moment', 'access denied', 'forbidden',
-                                    'cloudflare', 'captcha', 'robot', 'bot detection',
-                                    'please wait', 'checking your browser', 'temporarily unavailable',
-                                ]
-                                if not any(m in optimized_title.lower() for m in _bad_title_markers):
-                                    article_data['title'] = optimized_title
-
-                        if not article_data['category_processed']:
-                            async with _lock:
-                                stats['api_calls_made'] += 1
-                            categories = await self.categorization_processor.categorize_by_source_type_new(
-                                ArticleDTO.for_categorization(article_data), source_type, stats
-                            )
-                            if categories:
-                                article_data['categories'] = categories
-                                async with _lock:
-                                    categorized_count += 1
-
-                        article_data['summary_processed'] = True
-                        article_data['category_processed'] = True
-                        article_data['ad_processed'] = True
-                        async with _lock:
-                            processed_count += 1
-                        return True
-
-                    except Exception as e:
-                        logger.warning(f"  ⚠️ Error processing article {article_data.get('url')}: {e}")
-                        return False
-
-            await asyncio.gather(*[_process_one(a) for a in articles_data])
-            logger.info(f"  ✅ AI processing completed: {processed_count} articles, {summarized_count} summaries, {categorized_count} categories")
-            # Step 3: Save results to database (new transaction, only writes)
-            logger.info("  💾 Saving processed results to database...")
-            async def save_results_operation(db):
-                updated_count = 0
-
-                # Batch-load all articles in one query instead of N×db.get()
-                article_ids = [a['id'] for a in articles_data]
-                result = await db.execute(select(Article).where(Article.id.in_(article_ids)))
-                articles_by_id = {a.id: a for a in result.scalars().all()}
-
-                # Pre-load categories once for all articles
-                from .models import Category
-                cat_result = await db.execute(select(Category))
-                categories_by_name: Dict[str, int] = {
-                    c.name.lower(): c.id for c in cat_result.scalars().all()
-                }
-
-                for article_data in articles_data:
-                    try:
-                        article = articles_by_id.get(article_data['id'])
-                        if not article:
-                            continue
-
-                        if article_data.get('summary') and article_data['summary'] != article.summary:
-                            article.summary = article_data['summary']
-
-                        if article_data.get('title') and article_data['title'] != article.title:
-                            article.title = article_data['title']
-
-                        article.summary_processed = article_data['summary_processed']
-                        article.category_processed = article_data['category_processed']
-                        article.ad_processed = article_data['ad_processed']
-                        article.processed = all([
-                            article_data['summary_processed'],
-                            article_data['category_processed'],
-                            article_data['ad_processed']
-                        ])
-
-                        # Save categories in the same transaction
-                        categories = article_data.get('categories')
-                        if categories:
-                            await self._save_ai_categories_to_database(
-                                db, article_data['id'], categories,
-                                preloaded_categories=categories_by_name
-                            )
-
-                        updated_count += 1
-
-                    except Exception as e:
-                        logger.warning(f"  ⚠️ Error saving article {article_data['id']}: {e}")
+                batch = await self.db_queue_manager.execute_read(fetch_batch, timeout=10.0)
+                if not batch:
+                    break
+                cursor = batch[-1]['id']
+                eligible = []
+                for article in batch:
+                    source_id = article['source_id']
+                    if per_source and source_counts.get(source_id, 0) >= per_source:
                         continue
+                    source_counts[source_id] = source_counts.get(source_id, 0) + 1
+                    eligible.append(article)
+                selected_count += len(eligible)
+                semaphore = asyncio.Semaphore(workers)
 
-                return updated_count
+                async def process_one(article):
+                    async with semaphore:
+                        attempt = article['processing_attempts'] + 1
+                        # Persist a finite recovery deadline BEFORE any extraction/AI work.
+                        async def claim(db):
+                            result = await db.execute(update(Article).where(
+                                Article.id == article['id'],
+                                Article.processing_attempts == attempt - 1,
+                                Article.processing_state.in_(['pending', 'retry_wait']),
+                            ).values(processing_attempts=attempt, processing_state='retry_wait',
+                                     next_attempt_at=datetime.utcnow() + timedelta(seconds=max(
+                                         attempt_timeout + 60,
+                                         limits['initial_seconds'] if attempt == 1 else limits['later_seconds'])),
+                                     last_processing_error='Attempt interrupted before outcome was saved'))
+                            return result.rowcount == 1
+                        if not await self.db_queue_manager.execute_write(claim):
+                            return
+                        try:
+                            processing = (
+                                self.ai_processor.process_article_outcome(article, stats, force_refresh=True)
+                                if force_refresh else self.ai_processor.process_article_outcome(article, stats)
+                            )
+                            outcome = await asyncio.wait_for(
+                                processing,
+                                timeout=attempt_timeout,
+                            )
+                        except Exception as exc:
+                            outcome = ProcessingOutcome('retry_wait', error=type(exc).__name__)
+                        fields = outcome_fields(outcome, attempt, datetime.utcnow(), **limits)
+                        categories = fields.pop('categories', None)
+                        async def save(db):
+                            # Category writes and flags share one auto-committed transaction.
+                            if categories is not None:
+                                await self._save_ai_categories_to_database(db, article['id'], categories)
+                            await db.execute(update(Article).where(
+                                Article.id == article['id'], Article.processing_attempts == attempt,
+                            ).values(**fields))
+                        try:
+                            await self.db_queue_manager.execute_write(save, timeout=30.0)
+                        except (ValueError, LookupError) as exc:
+                            # Invalid category mappings belong to this article.
+                            # The failed transaction rolled back; retain its claim
+                            # deadline and attempt budget while siblings continue.
+                            async def record_mapping_error(db):
+                                await db.execute(update(Article).where(
+                                    Article.id == article['id'],
+                                    Article.processing_attempts == attempt,
+                                ).values(last_processing_error='category_mapping_failed'))
+                            await self.db_queue_manager.execute_write(record_mapping_error)
+                            stats.setdefault('errors', []).append(
+                                f"Article {article['id']} category mapping failed ({type(exc).__name__})")
+                            return
+                        if outcome.state == 'completed':
+                            counters['articles_processed'] += 1
+                        if fields.get('summary'):
+                            counters['articles_summarized'] += 1
+                        if categories:
+                            counters['articles_categorized'] += 1
+                # Only one batch of tasks and payloads exists at a time.
+                async with asyncio.TaskGroup() as tasks:
+                    for article in eligible:
+                        tasks.create_task(process_one(article))
+            return counters
+        except Exception as exc:
+            stats.setdefault('errors', []).append(f'Error processing unprocessed articles: {exc}')
+            logger.exception('Article processing failed')
+            # Infrastructure failures must abort the cycle before digest delivery.
+            raise
 
-            saved_count = await self.db_queue_manager.execute_write(save_results_operation, timeout=30.0)
-            logger.info(f"  ✅ Saved {saved_count} processed articles to database")
-            return {
-                'articles_processed': processed_count,
-                'articles_summarized': summarized_count,
-                'articles_categorized': categorized_count
-            }
+    async def retry_selected_articles(self, article_ids, reservation=None):
+        """Reset only explicit selections, preserving successful stage results."""
+        token = reservation or reserve_processing_cycle()
+        if token is None:
+            raise RuntimeError('News processing is already running')
+        if token is not _processing_cycle_token:
+            raise ValueError('Invalid processing cycle reservation')
+        try:
+            return await self._reset_selected_articles(article_ids)
+        finally:
+            if reservation is None:
+                release_processing_cycle(token)
 
-        except Exception as e:
-            error_msg = f"Error processing unprocessed articles: {e}"
-            logger.error(f"  ❌ {error_msg}")
-            stats['errors'].append(error_msg)
-            return {'articles_processed': 0, 'articles_summarized': 0, 'articles_categorized': 0}
-    
+    async def _reset_selected_articles(self, article_ids, force=False):
+        ids = sorted(set(article_ids))
+        if not ids or len(ids) > 100 or any(type(i) is not int or i < 1 for i in ids):
+            raise ValueError('Select between 1 and 100 positive article IDs')
+        async def reset(db):
+            fields = dict(processing_state='pending', processing_attempts=0,
+                          next_attempt_at=None, last_processing_error=None, processed=False)
+            if force:
+                fields.update(summary_processed=False, category_processed=False, ad_processed=False)
+            result = await db.execute(update(Article).where(Article.id.in_(ids)).values(**fields))
+            return result.rowcount
+        return await self.db_queue_manager.execute_write(reset)
+
+    async def process_selected_articles(self, article_ids, reservation=None, force=False):
+        """Retry an explicit selection through the same guarded, durable pipeline."""
+        token = reservation or reserve_processing_cycle()
+        if token is None:
+            return {'status': 'busy', 'success': False}
+        if token is not _processing_cycle_token:
+            raise ValueError('Invalid processing cycle reservation')
+        browser_lease = None
+        try:
+            from .core.browser_pool import acquire_browser_cycle
+            browser_lease = await acquire_browser_cycle()
+            await self._reset_selected_articles(article_ids, force=force)
+            stats = {'api_calls_made': 0, 'errors': []}
+            stats.update(await self._process_unprocessed_articles(
+                stats, selected_ids=article_ids, force_refresh=force))
+            # Selected requests report durable outcomes, while cycle counters
+            # continue to count completed news articles only.
+            async def read_outcomes(db):
+                result = await db.execute(select(
+                    Article.id, Article.processing_state, Article.last_processing_error,
+                    Article.next_attempt_at,
+                ).where(Article.id.in_(article_ids)).order_by(Article.id))
+                return [
+                    {'article_id': row.id, 'state': row.processing_state,
+                     'reason': row.last_processing_error,
+                     'next_attempt_at': row.next_attempt_at.isoformat() if row.next_attempt_at else None}
+                    for row in result.all()
+                ]
+            outcomes = await self.db_queue_manager.execute_read(read_outcomes)
+            stats['article_outcomes'] = outcomes
+            stats['settled'] = len(outcomes) == len(set(article_ids)) and all(
+                item['state'] in {'completed', 'rejected'} for item in outcomes)
+            stats['success'] = stats['settled'] and not stats['errors']
+            stats['retryable'] = any(item['state'] in {'pending', 'retry_wait'} for item in outcomes)
+            stats['status'] = outcomes[0]['state'] if len(outcomes) == 1 else (
+                'settled' if stats['settled'] else 'incomplete')
+            return stats
+        finally:
+            try:
+                if browser_lease is not None:
+                    await _release_browser_lease(browser_lease)
+            finally:
+                if reservation is None:
+                    release_processing_cycle(token)
+
     async def _generate_daily_summaries(self, timeout: float = 60.0) -> Dict[str, Any]:
         """Generate daily summaries: read articles, generate AI summaries, save to DB."""
         try:
@@ -612,6 +697,7 @@ class NewsOrchestrator:
             .join(ArticleCategory, Article.id == ArticleCategory.article_id)
             .join(Category, Category.id == ArticleCategory.category_id)
             .where(func.date(Article.fetched_at) == date)
+            .where(Article.processing_state == 'completed')
             .where(Article.is_advertisement != True)  # Filter out ads
             .order_by(Article.fetched_at.desc())
         )
@@ -666,18 +752,20 @@ class NewsOrchestrator:
             for cat_data in ai_categories:
                 ai_category_name = cat_data.get('name', 'Other')
                 confidence = cat_data.get('confidence', 1.0)
+                original_category = cat_data.get('ai_category')
+                if not isinstance(original_category, str) or not original_category.strip():
+                    original_category = ai_category_name
 
                 # Fast path: if AI returned a known fixed category name, use it directly
                 category_id = categories_by_name.get(ai_category_name.lower())
                 if category_id is None:
                     # Fallback: try mapping service for free-form AI categories
-                    display = await category_display_service.map_ai_category_to_display(ai_category_name)
+                    display = await category_display_service.map_ai_category_to_display(ai_category_name, commit=False)
                     display_name = (display.get('name') or display.get('display_name') or ai_category_name).lower()
                     category_id = categories_by_name.get(display_name) or other_id
 
                 if category_id is None:
-                    logger.warning(f"  ⚠️ No category found for '{ai_category_name}', skipping")
-                    continue
+                    raise ValueError('AI category could not be mapped to a configured category')
 
                 await db.execute(
                     text(
@@ -690,21 +778,51 @@ class NewsOrchestrator:
                         'article_id': article_id,
                         'category_id': category_id,
                         'confidence': confidence,
-                        'ai_category': ai_category_name,
+                        'ai_category': original_category.strip(),
                     }
                 )
 
             logger.debug(f"  Saved {len(ai_categories)} AI categories for article {article_id}")
         except Exception as e:
             logger.warning(f"  ⚠️ Error saving AI categories: {e}")
+            raise
     # Delegate methods to specialized processors
     async def get_processing_stats(self, days: int = 7) -> Dict[str, Any]:
         """Get processing statistics."""
         return await self.stats_collector.get_processing_stats(days)
     
     async def reprocess_failed_extractions(self, limit: int = 50, dry_run: bool = False) -> Dict[str, Any]:
-        """Reprocess failed content extractions."""
-        return await self.stats_collector.reprocess_failed_extractions(limit, dry_run)
+        """Retry due bounded work without resetting terminal historical articles."""
+        if dry_run:
+            async def count_candidates(db):
+                query = select(Article.id).where(
+                    Article.processing_attempts < self._processing_limits()['max_attempts'],
+                    or_(Article.processing_state == 'pending', and_(
+                        Article.processing_state == 'retry_wait',
+                        Article.next_attempt_at <= datetime.utcnow())),
+                ).order_by(Article.id).limit(max(1, limit))
+                query = self.article_limiter.apply_date_filters_to_query(query)
+                return len((await db.execute(query)).scalars().all())
+            count = await self.db_queue_manager.execute_read(count_candidates)
+            return {'status': 'dry_run', 'total_candidates': count,
+                    'found_candidates': count, 'processed': 0, 'improved': 0, 'errors': []}
+        token = reserve_processing_cycle()
+        if token is None:
+            return {'status': 'busy', 'processed': 0, 'improved': 0, 'errors': []}
+        browser_lease = None
+        try:
+            from .core.browser_pool import acquire_browser_cycle
+            browser_lease = await acquire_browser_cycle()
+            stats = {'api_calls_made': 0, 'errors': []}
+            result = await self._process_unprocessed_articles(stats, max_articles=max(1, limit))
+            return {**result, 'processed': result['articles_processed'],
+                    'improved': result['articles_summarized'], 'errors': stats['errors']}
+        finally:
+            try:
+                if browser_lease is not None:
+                    await _release_browser_lease(browser_lease)
+            finally:
+                release_processing_cycle(token)
     
     # Legacy method compatibility (delegate to processors)
     async def _get_summary_by_source_type(self, article: Article, source_type: str, stats: Dict[str, Any]) -> str:

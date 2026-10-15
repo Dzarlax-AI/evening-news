@@ -3,6 +3,7 @@
 import asyncio
 import logging
 import time
+from ..core.resource_limits import ResourceLimitError, enforce_text_limit
 from typing import Optional, Dict, Any
 
 from ..services.extraction_memory import get_extraction_memory, ExtractionAttempt
@@ -142,6 +143,9 @@ class CoreExtractor:
                 # Use comprehensive extraction with metadata
                 result = await self.strategies.attempt_extraction_with_metadata(clean_url, domain, attempt_num)
 
+                if result.get('content'):
+                    enforce_text_limit(result['content'])
+
                 if result.get('content') and self.utils.is_good_content(result['content']):
                     extraction_time = time.time() - extraction_start
                     content_length = len(result['content'])
@@ -204,6 +208,9 @@ class CoreExtractor:
                     if attempt_num < retry_count:
                         await asyncio.sleep(1)
 
+            except ResourceLimitError:
+                ext_logger.complete_extraction(clean_url, False)
+                raise
             except Exception as e:
                 last_exception = e
                 ext_logger.log_error(clean_url, str(e), f"attempt_{attempt_num}")

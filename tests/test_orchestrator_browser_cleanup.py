@@ -136,47 +136,27 @@ async def test_full_cycle_closes_browser_session_before_propagating_cancellation
 
 
 @pytest.mark.asyncio
-async def test_overlapping_full_cycles_keep_session_until_both_exit():
+async def test_overlapping_full_cycle_returns_busy_without_starting_work():
     first = make_orchestrator()
     second = make_orchestrator()
-    first_entered = asyncio.Event()
-    second_entered = asyncio.Event()
-    release_first = asyncio.Event()
-    release_second = asyncio.Event()
+    entered = asyncio.Event()
+    release = asyncio.Event()
 
     async def hold_first():
-        first_entered.set()
-        await release_first.wait()
-        return []
-
-    async def hold_second():
-        second_entered.set()
-        await release_second.wait()
+        entered.set()
+        await release.wait()
         return []
 
     first.source_manager.get_sources_from_db.side_effect = hold_first
-    second.source_manager.get_sources_from_db.side_effect = hold_second
-    browser = MagicMock()
-    browser.aclose = AsyncMock()
-    browser._process = None
-    bp._browser = browser
-    bp._active_cycle_leases = set()
-    bp._cycle_lock = asyncio.Lock()
-
     first_task = asyncio.create_task(first.run_full_cycle())
-    second_task = asyncio.create_task(second.run_full_cycle())
-    await first_entered.wait()
-    await second_entered.wait()
-
-    release_first.set()
-    await first_task
-    assert bp._browser is browser
-    browser.aclose.assert_not_awaited()
-
-    release_second.set()
-    await second_task
-    assert bp._browser is None
-    browser.aclose.assert_awaited_once()
+    await entered.wait()
+    try:
+        result = await second.run_full_cycle()
+        assert result['status'] == 'busy'
+        second.source_manager.get_sources_from_db.assert_not_awaited()
+    finally:
+        release.set()
+        await first_task
 
 
 @pytest.mark.asyncio

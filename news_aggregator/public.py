@@ -13,6 +13,9 @@ from sqlalchemy.orm import selectinload
 from datetime import datetime, timedelta
 from typing import Optional
 from pathlib import Path
+
+logger = logging.getLogger(__name__)
+
 try:
     import magic
     MAGIC_AVAILABLE = True
@@ -27,8 +30,6 @@ from .services.data_service import DataService, get_data_service
 from .services.database_queue import get_database_queue
 from .security import verify_jwt_token
 from .api.articles_router import ReprocessRequest, reprocess_article
-
-logger = logging.getLogger(__name__)
 
 router = APIRouter()
 templates = Jinja2Templates(directory="web/templates")
@@ -149,6 +150,7 @@ async def public_digest_view(
             .join(ArticleCategory, Article.id == ArticleCategory.article_id)
             .join(Category, Category.id == ArticleCategory.category_id)
             .where(func.date(Article.fetched_at) == parsed_date)
+            .where(Article.processing_state == 'completed')
             .where(Article.is_advertisement.is_not(True))
             .order_by(Article.fetched_at.desc())
         )
@@ -281,7 +283,8 @@ async def get_public_feed(
 
 @router.get("/api/public/article/{article_id}")
 async def get_public_article(
-    article_id: int, 
+    article_id: int,
+    request: Request,
     data_service: DataService = Depends(get_data_service)
 ):
     """Get full article content using unified DataService."""
@@ -317,7 +320,8 @@ async def get_public_article(
             }
         
         # Use DataService for clean database access
-        article_data = await data_service.get_article_by_id(article_id)
+        article_data = await data_service.get_article_by_id(
+            article_id, include_unpublished=_has_public_admin_access(request))
         
         if not article_data:
             raise HTTPException(status_code=404, detail="Article not found")
@@ -466,10 +470,11 @@ async def search_articles(
             raise HTTPException(status_code=400, detail="Search query must be at least 2 characters")
         
         # Build base query with relationships
+        from .processing.processing_outcome import publication_filter
         query = select(Article).options(
             selectinload(Article.source),
             selectinload(Article.article_categories).selectinload(ArticleCategory.category)
-        )
+        ).where(publication_filter(include_classified_ads=not hide_ads))
         
         # Full-text search across title, summary, and content
         # Using PostgreSQL ILIKE for case-insensitive partial matching

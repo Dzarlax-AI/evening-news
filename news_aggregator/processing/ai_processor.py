@@ -2,6 +2,7 @@ import logging
 """AI Processing Engine for articles."""
 
 import time
+import math
 from datetime import datetime
 from typing import Dict, Any, List, Optional
 
@@ -10,6 +11,85 @@ from sqlalchemy.ext.asyncio import AsyncSession
 from ..services.ai_client import get_ai_client
 
 logger = logging.getLogger(__name__)
+
+
+def is_extractable_article_url(url):
+    """Exclude social, map, and app-store destinations from article extraction."""
+    from urllib.parse import urlparse
+    parsed = urlparse(url or '')
+    host = (parsed.hostname or '').lower()
+    excluded = ('t.me', 'telegram.me', 'twitter.com', 'x.com', 'instagram.com',
+                'maps.app.goo.gl', 'maps.google.com', 'maps.google.ru',
+                '2gis.ru', '2gis.com', 'waze.com', 'play.google.com', 'apps.apple.com')
+    if parsed.scheme not in {'http', 'https'} or not host:
+        return False
+    if any(host == domain or host.endswith('.' + domain) for domain in excluded):
+        return False
+    if '/maps' in parsed.path.lower() and (
+            host in {'google.com', 'google.ru'} or host.endswith(('.google.com', '.google.ru'))
+            or 'yandex' in host.split('.')):
+        return False
+    return True
+
+
+def extraction_update_fields(article_data, metadata):
+    """Persist bounded improvements without replacing source data with stubs."""
+    from ..core.resource_limits import enforce_text_limit
+    from .processing_outcome import is_challenge_text
+    content = metadata.get('content')
+    if not isinstance(content, str):
+        return {}
+    enforce_text_limit(content)
+    if is_challenge_text(content) or len(content.strip()) <= len(article_data.get('content') or ''):
+        return {}
+    fields = {'content': content}
+    image = metadata.get('image_url')
+    if not article_data.get('image_url') and isinstance(image, str) and image:
+        fields['image_url'] = image
+    return fields
+
+
+def _category_confidence(value, fallback):
+    """Keep finite numeric confidence, clamped like the legacy combined path."""
+    if isinstance(value, bool) or not isinstance(value, (int, float)):
+        return fallback
+    try:
+        value = float(value)
+    except (ValueError, OverflowError):
+        return fallback
+    return max(0.0, min(1.0, value)) if math.isfinite(value) else fallback
+
+
+def normalize_analysis_categories(analysis):
+    """Preserve aligned confidences and original labels before filtering entries."""
+    categories = analysis.get('categories')
+    if not isinstance(categories, list):
+        return []
+    confidences = analysis.get('category_confidences')
+    if not isinstance(confidences, list):
+        confidences = [confidences]
+    originals = analysis.get('original_categories')
+    if not isinstance(originals, list):
+        originals = []
+    default_confidence = _category_confidence(analysis.get('category_confidence'), 0.8)
+    normalized = []
+    for index, category in enumerate(categories):
+        data = category if isinstance(category, dict) else {}
+        name = data.get('name') if data else category
+        if not isinstance(name, str) or not name.strip():
+            continue
+        name = name.strip()
+        aligned_confidence = confidences[index] if index < len(confidences) else None
+        confidence = _category_confidence(data.get('confidence'),
+            _category_confidence(aligned_confidence, default_confidence))
+        original = data.get('ai_category')
+        if not isinstance(original, str) or not original.strip():
+            original = originals[index] if index < len(originals) else None
+        if not isinstance(original, str) or not original.strip():
+            original = name
+        normalized.append({**data, 'name': name, 'confidence': confidence,
+                           'ai_category': original.strip()})
+    return normalized
 
 
 class AIProcessor:
@@ -572,413 +652,218 @@ class AIProcessor:
                 return await self.process_article_incremental(article_data, stats, False)
 
     async def process_article_incremental(
-        self, 
-        article_data: Dict[str, Any], 
-        stats: Dict[str, Any], 
-        force_processing: bool = False
+        self,
+        article_data: Dict[str, Any],
+        stats: Dict[str, Any],
+        force_processing: bool = False,
     ) -> Dict[str, Any]:
-        """Process article with AI, saving after each API call."""
-        source_type = article_data.get('source_type', 'rss')
-        source_name = article_data.get('source_name', 'Unknown')
-        article_id = article_data['id']
-        
-        logger.info(f"  📡 Source: {source_name} (type: {source_type})")
-        logger.info(f"  🔧 Incremental processing mode")
-        # Check what processing is needed
-        needs_summary = force_processing or (not article_data.get('summary_processed', False) and not article_data.get('summary'))
-        needs_category = force_processing or not article_data.get('category_processed', False)
-        needs_ad_detection = force_processing or not article_data.get('ad_processed', False)
-        
-        # Smart Filtering check
-        if needs_summary or needs_category or needs_ad_detection:
-            from ..services.smart_filter import get_smart_filter
-            smart_filter = get_smart_filter()
-            
-            article_content = article_data.get('content') or ''
-            article_url = article_data.get('url') or ''
-            
-            if not force_processing:
-                should_process, filter_reason = await smart_filter.should_process_with_ai(
-                    title=article_data.get('title') or '',
-                    content=article_content,
-                    url=article_url,
-                    source_type=source_type
-                )
-            else:
-                should_process = True
-                filter_reason = "Force processing enabled"
-            
-            if not should_process:
-                logger.info(f"  🚫 Smart Filter: Skipping AI processing - {filter_reason}")
-                # Mark as processed with fallback values
-                if needs_summary:
-                    # Better fallback for summary: try RSS description/content if available
-                    fallback_summary = article_data.get('title', 'No summary available')
-                    rss_content = article_data.get('raw_description') or article_data.get('description') or article_data.get('content')
-                    
-                    if rss_content and len(rss_content.strip()) > len(fallback_summary) * 1.5:
-                        # If RSS content is significantly longer than title, use it as fallback
-                        from ..extraction.extraction_utils import ExtractionUtils
-                        utils = ExtractionUtils()
-                        # Use first 500 chars as a mini-summary if extraction failed/skipped
-                        fallback_summary = utils.smart_truncate(rss_content, 500)
-                        logger.info(f"  📝 Using RSS description as fallback summary ({len(fallback_summary)} chars)")
-                    else:
-                        logger.info(f"  📝 Using title as fallback summary (no better RSS content found)")
-                    await self._save_article_fields(article_id, {
-                        'summary': fallback_summary,
-                        'summary_processed': True
-                    })
-                if needs_category:
-                    await self._save_article_fields(article_id, {'category_processed': True})
-                if needs_ad_detection:
-                    await self._save_article_fields(article_id, {
-                        'is_advertisement': False,
-                        'ad_confidence': 0.0,
-                        'ad_type': 'news_article',
-                        'ad_reasoning': f'Smart Filter: {filter_reason}',
-                        'ad_processed': True,
-                        'processed': True  # Mark as processed when skipped by Smart Filter
-                    })
-                
-                # Extract media files even when Smart Filter skips AI processing
-                logger.info(f"  🖼️ Extracting media files (Smart Filter skip)...")
-                from .media_extractor import get_media_extractor
-                
-                try:
-                    # Check if media files already exist in article_data (e.g., from Telegram sources)
-                    existing_media = article_data.get('media_files', [])
-                    extracted_media = []
-                    
-                    if existing_media and isinstance(existing_media, list) and len(existing_media) > 0:
-                        logger.info(f"  📎 Using existing media files from article data: {len(existing_media)} files")
-                        extracted_media = existing_media
-                    else:
-                        # Extract media files from HTML content
-                        logger.info(f"  🔍 Extracting media files from HTML content...")
-                        media_extractor = get_media_extractor()
-                        extracted_media = media_extractor.extract_media_files(
-                            article_data.get('content', ''), 
-                            base_url=article_data.get('url')
-                        )
-                    
-                    if extracted_media:
-                        # Add extracted media to article data and save to database
-                        article_data['media_files'] = extracted_media
-                        await self._save_article_fields(article_id, {'media_files': extracted_media})
-                        
-                        # Get media extractor for summary (if not already created)
-                        if 'media_extractor' not in locals():
-                            media_extractor = get_media_extractor()
-                            
-                        summary = media_extractor.get_media_summary(extracted_media)
-                        logger.info(f"  📎 Found {summary['total']} media files (Smart Filter skip)")
-                    else:
-                        logger.info(f"  📭 No media files found in content (Smart Filter skip)")
-                except Exception as media_error:
-                    logger.error(f"  ❌ Media extraction failed (Smart Filter skip): {media_error}")
-                    # Don't raise - media processing is optional
-                
-                stats.setdefault('smart_filter_skipped', 0)
-                stats['smart_filter_skipped'] += 1
-                return article_data
-            else:
-                logger.info(f"  ✅ Smart Filter: Approved for AI processing - {filter_reason}")
-                stats.setdefault('smart_filter_approved', 0)
-                stats['smart_filter_approved'] += 1
-        
-        logger.error(f"  🔍 Processing needs: {'✅ Summary' if needs_summary else '❌ Summary'}, {'✅ Category' if needs_category else '❌ Category'}, {'✅ Ad Detection' if needs_ad_detection else '❌ Ad Detection'}")
-        # Process summary if needed
-        if needs_summary:
-            logger.info(f"  📄 Starting summarization...")
-            # Validate article content before AI processing
-            article_content = article_data.get('content') or ''
-            article_title = article_data.get('title') or ''
+        """Route legacy callers through authoritative typed outcomes and retries."""
+        from ..orchestrator import NewsOrchestrator
+        orchestrator = NewsOrchestrator.for_article_processing(self)
+        result = await orchestrator.process_selected_articles(
+            [article_data['id']], force=force_processing)
+        stats['api_calls_made'] = stats.get('api_calls_made', 0) + result.get('api_calls_made', 0)
+        stats.setdefault('errors', []).extend(result.get('errors', []))
+        return result
 
-            # Skip AI summarization if content is too short
-            if len(article_content.strip()) < 50 and len(article_title.strip()) < 20:
-                logger.warning(f"  ⚠️ Content too short for AI summarization (content: {len(article_content)} chars, title: {len(article_title)} chars)")
-                # Use title as fallback
-                fallback_summary = article_title or 'No summary available'
-                await self._save_article_fields(article_id, {
-                    'summary': fallback_summary,
-                    'summary_processed': True
-                })
-                logger.info(f"  💾 Fallback summary saved to database")
-            else:
-                try:
-                    start_time = time.time()
-                    # Create a temporary Article-like object for compatibility
-                    class TempArticle:
-                        def __init__(self, data):
-                            self.url = data['url']
-                            self.title = data['title']
-                            self.content = data['content']
+    async def process_article_outcome(self, article_data, stats, force_refresh=False):
+        """Compute a typed outcome outside a database transaction.
 
-                    temp_article = TempArticle(article_data)
-                    summary = await self.get_summary_by_source_type(temp_article, source_type, stats)
-                    elapsed_time = time.time() - start_time
-                    logger.info(f"  ✅ Summary generated in {elapsed_time:.1f}s: {summary[:100] if summary else 'None'}...")
-                    # Save summary immediately
-                    await self._save_article_fields(article_id, {
-                        'summary': summary,
-                        'summary_processed': True
-                    })
-                    stats['api_calls_made'] += 1
-                    logger.info(f"  💾 Summary saved to database")
-                except Exception as e:
-                    logger.error(f"  ❌ Summarization failed: {e}")
-                    # Improved fallback: try RSS description, then title
-                    fallback_summary = article_title
-                    rss_content = article_data.get('raw_description') or article_data.get('description') or article_content
-
-                    if rss_content and len(rss_content.strip()) > len(fallback_summary) * 1.5:
-                        # Use first 300 chars of RSS content as fallback
-                        from ..extraction.extraction_utils import ExtractionUtils
-                        utils = ExtractionUtils()
-                        fallback_summary = utils.smart_truncate(rss_content, 300)
-                        logger.info(f"  📝 Using RSS description as fallback summary ({len(fallback_summary)} chars)")
-                    await self._save_article_fields(article_id, {
-                        'summary': fallback_summary,
-                        'summary_processed': True
-                    })
-                    logger.info(f"  💾 Fallback summary saved to database")
-        # Process category if needed  
-        if needs_category:
-            logger.info(f"  🏷️ Starting categorization...")
-            try:
-                start_time = time.time()
-                categories_result = await self._categorize_by_source_type_new(TempArticle(article_data), source_type, stats)
-                elapsed_time = time.time() - start_time
-                
-                if categories_result:
-                    from ..services.category_service import get_category_service
-                    if db:
-                        category_service = await get_category_service(db)
-                        await category_service.assign_categories_with_confidences(
-                            article_id, categories_result
-                        )
-                        logger.info(f"  ✅ Categorization completed in {elapsed_time:.1f}s")
-                        await self._save_article_fields(article_id, {'category_processed': True})
-                    else:
-                        from ..services.database_queue import get_db_queue_manager
-
-                        async def _assign_cats(category_db):
-                            category_service = await get_category_service(category_db)
-                            await category_service.assign_categories_with_confidences(
-                                article_id, categories_result
-                            )
-
-                        await get_db_queue_manager().execute_write(_assign_cats)
-                        logger.info(f"  ✅ Categorization completed in {elapsed_time:.1f}s")
-                        await self._save_article_fields(article_id, {'category_processed': True})
-                        
-            except Exception as e:
-                logger.error(f"  ❌ Categorization failed: {e}")
-                await self._save_article_fields(article_id, {'category_processed': True})
-        
-        # Ad detection moved to combined analysis - using fallback
-        if needs_ad_detection:
-            logger.info(f"  🛡️ Ad detection moved to combined analysis - using fallback...")
-            # Set fallback values and mark as processed
-            await self._save_article_fields(article_id, {
-                'is_advertisement': False,
-                'ad_confidence': 0.1,
-                'ad_type': 'news_article',
-                'ad_reasoning': 'Incremental processing fallback',
-                'ad_processed': True,
-            })
-            logger.info(f"  💾 Ad detection fallback saved to database")
-        # Extract media files from article content
-        logger.info(f"  🖼️ Extracting media files...")
-        logger.info(f"  🔍 DEBUG: article_data keys = {list(article_data.keys())}")
-        logger.info(f"  🔍 DEBUG: media_files in article_data = {article_data.get('media_files', 'NOT_FOUND')}")
-        from .media_extractor import get_media_extractor
-        
-        try:
-            # Check if media files already exist in article_data (e.g., from Telegram sources)
-            existing_media = article_data.get('media_files', [])
-            extracted_media = []
-            
-            if existing_media and isinstance(existing_media, list) and len(existing_media) > 0:
-                logger.info(f"  📎 Using existing media files from article data: {len(existing_media)} files")
-                extracted_media = existing_media
-            else:
-                # Extract media files from HTML content
-                logger.info(f"  🔍 Extracting media files from HTML content...")
-                media_extractor = get_media_extractor()
-                extracted_media = media_extractor.extract_media_files(
-                    article_data.get('content', ''), 
-                    base_url=article_data.get('url')
-                )
-            
-            if extracted_media:
-                # Add extracted media to article data and save to database
-                article_data['media_files'] = extracted_media
-                await self._save_article_fields(article_id, {'media_files': extracted_media})
-                
-                # Get media extractor for summary (if not already created)
-                if 'media_extractor' not in locals():
-                    media_extractor = get_media_extractor()
-                    
-                summary = media_extractor.get_media_summary(extracted_media)
-                logger.info(f"  📎 Found {summary['total']} media files")
-            else:
-                logger.info(f"  📭 No media files found in content")
-        except Exception as media_error:
-            logger.error(f"  ❌ Media extraction failed: {media_error}")
-            # Don't raise - media processing is optional
-        
-        # Mark article as fully processed after incremental processing
-        await self._save_article_fields(article_id, {'processed': True})
-        logger.info(f"  ✅ Article marked as fully processed")
-        return {'success': True, 'content_length': len(article_data.get('content', ''))}
-
-    async def get_summary_by_source_type(self, article, source_type: str, stats: Dict[str, Any]) -> Dict[str, Any]:
-        """Get article summary and optimized title based on source type.
-
-        Returns dict with 'summary' and 'optimized_title' keys.
+        Successful stages survive a later failure. Missing AI output is never a
+        successful summary, and source/title fallbacks do not hide API failures.
         """
-        def _make(summary, optimized_title=None):
-            return {'summary': summary, 'optimized_title': optimized_title}
+        from types import SimpleNamespace
+        from .processing_outcome import ProcessingOutcome, is_challenge_text
+        from ..core.resource_limits import ResourceLimitError, enforce_text_limit
 
+        fields = {}
+        summary_done = not force_refresh and bool(article_data.get('summary_processed') and article_data.get('summary'))
+        category_done = not force_refresh and bool(article_data.get('category_processed'))
+        ad_done = not force_refresh and bool(article_data.get('ad_processed'))
+        if ad_done and article_data.get('is_advertisement') is True:
+            return ProcessingOutcome('rejected', error='advertisement')
+        if summary_done and category_done and ad_done:
+            return ProcessingOutcome('completed')
         try:
-            if source_type == 'rss':
-                rss_content = article.content or ''
-                # Try extracting from page first (may have richer content)
-                # Pass RSS content as original_context so AI can fall back to it if page is junk
-                ai_result = await self.ai_client.get_article_summary_with_metadata(
-                    article.url,
-                    original_context=rss_content if len(rss_content.strip()) >= 50 else None,
-                )
-                stats['api_calls_made'] += 1
-                self._update_article_publication_date(article, ai_result.get('publication_date'), 'RSS')
-
-                summary = ai_result.get('summary')
-                optimized_title = ai_result.get('optimized_title')
-
-                # Detect bot-protection / consent / error page summaries
-                _bot_markers = [
-                    # Bot protection
-                    'недоступен', 'защиты от ботов', 'проверки безопасности',
-                    'является ли пользователь ботом', 'включить javascript',
-                    'just a moment', 'access denied', 'cloudflare',
-                    'enable javascript', 'checking your browser',
-                    'temporarily unavailable', 'bot detection',
-                    # Cookie consent pages
-                    'согласие на использование файлов cookie',
-                    'consent to the use of cookies',
-                    'cookie policy', 'политика использования файлов cookie',
-                    'before you continue to google',
-                    'конфиденциальности и использование файлов cookie',
-                ]
-                if summary and any(m in summary.lower() for m in _bot_markers):
-                    logger.warning(f"  ⚠️ Extracted summary looks like bot-protection page, discarding: {article.url}")
-                    summary = None
-                    optimized_title = None
-
-                # If page extraction failed but RSS has content, use it as fallback
-                if not summary and len(rss_content.strip()) >= 100:
-                    logger.info(f"  📄 Page extraction failed, falling back to RSS content ({len(rss_content)} chars)")
-                    fallback_result = await self.ai_client.analyze_article_complete(
-                        title=article.title or '',
-                        content=rss_content,
-                        url=article.url,
-                    )
-                    stats['api_calls_made'] += 1
-                    summary = (fallback_result or {}).get('summary')
-                    optimized_title = (fallback_result or {}).get('optimized_title')
-
-                return _make(
-                    summary or rss_content[:500] or article.title,
-                    optimized_title,
-                )
-
-            elif source_type == 'telegram':
-                from urllib.parse import urlparse
-
-                def _is_telegram_domain(url: str) -> bool:
-                    try:
-                        host = urlparse(url).netloc.lower()
-                        return ('t.me' in host) or ('telegram.me' in host)
-                    except Exception:
-                        return False
-
-                def _is_non_article_url(url: str) -> bool:
-                    """Check if URL points to a non-article resource (maps, app stores, etc.)."""
-                    try:
-                        parsed = urlparse(url)
-                        host = parsed.netloc.lower()
-                        path = parsed.path.lower()
-                        _non_article_domains = (
-                            'maps.app.goo.gl', 'maps.google.com', 'maps.google.ru',
-                            'goo.gl/maps', 'yandex.ru/maps', 'yandex.com/maps',
-                            '2gis.ru', '2gis.com', 'waze.com',
-                            'play.google.com', 'apps.apple.com',
-                        )
-                        if any(d in host for d in _non_article_domains):
-                            return True
-                        if 'google.com' in host and '/maps' in path:
-                            return True
-                        if 'yandex' in host and '/maps' in path:
-                            return True
-                    except Exception:
-                        pass
-                    return False
-
-                # article.url is already the external URL (final_url = original_link or message_url)
-                # raw_data is not persisted to DB, so use article.url directly
-                external_url = article.url if not _is_telegram_domain(article.url) else None
-                telegram_content = article.content or article.title or ''
-
-                # Skip fetching non-article URLs (maps, app stores) — summarize Telegram content directly
-                if external_url and _is_non_article_url(external_url):
-                    logger.info(f"  🗺️ Non-article URL detected ({external_url}), using Telegram content")
-                    external_url = None
-
-                if external_url:
-                    try:
-                        # Pass Telegram content as original_context so AI can fall back to it
-                        ai_result = await self.ai_client.get_article_summary_with_metadata(
-                            external_url,
-                            original_context=telegram_content if len(telegram_content.strip()) >= 30 else None,
-                        )
-                        self._update_article_publication_date(article, ai_result.get('publication_date'), 'Telegram')
-                        if ai_result.get('summary'):
-                            return _make(ai_result['summary'], ai_result.get('optimized_title'))
-                    except Exception as e:
-                        logger.warning(f"  ⚠️ Skipping Telegram AI extraction (external link failed): {e}")
-
-                # No external link or extraction failed — summarize the Telegram message content directly
-                if len(telegram_content.strip()) >= 30:
-                    try:
-                        ai_result = await self.ai_client.analyze_article_complete(
-                            title=article.title or '',
-                            content=telegram_content,
-                            url=article.url or '',
-                        )
-                        stats['api_calls_made'] += 1
-                        if ai_result.get('summary'):
-                            return _make(ai_result['summary'], ai_result.get('optimized_title'))
-                    except Exception as e:
-                        logger.warning(f"  ⚠️ Telegram content summarization failed: {e}")
-                return _make(telegram_content or article.title)
-
-            elif source_type == 'custom':
-                ai_result = await self.ai_client.get_article_summary_with_metadata(article.url)
-                stats['api_calls_made'] += 1
-                self._update_article_publication_date(article, ai_result.get('publication_date'), 'Custom')
-                return _make(
-                    ai_result.get('summary') or article.content or article.title,
-                    ai_result.get('optimized_title'),
-                )
-
+            # Remaining classification stages use an already completed summary.
+            # An unused archival body must not prevent processing that summary.
+            analysis_input = article_data.get('summary') if summary_done else article_data.get('content')
+            force_extraction = force_refresh and is_extractable_article_url(article_data.get('url'))
+            content = '' if force_extraction else enforce_text_limit(analysis_input or '')
+            media_content = content
+            if force_extraction:
+                # The archival body is optional media/context only; oversized
+                # historical data must not prevent recovery from fresh input.
+                try:
+                    media_content = enforce_text_limit(analysis_input or '')
+                except ResourceLimitError:
+                    media_content = ''
+            if media_content and not summary_done and not article_data.get('media_files'):
+                # Optional media extraction uses bounded existing text only.
+                try:
+                    from .media_extractor import get_media_extractor
+                    media = get_media_extractor().extract_media_files(media_content, base_url=article_data.get('url'))
+                    if media:
+                        fields['media_files'] = media
+                except ResourceLimitError:
+                    raise
+                except Exception:
+                    logger.warning('Optional article media extraction failed')
+            refreshed_metadata = None
+            if force_extraction:
+                from ..extraction import ContentExtractor
+                async with ContentExtractor() as extractor:
+                    refreshed_metadata = await extractor.extract_article_content_with_metadata(
+                        article_data['url'], retry_count=1)
+                refreshed_content = refreshed_metadata.get('content')
+                if not isinstance(refreshed_content, str) or not refreshed_content.strip():
+                    return ProcessingOutcome('retry_wait', fields, error='content_refresh_unavailable')
+                enforce_text_limit(refreshed_content)
+                if is_challenge_text(refreshed_content):
+                    return ProcessingOutcome('retry_wait', fields, error='extraction_challenge')
+                fields.update(extraction_update_fields(article_data, refreshed_metadata))
+                # Fresh input drives forced analysis even when archival storage
+                # retains a longer body under the improvement-only policy.
+                content = refreshed_content
+            if is_challenge_text(content):
+                return ProcessingOutcome('retry_wait', error='extraction_challenge')
+            article = SimpleNamespace(**{**article_data, 'content': content})
+            if refreshed_metadata is not None:
+                self._update_article_publication_date(article, refreshed_metadata.get('publication_date'), 'forced refresh')
+                if article.published_at != article_data.get('published_at'):
+                    fields['published_at'] = article.published_at
+                stats['api_calls_made'] = stats.get('api_calls_made', 0) + 1
+                context = {}
+                if article_data.get('source_type') == 'telegram' and len(media_content.strip()) >= 30:
+                    context['original_context'] = media_content
+                analysis = await self.ai_client.analyze_article_complete(
+                    article.title, content, article.url, **context)
+            elif not summary_done:
+                analysis = await self.get_summary_by_source_type(
+                    article, article_data.get('source_type') or 'rss', stats,
+                    bypass_filter=force_refresh)
             else:
-                return _make(article.content or article.title)
+                stats['api_calls_made'] = stats.get('api_calls_made', 0) + 1
+                analysis = await self.ai_client.analyze_article_complete(
+                    article.title, article.summary or content, article.url)
+            fields.update(extraction_update_fields(article_data, analysis))
+            if article.published_at != article_data.get('published_at'):
+                fields['published_at'] = article.published_at
+            if analysis.get('_processing_error'):
+                return ProcessingOutcome('rejected' if analysis.get('_processing_terminal') else 'retry_wait', fields,
+                    analysis['_processing_error'], analysis.get('_retry_after_seconds'))
+            summary = analysis.get('summary')
+            optimized_title = analysis.get('optimized_title')
+            if isinstance(optimized_title, str):
+                optimized_title = optimized_title.strip()
+                if optimized_title and len(optimized_title) <= 200 and not is_challenge_text(optimized_title):
+                    fields['title'] = optimized_title
+            # A validated positive verdict is terminal even if optional summary
+            # or category output is absent. Preserve any independently valid data.
+            if analysis.get('is_advertisement') is True:
+                fields.update(ad_processed=True, is_advertisement=True,
+                              ad_confidence=analysis.get('ad_confidence', 0),
+                              ad_type=analysis.get('ad_type'), ad_reasoning=analysis.get('ad_reasoning'))
+                if not summary_done and isinstance(summary, str) and summary.strip() and not is_challenge_text(summary):
+                    fields.update(summary=summary.strip(), summary_processed=True)
+                    if article.published_at != article_data.get('published_at'):
+                        fields['published_at'] = article.published_at
+                if not category_done:
+                    normalized = normalize_analysis_categories(analysis)
+                    if normalized:
+                        fields.update(categories=normalized, category_processed=True)
+                return ProcessingOutcome('rejected', fields, 'advertisement')
+            if not summary_done:
+                if not isinstance(summary, str) or not summary.strip():
+                    return ProcessingOutcome('retry_wait', fields, error='missing_summary')
+                if is_challenge_text(summary):
+                    return ProcessingOutcome('retry_wait', fields, error='summary_describes_challenge')
+                fields.update(summary=summary.strip(), summary_processed=True)
+                if article.published_at != article_data.get('published_at'):
+                    fields['published_at'] = article.published_at
+            if not category_done:
+                normalized = normalize_analysis_categories(analysis)
+                if not normalized:
+                    return ProcessingOutcome('retry_wait', fields, 'missing_categories')
+                fields.update(categories=normalized, category_processed=True)
+            if not ad_done:
+                if not isinstance(analysis.get('is_advertisement'), bool):
+                    return ProcessingOutcome('retry_wait', fields, 'missing_ad_classification')
+                fields.update(ad_processed=True, is_advertisement=analysis['is_advertisement'],
+                              ad_confidence=analysis.get('ad_confidence', 0),
+                              ad_type=analysis.get('ad_type'), ad_reasoning=analysis.get('ad_reasoning'))
+            return ProcessingOutcome('completed', fields)
+        except ResourceLimitError as exc:
+            return ProcessingOutcome('rejected', fields, 'resource_limit')
+        except Exception as exc:
+            return ProcessingOutcome('retry_wait', fields,
+                type(exc).__name__, getattr(exc, 'retry_after_seconds', None))
 
-        except Exception as e:
-            logger.error(f"  ❌ Summary generation failed for {source_type}: {e}")
-            return _make(article.content or article.title or "Summary unavailable")
+    async def get_summary_by_source_type(self, article, source_type: str, stats: Dict[str, Any],
+                                         bypass_filter=False) -> Dict[str, Any]:
+        """Filter ordinary input, enrich when needed, and preserve extraction metadata."""
+        from .processing_outcome import is_challenge_text
+        from ..core.resource_limits import enforce_text_limit
+        from ..services.smart_filter import get_smart_filter
+
+        content = enforce_text_limit(article.content or '')
+        extractable = is_extractable_article_url(article.url)
+        needs_extraction = False
+        smart_filter = get_smart_filter()
+        if not bypass_filter:
+            should_process, reason = await smart_filter.should_process_with_ai(
+                title=article.title or '', content=content, url=article.url or '',
+                source_type=source_type, allow_extraction=extractable,
+                check_duplicates=not bool(getattr(article, 'processing_attempts', 0)),
+                article_id=getattr(article, 'id', None),
+            )
+            if not should_process:
+                needs_extraction = extractable and (
+                    len(content.strip()) < 10 or 'needs extraction' in reason.lower()
+                    or 'metadata/low-quality content' in reason.lower())
+                if not needs_extraction:
+                    stats['smart_filter_skipped'] = stats.get('smart_filter_skipped', 0) + 1
+                    return {'_processing_error': 'smart_filter_rejected', '_processing_terminal': True}
+            else:
+                stats['smart_filter_approved'] = stats.get('smart_filter_approved', 0) + 1
+        analysis = {}
+        if extractable and source_type in {'rss', 'custom', 'telegram'}:
+            stats['api_calls_made'] = stats.get('api_calls_made', 0) + 1
+            analysis = await self.ai_client.get_article_summary_with_metadata(
+                article.url, original_context=content or None,
+                article_title=article.title or '', source_type=source_type)
+            self._update_article_publication_date(article, analysis.get('publication_date'), source_type)
+            if analysis.get('_processing_error') or analysis.get('is_advertisement') is True:
+                return analysis
+        if analysis.get('_extraction_rejected'):
+            needs_extraction = True
+        fallback_content = content if analysis.get('_extraction_rejected') else analysis.get('content') or content
+        if not isinstance(fallback_content, str) or len(fallback_content.strip()) < 30:
+            fallback_content = content
+        from urllib.parse import urlparse
+        host = (urlparse(article.url or '').hostname or '').lower()
+        scientific_title = len((article.title or '').strip()) > 20 and any(
+            host == domain or host.endswith('.' + domain)
+            for domain in ('nplus1.ru', 'arxiv.org', 'nature.com', 'sciencedirect.com'))
+        if len(fallback_content.strip()) < 30 and scientific_title:
+            fallback_content = article.title
+        if (not analysis.get('summary') or is_challenge_text(analysis.get('summary'))) and (
+                len(fallback_content.strip()) >= 30 or scientific_title):
+            enforce_text_limit(fallback_content)
+            if needs_extraction and not bypass_filter:
+                should_process, _ = await smart_filter.should_process_with_ai(
+                    title=article.title or '', content=fallback_content, url=article.url or '',
+                    source_type=source_type, allow_extraction=False, check_duplicates=False,
+                    article_id=getattr(article, 'id', None))
+                if not should_process:
+                    return {**analysis, '_processing_error': 'smart_filter_rejected', '_processing_terminal': True}
+            stats['api_calls_made'] = stats.get('api_calls_made', 0) + 1
+            fallback = await self.ai_client.analyze_article_complete(
+                title=article.title or '', content=fallback_content, url=article.url or '')
+            analysis = {**analysis, **fallback}
+        elif analysis.get('_extraction_rejected'):
+            return {'_processing_error': 'smart_filter_rejected', '_processing_terminal': True}
+        return analysis
 
     def _update_article_publication_date(self, article, pub_date: str, source_type: str):
         """Update article publication date if provided."""

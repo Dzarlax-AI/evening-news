@@ -25,6 +25,12 @@ wheels/
 *.egg
 
 # Environment
+.venv/
+.uv-cache/
+.pytest_cache/
+.test-postgres/
+.test-chrome/
+.patch-validation/
 .env
 .env.local
 .env.*.local

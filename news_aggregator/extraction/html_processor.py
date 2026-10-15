@@ -1,6 +1,7 @@
 """HTML processing and content extraction from DOM elements."""
 
 import re
+from ..core.resource_limits import ResourceLimitError
 from typing import Optional, List
 from bs4 import BeautifulSoup, Comment, NavigableString
 
@@ -53,6 +54,8 @@ class HTMLProcessor:
                     content = self._extract_text_from_element(element)
                     if content and self.utils.is_good_content(content):
                         return content, selector
+            except ResourceLimitError:
+                raise
             except Exception:
                 continue
         
@@ -60,14 +63,22 @@ class HTMLProcessor:
     
     def extract_by_enhanced_heuristics(self, soup: BeautifulSoup) -> Optional[str]:
         """Extract content using heuristic analysis of DOM structure."""
+        from ..core.resource_limits import enforce_text_limit
         # Find all text-containing elements
         candidates = []
         
         for element in soup.find_all(['p', 'div', 'article', 'section']):
             text = self._extract_text_from_element(element)
             if text and len(text) > 50:  # Minimum meaningful content
+                try:
+                    enforce_text_limit(text)
+                except ResourceLimitError:
+                    continue
                 score = self._score_content_element(element, text)
                 candidates.append((element, text, score))
+                # Only the top five (top three for combination) are ever used.
+                candidates.sort(key=lambda x: x[2], reverse=True)
+                del candidates[5:]
         
         # Sort by score (highest first)
         candidates.sort(key=lambda x: x[2], reverse=True)

@@ -9,7 +9,7 @@ sqlalchemy[asyncio]>=2.0.23
 # HTTP clients
 aiohttp>=3.9.1
 tenacity>=8.2.3
-Brotli>=1.1.0                   # Brotli compression support
+Brotli>=1.2.0                   # Bounded streaming decompression API
 
 # Cache (using file-based cache instead of Redis)
 

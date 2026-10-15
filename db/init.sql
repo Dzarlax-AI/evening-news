@@ -32,6 +32,10 @@ CREATE TABLE articles (
     processed BOOLEAN DEFAULT false,
     summary_processed BOOLEAN DEFAULT FALSE,
     category_processed BOOLEAN DEFAULT FALSE,
+    processing_state VARCHAR(20) NOT NULL DEFAULT 'pending',
+    processing_attempts INTEGER NOT NULL DEFAULT 0,
+    next_attempt_at TIMESTAMP,
+    last_processing_error TEXT,
     hash_content VARCHAR(64), -- Хеш для дедупликации
     
     -- Advertising detection fields
@@ -125,6 +129,8 @@ CREATE INDEX idx_schedule_settings_enabled ON schedule_settings(enabled);
 CREATE INDEX idx_schedule_settings_next_run ON schedule_settings(next_run);
 -- Indexes from migrations
 CREATE INDEX idx_articles_summary_processed ON articles(summary_processed);
+CREATE INDEX idx_articles_processing_due ON articles(processing_state, next_attempt_at, id)
+    WHERE processing_state IN ('pending', 'retry_wait');
 CREATE INDEX idx_articles_category_processed ON articles(category_processed);
 CREATE INDEX idx_articles_hash_content ON articles(hash_content);
 
