@@ -696,6 +696,7 @@ class NewsOrchestrator:
             .join(ArticleCategory, Article.id == ArticleCategory.article_id)
             .join(Category, Category.id == ArticleCategory.category_id)
             .where(func.date(Article.fetched_at) == date)
+            .where(Article.processing_state == 'completed')
             .where(Article.is_advertisement != True)  # Filter out ads
             .order_by(Article.fetched_at.desc())
         )

@@ -688,12 +688,21 @@ class AIProcessor:
             # Remaining classification stages use an already completed summary.
             # An unused archival body must not prevent processing that summary.
             analysis_input = article_data.get('summary') if summary_done else article_data.get('content')
-            content = enforce_text_limit(analysis_input or '')
-            if not summary_done and not article_data.get('media_files'):
+            force_extraction = force_refresh and is_extractable_article_url(article_data.get('url'))
+            content = '' if force_extraction else enforce_text_limit(analysis_input or '')
+            media_content = content
+            if force_extraction:
+                # The archival body is optional media/context only; oversized
+                # historical data must not prevent recovery from fresh input.
+                try:
+                    media_content = enforce_text_limit(analysis_input or '')
+                except ResourceLimitError:
+                    media_content = ''
+            if media_content and not summary_done and not article_data.get('media_files'):
                 # Optional media extraction uses bounded existing text only.
                 try:
                     from .media_extractor import get_media_extractor
-                    media = get_media_extractor().extract_media_files(content, base_url=article_data.get('url'))
+                    media = get_media_extractor().extract_media_files(media_content, base_url=article_data.get('url'))
                     if media:
                         fields['media_files'] = media
                 except ResourceLimitError:
@@ -701,7 +710,7 @@ class AIProcessor:
                 except Exception:
                     logger.warning('Optional article media extraction failed')
             refreshed_metadata = None
-            if force_refresh and is_extractable_article_url(article_data.get('url')):
+            if force_extraction:
                 from ..extraction import ContentExtractor
                 async with ContentExtractor() as extractor:
                     refreshed_metadata = await extractor.extract_article_content_with_metadata(
@@ -713,7 +722,9 @@ class AIProcessor:
                 if is_challenge_text(refreshed_content):
                     return ProcessingOutcome('retry_wait', fields, error='extraction_challenge')
                 fields.update(extraction_update_fields(article_data, refreshed_metadata))
-                content = fields.get('content', content)
+                # Fresh input drives forced analysis even when archival storage
+                # retains a longer body under the improvement-only policy.
+                content = refreshed_content
             if is_challenge_text(content):
                 return ProcessingOutcome('retry_wait', error='extraction_challenge')
             article = SimpleNamespace(**{**article_data, 'content': content})
@@ -723,8 +734,8 @@ class AIProcessor:
                     fields['published_at'] = article.published_at
                 stats['api_calls_made'] = stats.get('api_calls_made', 0) + 1
                 context = {}
-                if article_data.get('source_type') == 'telegram' and len((article_data.get('content') or '').strip()) >= 30:
-                    context['original_context'] = enforce_text_limit(article_data['content'])
+                if article_data.get('source_type') == 'telegram' and len(media_content.strip()) >= 30:
+                    context['original_context'] = media_content
                 analysis = await self.ai_client.analyze_article_complete(
                     article.title, content, article.url, **context)
             elif not summary_done:

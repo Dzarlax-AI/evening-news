@@ -12,6 +12,7 @@ from datetime import datetime, timedelta
 from ..models import Article, Source, Category, ArticleCategory
 from ..database import get_db
 from fastapi import Depends
+from ..processing.processing_outcome import publication_filter
 
 
 class DataService:
@@ -37,17 +38,22 @@ class DataService:
             selectinload(Article.article_categories).selectinload(ArticleCategory.category)
         )
 
+        advertisements_view = bool(category and category.lower() == 'advertisements')
+        query = query.where(publication_filter(
+            include_classified_ads=(not hide_ads or advertisements_view)
+        ))
+
         # Apply filters
         if since_hours:
             since_time = datetime.utcnow() - timedelta(hours=since_hours)
             query = query.where(Article.published_at >= since_time)
 
-        if hide_ads:
-            query = query.where(Article.is_advertisement != True)
+        if hide_ads and not advertisements_view:
+            query = query.where(Article.is_advertisement.is_(False))
 
         if category and category.lower() != 'all':
             if category.lower() == 'advertisements':
-                query = query.where(Article.is_advertisement == True)
+                query = query.where(Article.is_advertisement.is_(True))
             else:
                 query = query.join(ArticleCategory).join(Category).where(
                     func.lower(Category.name) == category.lower()
@@ -81,12 +87,14 @@ class DataService:
         # Convert to dict format
         return [self._article_to_dict(article) for article in articles]
     
-    async def get_article_by_id(self, article_id: int) -> Optional[Dict[str, Any]]:
+    async def get_article_by_id(self, article_id: int, *, include_unpublished: bool = False) -> Optional[Dict[str, Any]]:
         """Get single article by ID."""
         query = select(Article).options(
             selectinload(Article.source),
             selectinload(Article.article_categories).selectinload(ArticleCategory.category)
         ).where(Article.id == article_id)
+        if not include_unpublished:
+            query = query.where(publication_filter(include_classified_ads=True))
         
         result = await self.db.execute(query)
         article = result.scalar_one_or_none()
@@ -119,9 +127,9 @@ class DataService:
         """Get category statistics."""
         
         # Base conditions
-        conditions = []
+        conditions = [publication_filter(include_classified_ads=not hide_ads)]
         if hide_ads:
-            conditions.append(Article.is_advertisement != True)
+            conditions.append(Article.is_advertisement.is_(False))
         
         if since_hours:
             since_time = datetime.utcnow() - timedelta(hours=since_hours)
@@ -175,9 +183,9 @@ class DataService:
         """Get source statistics."""
 
         # Base conditions
-        conditions = []
+        conditions = [publication_filter(include_classified_ads=not hide_ads)]
         if hide_ads:
-            conditions.append(Article.is_advertisement != True)
+            conditions.append(Article.is_advertisement.is_(False))
 
         if since_hours:
             since_time = datetime.utcnow() - timedelta(hours=since_hours)

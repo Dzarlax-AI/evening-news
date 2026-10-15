@@ -14,6 +14,7 @@ from sqlalchemy.orm import selectinload
 
 from ..database import get_db
 from ..models import Article, ArticleCategory, Category
+from ..processing.processing_outcome import publication_filter
 
 
 router = APIRouter()
@@ -162,6 +163,10 @@ async def get_main_feed(
         Article.ad_type,
         Article.ad_reasoning,
         Article.source_id
+    ).where(
+        publication_filter(
+            include_classified_ads=bool(category and category.lower() == 'advertisements')
+        )
     ).order_by(desc(Article.fetched_at))
     
     # Apply time filter
@@ -173,7 +178,7 @@ async def get_main_feed(
     if category and category.lower() != 'all':
         if category.lower() == 'advertisements':
             # Filter for advertising content
-            query = query.where(Article.is_advertisement == True)
+            query = query.where(Article.is_advertisement.is_(True))
         else:
             # Filter by category using new junction table
             query = query.join(ArticleCategory).join(Category).where(
@@ -286,7 +291,13 @@ async def get_rss_feed(
     """RSS compatibility endpoint."""
     
     # Get articles
-    query = select(Article).order_by(desc(Article.published_at)).limit(limit)
+    query = (
+        select(Article)
+        .where(publication_filter())
+        .where(Article.is_advertisement.is_(False))
+        .order_by(desc(Article.published_at))
+        .limit(limit)
+    )
     
     result = await db.execute(query)
     articles = result.scalars().all()

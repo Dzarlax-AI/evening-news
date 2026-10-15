@@ -438,3 +438,48 @@ async def test_unusable_extracted_page_falls_back_to_valid_original_without_savi
     client.analyze_article_complete.assert_awaited_once()
     assert client.analyze_article_complete.await_args.kwargs['content'] == original['content']
     extractor.extract_article_content_with_metadata.assert_awaited_once()
+
+
+@pytest.mark.asyncio
+async def test_forced_analysis_uses_shorter_fresh_body_without_replacing_longer_archival_body(fresh_smart_filter):
+    original = article(content='An older archival article with extensive historical context. ' * 20)
+    refreshed = 'Fresh corrected facts replace the outdated account of the event. ' * 2
+    value = AIProcessor.__new__(AIProcessor)
+    value.ai_client = SimpleNamespace(analyze_article_complete=AsyncMock(return_value=valid_analysis()))
+    context = AsyncMock()
+    extractor = SimpleNamespace(extract_article_content_with_metadata=AsyncMock(return_value={
+        'content': refreshed, 'image_url': 'https://example.org/new.jpg'}))
+    context.__aenter__.return_value = extractor
+    with patch('news_aggregator.extraction.ContentExtractor', return_value=context):
+        result = await value.process_article_outcome(original, {}, force_refresh=True)
+    assert result.state == 'completed'
+    assert value.ai_client.analyze_article_complete.await_args.args[1] == refreshed
+    assert 'content' not in result.fields
+    assert 'image_url' not in result.fields
+    assert result.fields['summary'] == valid_analysis()['summary']
+    extractor.extract_article_content_with_metadata.assert_awaited_once()
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize('source_type', ['rss', 'telegram'])
+async def test_forced_refresh_recovers_from_oversized_archival_body_without_sending_or_parsing_it(
+        fresh_smart_filter, monkeypatch, source_type):
+    from news_aggregator.config import settings
+    monkeypatch.setattr(settings, 'extraction_text_max_chars', 100)
+    original = article(content='x' * 101, source_type=source_type)
+    refreshed = 'Fresh corrected article content with sufficient factual detail.'
+    value = AIProcessor.__new__(AIProcessor)
+    value.ai_client = SimpleNamespace(analyze_article_complete=AsyncMock(return_value=valid_analysis()))
+    context = AsyncMock()
+    extractor = SimpleNamespace(extract_article_content_with_metadata=AsyncMock(return_value={'content': refreshed}))
+    context.__aenter__.return_value = extractor
+    with patch('news_aggregator.extraction.ContentExtractor', return_value=context), patch(
+            'news_aggregator.processing.media_extractor.get_media_extractor') as media:
+        media.return_value.extract_media_files.return_value = []
+        result = await value.process_article_outcome(original, {}, force_refresh=True)
+    assert result.state == 'completed'
+    assert value.ai_client.analyze_article_complete.await_args.args[1] == refreshed
+    assert 'original_context' not in value.ai_client.analyze_article_complete.await_args.kwargs
+    media.assert_not_called()
+    assert 'content' not in result.fields
+    extractor.extract_article_content_with_metadata.assert_awaited_once()
