@@ -258,7 +258,9 @@ async def test_forced_refresh_failure_preserves_saved_body_summary_and_image(iso
     context.__aenter__.return_value = SimpleNamespace(extract_article_content_with_metadata=extract)
     with patch('news_aggregator.extraction.ContentExtractor', return_value=context):
         result = await orchestrator.process_selected_articles([1], force=True)
-    assert result['success'] is False
+    assert result['success'] is (expected_state == 'rejected')
+    assert result['settled'] is (expected_state == 'rejected')
+    assert result['retryable'] is (expected_state == 'retry_wait')
     processor.ai_client.analyze_article_complete.assert_not_awaited()
     with Session(engine) as db:
         article = db.get(Article, 1)
@@ -333,3 +335,51 @@ async def test_legacy_incremental_uses_typed_summary_metadata_and_never_reports_
         assert saved.summary == (None if ai_failed else 'A valid generated summary')
         if not ai_failed:
             assert saved.published_at == datetime(2026, 10, 15)
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize('state,reason,settled', [
+    ('completed', None, True), ('rejected', 'advertisement', True),
+    ('rejected', 'resource_limit', True), ('retry_wait', 'APIError', False),
+    ('exhausted', 'APIError', False),
+])
+async def test_selected_api_reports_durable_terminal_outcomes_without_inflating_news_counts(
+        isolated, monkeypatch, state, reason, settled):
+    from unittest.mock import MagicMock
+    from news_aggregator.config import settings
+    monkeypatch.setattr(settings, 'admin_password', 'test-only-admin')
+    from news_aggregator.api.articles_router import reprocess_article, ReprocessRequest
+    orchestrator, engine = isolated
+    add_articles(engine, 1)
+    fields = {'is_advertisement': True, 'ad_processed': True} if reason == 'advertisement' else {}
+    orchestrator.ai_processor.process_article_outcome.return_value = ProcessingOutcome(state, fields, reason)
+    article = SimpleNamespace(
+        id=1, title='Original title', content='Original content', url='https://example.org/0',
+        summary=None, summary_processed=False, category_processed=False, ad_processed=False,
+        processed=False, media_files=[], image_url=None, source=None)
+    lookup = MagicMock()
+    lookup.scalar_one_or_none.return_value = article
+    request_db = SimpleNamespace(execute=AsyncMock(return_value=lookup), rollback=AsyncMock())
+    with patch('news_aggregator.api.articles_router.NewsOrchestrator', return_value=orchestrator):
+        result = await reprocess_article(1, ReprocessRequest(force=True), request_db)
+    assert result['status'] == state
+    assert result['settled'] is settled
+    assert result['success'] is settled
+    assert result['reason'] == reason
+    assert result['retryable'] is (state == 'retry_wait')
+    assert result['stats']['articles_processed'] == (1 if state == 'completed' else 0)
+    if reason == 'advertisement':
+        assert 'распознана как реклама' in result['message']
+    elif reason == 'resource_limit':
+        assert 'превышает допустимый размер' in result['message']
+        assert 'повтор не запланирован' in result['message']
+    elif state == 'exhausted':
+        assert 'повтор остановлен' in result['message']
+    elif state == 'retry_wait':
+        assert 'попытка запланирована' in result['message']
+    with Session(engine) as db:
+        saved = db.get(Article, 1)
+        assert saved.processing_state == state
+        assert saved.next_attempt_at is None if state != 'retry_wait' else saved.next_attempt_at > datetime.utcnow()
+        if reason == 'advertisement':
+            assert saved.is_advertisement is True

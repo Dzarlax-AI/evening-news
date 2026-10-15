@@ -178,10 +178,33 @@ async def reprocess_article(
         orchestrator = NewsOrchestrator()
         stats = await orchestrator.process_selected_articles(
             [article_id], reservation=reservation, force=request.force)
+        status = stats.get('status', 'incomplete')
+        outcome = next((item for item in stats.get('article_outcomes', [])
+                        if item['article_id'] == article_id), {})
+        reason = outcome.get('reason')
+        if status == 'rejected':
+            if reason == 'advertisement':
+                message = 'Статья распознана как реклама.'
+            elif reason == 'resource_limit':
+                message = 'Страница превышает допустимый размер. Автоматический повтор не запланирован.'
+            else:
+                message = 'Статья исключена из обработки. Автоматический повтор не запланирован.'
+        elif status == 'exhausted':
+            message = 'Лимит попыток обработки исчерпан. Автоматический повтор остановлен.'
+        elif stats.get('success'):
+            message = 'Статья обновлена.'
+        elif stats.get('retryable'):
+            message = 'Обработка временно не завершена. Повторная попытка запланирована.'
+        else:
+            message = 'Обработка статьи не завершена.'
         return {
-            "message": "Article processing completed" if stats.get('success') else "Article processing requires retry",
+            "message": message,
             "article_id": article_id,
             "success": stats.get('success', False),
+            "status": status,
+            "settled": stats.get('settled', False),
+            "retryable": stats.get('retryable', False),
+            "reason": reason,
             "stats": stats,
             "timestamp": datetime.utcnow().isoformat(),
         }

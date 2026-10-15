@@ -895,8 +895,12 @@ window.refreshArticle = async function() {
         console.log('Refresh result:', result);
         
         if (result.success) {
-            // Show success message
-            refreshBtn.innerHTML = '✅ Обновлено!';
+            if (result.status === 'rejected') {
+                refreshBtn.innerHTML = result.reason === 'advertisement' ? '🚫 Реклама' : '⛔ Обработка остановлена';
+                alert(result.message);
+            } else {
+                refreshBtn.innerHTML = '✅ Обновлено!';
+            }
             
             // Auto-reload the article in modal after a short delay
             setTimeout(async () => {

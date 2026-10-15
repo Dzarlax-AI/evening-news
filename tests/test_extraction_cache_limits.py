@@ -156,6 +156,36 @@ async def test_recent_new_success_is_learned_at_full_domain_capacity(monkeypatch
     assert len(service._patterns["site.test"]) == 2
 
 
+@pytest.mark.asyncio
+async def test_high_confidence_untried_ai_pattern_is_kept_at_full_capacity(monkeypatch):
+    monkeypatch.setattr(memory_module, "MAX_PATTERNS_PER_DOMAIN", 2)
+    monkeypatch.setattr(memory_module, "MAX_PATTERNS_IN_MEMORY", 10)
+    monkeypatch.setattr(memory_module, "MAX_DOMAINS_IN_MEMORY", 10)
+    service = ExtractionMemoryService()
+    service._initialized = True
+    service._patterns["site.test"] = [
+        entry("site.test", ".a-manual", successes=0, quality=0),
+        entry("site.test", ".b-manual", successes=0, quality=0),
+    ]
+
+    def no_task(coro):
+        coro.close()
+
+    monkeypatch.setattr(memory_module.asyncio, "create_task", no_task)
+    await service.record_ai_pattern_discovery("site.test", [{
+        "selector": ".z-ai-confidence",
+        "strategy": "source_container",
+        "confidence": 0.95,
+    }])
+
+    retained = service._patterns["site.test"]
+    ai_pattern = next(pattern for pattern in retained if pattern.selector_pattern == ".z-ai-confidence")
+    assert ai_pattern.success_count == 0
+    assert ai_pattern.success_rate == 95.0
+    assert ai_pattern.quality_score_avg == 0.95
+    assert len(retained) == 2
+
+
 def test_failures_do_not_improve_pattern_rank():
     good = entry("site.test", ".good", quality=0.4, successes=3,
                  consecutive_successes=3, last_success_at=datetime.utcnow())
@@ -198,6 +228,10 @@ async def test_startup_sql_and_python_choose_same_pattern_order(monkeypatch):
          "manual", 0, 3, 0, None, "2026-10-14T00:00:00", None, None),
         (4, "b.test", ".other-domain", "css", 2, 0, 0.80, 100,
          "manual", 0, 2, 0, None, "2026-10-14T00:00:00", None, None),
+        (5, "a.test", ".ai-confidence", "css", 0, 0, 0.95, 0,
+         "ai", 0, 0, 0, None, None, None, None),
+        (6, "b.test", ".unknown", "css", 0, 0, 0.00, 0,
+         "manual", 0, 0, 0, None, None, None, None),
     ]
     connection.executemany(
         "INSERT INTO extraction_patterns VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)",
@@ -225,7 +259,14 @@ async def test_startup_sql_and_python_choose_same_pattern_order(monkeypatch):
     python_order = [pattern.selector_pattern for pattern in sorted(
         loaded, key=service._pattern_rank
     )]
-    assert python_order == [".recent", ".steady", ".other-domain", ".failed-high-quality"]
+    ai_confidence_pattern = next(
+        pattern for pattern in loaded if pattern.selector_pattern == ".ai-confidence"
+    )
+    assert ai_confidence_pattern.success_rate == 95.0
+    assert python_order == [
+        ".recent", ".steady", ".other-domain", ".ai-confidence",
+        ".failed-high-quality", ".unknown",
+    ]
 
 
 def analysis(reasoning="ok"):

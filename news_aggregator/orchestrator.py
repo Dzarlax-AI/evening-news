@@ -613,7 +613,27 @@ class NewsOrchestrator:
             stats = {'api_calls_made': 0, 'errors': []}
             stats.update(await self._process_unprocessed_articles(
                 stats, selected_ids=article_ids, force_refresh=force))
-            stats['success'] = stats['articles_processed'] == len(set(article_ids)) and not stats['errors']
+            # Selected requests report durable outcomes, while cycle counters
+            # continue to count completed news articles only.
+            async def read_outcomes(db):
+                result = await db.execute(select(
+                    Article.id, Article.processing_state, Article.last_processing_error,
+                    Article.next_attempt_at,
+                ).where(Article.id.in_(article_ids)).order_by(Article.id))
+                return [
+                    {'article_id': row.id, 'state': row.processing_state,
+                     'reason': row.last_processing_error,
+                     'next_attempt_at': row.next_attempt_at.isoformat() if row.next_attempt_at else None}
+                    for row in result.all()
+                ]
+            outcomes = await self.db_queue_manager.execute_read(read_outcomes)
+            stats['article_outcomes'] = outcomes
+            stats['settled'] = len(outcomes) == len(set(article_ids)) and all(
+                item['state'] in {'completed', 'rejected'} for item in outcomes)
+            stats['success'] = stats['settled'] and not stats['errors']
+            stats['retryable'] = any(item['state'] in {'pending', 'retry_wait'} for item in outcomes)
+            stats['status'] = outcomes[0]['state'] if len(outcomes) == 1 else (
+                'settled' if stats['settled'] else 'incomplete')
             return stats
         finally:
             try:

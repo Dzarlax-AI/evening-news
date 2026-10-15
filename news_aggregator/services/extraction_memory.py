@@ -100,6 +100,7 @@ class ExtractionMemoryService:
                            CASE WHEN COALESCE(success_count, 0) + COALESCE(failure_count, 0) > 0
                                 THEN COALESCE(success_count, 0) * 1.0 /
                                      (COALESCE(success_count, 0) + COALESCE(failure_count, 0))
+                                WHEN discovered_by = 'ai' THEN COALESCE(quality_score_avg, 0)
                                 ELSE 0 END AS success_rate,
                            quality_score_avg,
                            content_length_avg, discovered_by, is_stable,
@@ -179,17 +180,28 @@ class ExtractionMemoryService:
                 if domain not in self._patterns:
                     self._patterns[domain] = []
 
+                success_count = row[4] or 0
+                failure_count = row[5] or 0
+                quality_score = float(row[6] or 0)
+                discovered_by = row[8] or 'manual'
+                if success_count + failure_count:
+                    success_rate = self._calc_success_rate(success_count, failure_count)
+                elif discovered_by == 'ai':
+                    success_rate = quality_score * 100
+                else:
+                    success_rate = 0.0
+
                 entry = ExtractionMemoryEntry(
                     id=row[0],
                     domain=domain,
                     selector_pattern=row[2],
                     extraction_strategy=row[3],
-                    success_count=row[4] or 0,
-                    failure_count=row[5] or 0,
-                    success_rate=self._calc_success_rate(row[4] or 0, row[5] or 0),
-                    quality_score_avg=float(row[6] or 0),
+                    success_count=success_count,
+                    failure_count=failure_count,
+                    success_rate=success_rate,
+                    quality_score_avg=quality_score,
                     content_length_avg=row[7] or 0,
-                    discovered_by=row[8] or 'manual',
+                    discovered_by=discovered_by,
                     is_stable=row[9] or False,
                     consecutive_successes=row[10] or 0,
                     consecutive_failures=row[11] or 0,
@@ -207,7 +219,16 @@ class ExtractionMemoryService:
         successes = int(pattern.success_count or 0)
         failures = int(pattern.failure_count or 0)
         total_attempts = successes + failures
-        success_rate = successes / total_attempts if total_attempts else 0.0
+        if total_attempts:
+            success_rate = successes / total_attempts
+        elif pattern.discovered_by == "ai":
+            # AI confidence is the admission signal until an extraction is observed.
+            confidence = float(pattern.success_rate or 0) / 100
+            if not confidence:
+                confidence = float(pattern.quality_score_avg or 0)
+            success_rate = confidence
+        else:
+            success_rate = 0.0
         last_success_at = pattern.last_success_at
         if isinstance(last_success_at, str):
             try:
@@ -746,6 +767,9 @@ class ExtractionMemoryService:
                         success_count=0,
                         failure_count=0,
                         success_rate=confidence * 100,
+                        # success_rate is a generated database column; retain
+                        # zero-attempt AI confidence in this persisted score.
+                        quality_score_avg=confidence,
                         discovered_by='ai',
                         created_at=datetime.utcnow(),
                         updated_at=datetime.utcnow()
