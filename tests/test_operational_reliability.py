@@ -227,6 +227,72 @@ async def test_manual_digest_endpoint_returns_non_2xx_on_delivery_failure(monkey
 
 
 @pytest.mark.asyncio
+async def test_manual_digest_endpoint_refuses_active_processing_without_constructing_sender(monkeypatch):
+    from news_aggregator.config import settings
+    monkeypatch.setattr(settings, 'admin_password', 'test-only-password')
+    from news_aggregator.api.telegram_router import send_telegram_digest
+    from news_aggregator.orchestrator import reserve_processing_cycle, release_processing_cycle
+    reservation = reserve_processing_cycle()
+    assert reservation is not None
+    try:
+        with patch('news_aggregator.api.telegram_router.NewsOrchestrator') as factory:
+            response = await send_telegram_digest()
+        assert response.status_code == 409
+        assert json.loads(response.body)['status'] == 'busy'
+        factory.assert_not_called()
+    finally:
+        release_processing_cycle(reservation)
+
+
+@pytest.mark.asyncio
+async def test_manual_digest_reservation_lasts_through_cleanup_and_releases_on_failure(monkeypatch):
+    from news_aggregator.config import settings
+    monkeypatch.setattr(settings, 'admin_password', 'test-only-password')
+    from news_aggregator.api.telegram_router import send_telegram_digest
+    from news_aggregator.orchestrator import processing_cycle_busy
+    async def send():
+        assert processing_cycle_busy()
+        return {'success': True}
+    async def stop():
+        assert processing_cycle_busy()
+        raise RuntimeError('cleanup failed')
+    orchestrator = SimpleNamespace(start=AsyncMock(), send_telegram_digest=send, stop=stop)
+    with patch('news_aggregator.api.telegram_router.NewsOrchestrator', return_value=orchestrator):
+        with pytest.raises(RuntimeError, match='cleanup failed'):
+            await send_telegram_digest()
+    assert not processing_cycle_busy()
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize('cleanup_failure', [False, True])
+async def test_manual_processing_reservation_lasts_through_cleanup(monkeypatch, cleanup_failure):
+    from news_aggregator.config import settings
+    monkeypatch.setattr(settings, 'admin_password', 'test-only-password')
+    from news_aggregator.api.processing_router import _run_processing_cycle
+    from news_aggregator.orchestrator import (
+        NewsOrchestrator, processing_cycle_busy, reserve_processing_cycle,
+        release_processing_cycle,
+    )
+    orchestrator = NewsOrchestrator.__new__(NewsOrchestrator)
+    orchestrator.start = AsyncMock()
+    orchestrator._run_full_cycle = AsyncMock(return_value={'status': 'success'})
+    async def stop():
+        assert processing_cycle_busy()
+        if cleanup_failure:
+            raise RuntimeError('cleanup failed')
+    orchestrator.stop = AsyncMock(side_effect=stop)
+    reservation = reserve_processing_cycle()
+    assert reservation is not None
+    try:
+        with patch('news_aggregator.api.processing_router.NewsOrchestrator', return_value=orchestrator):
+            await _run_processing_cycle(reservation)
+        orchestrator.stop.assert_awaited_once()
+        assert not processing_cycle_busy()
+    finally:
+        release_processing_cycle(reservation)
+
+
+@pytest.mark.asyncio
 async def test_failed_run_preserves_previous_success_timestamp():
     scheduler = make_scheduler_for_unit_test()
     previous_success = datetime(2026, 7, 24, 19, 6)

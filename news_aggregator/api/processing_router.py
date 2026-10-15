@@ -26,12 +26,13 @@ async def _run_processing_cycle(reservation):
     except Exception as e:
         logger.error(f"Background processing failed: {e}")
     finally:
-        release_processing_cycle(reservation)
         try:
             if orchestrator is not None:
                 await orchestrator.stop()
         except Exception:
             pass
+        finally:
+            release_processing_cycle(reservation)
 
 @router.post("/run")
 async def trigger_processing(background_tasks: BackgroundTasks):

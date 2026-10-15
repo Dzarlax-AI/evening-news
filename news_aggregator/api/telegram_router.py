@@ -10,7 +10,7 @@ from pydantic import BaseModel
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from ..database import get_db
-from ..orchestrator import NewsOrchestrator
+from ..orchestrator import NewsOrchestrator, reserve_processing_cycle, release_processing_cycle
 from ..config import settings as app_settings
 
 logger = logging.getLogger(__name__)
@@ -124,6 +124,12 @@ async def test_telegram_connection(db: AsyncSession = Depends(get_db)):
 @router.post("/send-digest")
 async def send_telegram_digest():
     """Generate and send Telegram digest."""
+    reservation = reserve_processing_cycle()
+    if reservation is None:
+        return JSONResponse(status_code=409, content={
+            'success': False, 'status': 'busy',
+            'message': 'News processing is already running',
+        })
     orchestrator = None
     try:
         logger.info("📱 Generating Telegram digest...")
@@ -147,5 +153,8 @@ async def send_telegram_digest():
         logger.error(f"Error sending Telegram digest: {e}")
         raise HTTPException(status_code=500, detail=f"Failed to send digest: {str(e)}")
     finally:
-        if orchestrator is not None:
-            await orchestrator.stop()
+        try:
+            if orchestrator is not None:
+                await orchestrator.stop()
+        finally:
+            release_processing_cycle(reservation)

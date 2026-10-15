@@ -164,7 +164,8 @@ class NewsOrchestrator:
         try:
             return await self._run_full_cycle()
         finally:
-            release_processing_cycle(token)
+            if reservation is None:
+                release_processing_cycle(token)
 
     async def _run_full_cycle(self) -> Dict[str, Any]:
         """Run complete news processing cycle."""
