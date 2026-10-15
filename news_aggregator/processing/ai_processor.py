@@ -605,8 +605,10 @@ class AIProcessor:
         if summary_done and category_done and ad_done:
             return ProcessingOutcome('completed')
         try:
-            content = enforce_text_limit(article_data.get('content') or '')
-            enforce_text_limit(article_data.get('summary') or '')
+            # Remaining classification stages use an already completed summary.
+            # An unused archival body must not prevent processing that summary.
+            analysis_input = article_data.get('summary') if summary_done else article_data.get('content')
+            content = enforce_text_limit(analysis_input or '')
             refreshed_metadata = None
             if force_refresh:
                 from urllib.parse import urlparse

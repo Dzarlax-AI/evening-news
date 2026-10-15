@@ -181,4 +181,5 @@ Passed</pre>
 </section>
 <p>Итоговый локальный прогон после исправления замечаний: 211 passed, 5 skipped, PostgreSQL включен; compileall и git diff --check прошли. Реальный Chrome в этом повторном прогоне не включался, его проверка выше относится к первоначальной реализации lifecycle.</p>
 <p>Второй проход Codex: сохранена уверенность AI-паттернов без фактических попыток (через существующий persisted score); selected API возвращает durable outcome, settled/retryable и корректное сообщение для completed/rejected/exhausted. Интерфейс отличает рекламу/остановку от обновленной статьи. Итог: 217 passed, 5 skipped с локальным PostgreSQL; compileall и diff checks прошли. Повторный CodeRabbit ограничен квотой сервиса; исправления независимо проверяет Astra.</p>
+<p>Третий проход Codex: лимит текста проверяет фактический вход оставшихся стадий; готовое короткое summary позволяет завершить классификацию, даже если неиспользуемый архивный body больше лимита. Регрессия добавлена; полный прогон с PostgreSQL: 218 passed, 5 skipped, compileall и diff checks прошли.</p>
 </main></body></html>

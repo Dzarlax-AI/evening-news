@@ -86,6 +86,24 @@ async def test_resource_limit_is_terminal_and_does_not_become_an_ad():
 
 
 @pytest.mark.asyncio
+async def test_completed_short_summary_supports_remaining_stages_with_oversized_archival_body(monkeypatch):
+    from news_aggregator.config import settings
+    from types import SimpleNamespace
+    monkeypatch.setattr(settings, 'extraction_text_max_chars', 100)
+    value = processor({})
+    value.ai_client = SimpleNamespace(analyze_article_complete=AsyncMock(return_value={
+        'categories': ['Tech'], 'is_advertisement': False}))
+    result = await value.process_article_outcome(article(
+        content='x' * 101, summary='Existing valid short summary.', summary_processed=True), {})
+    assert result.state == 'completed'
+    assert result.fields['category_processed'] is True
+    assert result.fields['ad_processed'] is True
+    assert 'summary' not in result.fields
+    assert value.ai_client.analyze_article_complete.await_args.args[1] == 'Existing valid short summary.'
+    value.get_summary_by_source_type.assert_not_awaited()
+
+
+@pytest.mark.asyncio
 async def test_completed_news_accepts_cloudflare_in_title_and_summary():
     result = await processor({"summary": "Cloudflare introduced a new service.",
                               "optimized_title": "Cloudflare service launch",
