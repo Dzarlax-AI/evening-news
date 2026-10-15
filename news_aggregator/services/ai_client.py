@@ -2,6 +2,7 @@
 
 import asyncio
 import json
+import math
 from typing import Optional, Dict, Any
 
 import logging
@@ -1011,10 +1012,11 @@ class AIClient:
         # Safe float conversion with fallback
         def safe_float(value, default=0.0):
             try:
-                if value is None:
+                if value is None or isinstance(value, bool):
                     return default
-                return float(value)
-            except (TypeError, ValueError):
+                value = float(value)
+                return value if math.isfinite(value) else default
+            except (TypeError, ValueError, OverflowError):
                 return default
 
         # Import category parser
