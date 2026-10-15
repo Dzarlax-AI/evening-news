@@ -751,6 +751,9 @@ class NewsOrchestrator:
             for cat_data in ai_categories:
                 ai_category_name = cat_data.get('name', 'Other')
                 confidence = cat_data.get('confidence', 1.0)
+                original_category = cat_data.get('ai_category')
+                if not isinstance(original_category, str) or not original_category.strip():
+                    original_category = ai_category_name
 
                 # Fast path: if AI returned a known fixed category name, use it directly
                 category_id = categories_by_name.get(ai_category_name.lower())
@@ -774,7 +777,7 @@ class NewsOrchestrator:
                         'article_id': article_id,
                         'category_id': category_id,
                         'confidence': confidence,
-                        'ai_category': ai_category_name,
+                        'ai_category': original_category.strip(),
                     }
                 )
 

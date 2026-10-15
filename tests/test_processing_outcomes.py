@@ -193,3 +193,51 @@ async def test_primary_ad_verdict_without_summary_does_not_fall_back_to_another_
     result = await value.get_summary_by_source_type(SimpleNamespace(**article()), 'rss', {})
     assert result['is_advertisement'] is True
     value.ai_client.analyze_article_complete.assert_not_awaited()
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize('is_advertisement', [False, True])
+async def test_category_normalization_preserves_original_indices_labels_and_dictionary_confidence(is_advertisement):
+    result = await processor({
+        'summary': 'A valid article summary.', 'is_advertisement': is_advertisement,
+        'categories': ['', 'Tech', {'name': ' Science ', 'confidence': 0.94, 'ai_category': 'Raw science'}],
+        'category_confidences': [0.99, 0.14, 0.31], 'category_confidence': 0.8,
+        'original_categories': ['Skipped label', 'Raw technology', 'Ignored dictionary fallback'],
+    }).process_article_outcome(article(), {})
+    assert result.state == ('rejected' if is_advertisement else 'completed')
+    assert result.fields['categories'] == [
+        {'name': 'Tech', 'confidence': 0.14, 'ai_category': 'Raw technology'},
+        {'name': 'Science', 'confidence': 0.94, 'ai_category': 'Raw science'},
+    ]
+
+
+@pytest.mark.parametrize('malformed', [None, True, '0.2', float('nan'), float('inf'), -float('inf'), {}, [], 10 ** 400])
+def test_malformed_per_category_confidence_uses_validated_fallbacks(malformed):
+    from news_aggregator.processing.ai_processor import normalize_analysis_categories
+    result = normalize_analysis_categories({
+        'categories': ['Tech', {'name': 'Science', 'confidence': malformed}],
+        'category_confidences': [malformed, 0.72], 'category_confidence': 0.61,
+    })
+    assert [category['confidence'] for category in result] == [0.61, 0.72]
+
+
+def test_confidence_normalization_clamps_finite_numbers_and_validates_scalar_default():
+    from news_aggregator.processing.ai_processor import normalize_analysis_categories
+    result = normalize_analysis_categories({
+        'categories': ['Tech', 'Science', 'Business'],
+        'category_confidences': [-0.3, 1.4], 'category_confidence': float('nan'),
+    })
+    assert [category['confidence'] for category in result] == [0.0, 1.0, 0.8]
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize('malformed', [True, float('nan'), float('inf'), -float('inf'), 10 ** 400])
+async def test_real_ai_normalizer_does_not_turn_malformed_scalar_into_high_confidence(malformed):
+    from news_aggregator.services.ai_client import AIClient
+    analysis = AIClient.__new__(AIClient)._validate_analysis_result({
+        'summary': 'A valid article summary.', 'is_advertisement': False,
+        'categories': ['Tech'], 'category_confidence': malformed,
+    }, valid_categories=['Tech'])
+    result = await processor(analysis).process_article_outcome(article(), {})
+    assert result.state == 'completed'
+    assert result.fields['categories'][0]['confidence'] == 0.8

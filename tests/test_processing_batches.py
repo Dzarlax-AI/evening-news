@@ -383,3 +383,35 @@ async def test_selected_api_reports_durable_terminal_outcomes_without_inflating_
         assert saved.next_attempt_at is None if state != 'retry_wait' else saved.next_attempt_at > datetime.utcnow()
         if reason == 'advertisement':
             assert saved.is_advertisement is True
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize('is_advertisement', [False, True])
+async def test_category_confidence_and_original_labels_persist_with_correct_primary_and_digest_group(isolated, is_advertisement):
+    from news_aggregator.processing.ai_processor import AIProcessor
+    from news_aggregator.services.ai_client import AIClient
+    orchestrator, engine = isolated
+    add_articles(engine, 1)
+    with Session(engine) as db:
+        db.add_all([Category(name='Tech', display_name='Tech'), Category(name='Science', display_name='Science')])
+        db.commit()
+    analysis = AIClient.__new__(AIClient)._validate_analysis_result({
+        'summary': 'A valid generated summary.', 'is_advertisement': is_advertisement,
+        'categories': ['Tech', 'Science'], 'category_confidences': [0.12, 0.94],
+        'category_confidence': 0.8, 'original_categories': ['Network tools', 'Scientific discoveries'],
+    }, valid_categories=['Tech', 'Science'])
+    value = AIProcessor.__new__(AIProcessor)
+    value.get_summary_by_source_type = AsyncMock(return_value=analysis)
+    orchestrator.ai_processor = value
+    with patch('news_aggregator.services.category_display_service.get_category_display_service', AsyncMock()):
+        await orchestrator._process_unprocessed_articles({'errors': []})
+    with Session(engine) as db:
+        saved = db.get(Article, 1)
+        assert saved.primary_category == 'Scientific discoveries'
+        categories = db.execute(select(Category.name, ArticleCategory.confidence, ArticleCategory.ai_category).join(
+            ArticleCategory, ArticleCategory.category_id == Category.id).order_by(Category.name)).all()
+        assert categories == [('Science', 0.94, 'Scientific discoveries'), ('Tech', 0.12, 'Network tools')]
+    async def read_group(db):
+        return await orchestrator._group_articles_by_category(db, datetime.utcnow().date())
+    grouped = await orchestrator.db_queue_manager.execute_read(read_group)
+    assert list(grouped) == ([] if is_advertisement else ['Science'])

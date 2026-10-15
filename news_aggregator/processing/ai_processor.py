@@ -2,6 +2,7 @@ import logging
 """AI Processing Engine for articles."""
 
 import time
+import math
 from datetime import datetime
 from typing import Dict, Any, List, Optional
 
@@ -10,6 +11,49 @@ from sqlalchemy.ext.asyncio import AsyncSession
 from ..services.ai_client import get_ai_client
 
 logger = logging.getLogger(__name__)
+
+
+def _category_confidence(value, fallback):
+    """Keep finite numeric confidence, clamped like the legacy combined path."""
+    if isinstance(value, bool) or not isinstance(value, (int, float)):
+        return fallback
+    try:
+        value = float(value)
+    except (ValueError, OverflowError):
+        return fallback
+    return max(0.0, min(1.0, value)) if math.isfinite(value) else fallback
+
+
+def normalize_analysis_categories(analysis):
+    """Preserve aligned confidences and original labels before filtering entries."""
+    categories = analysis.get('categories')
+    if not isinstance(categories, list):
+        return []
+    confidences = analysis.get('category_confidences')
+    if not isinstance(confidences, list):
+        confidences = [confidences]
+    originals = analysis.get('original_categories')
+    if not isinstance(originals, list):
+        originals = []
+    default_confidence = _category_confidence(analysis.get('category_confidence'), 0.8)
+    normalized = []
+    for index, category in enumerate(categories):
+        data = category if isinstance(category, dict) else {}
+        name = data.get('name') if data else category
+        if not isinstance(name, str) or not name.strip():
+            continue
+        name = name.strip()
+        aligned_confidence = confidences[index] if index < len(confidences) else None
+        confidence = _category_confidence(data.get('confidence'),
+            _category_confidence(aligned_confidence, default_confidence))
+        original = data.get('ai_category')
+        if not isinstance(original, str) or not original.strip():
+            original = originals[index] if index < len(originals) else None
+        if not isinstance(original, str) or not original.strip():
+            original = name
+        normalized.append({**data, 'name': name, 'confidence': confidence,
+                           'ai_category': original.strip()})
+    return normalized
 
 
 class AIProcessor:
@@ -672,15 +716,8 @@ class AIProcessor:
                         fields['title'] = title
                     if article.published_at != article_data.get('published_at'):
                         fields['published_at'] = article.published_at
-                categories = analysis.get('categories')
-                if not category_done and isinstance(categories, list):
-                    normalized = [
-                        {'name': category.strip(), 'confidence': analysis.get('category_confidence', 0.8)}
-                        if isinstance(category, str) else category
-                        for category in categories
-                        if (isinstance(category, str) and category.strip())
-                        or (isinstance(category, dict) and category.get('name'))
-                    ]
+                if not category_done:
+                    normalized = normalize_analysis_categories(analysis)
                     if normalized:
                         fields.update(categories=normalized, category_processed=True)
                 return ProcessingOutcome('rejected', fields, 'advertisement')
@@ -696,15 +733,7 @@ class AIProcessor:
                 if article.published_at != article_data.get('published_at'):
                     fields['published_at'] = article.published_at
             if not category_done:
-                categories = analysis.get('categories')
-                if not isinstance(categories, list) or not categories:
-                    return ProcessingOutcome('retry_wait', fields, 'missing_categories')
-                normalized = []
-                for category in categories:
-                    if isinstance(category, str) and category.strip():
-                        normalized.append({'name': category.strip(), 'confidence': analysis.get('category_confidence', 0.8)})
-                    elif isinstance(category, dict) and category.get('name'):
-                        normalized.append(category)
+                normalized = normalize_analysis_categories(analysis)
                 if not normalized:
                     return ProcessingOutcome('retry_wait', fields, 'missing_categories')
                 fields.update(categories=normalized, category_processed=True)
