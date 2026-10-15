@@ -2,6 +2,8 @@
 
 import json
 import sqlite3
+import os
+import uuid
 from types import SimpleNamespace
 from unittest.mock import AsyncMock, patch
 from datetime import datetime, timedelta
@@ -336,3 +338,93 @@ def test_ai_cache_enforces_total_serialized_byte_budget(monkeypatch):
     assert len(analyzer.analysis_cache) == 1
     assert analyzer._analysis_cache_bytes <= 500
     assert analyzer._analysis_cache_bytes != first_size * 2
+
+
+@pytest.mark.asyncio
+async def test_repeated_ai_discovery_keeps_distinct_fallback_and_merges_confidence(monkeypatch):
+    monkeypatch.setattr(memory_module, 'MAX_PATTERNS_PER_DOMAIN', 2)
+    service = ExtractionMemoryService()
+    service._initialized = True
+    service._patterns['site.test'] = [entry('site.test', '.fallback')]
+    service._save_ai_discovery_to_db = AsyncMock()
+    for confidence in [0.95] + [0.8] * 12:
+        await service.record_ai_pattern_discovery('site.test', [
+            {'selector': '.primary', 'strategy': 'css', 'confidence': confidence}])
+    await memory_module.asyncio.sleep(0)
+    assert set(selector_names(service)['site.test']) == {'.primary', '.fallback'}
+    primary = next(pattern for pattern in service._patterns['site.test'] if pattern.selector_pattern == '.primary')
+    assert primary.success_rate == 95.0
+    assert primary.quality_score_avg == 0.95
+    assert len(service._patterns['site.test']) == 2
+
+
+@pytest.mark.asyncio
+async def test_ai_rediscovery_preserves_observed_metrics_and_identity(monkeypatch):
+    service = ExtractionMemoryService()
+    service._initialized = True
+    observed = entry('site.test', '.primary', successes=8, failures=2, quality=0.72,
+                     consecutive_successes=3, identifier=42, last_success_at=datetime.utcnow())
+    service._patterns['site.test'] = [observed]
+    service._save_ai_discovery_to_db = AsyncMock()
+    await service.record_ai_pattern_discovery('site.test', [
+        {'selector': '.primary', 'strategy': 'css', 'confidence': 0.99}])
+    await memory_module.asyncio.sleep(0)
+    assert service._patterns['site.test'] == [observed]
+    assert (observed.success_count, observed.failure_count, observed.success_rate) == (8, 2, 80.0)
+    assert observed.quality_score_avg == 0.72 and observed.consecutive_successes == 3
+    assert observed.id == 42 and observed.discovered_by == 'manual'
+
+
+def test_existing_duplicate_snapshots_do_not_consume_distinct_pattern_slots(monkeypatch):
+    monkeypatch.setattr(memory_module, 'MAX_PATTERNS_PER_DOMAIN', 2)
+    service = ExtractionMemoryService()
+    observed = entry('site.test', '.primary', successes=3, failures=1, quality=0.7)
+    duplicate = entry('site.test', '.primary', successes=1, quality=0.9)
+    service._patterns['site.test'] = [observed, duplicate, entry('site.test', '.fallback')]
+    service._enforce_pattern_limits()
+    assert set(selector_names(service)['site.test']) == {'.primary', '.fallback'}
+    assert next(pattern for pattern in service._patterns['site.test'] if pattern.selector_pattern == '.primary') is observed
+
+
+@pytest.mark.asyncio
+async def test_ai_rediscovery_database_upsert_preserves_evicted_observations_and_stronger_prior(monkeypatch):
+    from sqlalchemy import text
+    from sqlalchemy.engine import make_url
+    from sqlalchemy.ext.asyncio import AsyncSession, create_async_engine
+    from sqlalchemy.orm import sessionmaker
+    url = os.environ.get('TEST_DATABASE_URL')
+    if not url:
+        pytest.skip('TEST_DATABASE_URL is required for isolated PostgreSQL persistence checks')
+    assert make_url(url).host in {'127.0.0.1', 'localhost'}
+    schema = 'test_discovery_' + uuid.uuid4().hex
+    admin = create_async_engine(url)
+    engine = create_async_engine(url, connect_args={'server_settings': {'search_path': schema}})
+    try:
+        async with admin.begin() as connection:
+            await connection.execute(text(f'CREATE SCHEMA {schema}'))
+        async with engine.begin() as connection:
+            await connection.execute(text('''CREATE TABLE extraction_patterns (
+                domain TEXT, selector_pattern TEXT, extraction_strategy TEXT,
+                success_count INTEGER DEFAULT 0, failure_count INTEGER DEFAULT 0,
+                quality_score_avg NUMERIC DEFAULT 0, discovered_by TEXT,
+                updated_at TIMESTAMP DEFAULT NOW(),
+                UNIQUE(domain, selector_pattern, extraction_strategy))'''))
+            await connection.execute(text("""INSERT INTO extraction_patterns VALUES
+                ('site.test', '.observed', 'css', 8, 2, 0.72, 'manual', NOW()),
+                ('site.test', '.untried', 'css', 0, 0, 0.95, 'ai', NOW()),
+                ('site.test', '.upgraded', 'css', 0, 0, 0.5, 'ai', NOW())"""))
+        monkeypatch.setattr(memory_module, 'AsyncSessionLocal', sessionmaker(engine, class_=AsyncSession))
+        service = ExtractionMemoryService()
+        for selector in ['.observed', '.untried', '.upgraded', '.new']:
+            await service._save_ai_discovery_to_db(entry('site.test', selector, quality=0.8))
+        async with engine.connect() as connection:
+            rows = (await connection.execute(text('''SELECT selector_pattern, success_count, failure_count,
+                quality_score_avg, discovered_by FROM extraction_patterns ORDER BY selector_pattern'''))).all()
+        assert [(row[0], row[1], row[2], float(row[3]), row[4]) for row in rows] == [
+            ('.new', 0, 0, 0.8, 'ai'), ('.observed', 8, 2, 0.72, 'manual'),
+            ('.untried', 0, 0, 0.95, 'ai'), ('.upgraded', 0, 0, 0.8, 'ai')]
+    finally:
+        await engine.dispose()
+        async with admin.begin() as connection:
+            await connection.execute(text(f'DROP SCHEMA IF EXISTS {schema} CASCADE'))
+        await admin.dispose()

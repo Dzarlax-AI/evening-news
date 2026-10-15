@@ -253,7 +253,7 @@ class ExtractionMemoryService:
     def _enforce_pattern_limits(self) -> None:
         """Apply the same deterministic admission limits to every insertion path."""
         nonempty = {
-            domain: sorted(patterns, key=self._pattern_rank)[:MAX_PATTERNS_PER_DOMAIN]
+            domain: sorted(self._unique_patterns(patterns), key=self._pattern_rank)[:MAX_PATTERNS_PER_DOMAIN]
             for domain, patterns in self._patterns.items()
             if patterns
         }
@@ -268,6 +268,19 @@ class ExtractionMemoryService:
         for pattern in admitted:
             rebuilt.setdefault(pattern.domain, []).append(pattern)
         self._patterns = rebuilt
+
+    def _unique_patterns(self, patterns):
+        """Keep one cumulative snapshot per identity, without doubling evidence."""
+        unique = {}
+        def snapshot_rank(entry):
+            observations = (entry.success_count or 0) + (entry.failure_count or 0)
+            return (-observations, self._pattern_rank(entry))
+        for pattern in patterns:
+            key = (pattern.selector_pattern, pattern.extraction_strategy)
+            existing = unique.get(key)
+            if existing is None or snapshot_rank(pattern) < snapshot_rank(existing):
+                unique[key] = pattern
+        return list(unique.values())
 
     def _calc_success_rate(self, success_count: int, failure_count: int) -> float:
         """Calculate success rate percentage."""
@@ -319,6 +332,32 @@ class ExtractionMemoryService:
                 await session.commit()
         except Exception as e:
             logger.warning(f"  ⚠️ Failed to save pattern to DB: {e}")
+
+    async def _save_ai_discovery_to_db(self, entry: ExtractionMemoryEntry):
+        """Refresh an AI prior without erasing an observed row outside the cache."""
+        try:
+            async with AsyncSessionLocal() as session:
+                await session.execute(text("""
+                    INSERT INTO extraction_patterns
+                        (domain, selector_pattern, extraction_strategy, quality_score_avg, discovered_by)
+                    VALUES (:domain, :selector, :strategy, :confidence, 'ai')
+                    ON CONFLICT (domain, selector_pattern, extraction_strategy) DO UPDATE SET
+                        quality_score_avg = CASE
+                            WHEN COALESCE(extraction_patterns.success_count, 0) +
+                                 COALESCE(extraction_patterns.failure_count, 0) = 0
+                            THEN GREATEST(COALESCE(extraction_patterns.quality_score_avg, 0), EXCLUDED.quality_score_avg)
+                            ELSE extraction_patterns.quality_score_avg END,
+                        discovered_by = CASE
+                            WHEN COALESCE(extraction_patterns.success_count, 0) +
+                                 COALESCE(extraction_patterns.failure_count, 0) = 0
+                            THEN 'ai' ELSE extraction_patterns.discovered_by END,
+                        updated_at = NOW()
+                """), {'domain': entry.domain, 'selector': entry.selector_pattern,
+                        'strategy': entry.extraction_strategy,
+                        'confidence': Decimal(str(entry.quality_score_avg))})
+                await session.commit()
+        except Exception as e:
+            logger.warning(f"  ⚠️ Failed to save AI pattern discovery: {e}")
     async def _save_attempt_to_db(self, attempt: ExtractionAttempt):
         """Save extraction attempt to database for analytics."""
         try:
@@ -417,6 +456,7 @@ class ExtractionMemoryService:
         """Add or update successful pattern."""
         if domain not in self._patterns:
             self._patterns[domain] = []
+        self._patterns[domain] = self._unique_patterns(self._patterns[domain])
         
         # Find existing pattern
         existing = None
@@ -492,6 +532,7 @@ class ExtractionMemoryService:
             return
         if domain not in self._patterns:
             self._patterns[domain] = []
+        self._patterns[domain] = self._unique_patterns(self._patterns[domain])
 
         # Find existing pattern or create a new failed one
         existing = None
@@ -750,6 +791,7 @@ class ExtractionMemoryService:
     ) -> bool:
         """Record AI-discovered patterns."""
         try:
+            await self._ensure_initialized()
             for pattern_data in patterns:
                 selector = pattern_data.get('selector')
                 strategy = pattern_data.get('strategy', 'ai_discovered')
@@ -758,6 +800,22 @@ class ExtractionMemoryService:
                 if selector:
                     if domain not in self._patterns:
                         self._patterns[domain] = []
+                    self._patterns[domain] = self._unique_patterns(self._patterns[domain])
+                    existing = next((entry for entry in self._patterns[domain]
+                                     if entry.selector_pattern == selector
+                                     and entry.extraction_strategy == strategy), None)
+                    if existing is not None:
+                        if not ((existing.success_count or 0) + (existing.failure_count or 0)):
+                            if existing.discovered_by == 'ai':
+                                confidence = max(confidence, (existing.success_rate or 0) / 100,
+                                                 existing.quality_score_avg or 0)
+                            existing.success_rate = confidence * 100
+                            existing.quality_score_avg = confidence
+                            existing.discovered_by = 'ai'
+                        existing.updated_at = datetime.utcnow()
+                        asyncio.create_task(self._save_ai_discovery_to_db(existing))
+                        self._enforce_pattern_limits()
+                        continue
                     
                     # Add AI-discovered pattern
                     pattern = ExtractionMemoryEntry(
@@ -775,7 +833,7 @@ class ExtractionMemoryService:
                         updated_at=datetime.utcnow()
                     )
                     self._patterns[domain].append(pattern)
-                    asyncio.create_task(self._save_pattern_to_db(pattern))
+                    asyncio.create_task(self._save_ai_discovery_to_db(pattern))
                     self._enforce_pattern_limits()
 
             logger.info(f"  🤖 Recorded {len(patterns)} AI-discovered patterns for {domain}")
