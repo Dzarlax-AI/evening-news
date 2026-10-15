@@ -339,3 +339,83 @@ def test_required_scheduler_migration_failure_blocks_startup():
         )
 
     ensure_scheduler_outcome_migration({"errors": []})
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize('task_name', ['news_processing', 'news_digest', 'reprocess_failed', 'telegram_digest'])
+async def test_busy_scheduler_tasks_defer_without_sends_or_false_alert_recovery(task_name):
+    from news_aggregator.orchestrator import NewsOrchestrator, reserve_processing_cycle, release_processing_cycle
+    scheduler = make_scheduler_for_unit_test()
+    # Exercise real orchestrator admission paths; no integrations are constructed.
+    scheduler.orchestrator = NewsOrchestrator.__new__(NewsOrchestrator)
+    scheduler.orchestrator.send_telegram_digest = AsyncMock()
+    reservation = reserve_processing_cycle()
+    assert reservation is not None
+    try:
+        await scheduler._run_task(task_name, {}, setting_id=9)
+    finally:
+        release_processing_cycle(reservation)
+    scheduler.orchestrator.send_telegram_digest.assert_not_awaited()
+    scheduler.alerts.failure.assert_not_awaited()
+    scheduler.alerts.recovery.assert_not_awaited()
+    kwargs = scheduler._update_task_schedule.await_args.kwargs
+    assert kwargs['status'] == 'deferred'
+    assert kwargs['error'] == 'processing_busy'
+    assert kwargs['retry_immediately'] is False
+    scheduler._task_semaphore.release.assert_called_once()
+
+
+@pytest.mark.asyncio
+async def test_busy_processing_stops_actual_digest_stage_before_delivery():
+    scheduler = make_scheduler_for_unit_test()
+    scheduler.orchestrator.run_full_cycle = AsyncMock(return_value={
+        'status': 'busy', 'errors': [], 'fatal_error': None})
+    scheduler.orchestrator.send_telegram_digest = AsyncMock(return_value={'success': True})
+    result = await scheduler._run_news_digest_cycle({})
+    assert result['status'] == 'deferred'
+    scheduler.orchestrator.send_telegram_digest.assert_not_awaited()
+
+
+@pytest.mark.asyncio
+async def test_digest_without_processing_still_defers_while_another_cycle_is_busy():
+    from news_aggregator.orchestrator import reserve_processing_cycle, release_processing_cycle
+    scheduler = make_scheduler_for_unit_test()
+    scheduler.orchestrator.send_telegram_digest = AsyncMock(return_value={'success': True})
+    reservation = reserve_processing_cycle()
+    assert reservation is not None
+    try:
+        result = await scheduler._run_news_digest_cycle({'run_processing': False})
+    finally:
+        release_processing_cycle(reservation)
+    assert result['status'] == 'deferred'
+    scheduler.orchestrator.send_telegram_digest.assert_not_awaited()
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize('status,retry_immediately,retry_minutes', [
+    ('deferred', False, 5), ('timeout', True, 10),
+])
+async def test_deferred_short_retry_preserves_success_without_advancing_normal_daily_slot(
+        status, retry_immediately, retry_minutes):
+    from datetime import timedelta
+    scheduler = make_scheduler_for_unit_test()
+    scheduler._calculate_next_run = AsyncMock()
+    previous_success = datetime(2026, 10, 15, 18)
+    setting = SimpleNamespace(enabled=True, is_running=True, task_name='news_digest',
+                              last_success_at=previous_success, next_run=previous_success)
+    result = MagicMock()
+    result.scalar_one_or_none.return_value = setting
+    db = MagicMock(execute=AsyncMock(return_value=result))
+    async def execute(operation):
+        return await operation(db)
+    before = datetime.utcnow()
+    with patch('news_aggregator.services.scheduler.execute_custom_write', side_effect=execute):
+        await TaskScheduler._update_task_schedule(
+            scheduler, 9, status=status, error='processing_busy',
+            retry_immediately=retry_immediately, duration_seconds=0.1)
+    after = datetime.utcnow()
+    assert setting.last_status == status
+    assert setting.last_success_at == previous_success
+    assert before + timedelta(minutes=retry_minutes) <= setting.next_run <= after + timedelta(minutes=retry_minutes)
+    assert setting.is_running is False
+    scheduler._calculate_next_run.assert_not_awaited()

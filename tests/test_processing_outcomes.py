@@ -146,3 +146,32 @@ async def test_normalizer_keeps_missing_or_malformed_ad_classification_retryable
     assert result.state == 'retry_wait'
     assert result.error == 'missing_ad_classification'
     assert 'is_advertisement' not in result.fields
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize('summary,categories', [(None, ['Tech']), ('A valid summary.', [])])
+async def test_validated_ad_is_terminal_despite_incomplete_other_stages(summary, categories):
+    from news_aggregator.services.ai_client import AIClient
+    normalized = AIClient.__new__(AIClient)._validate_analysis_result({
+        'summary': summary, 'categories': categories, 'is_advertisement': True,
+    }, valid_categories=['Tech'])
+    result = await processor(normalized).process_article_outcome(article(), {})
+    assert result.state == 'rejected'
+    assert result.error == 'advertisement'
+    assert result.fields['is_advertisement'] is True
+    assert result.fields['ad_processed'] is True
+    assert bool(result.fields.get('summary_processed')) is bool(summary)
+    assert bool(result.fields.get('category_processed')) is bool(categories)
+
+
+@pytest.mark.asyncio
+async def test_primary_ad_verdict_without_summary_does_not_fall_back_to_another_ai_call():
+    from types import SimpleNamespace
+    value = AIProcessor.__new__(AIProcessor)
+    value.ai_client = SimpleNamespace(
+        get_article_summary_with_metadata=AsyncMock(return_value={
+            'summary': None, 'categories': [], 'is_advertisement': True}),
+        analyze_article_complete=AsyncMock())
+    result = await value.get_summary_by_source_type(SimpleNamespace(**article()), 'rss', {})
+    assert result['is_advertisement'] is True
+    value.ai_client.analyze_article_complete.assert_not_awaited()

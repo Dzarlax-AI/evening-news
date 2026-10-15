@@ -13,11 +13,22 @@ from sqlalchemy.ext.asyncio import AsyncSession
 
 from ..database_helpers import fetch_all, execute_custom_write
 from ..models import ScheduleSettings
-from ..orchestrator import NewsOrchestrator
+from ..orchestrator import (
+    NewsOrchestrator,
+    reserve_processing_cycle,
+    release_processing_cycle,
+)
 from .operational_alerts import OperationalAlertManager
 
 
 logger = logging.getLogger(__name__)
+
+DEFERRED_TASK_RETRY_MINUTES = 5
+
+
+def _deferred_processing_result():
+    """Busy work is deferred without claiming delivery or processing success."""
+    return {"status": "deferred", "error": "processing_busy"}
 
 
 def calculate_next_run(
@@ -449,7 +460,10 @@ class TaskScheduler:
             else:
                 task_result = await task_coro
 
-            if isinstance(task_result, dict) and task_result.get("status") == "warning":
+            if isinstance(task_result, dict) and task_result.get("status") == "deferred":
+                status = "deferred"
+                error_message = str(task_result.get("error") or "processing_busy")
+            elif isinstance(task_result, dict) and task_result.get("status") == "warning":
                 status = "warning"
                 error_message = str(task_result.get("error") or "Task completed with warnings")
                 await self.alerts.failure(
@@ -540,11 +554,16 @@ class TaskScheduler:
             
     async def _run_telegram_digest(self, config: Dict[str, Any]):
         """Run telegram digest task using unified orchestrator logic."""
+        reservation = reserve_processing_cycle()
+        if reservation is None:
+            return _deferred_processing_result()
         try:
             logger.info("Starting telegram digest task...")
             
             # Use the same logic as button-triggered digest for consistency
             result = await self.orchestrator.send_telegram_digest()
+            if result.get('status') in {'busy', 'deferred'}:
+                return _deferred_processing_result()
             
             if result.get('success'):
                 parts_sent = result.get('parts_sent', 0)
@@ -557,12 +576,16 @@ class TaskScheduler:
         except Exception as e:
             logger.error(f"Error in telegram digest task: {e}", exc_info=True)
             raise
+        finally:
+            release_processing_cycle(reservation)
                 
     async def _run_news_processing(self, config: Dict[str, Any]):
         """Run news processing task."""
         try:
             logger.info("Starting news processing cycle...")
             stats = await self.orchestrator.run_full_cycle()
+            if stats.get('status') in {'busy', 'deferred'}:
+                return _deferred_processing_result()
             if stats.get('fatal_error'):
                 raise RuntimeError(str(stats['fatal_error']))
             processed = stats.get('articles_processed', 0)
@@ -586,19 +609,17 @@ class TaskScheduler:
             # Step 1: Run full news processing cycle (if enabled)
             if config.get('run_processing', True):
                 processing_stats = await self.orchestrator.run_full_cycle()
+                if processing_stats.get('status') in {'busy', 'deferred'}:
+                    return _deferred_processing_result()
                 if processing_stats.get('fatal_error'):
                     raise RuntimeError(str(processing_stats['fatal_error']))
                 logger.info(f"News processing completed: {processing_stats.get('articles_processed', 0)} articles processed")
             
             # Step 2: Send digest using unified logic (if enabled)
             if config.get('send_telegram', True):
-                digest_result = await self.orchestrator.send_telegram_digest()
-                
-                if digest_result.get('success'):
-                    logger.info(f"Digest sent successfully ({digest_result.get('parts_sent', 0)} parts)")
-                else:
-                    error = digest_result.get('error') or 'unknown Telegram error'
-                    raise RuntimeError(f"Telegram digest was not delivered: {error}")
+                digest_result = await self._run_telegram_digest(config)
+                if digest_result.get('status') == 'deferred':
+                    return digest_result
             
             logger.info("Complete news digest cycle finished successfully")
             processing_errors = (processing_stats.get('errors') or []) if config.get('run_processing', True) else []
@@ -646,7 +667,13 @@ class TaskScheduler:
                 setting.last_duration_seconds = duration_seconds
 
                 if setting.enabled:
-                    if retry_immediately:
+                    if status == 'deferred':
+                        setting.next_run = datetime.utcnow() + timedelta(minutes=DEFERRED_TASK_RETRY_MINUTES)
+                        logger.info(
+                            "Task %s deferred while processing is busy; retrying at %s UTC",
+                            setting.task_name, setting.next_run,
+                        )
+                    elif retry_immediately:
                         setting.next_run = datetime.utcnow() + timedelta(minutes=10)
                         logger.warning(
                             f"Task {setting.task_name} timed out; "
@@ -765,6 +792,8 @@ class TaskScheduler:
             logger.info(f"  Reprocessing up to {limit} failed extractions (dry_run={dry_run})")
             # Run the reprocessing
             results = await self.orchestrator.reprocess_failed_extractions(limit=limit, dry_run=dry_run)
+            if results.get('status') in {'busy', 'deferred'}:
+                return _deferred_processing_result()
             
             # Log results
             candidates_count = results.get('total_candidates', 0)

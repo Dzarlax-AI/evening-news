@@ -93,31 +93,59 @@ class ExtractionMemoryService:
         """Load the best bounded pattern set without materializing the full table."""
         async with AsyncSessionLocal() as session:
             result = await session.execute(text("""
-                WITH eligible AS (
+                WITH pattern_stats AS (
                     SELECT id, domain, selector_pattern, extraction_strategy,
-                           success_count, failure_count, quality_score_avg,
+                           COALESCE(success_count, 0) AS success_count,
+                           COALESCE(failure_count, 0) AS failure_count,
+                           CASE WHEN COALESCE(success_count, 0) + COALESCE(failure_count, 0) > 0
+                                THEN COALESCE(success_count, 0) * 1.0 /
+                                     (COALESCE(success_count, 0) + COALESCE(failure_count, 0))
+                                ELSE 0 END AS success_rate,
+                           quality_score_avg,
                            content_length_avg, discovered_by, is_stable,
                            consecutive_successes, consecutive_failures,
-                           first_success_at, last_success_at, created_at, updated_at,
-                           ROW_NUMBER() OVER (
-                               PARTITION BY domain
-                               ORDER BY COALESCE(quality_score_avg, 0) DESC,
-                                        COALESCE(success_count, 0) + COALESCE(failure_count, 0) DESC,
-                                        id ASC
-                           ) AS pattern_rank
+                           first_success_at, last_success_at, created_at, updated_at
                     FROM extraction_patterns
                     WHERE success_count > 0 OR failure_count < 5
+                ), eligible AS (
+                    SELECT *,
+                           ROW_NUMBER() OVER (
+                               PARTITION BY domain
+                               ORDER BY success_rate DESC,
+                                        success_count DESC,
+                                        COALESCE(consecutive_failures, 0) ASC,
+                                        COALESCE(consecutive_successes, 0) DESC,
+                                        last_success_at DESC NULLS LAST,
+                                        COALESCE(quality_score_avg, 0) DESC,
+                                        selector_pattern ASC,
+                                        extraction_strategy ASC
+                           ) AS pattern_rank
+                    FROM pattern_stats
                 ), domain_scores AS (
-                    SELECT domain, MAX(COALESCE(quality_score_avg, 0)) AS best_quality,
-                           SUM(COALESCE(success_count, 0) + COALESCE(failure_count, 0)) AS total_usage,
-                           MIN(id) AS first_id
+                    SELECT domain,
+                           MAX(CASE WHEN pattern_rank = 1 THEN success_rate END) AS best_success_rate,
+                           MAX(CASE WHEN pattern_rank = 1 THEN success_count END) AS best_success_count,
+                           MIN(CASE WHEN pattern_rank = 1 THEN consecutive_failures END) AS best_consecutive_failures,
+                           MAX(CASE WHEN pattern_rank = 1 THEN consecutive_successes END) AS best_consecutive_successes,
+                           MAX(CASE WHEN pattern_rank = 1 THEN last_success_at END) AS best_last_success_at,
+                           MAX(CASE WHEN pattern_rank = 1 THEN COALESCE(quality_score_avg, 0) END) AS best_quality,
+                           MAX(CASE WHEN pattern_rank = 1 THEN selector_pattern END) AS best_selector,
+                           MAX(CASE WHEN pattern_rank = 1 THEN extraction_strategy END) AS best_strategy
                     FROM eligible
                     WHERE pattern_rank <= :per_domain_limit
                     GROUP BY domain
                 ), ranked_domains AS (
                     SELECT domain,
                            ROW_NUMBER() OVER (
-                               ORDER BY best_quality DESC, total_usage DESC, first_id ASC, domain ASC
+                               ORDER BY best_success_rate DESC,
+                                        best_success_count DESC,
+                                        best_consecutive_failures ASC,
+                                        best_consecutive_successes DESC,
+                                        best_last_success_at DESC NULLS LAST,
+                                        best_quality DESC,
+                                        best_selector ASC,
+                                        best_strategy ASC,
+                                        domain ASC
                            ) AS domain_rank
                     FROM domain_scores
                 )
@@ -130,7 +158,15 @@ class ExtractionMemoryService:
                 JOIN ranked_domains d ON d.domain = e.domain
                 WHERE e.pattern_rank <= :per_domain_limit
                   AND d.domain_rank <= :domain_limit
-                ORDER BY d.domain_rank, e.pattern_rank
+                ORDER BY e.success_rate DESC,
+                         e.success_count DESC,
+                         COALESCE(e.consecutive_failures, 0) ASC,
+                         COALESCE(e.consecutive_successes, 0) DESC,
+                         e.last_success_at DESC NULLS LAST,
+                         COALESCE(e.quality_score_avg, 0) DESC,
+                         e.selector_pattern ASC,
+                         e.extraction_strategy ASC,
+                         e.domain ASC
                 LIMIT :total_limit
             """), {
                 "per_domain_limit": MAX_PATTERNS_PER_DOMAIN,
@@ -167,14 +203,30 @@ class ExtractionMemoryService:
 
     @staticmethod
     def _pattern_rank(pattern: ExtractionMemoryEntry):
-        """Stable rank used for cache admission and eviction."""
+        """Rank patterns by evidence of successful, recent extraction."""
+        successes = int(pattern.success_count or 0)
+        failures = int(pattern.failure_count or 0)
+        total_attempts = successes + failures
+        success_rate = successes / total_attempts if total_attempts else 0.0
+        last_success_at = pattern.last_success_at
+        if isinstance(last_success_at, str):
+            try:
+                last_success_at = datetime.fromisoformat(last_success_at)
+            except ValueError:
+                last_success_at = None
+        if last_success_at is not None and last_success_at.tzinfo is not None:
+            last_success_at = last_success_at.replace(tzinfo=None)
         return (
+            -success_rate,
+            -successes,
+            int(pattern.consecutive_failures or 0),
+            -int(pattern.consecutive_successes or 0),
+            last_success_at is None,
+            -(last_success_at.timestamp()) if last_success_at is not None else 0,
             -float(pattern.quality_score_avg or 0),
-            -(int(pattern.success_count or 0) + int(pattern.failure_count or 0)),
-            pattern.id if pattern.id is not None else 2**63,
-            pattern.domain,
             pattern.selector_pattern,
             pattern.extraction_strategy,
+            pattern.domain,
         )
 
     def _enforce_pattern_limits(self) -> None:

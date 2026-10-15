@@ -1,8 +1,10 @@
 """Regression coverage for bounded extraction and page-analysis caches."""
 
 import json
+import sqlite3
 from types import SimpleNamespace
 from unittest.mock import AsyncMock, patch
+from datetime import datetime, timedelta
 
 import pytest
 
@@ -14,14 +16,21 @@ from news_aggregator.services.extraction_memory import (
 from news_aggregator.sources.ai_page_analyzer import AIPageAnalyzer, PageAnalysis
 
 
-def entry(domain, selector, *, quality=0.0, successes=0, identifier=None):
+def entry(
+    domain, selector, *, quality=0.0, successes=0, failures=0, identifier=None,
+    consecutive_successes=0, consecutive_failures=0, last_success_at=None,
+):
     return ExtractionMemoryEntry(
         domain=domain,
         selector_pattern=selector,
         extraction_strategy="css",
         success_count=successes,
-        success_rate=100.0 if successes else 0.0,
+        failure_count=failures,
+        success_rate=(successes / (successes + failures) * 100) if successes + failures else 0.0,
         quality_score_avg=quality,
+        consecutive_successes=consecutive_successes,
+        consecutive_failures=consecutive_failures,
+        last_success_at=last_success_at,
         id=identifier,
     )
 
@@ -69,10 +78,9 @@ async def test_startup_db_load_is_limited_in_sql_and_admits_ranked_rows(monkeypa
     monkeypatch.setattr(memory_module, "MAX_PATTERNS_IN_MEMORY", 3)
     monkeypatch.setattr(memory_module, "MAX_DOMAINS_IN_MEMORY", 2)
     rows = [
-        (10, "a.test", ".high", "css", 8, 1, 0.9, 50, "manual", False, 0, 0, None, None, None, None),
-        (20, "a.test", ".low", "css", 1, 5, 0.1, 20, "manual", False, 0, 0, None, None, None, None),
         (30, "b.test", ".b", "css", 4, 0, 0.8, 50, "manual", False, 0, 0, None, None, None, None),
         (40, "c.test", ".c", "css", 4, 0, 0.8, 50, "manual", False, 0, 0, None, None, None, None),
+        (10, "a.test", ".high", "css", 8, 1, 0.9, 50, "manual", False, 0, 0, None, None, None, None),
     ]
     result = SimpleNamespace(fetchall=lambda: rows)
     session = SimpleNamespace(execute=AsyncMock(return_value=result))
@@ -92,28 +100,132 @@ async def test_startup_db_load_is_limited_in_sql_and_admits_ranked_rows(monkeypa
     params = session.execute.await_args.args[1]
     assert "ROW_NUMBER() OVER" in statement.upper()
     assert "LIMIT :total_limit" in statement
+    assert "success_rate DESC" in statement
+    assert "consecutive_failures" in statement
+    assert "last_success_at DESC NULLS LAST" in statement
+    assert "selector_pattern ASC" in statement
     assert params == {"per_domain_limit": 2, "domain_limit": 2, "total_limit": 3}
     assert len(service._patterns) <= 2
     assert sum(map(len, service._patterns.values())) <= 3
-    assert ".high" in selector_names(service).get("a.test", [])
+    assert ".b" in selector_names(service).get("b.test", [])
+    assert ".c" in selector_names(service).get("c.test", [])
 
 
-def test_extraction_eviction_is_quality_usage_id_deterministic(monkeypatch):
+def test_extraction_eviction_uses_success_evidence_then_stable_ties(monkeypatch):
     monkeypatch.setattr(memory_module, "MAX_PATTERNS_PER_DOMAIN", 2)
     monkeypatch.setattr(memory_module, "MAX_PATTERNS_IN_MEMORY", 10)
     monkeypatch.setattr(memory_module, "MAX_DOMAINS_IN_MEMORY", 10)
     service = ExtractionMemoryService()
     service._patterns = {
         "site.test": [
-            entry("site.test", ".id-later", quality=0.5, successes=10, identifier=8),
-            entry("site.test", ".id-earlier", quality=0.5, successes=10, identifier=3),
-            entry("site.test", ".worse", quality=0.4, successes=100, identifier=1),
+            entry("site.test", ".beta", quality=0.5, successes=10, identifier=3),
+            entry("site.test", ".alpha", quality=0.5, successes=10, identifier=8),
+            entry("site.test", ".worse", quality=0.99, successes=2, failures=2,
+                  consecutive_failures=2, identifier=1),
         ]
     }
 
     service._evict_patterns("site.test")
 
-    assert selector_names(service)["site.test"] == [".id-earlier", ".id-later"]
+    assert selector_names(service)["site.test"] == [".alpha", ".beta"]
+
+
+@pytest.mark.asyncio
+async def test_recent_new_success_is_learned_at_full_domain_capacity(monkeypatch):
+    monkeypatch.setattr(memory_module, "MAX_PATTERNS_PER_DOMAIN", 2)
+    monkeypatch.setattr(memory_module, "MAX_PATTERNS_IN_MEMORY", 10)
+    monkeypatch.setattr(memory_module, "MAX_DOMAINS_IN_MEMORY", 10)
+    service = ExtractionMemoryService()
+    service._initialized = True
+    old = datetime.utcnow() - timedelta(days=90)
+    service._patterns["site.test"] = [
+        entry("site.test", ".old-a", quality=0.8, successes=1,
+              consecutive_successes=1, last_success_at=old, identifier=1),
+        entry("site.test", ".old-z", quality=0.8, successes=1,
+              consecutive_successes=1, last_success_at=old, identifier=2),
+    ]
+    monkeypatch.setattr(service, "_save_pattern_to_db", AsyncMock())
+
+    def no_task(coro):
+        coro.close()
+
+    monkeypatch.setattr(memory_module.asyncio, "create_task", no_task)
+    await service._add_successful_pattern("site.test", ".new-success", "css", 0.5, 500)
+
+    assert ".new-success" in selector_names(service)["site.test"]
+    assert len(service._patterns["site.test"]) == 2
+
+
+def test_failures_do_not_improve_pattern_rank():
+    good = entry("site.test", ".good", quality=0.4, successes=3,
+                 consecutive_successes=3, last_success_at=datetime.utcnow())
+    failed = entry("site.test", ".failed", quality=0.99, successes=3, failures=3,
+                   consecutive_failures=3, last_success_at=datetime.utcnow())
+
+    assert ExtractionMemoryService._pattern_rank(good) < ExtractionMemoryService._pattern_rank(failed)
+
+    persisted = entry("site.test", ".same", quality=0.5, successes=2,
+                      consecutive_successes=2, identifier=99)
+    not_yet_persisted = entry("site.test", ".same", quality=0.5, successes=2,
+                              consecutive_successes=2, identifier=None)
+    assert ExtractionMemoryService._pattern_rank(persisted) == (
+        ExtractionMemoryService._pattern_rank(not_yet_persisted)
+    )
+
+
+@pytest.mark.asyncio
+async def test_startup_sql_and_python_choose_same_pattern_order(monkeypatch):
+    monkeypatch.setattr(memory_module, "MAX_PATTERNS_PER_DOMAIN", 4)
+    monkeypatch.setattr(memory_module, "MAX_PATTERNS_IN_MEMORY", 10)
+    monkeypatch.setattr(memory_module, "MAX_DOMAINS_IN_MEMORY", 10)
+
+    connection = sqlite3.connect(":memory:")
+    connection.execute("""
+        CREATE TABLE extraction_patterns (
+            id INTEGER, domain TEXT, selector_pattern TEXT, extraction_strategy TEXT,
+            success_count INTEGER, failure_count INTEGER, quality_score_avg REAL,
+            content_length_avg INTEGER, discovered_by TEXT, is_stable INTEGER,
+            consecutive_successes INTEGER, consecutive_failures INTEGER,
+            first_success_at TEXT, last_success_at TEXT, created_at TEXT, updated_at TEXT
+        )
+    """)
+    rows = [
+        (1, "a.test", ".failed-high-quality", "css", 3, 3, 0.99, 100,
+         "manual", 0, 0, 3, None, "2026-10-14T00:00:00", None, None),
+        (2, "a.test", ".steady", "css", 3, 0, 0.50, 100,
+         "manual", 0, 3, 0, None, "2026-10-01T00:00:00", None, None),
+        (3, "a.test", ".recent", "css", 3, 0, 0.10, 100,
+         "manual", 0, 3, 0, None, "2026-10-14T00:00:00", None, None),
+        (4, "b.test", ".other-domain", "css", 2, 0, 0.80, 100,
+         "manual", 0, 2, 0, None, "2026-10-14T00:00:00", None, None),
+    ]
+    connection.executemany(
+        "INSERT INTO extraction_patterns VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)",
+        rows,
+    )
+    connection.commit()
+
+    class SqliteSession:
+        async def __aenter__(self):
+            return self
+
+        async def __aexit__(self, *args):
+            connection.close()
+            return False
+
+        async def execute(self, statement, params):
+            cursor = connection.execute(str(statement), params)
+            return SimpleNamespace(fetchall=cursor.fetchall)
+
+    monkeypatch.setattr(memory_module, "AsyncSessionLocal", SqliteSession)
+    service = ExtractionMemoryService()
+    await service._load_patterns_from_db()
+
+    loaded = [pattern for patterns in service._patterns.values() for pattern in patterns]
+    python_order = [pattern.selector_pattern for pattern in sorted(
+        loaded, key=service._pattern_rank
+    )]
+    assert python_order == [".recent", ".steady", ".other-domain", ".failed-high-quality"]
 
 
 def analysis(reasoning="ok"):

@@ -129,6 +129,15 @@ class NewsOrchestrator:
         # Legacy queue for backward compatibility (will be removed)
         self.db_queue = None
 
+    @classmethod
+    def for_article_processing(cls, ai_processor):
+        """Build the selected-article facade without unrelated integrations."""
+        orchestrator = cls.__new__(cls)
+        orchestrator.ai_processor = ai_processor
+        orchestrator.db_queue_manager = get_database_queue()
+        orchestrator.article_limiter = get_article_limiter()
+        return orchestrator
+
     def _daily_digest_url(self, date) -> str:
         base_url = (settings.site_base_url or "https://news.dzarlax.dev").rstrip("/")
         return f"{base_url}/digest/{date.strftime('%Y-%m-%d')}"
@@ -430,7 +439,7 @@ class NewsOrchestrator:
         }
 
     async def _process_unprocessed_articles(self, stats: Dict[str, Any], selected_ids=None,
-                                          max_articles=None) -> Dict[str, Any]:
+                                          max_articles=None, force_refresh=False) -> Dict[str, Any]:
         """Walk due articles by stable ID in bounded batches, persisting each outcome."""
         counters = {'articles_processed': 0, 'articles_summarized': 0,
                     'articles_categorized': 0}
@@ -472,6 +481,8 @@ class NewsOrchestrator:
                             Article.processing_state == 'retry_wait',
                             Article.next_attempt_at <= cycle_time)),
                     ).order_by(Article.id).limit(remaining)
+                    if force_refresh:
+                        query = query.add_columns(Article.image_url)
                     if selected_ids is not None:
                         query = query.where(Article.id.in_(selected_ids))
                     else:
@@ -511,8 +522,12 @@ class NewsOrchestrator:
                         if not await self.db_queue_manager.execute_write(claim):
                             return
                         try:
+                            processing = (
+                                self.ai_processor.process_article_outcome(article, stats, force_refresh=True)
+                                if force_refresh else self.ai_processor.process_article_outcome(article, stats)
+                            )
                             outcome = await asyncio.wait_for(
-                                self.ai_processor.process_article_outcome(article, stats),
+                                processing,
                                 timeout=attempt_timeout,
                             )
                         except Exception as exc:
@@ -526,7 +541,21 @@ class NewsOrchestrator:
                             await db.execute(update(Article).where(
                                 Article.id == article['id'], Article.processing_attempts == attempt,
                             ).values(**fields))
-                        await self.db_queue_manager.execute_write(save, timeout=30.0)
+                        try:
+                            await self.db_queue_manager.execute_write(save, timeout=30.0)
+                        except (ValueError, LookupError) as exc:
+                            # Invalid category mappings belong to this article.
+                            # The failed transaction rolled back; retain its claim
+                            # deadline and attempt budget while siblings continue.
+                            async def record_mapping_error(db):
+                                await db.execute(update(Article).where(
+                                    Article.id == article['id'],
+                                    Article.processing_attempts == attempt,
+                                ).values(last_processing_error='category_mapping_failed'))
+                            await self.db_queue_manager.execute_write(record_mapping_error)
+                            stats.setdefault('errors', []).append(
+                                f"Article {article['id']} category mapping failed ({type(exc).__name__})")
+                            return
                         if outcome.state == 'completed':
                             counters['articles_processed'] += 1
                         if fields.get('summary'):
@@ -582,7 +611,8 @@ class NewsOrchestrator:
             browser_lease = await acquire_browser_cycle()
             await self._reset_selected_articles(article_ids, force=force)
             stats = {'api_calls_made': 0, 'errors': []}
-            stats.update(await self._process_unprocessed_articles(stats, selected_ids=article_ids))
+            stats.update(await self._process_unprocessed_articles(
+                stats, selected_ids=article_ids, force_refresh=force))
             stats['success'] = stats['articles_processed'] == len(set(article_ids)) and not stats['errors']
             return stats
         finally:

@@ -271,16 +271,16 @@ async def config():
 @click.option('--limit', default=50, help='Maximum number of articles to process')
 @click.option('--dry-run', is_flag=True, help='Only show candidates without processing')
 async def reprocess_failed(limit: int, dry_run: bool):
-    """Find and reprocess articles where content extraction failed (title equals summary)."""
+    """Process due pending and retry-wait articles through the bounded pipeline."""
     orchestrator = NewsOrchestrator()
     
     try:
         await orchestrator.start()
         
         if dry_run:
-            console.print(f"[bold yellow]🔍 Dry run: Finding articles with failed content extraction (limit: {limit})[/bold yellow]")
+            console.print(f"[bold yellow]🔍 Dry run: Finding due articles to process (limit: {limit})[/bold yellow]")
         else:
-            console.print(f"[bold green]🔧 Reprocessing articles with failed content extraction (limit: {limit})[/bold green]")
+            console.print(f"[bold green]🔧 Processing due articles (limit: {limit})[/bold green]")
         
         # Run the reprocessing
         results = await orchestrator.reprocess_failed_extractions(limit=limit, dry_run=dry_run)
@@ -293,13 +293,19 @@ async def reprocess_failed(limit: int, dry_run: bool):
         summary_table.add_column("Metric", style="cyan")
         summary_table.add_column("Value", style="white")
         
-        summary_table.add_row("Found candidates", str(results['found_candidates']))
-        if not dry_run:
-            summary_table.add_row("Processed", str(results['processed']))
-            summary_table.add_row("Improved", str(results['improved']))
-            summary_table.add_row("Failed", str(results['failed']))
-            summary_table.add_row("Success rate", f"{results['success_rate']:.1f}%")
-            summary_table.add_row("Improvement rate", f"{results['improvement_rate']:.1f}%")
+        if dry_run:
+            candidate_count = results.get('found_candidates', results.get('total_candidates'))
+            if candidate_count is not None:
+                summary_table.add_row("Found candidates", str(candidate_count))
+        else:
+            completed = results.get('processed', results.get('articles_processed', 0))
+            summaries = results.get('articles_summarized', results.get('improved'))
+            summary_table.add_row("Completed", str(completed))
+            if summaries is not None:
+                summary_table.add_row("Summaries generated", str(summaries))
+            summary_table.add_row("Errors", str(len(results.get('errors') or [])))
+        if results.get('status'):
+            summary_table.add_row("Status", str(results['status']))
         
         console.print(summary_table)
         
@@ -358,7 +364,13 @@ async def reprocess_failed(limit: int, dry_run: bool):
             console.print(f"\n[bold red]❌ Processing errors:[/bold red]")
             
             for error in results['errors'][:5]:  # Show first 5 errors
-                console.print(f"   Article {error['article_id']}: {error['error']}")
+                if isinstance(error, dict):
+                    message = error.get('error', error)
+                    article_id = error.get('article_id')
+                    prefix = f"Article {article_id}: " if article_id is not None else ""
+                    console.print(f"   {prefix}{message}")
+                else:
+                    console.print(f"   {error}")
             
             if len(results['errors']) > 5:
                 console.print(f"   [dim]... and {len(results['errors']) - 5} more errors[/dim]")

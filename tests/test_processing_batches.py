@@ -200,3 +200,136 @@ async def test_manual_reservation_prevents_duplicate_background_requests(monkeyp
         assert len(background.tasks) == 1
     finally:
         release_processing_cycle(background.tasks[0].args[0])
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize('existing_image', [None, 'https://example.org/original.jpg'])
+async def test_forced_selected_processing_persists_refreshed_body_and_missing_image(isolated, existing_image):
+    from news_aggregator.processing.ai_processor import AIProcessor
+    orchestrator, engine = isolated
+    add_articles(engine, 1, summary='Saved summary', summary_processed=True,
+                 category_processed=True, ad_processed=True, processing_state='completed',
+                 image_url=existing_image)
+    with Session(engine) as db:
+        db.add(Category(name='Tech', display_name='Tech'))
+        db.commit()
+    processor = AIProcessor.__new__(AIProcessor)
+    processor.ai_client = SimpleNamespace(
+        analyze_article_complete=AsyncMock(return_value={
+            'summary': 'Refreshed summary', 'categories': ['Tech'], 'is_advertisement': False}),
+        get_article_summary_with_metadata=AsyncMock(side_effect=AssertionError('duplicate extraction')))
+    orchestrator.ai_processor = processor
+    fresh_content = 'Fresh article content with details that were missing from the old body. ' * 5
+    extractor = SimpleNamespace(extract_article_content_with_metadata=AsyncMock(return_value={
+        'content': fresh_content, 'image_url': 'https://example.org/refreshed.jpg'}))
+    context = AsyncMock()
+    context.__aenter__.return_value = extractor
+    with patch('news_aggregator.extraction.ContentExtractor', return_value=context), patch(
+            'news_aggregator.services.category_display_service.get_category_display_service', AsyncMock()):
+        result = await orchestrator.process_selected_articles([1], force=True)
+    assert result['success'] is True
+    extractor.extract_article_content_with_metadata.assert_awaited_once_with('https://example.org/0', retry_count=1)
+    assert processor.ai_client.analyze_article_complete.await_args.args[1] == fresh_content
+    processor.ai_client.get_article_summary_with_metadata.assert_not_awaited()
+    with Session(engine) as db:
+        article = db.get(Article, 1)
+        assert article.content == fresh_content
+        assert article.summary == 'Refreshed summary'
+        assert article.image_url == (existing_image or 'https://example.org/refreshed.jpg')
+        assert article.processing_state == 'completed'
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize('failure,expected_state', [('transport', 'retry_wait'), ('oversized', 'rejected')])
+async def test_forced_refresh_failure_preserves_saved_body_summary_and_image(isolated, monkeypatch, failure, expected_state):
+    from news_aggregator.config import settings
+    from news_aggregator.processing.ai_processor import AIProcessor
+    orchestrator, engine = isolated
+    add_articles(engine, 1, summary='Saved summary', summary_processed=True,
+                 category_processed=True, ad_processed=True, processing_state='completed',
+                 image_url='https://example.org/original.jpg')
+    processor = AIProcessor.__new__(AIProcessor)
+    processor.ai_client = SimpleNamespace(analyze_article_complete=AsyncMock())
+    orchestrator.ai_processor = processor
+    monkeypatch.setattr(settings, 'extraction_text_max_chars', 100)
+    extract = AsyncMock(side_effect=TimeoutError('unavailable')) if failure == 'transport' else AsyncMock(
+        return_value={'content': 'x' * 101, 'image_url': 'https://example.org/new.jpg'})
+    context = AsyncMock()
+    context.__aenter__.return_value = SimpleNamespace(extract_article_content_with_metadata=extract)
+    with patch('news_aggregator.extraction.ContentExtractor', return_value=context):
+        result = await orchestrator.process_selected_articles([1], force=True)
+    assert result['success'] is False
+    processor.ai_client.analyze_article_complete.assert_not_awaited()
+    with Session(engine) as db:
+        article = db.get(Article, 1)
+        assert article.content == 'Article content'
+        assert article.summary == 'Saved summary'
+        assert article.image_url == 'https://example.org/original.jpg'
+        assert article.processing_state == expected_state
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize('mapping_error', [ValueError, LookupError])
+async def test_category_mapping_error_retains_claim_without_cancelling_other_articles(isolated, mapping_error):
+    orchestrator, engine = isolated
+    add_articles(engine, 2)
+    with Session(engine) as db:
+        db.add(Category(name='Tech', display_name='Tech'))
+        db.commit()
+    orchestrator.ai_processor.process_article_outcome.return_value = ProcessingOutcome(
+        'completed', {'summary': 'Successful summary', 'summary_processed': True,
+                      'categories': [{'name': 'Tech'}], 'category_processed': True, 'ad_processed': True})
+    save_categories = orchestrator._save_ai_categories_to_database
+    async def map_categories(db, article_id, categories):
+        await save_categories(db, article_id, categories)
+        if article_id == 1:
+            raise mapping_error('unsupported configured category')
+    orchestrator._save_ai_categories_to_database = map_categories
+    stats = {'errors': []}
+    with patch('news_aggregator.services.category_display_service.get_category_display_service', AsyncMock()):
+        result = await orchestrator._process_unprocessed_articles(stats)
+    assert result['articles_processed'] == 1
+    assert len(stats['errors']) == 1
+    with Session(engine) as db:
+        failed = db.get(Article, 1)
+        assert failed.processing_state == 'retry_wait'
+        assert failed.processing_attempts == 1
+        assert failed.next_attempt_at > datetime.utcnow()
+        assert failed.last_processing_error == 'category_mapping_failed'
+        assert failed.summary is None
+        assert db.get(Article, 2).processing_state == 'completed'
+        categories = db.execute(select(ArticleCategory)).scalars().all()
+        assert [category.article_id for category in categories] == [2]
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize('ai_failed', [False, True])
+async def test_legacy_incremental_uses_typed_summary_metadata_and_never_reports_failed_ai_as_success(isolated, ai_failed):
+    from news_aggregator.processing.ai_processor import AIProcessor
+    orchestrator, engine = isolated
+    add_articles(engine, 1)
+    with Session(engine) as db:
+        db.add(Category(name='Tech', display_name='Tech'))
+        db.commit()
+    processor = AIProcessor.__new__(AIProcessor)
+    analysis = {'_processing_error': 'APIError'} if ai_failed else {
+        'summary': 'A valid generated summary', 'categories': ['Tech'],
+        'publication_date': '2026-10-15', 'is_advertisement': False}
+    processor.ai_client = SimpleNamespace(get_article_summary_with_metadata=AsyncMock(return_value=analysis))
+    processor._save_article_fields = AsyncMock()
+    stats = {'api_calls_made': 0}
+    with patch('news_aggregator.orchestrator.get_database_queue', return_value=orchestrator.db_queue_manager), patch(
+            'news_aggregator.orchestrator.get_article_limiter', return_value=orchestrator.article_limiter), patch(
+            'news_aggregator.orchestrator.get_telegram_service') as telegram, patch(
+            'news_aggregator.services.category_display_service.get_category_display_service', AsyncMock()):
+        result = await processor.process_article_incremental({'id': 1}, stats)
+    assert result['success'] is (not ai_failed)
+    processor._save_article_fields.assert_not_awaited()
+    telegram.assert_not_called()
+    assert stats['api_calls_made'] == 1
+    with Session(engine) as db:
+        saved = db.get(Article, 1)
+        assert saved.processing_state == ('retry_wait' if ai_failed else 'completed')
+        assert saved.summary == (None if ai_failed else 'A valid generated summary')
+        if not ai_failed:
+            assert saved.published_at == datetime(2026, 10, 15)

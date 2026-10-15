@@ -166,7 +166,7 @@ class AIClient:
             logger.error(f"  ❌ Error getting article summary with metadata: {e}")
             return {
                 '_processing_error': type(e).__name__,
-                '_processing_terminal': getattr(e, 'status_code', None) in {400, 401, 403, 404, 413, 422},
+                '_processing_terminal': getattr(e, 'status_code', None) in {400, 413, 422},
                 '_retry_after_seconds': getattr(e, 'retry_after_seconds', None),
                 'summary': None,
                 'publication_date': metadata_result.get('publication_date'),
@@ -877,7 +877,7 @@ class AIClient:
                 content = title
             else:
                 logger.warning(f"  ⚠️ Content too short for analysis: {len(content.strip()) if content else 0} chars < 30")
-                return self._get_fallback_analysis()
+                return {**self._get_fallback_analysis(), '_processing_error': None}
         
         max_retries = 0
         for attempt in range(max_retries + 1):
@@ -992,7 +992,7 @@ class AIClient:
                     continue
                 return {**self._get_fallback_analysis(),
                         '_processing_error': type(e).__name__,
-                        '_processing_terminal': getattr(e, 'status_code', None) in {400, 401, 403, 404, 413, 422},
+                        '_processing_terminal': getattr(e, 'status_code', None) in {400, 413, 422},
                         '_retry_after_seconds': getattr(e, 'retry_after_seconds', None)}
         
         # Fallback if all retries failed
