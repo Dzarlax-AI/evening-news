@@ -66,7 +66,8 @@ async def test_provider_configuration_errors_are_retryable_not_article_rejection
 
 
 @pytest.mark.asyncio
-async def test_short_extracted_stub_allows_original_source_content_analysis():
+@pytest.mark.parametrize('stub', ['Short teaser', 'x'])
+async def test_short_extracted_stub_allows_original_source_content_analysis(stub):
     client = AIClient.__new__(AIClient)
     client.supports_structured_output = True
     client.summarization_model = 'test-model'
@@ -75,11 +76,11 @@ async def test_short_extracted_stub_allows_original_source_content_analysis():
         'summary': 'Valid summary from the full source content.', 'categories': ['Tech'], 'is_advertisement': False}})
     extractor_context = AsyncMock()
     extractor_context.__aenter__.return_value = SimpleNamespace(
-        extract_article_content_with_metadata=AsyncMock(return_value={'content': 'Short teaser'}))
+        extract_article_content_with_metadata=AsyncMock(return_value={'content': stub}))
     cache = SimpleNamespace(get_categories=AsyncMock(return_value=['Tech']))
     processor = AIProcessor.__new__(AIProcessor)
     processor.ai_client = client
-    article = SimpleNamespace(title='Article', url='https://example.test/article',
+    article = SimpleNamespace(id=1, title='Original RSS article title', url='https://example.test/article',
                               content='Original RSS article with enough information to produce a useful summary.', published_at=None)
     with patch('news_aggregator.extraction.ContentExtractor', return_value=extractor_context), patch(
             'news_aggregator.services.category_cache.get_category_cache', return_value=cache):

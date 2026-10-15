@@ -55,11 +55,13 @@ class SmartFilter:
         
         # Duplicate detection (simple hash-based)
         self.recent_content_hashes = {}  # Hash -> timestamp
+        self._content_hash_owners = {}  # Hash -> admitted article ID
         self.duplicate_detection_window = timedelta(hours=24)
         
     async def should_process_with_ai(self, title: str, content: str, url: str, 
                                source_type: str = 'rss', allow_extraction: bool = True,
-                               db_session: Optional[Any] = None) -> Tuple[bool, str]:
+                               db_session: Optional[Any] = None, check_duplicates: bool = True,
+                               article_id: Optional[int] = None) -> Tuple[bool, str]:
         """
         Determine if article should be processed with AI.
         
@@ -110,7 +112,7 @@ class SmartFilter:
                 return False, "Metadata/low-quality content detected (no extraction possible)"
         
         # Check for duplicates
-        if await self._is_duplicate_content(content, db_session):
+        if check_duplicates and await self._is_duplicate_content(content, db_session, article_id):
             return False, "Duplicate content detected"
         
         # Check for suspiciously short articles that might need extraction
@@ -223,7 +225,8 @@ class SmartFilter:
         
         return False
     
-    async def _is_duplicate_content(self, content: str, db_session: Optional[Any] = None) -> bool:
+    async def _is_duplicate_content(self, content: str, db_session: Optional[Any] = None,
+                                    article_id: Optional[int] = None) -> bool:
         """Check if content is a duplicate of recently processed content."""
         if not content:
             return False
@@ -241,8 +244,14 @@ class SmartFilter:
                 h: timestamp for h, timestamp in self.recent_content_hashes.items()
                 if timestamp > cutoff_time
             }
+            self._content_hash_owners = {
+                key: owner for key, owner in self._content_hash_owners.items()
+                if key in self.recent_content_hashes
+            }
             
             if content_hash in self.recent_content_hashes:
+                if article_id is not None and self._content_hash_owners.get(content_hash) == article_id:
+                    return False
                 last_seen = self.recent_content_hashes[content_hash]
                 time_diff = current_time - last_seen
                 seconds_ago = int(time_diff.total_seconds())
@@ -257,6 +266,8 @@ class SmartFilter:
                 # Check if hash exists in DB
                 # Note: We rely on the index we added to hash_content
                 stmt = select(Article.id).where(Article.hash_content == content_hash).limit(1)
+                if article_id is not None:
+                    stmt = stmt.where(Article.id != article_id)
                 result = await db_session.execute(stmt)
                 if result.scalar_one_or_none():
                     logger.info(f"  🔍 Smart Filter: Content hash {content_hash} found in Database")
@@ -266,6 +277,8 @@ class SmartFilter:
             
             # Not found: Add to RAM cache
             self.recent_content_hashes[content_hash] = current_time
+            if article_id is not None:
+                self._content_hash_owners[content_hash] = article_id
             return False
             
         except Exception as e:

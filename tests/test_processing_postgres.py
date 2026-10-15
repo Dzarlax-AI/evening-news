@@ -99,7 +99,8 @@ async def test_postgres_crash_between_attempt_and_outcome_recovers_without_dupli
             'news_aggregator.services.category_display_service.get_category_display_service', AsyncMock()):
             value._save_ai_categories_to_database = fail_after_category_writes
             stats = {'errors': []}
-            await value._process_unprocessed_articles(stats)
+            with pytest.raises(ExceptionGroup):
+                await value._process_unprocessed_articles(stats)
             assert stats['errors']
             async with factory() as db:
                 article = await db.get(Article, 1)

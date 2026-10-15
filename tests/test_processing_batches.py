@@ -22,6 +22,9 @@ class AsyncSessionAdapter:
     async def execute(self, statement, parameters=None):
         return self.db.execute(statement, parameters or {})
 
+    async def commit(self):
+        self.db.commit()
+
 
 class IsolatedQueue:
     """Match DatabaseQueueManager's commit-on-success contract using SQLite."""
@@ -86,7 +89,7 @@ async def test_batches_are_bounded_stable_and_skip_completed_history(isolated):
     assert result["articles_processed"] == 61
     assert orchestrator.ai_processor.process_article_outcome.await_count == 61
     assert len(statements) == 4
-    assert all("LIMIT" in sql and "media_files" not in sql for sql, _ in statements)
+    assert all("LIMIT" in sql for sql, _ in statements)
     assert [call.args[0]["id"] for call in orchestrator.ai_processor.process_article_outcome.await_args_list] == list(range(1, 62))
 
 
@@ -96,7 +99,8 @@ async def test_failed_outcome_write_has_durable_budget_and_restart_deadline(isol
     add_articles(engine, 1)
     orchestrator.db_queue_manager.fail_save = True
     stats = {"errors": []}
-    await orchestrator._process_unprocessed_articles(stats)
+    with pytest.raises(ExceptionGroup):
+        await orchestrator._process_unprocessed_articles(stats)
     assert stats["errors"]
     with Session(engine) as db:
         article = db.get(Article, 1)
@@ -180,7 +184,8 @@ async def test_outcome_write_failure_cancels_and_awaits_other_batch_workers(isol
             second_cancelled.set()
     orchestrator.ai_processor.process_article_outcome.side_effect = process
     orchestrator.db_queue_manager.fail_save = True
-    await orchestrator._process_unprocessed_articles({'errors': []})
+    with pytest.raises(ExceptionGroup):
+        await orchestrator._process_unprocessed_articles({'errors': []})
     assert second_cancelled.is_set()
 
 
@@ -200,6 +205,69 @@ async def test_manual_reservation_prevents_duplicate_background_requests(monkeyp
         assert len(background.tasks) == 1
     finally:
         release_processing_cycle(background.tasks[0].args[0])
+
+
+@pytest.mark.asyncio
+async def test_real_batch_database_failure_aborts_combined_digest_before_delivery(isolated):
+    from news_aggregator.services.scheduler import TaskScheduler
+    orchestrator, engine = isolated
+    add_articles(engine, 1)
+    orchestrator.db_queue_manager.fail_save = True
+    orchestrator.source_manager = SimpleNamespace(
+        get_sources_from_db=AsyncMock(return_value=[]),
+        fetch_from_all_sources_no_db=AsyncMock(return_value={}),
+        save_fetched_articles_with_sources=AsyncMock(return_value={}))
+    orchestrator.send_telegram_digest = AsyncMock(return_value={'success': True})
+    scheduler = TaskScheduler.__new__(TaskScheduler)
+    scheduler.orchestrator = orchestrator
+    with pytest.raises(RuntimeError, match='Error in full processing cycle'):
+        await scheduler._run_news_digest_cycle({})
+    orchestrator.send_telegram_digest.assert_not_awaited()
+    with Session(engine) as db:
+        article = db.get(Article, 1)
+        assert article.processing_state == 'retry_wait'
+        assert article.processing_attempts == 1
+        assert article.summary is None
+
+
+@pytest.mark.asyncio
+async def test_real_category_mapping_cannot_commit_before_article_outcome(isolated):
+    from news_aggregator.models import CategoryMapping
+    orchestrator, engine = isolated
+    add_articles(engine, 1)
+    with Session(engine) as db:
+        category = Category(name='Tech', display_name='Tech')
+        db.add(category)
+        db.flush()
+        db.add(ArticleCategory(article_id=1, category_id=category.id,
+                               confidence=0.4, ai_category='Existing label'))
+        db.add(CategoryMapping(ai_category='Computing', fixed_category='Tech', usage_count=0))
+        db.commit()
+    orchestrator.ai_processor.process_article_outcome.return_value = ProcessingOutcome('completed', {
+        'summary': 'A valid replacement summary.', 'summary_processed': True,
+        'category_processed': True, 'ad_processed': True,
+        'categories': [{'name': 'Computing', 'confidence': 0.9}]})
+    orchestrator.db_queue_manager.fail_save = True
+    with pytest.raises(ExceptionGroup):
+        await orchestrator._process_unprocessed_articles({'errors': []})
+    with Session(engine) as db:
+        relations = db.execute(select(ArticleCategory)).scalars().all()
+        assert [(item.ai_category, item.confidence) for item in relations] == [('Existing label', 0.4)]
+        assert db.get(Article, 1).summary is None
+        assert db.get(Article, 1).processing_state == 'retry_wait'
+        assert db.execute(select(CategoryMapping)).scalar_one().usage_count == 0
+        db.execute(update(Article).where(Article.id == 1).values(
+            next_attempt_at=datetime.utcnow() - timedelta(seconds=1)))
+        db.commit()
+    orchestrator.db_queue_manager.fail_save = False
+    result = await orchestrator._process_unprocessed_articles({'errors': []})
+    assert result['articles_processed'] == 1
+    with Session(engine) as db:
+        relations = db.execute(select(ArticleCategory)).scalars().all()
+        assert [(item.ai_category, item.confidence) for item in relations] == [('Computing', 0.9)]
+        assert db.get(Article, 1).summary == 'A valid replacement summary.'
+        assert db.get(Article, 1).processing_state == 'completed'
+        assert db.execute(select(CategoryMapping)).scalar_one().usage_count == 1
 
 
 @pytest.mark.asyncio
@@ -312,6 +380,9 @@ async def test_legacy_incremental_uses_typed_summary_metadata_and_never_reports_
     add_articles(engine, 1)
     with Session(engine) as db:
         db.add(Category(name='Tech', display_name='Tech'))
+        db.execute(update(Article).values(
+            title='A useful technology news report',
+            content='Researchers published a detailed technology report with useful information for readers. ' * 4))
         db.commit()
     processor = AIProcessor.__new__(AIProcessor)
     analysis = {'_processing_error': 'APIError'} if ai_failed else {

@@ -13,6 +13,42 @@ from ..services.ai_client import get_ai_client
 logger = logging.getLogger(__name__)
 
 
+def is_extractable_article_url(url):
+    """Exclude social, map, and app-store destinations from article extraction."""
+    from urllib.parse import urlparse
+    parsed = urlparse(url or '')
+    host = (parsed.hostname or '').lower()
+    excluded = ('t.me', 'telegram.me', 'twitter.com', 'x.com', 'instagram.com',
+                'maps.app.goo.gl', 'maps.google.com', 'maps.google.ru',
+                '2gis.ru', '2gis.com', 'waze.com', 'play.google.com', 'apps.apple.com')
+    if parsed.scheme not in {'http', 'https'} or not host:
+        return False
+    if any(host == domain or host.endswith('.' + domain) for domain in excluded):
+        return False
+    if '/maps' in parsed.path.lower() and (
+            host in {'google.com', 'google.ru'} or host.endswith(('.google.com', '.google.ru'))
+            or 'yandex' in host.split('.')):
+        return False
+    return True
+
+
+def extraction_update_fields(article_data, metadata):
+    """Persist bounded improvements without replacing source data with stubs."""
+    from ..core.resource_limits import enforce_text_limit
+    from .processing_outcome import is_challenge_text
+    content = metadata.get('content')
+    if not isinstance(content, str):
+        return {}
+    enforce_text_limit(content)
+    if is_challenge_text(content) or len(content.strip()) <= len(article_data.get('content') or ''):
+        return {}
+    fields = {'content': content}
+    image = metadata.get('image_url')
+    if not article_data.get('image_url') and isinstance(image, str) and image:
+        fields['image_url'] = image
+    return fields
+
+
 def _category_confidence(value, fallback):
     """Keep finite numeric confidence, clamped like the legacy combined path."""
     if isinstance(value, bool) or not isinstance(value, (int, float)):
@@ -641,9 +677,9 @@ class AIProcessor:
         from ..core.resource_limits import ResourceLimitError, enforce_text_limit
 
         fields = {}
-        summary_done = bool(article_data.get('summary_processed') and article_data.get('summary'))
-        category_done = bool(article_data.get('category_processed'))
-        ad_done = bool(article_data.get('ad_processed'))
+        summary_done = not force_refresh and bool(article_data.get('summary_processed') and article_data.get('summary'))
+        category_done = not force_refresh and bool(article_data.get('category_processed'))
+        ad_done = not force_refresh and bool(article_data.get('ad_processed'))
         if ad_done and article_data.get('is_advertisement') is True:
             return ProcessingOutcome('rejected', error='advertisement')
         if summary_done and category_done and ad_done:
@@ -653,35 +689,31 @@ class AIProcessor:
             # An unused archival body must not prevent processing that summary.
             analysis_input = article_data.get('summary') if summary_done else article_data.get('content')
             content = enforce_text_limit(analysis_input or '')
+            if not summary_done and not article_data.get('media_files'):
+                # Optional media extraction uses bounded existing text only.
+                try:
+                    from .media_extractor import get_media_extractor
+                    media = get_media_extractor().extract_media_files(content, base_url=article_data.get('url'))
+                    if media:
+                        fields['media_files'] = media
+                except ResourceLimitError:
+                    raise
+                except Exception:
+                    logger.warning('Optional article media extraction failed')
             refreshed_metadata = None
-            if force_refresh:
-                from urllib.parse import urlparse
+            if force_refresh and is_extractable_article_url(article_data.get('url')):
                 from ..extraction import ContentExtractor
-                parsed = urlparse(article_data.get('url') or '')
-                skip_hosts = ('t.me', 'telegram.me', 'twitter.com', 'x.com', 'instagram.com',
-                              'maps.app.goo.gl', 'maps.google.com', 'maps.google.ru',
-                              '2gis.ru', '2gis.com', 'waze.com', 'play.google.com', 'apps.apple.com')
-                host = (parsed.hostname or '').lower()
-                if parsed.scheme in {'http', 'https'} and not any(
-                        host == domain or host.endswith('.' + domain) for domain in skip_hosts):
-                    # This remains inside the persisted whole-pipeline attempt and
-                    # its timeout. Extraction owns bounded HTTP/browser readers.
-                    async with ContentExtractor() as extractor:
-                        refreshed_metadata = await extractor.extract_article_content_with_metadata(
-                            article_data['url'], retry_count=1)
-                    refreshed_content = refreshed_metadata.get('content')
-                    if not isinstance(refreshed_content, str) or not refreshed_content.strip():
-                        return ProcessingOutcome('retry_wait', error='content_refresh_unavailable')
-                    enforce_text_limit(refreshed_content)
-                    if is_challenge_text(refreshed_content):
-                        return ProcessingOutcome('retry_wait', error='extraction_challenge')
-                    # Retain the previous improvement-only body/image semantics.
-                    if len(refreshed_content.strip()) > len(content):
-                        content = refreshed_content
-                        fields['content'] = content
-                        image = refreshed_metadata.get('image_url')
-                        if not article_data.get('image_url') and isinstance(image, str) and image:
-                            fields['image_url'] = image
+                async with ContentExtractor() as extractor:
+                    refreshed_metadata = await extractor.extract_article_content_with_metadata(
+                        article_data['url'], retry_count=1)
+                refreshed_content = refreshed_metadata.get('content')
+                if not isinstance(refreshed_content, str) or not refreshed_content.strip():
+                    return ProcessingOutcome('retry_wait', fields, error='content_refresh_unavailable')
+                enforce_text_limit(refreshed_content)
+                if is_challenge_text(refreshed_content):
+                    return ProcessingOutcome('retry_wait', fields, error='extraction_challenge')
+                fields.update(extraction_update_fields(article_data, refreshed_metadata))
+                content = fields.get('content', content)
             if is_challenge_text(content):
                 return ProcessingOutcome('retry_wait', error='extraction_challenge')
             article = SimpleNamespace(**{**article_data, 'content': content})
@@ -690,19 +722,31 @@ class AIProcessor:
                 if article.published_at != article_data.get('published_at'):
                     fields['published_at'] = article.published_at
                 stats['api_calls_made'] = stats.get('api_calls_made', 0) + 1
+                context = {}
+                if article_data.get('source_type') == 'telegram' and len((article_data.get('content') or '').strip()) >= 30:
+                    context['original_context'] = enforce_text_limit(article_data['content'])
                 analysis = await self.ai_client.analyze_article_complete(
-                    article.title, content, article.url)
+                    article.title, content, article.url, **context)
             elif not summary_done:
                 analysis = await self.get_summary_by_source_type(
-                    article, article_data.get('source_type') or 'rss', stats)
+                    article, article_data.get('source_type') or 'rss', stats,
+                    bypass_filter=force_refresh)
             else:
                 stats['api_calls_made'] = stats.get('api_calls_made', 0) + 1
                 analysis = await self.ai_client.analyze_article_complete(
                     article.title, article.summary or content, article.url)
+            fields.update(extraction_update_fields(article_data, analysis))
+            if article.published_at != article_data.get('published_at'):
+                fields['published_at'] = article.published_at
             if analysis.get('_processing_error'):
                 return ProcessingOutcome('rejected' if analysis.get('_processing_terminal') else 'retry_wait', fields,
                     analysis['_processing_error'], analysis.get('_retry_after_seconds'))
             summary = analysis.get('summary')
+            optimized_title = analysis.get('optimized_title')
+            if isinstance(optimized_title, str):
+                optimized_title = optimized_title.strip()
+                if optimized_title and len(optimized_title) <= 200 and not is_challenge_text(optimized_title):
+                    fields['title'] = optimized_title
             # A validated positive verdict is terminal even if optional summary
             # or category output is absent. Preserve any independently valid data.
             if analysis.get('is_advertisement') is True:
@@ -711,9 +755,6 @@ class AIProcessor:
                               ad_type=analysis.get('ad_type'), ad_reasoning=analysis.get('ad_reasoning'))
                 if not summary_done and isinstance(summary, str) and summary.strip() and not is_challenge_text(summary):
                     fields.update(summary=summary.strip(), summary_processed=True)
-                    title = analysis.get('optimized_title')
-                    if title and not is_challenge_text(title):
-                        fields['title'] = title
                     if article.published_at != article_data.get('published_at'):
                         fields['published_at'] = article.published_at
                 if not category_done:
@@ -727,9 +768,6 @@ class AIProcessor:
                 if is_challenge_text(summary):
                     return ProcessingOutcome('retry_wait', fields, error='summary_describes_challenge')
                 fields.update(summary=summary.strip(), summary_processed=True)
-                title = analysis.get('optimized_title')
-                if title and not is_challenge_text(title):
-                    fields['title'] = title
                 if article.published_at != article_data.get('published_at'):
                     fields['published_at'] = article.published_at
             if not category_done:
@@ -750,27 +788,70 @@ class AIProcessor:
             return ProcessingOutcome('retry_wait', fields,
                 type(exc).__name__, getattr(exc, 'retry_after_seconds', None))
 
-    async def get_summary_by_source_type(self, article, source_type: str, stats: Dict[str, Any]) -> Dict[str, Any]:
-        """Return explicit analysis; a failed summary remains failed."""
+    async def get_summary_by_source_type(self, article, source_type: str, stats: Dict[str, Any],
+                                         bypass_filter=False) -> Dict[str, Any]:
+        """Filter ordinary input, enrich when needed, and preserve extraction metadata."""
         from .processing_outcome import is_challenge_text
         from ..core.resource_limits import enforce_text_limit
+        from ..services.smart_filter import get_smart_filter
 
         content = enforce_text_limit(article.content or '')
+        extractable = is_extractable_article_url(article.url)
+        needs_extraction = False
+        smart_filter = get_smart_filter()
+        if not bypass_filter:
+            should_process, reason = await smart_filter.should_process_with_ai(
+                title=article.title or '', content=content, url=article.url or '',
+                source_type=source_type, allow_extraction=extractable,
+                check_duplicates=not bool(getattr(article, 'processing_attempts', 0)),
+                article_id=getattr(article, 'id', None),
+            )
+            if not should_process:
+                needs_extraction = extractable and (
+                    len(content.strip()) < 10 or 'needs extraction' in reason.lower()
+                    or 'metadata/low-quality content' in reason.lower())
+                if not needs_extraction:
+                    stats['smart_filter_skipped'] = stats.get('smart_filter_skipped', 0) + 1
+                    return {'_processing_error': 'smart_filter_rejected', '_processing_terminal': True}
+            else:
+                stats['smart_filter_approved'] = stats.get('smart_filter_approved', 0) + 1
         analysis = {}
-        if source_type in {'rss', 'custom'} or (source_type == 'telegram' and not
-                any(host in article.url for host in ('t.me/', 'telegram.me/'))):
+        if extractable and source_type in {'rss', 'custom', 'telegram'}:
             stats['api_calls_made'] = stats.get('api_calls_made', 0) + 1
             analysis = await self.ai_client.get_article_summary_with_metadata(
-                article.url, original_context=content or None)
+                article.url, original_context=content or None,
+                article_title=article.title or '', source_type=source_type)
             self._update_article_publication_date(article, analysis.get('publication_date'), source_type)
-            if analysis.get('_processing_error'):
+            if analysis.get('_processing_error') or analysis.get('is_advertisement') is True:
                 return analysis
-            if analysis.get('is_advertisement') is True:
-                return analysis
-        if (not analysis.get('summary') or is_challenge_text(analysis.get('summary'))) and len(content.strip()) >= 30:
+        if analysis.get('_extraction_rejected'):
+            needs_extraction = True
+        fallback_content = content if analysis.get('_extraction_rejected') else analysis.get('content') or content
+        if not isinstance(fallback_content, str) or len(fallback_content.strip()) < 30:
+            fallback_content = content
+        from urllib.parse import urlparse
+        host = (urlparse(article.url or '').hostname or '').lower()
+        scientific_title = len((article.title or '').strip()) > 20 and any(
+            host == domain or host.endswith('.' + domain)
+            for domain in ('nplus1.ru', 'arxiv.org', 'nature.com', 'sciencedirect.com'))
+        if len(fallback_content.strip()) < 30 and scientific_title:
+            fallback_content = article.title
+        if (not analysis.get('summary') or is_challenge_text(analysis.get('summary'))) and (
+                len(fallback_content.strip()) >= 30 or scientific_title):
+            enforce_text_limit(fallback_content)
+            if needs_extraction and not bypass_filter:
+                should_process, _ = await smart_filter.should_process_with_ai(
+                    title=article.title or '', content=fallback_content, url=article.url or '',
+                    source_type=source_type, allow_extraction=False, check_duplicates=False,
+                    article_id=getattr(article, 'id', None))
+                if not should_process:
+                    return {**analysis, '_processing_error': 'smart_filter_rejected', '_processing_terminal': True}
             stats['api_calls_made'] = stats.get('api_calls_made', 0) + 1
-            analysis = await self.ai_client.analyze_article_complete(
-                title=article.title or '', content=content, url=article.url or '')
+            fallback = await self.ai_client.analyze_article_complete(
+                title=article.title or '', content=fallback_content, url=article.url or '')
+            analysis = {**analysis, **fallback}
+        elif analysis.get('_extraction_rejected'):
+            return {'_processing_error': 'smart_filter_rejected', '_processing_terminal': True}
         return analysis
 
     def _update_article_publication_date(self, article, pub_date: str, source_type: str):

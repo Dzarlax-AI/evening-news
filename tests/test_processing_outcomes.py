@@ -1,7 +1,8 @@
 """Article failure classification and finite retry schedule regressions."""
 
 from datetime import datetime, timedelta
-from unittest.mock import AsyncMock
+from types import SimpleNamespace
+from unittest.mock import AsyncMock, patch
 
 import pytest
 
@@ -241,3 +242,199 @@ async def test_real_ai_normalizer_does_not_turn_malformed_scalar_into_high_confi
     result = await processor(analysis).process_article_outcome(article(), {})
     assert result.state == 'completed'
     assert result.fields['categories'][0]['confidence'] == 0.8
+
+
+@pytest.fixture
+def fresh_smart_filter(monkeypatch):
+    from news_aggregator.services.smart_filter import SmartFilter
+    smart_filter = SmartFilter()
+    monkeypatch.setattr('news_aggregator.services.smart_filter.get_smart_filter', lambda: smart_filter)
+    return smart_filter
+
+
+def valid_analysis(**changes):
+    return {'summary': 'A valid summary based on the full article.', 'categories': ['Tech'],
+            'is_advertisement': False, **changes}
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize('source_type', ['rss', 'custom'])
+@pytest.mark.parametrize('existing_image', [None, 'https://example.org/existing.jpg'])
+async def test_ordinary_extraction_retains_improved_body_missing_image_and_source_title(
+        fresh_smart_filter, source_type, existing_image):
+    from news_aggregator.services.ai_client import AIClient
+    content = ('Researchers published detailed observations and explained their methods. '
+               'Their results identify new opportunities for scientific collaboration. ') * 4
+    client = AIClient.__new__(AIClient)
+    client.analyze_article_complete = AsyncMock(return_value=valid_analysis())
+    extractor = SimpleNamespace(extract_article_content_with_metadata=AsyncMock(return_value={
+        'content': content, 'image_url': 'https://example.org/new.jpg', 'publication_date': '2026-10-15'}))
+    context = AsyncMock()
+    context.__aenter__.return_value = extractor
+    value = AIProcessor.__new__(AIProcessor)
+    value.ai_client = client
+    with patch('news_aggregator.extraction.ContentExtractor', return_value=context):
+        result = await value.process_article_outcome(article(source_type=source_type, image_url=existing_image), {})
+    assert result.state == 'completed'
+    assert result.fields['content'] == content
+    assert result.fields.get('image_url') == (None if existing_image else 'https://example.org/new.jpg')
+    assert result.fields['published_at'] == datetime(2026, 10, 15)
+    extractor.extract_article_content_with_metadata.assert_awaited_once()
+    assert client.analyze_article_complete.await_args.args[0] == 'Cloudflare launches a service'
+    assert client.analyze_article_complete.await_args.args[1] == content
+
+
+@pytest.mark.asyncio
+async def test_ordinary_metadata_improvements_survive_later_ai_failure(fresh_smart_filter):
+    content = 'An independently validated full article with substantially more information. ' * 8
+    value = processor({'content': content, 'image_url': 'https://example.org/new.jpg',
+                       '_processing_error': 'APIError'})
+    result = await value.process_article_outcome(article(image_url=None), {})
+    assert result.state == 'retry_wait'
+    assert result.fields['content'] == content
+    assert result.fields['image_url'] == 'https://example.org/new.jpg'
+    assert 'summary' not in result.fields
+
+
+@pytest.mark.asyncio
+async def test_smart_filter_skip_is_terminal_without_ai_or_fake_summary_and_retains_media(fresh_smart_filter):
+    value = AIProcessor.__new__(AIProcessor)
+    value.ai_client = SimpleNamespace(get_article_summary_with_metadata=AsyncMock(), analyze_article_complete=AsyncMock())
+    content = ('Buy now and claim this promotional offer. ' * 6
+               + '<img src="/campaign.jpg"><a href="/details.pdf">Details</a>')
+    result = await value.process_article_outcome(article(content=content), {})
+    assert result.state == 'rejected'
+    assert result.error == 'smart_filter_rejected'
+    assert 'summary' not in result.fields
+    assert 'is_advertisement' not in result.fields
+    assert {item['type'] for item in result.fields['media_files']} == {'image', 'document'}
+    value.ai_client.get_article_summary_with_metadata.assert_not_awaited()
+    value.ai_client.analyze_article_complete.assert_not_awaited()
+
+
+@pytest.mark.asyncio
+async def test_needs_extraction_enriches_then_filters_full_body_before_ai(fresh_smart_filter):
+    from news_aggregator.services.ai_client import AIClient
+    client = AIClient.__new__(AIClient)
+    client.analyze_article_complete = AsyncMock()
+    context = AsyncMock()
+    context.__aenter__.return_value = SimpleNamespace(extract_article_content_with_metadata=AsyncMock(return_value={
+        'content': 'Buy now and claim this promotional offer. ' * 8}))
+    value = AIProcessor.__new__(AIProcessor)
+    value.ai_client = client
+    with patch('news_aggregator.extraction.ContentExtractor', return_value=context):
+        result = await value.process_article_outcome(article(content='5 min read'), {})
+    assert result.state == 'rejected'
+    assert result.error == 'smart_filter_rejected'
+    assert 'content' not in result.fields and 'image_url' not in result.fields
+    client.analyze_article_complete.assert_not_awaited()
+    context.__aenter__.assert_awaited_once()
+
+
+@pytest.mark.asyncio
+async def test_existing_media_and_completed_summary_classification_are_preserved(fresh_smart_filter):
+    fresh_smart_filter.should_process_with_ai = AsyncMock(side_effect=AssertionError('completed summary admission'))
+    value = AIProcessor.__new__(AIProcessor)
+    value.ai_client = SimpleNamespace(analyze_article_complete=AsyncMock(return_value={
+        'categories': ['Tech'], 'is_advertisement': False, 'optimized_title': 'Improved category-stage title'}))
+    result = await value.process_article_outcome(article(
+        summary='An existing completed summary with adequate analysis context.', summary_processed=True,
+        media_files=[{'url': 'https://example.org/photo.jpg', 'type': 'image'}]), {})
+    assert result.state == 'completed'
+    assert result.fields['title'] == 'Improved category-stage title'
+    assert 'summary' not in result.fields and 'media_files' not in result.fields
+    fresh_smart_filter.should_process_with_ai.assert_not_awaited()
+
+
+@pytest.mark.asyncio
+async def test_short_completed_summary_does_not_fabricate_missing_classification():
+    from news_aggregator.services.ai_client import AIClient
+    client = AIClient.__new__(AIClient)
+    client._make_structured_ai_request = AsyncMock()
+    value = AIProcessor.__new__(AIProcessor)
+    value.ai_client = client
+    result = await value.process_article_outcome(article(summary='A short saved summary.', summary_processed=True), {})
+    assert result.state == 'retry_wait'
+    assert result.error == 'missing_categories'
+    assert 'category_processed' not in result.fields and 'ad_processed' not in result.fields
+    client._make_structured_ai_request.assert_not_awaited()
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize('url', ['https://maps.app.goo.gl/route', 'https://www.google.com/maps/place/test',
+                               'https://yandex.ru/maps/1/', 'https://yandex.com.tr/maps/',
+                               'https://play.google.com/store/apps/details', 'https://apps.apple.com/app/test'])
+@pytest.mark.parametrize('force', [False, True])
+async def test_non_article_telegram_urls_analyze_message_without_extraction(fresh_smart_filter, url, force):
+    value = AIProcessor.__new__(AIProcessor)
+    value.ai_client = SimpleNamespace(get_article_summary_with_metadata=AsyncMock(),
+                                      analyze_article_complete=AsyncMock(return_value=valid_analysis()))
+    if force:
+        fresh_smart_filter.should_process_with_ai = AsyncMock(side_effect=AssertionError('forced admission'))
+    with patch('news_aggregator.extraction.ContentExtractor') as extractor:
+        result = await value.process_article_outcome(article(source_type='telegram', url=url), {}, force_refresh=force)
+    assert result.state == 'completed'
+    extractor.assert_not_called()
+    value.ai_client.get_article_summary_with_metadata.assert_not_awaited()
+    assert value.ai_client.analyze_article_complete.await_args.kwargs['content'] == article()['content']
+    if force:
+        fresh_smart_filter.should_process_with_ai.assert_not_awaited()
+
+
+@pytest.mark.asyncio
+async def test_scientific_title_analysis_survives_unavailable_extraction(fresh_smart_filter):
+    from news_aggregator.services.ai_client import AIClient
+    client = AIClient.__new__(AIClient)
+    client.supports_structured_output = True
+    client.summarization_model = 'test-model'
+    client._build_combined_analysis_prompt_enhanced = AsyncMock(return_value='test prompt')
+    client._make_structured_ai_request = AsyncMock(return_value={'result': valid_analysis()})
+    context = AsyncMock()
+    context.__aenter__.return_value = SimpleNamespace(
+        extract_article_content_with_metadata=AsyncMock(return_value={'content': None}),
+        extract_article_content=AsyncMock(return_value=None))
+    value = AIProcessor.__new__(AIProcessor)
+    value.ai_client = client
+    cache = SimpleNamespace(get_categories=AsyncMock(return_value=['Tech']))
+    with patch('news_aggregator.extraction.ContentExtractor', return_value=context), patch(
+            'news_aggregator.services.category_cache.get_category_cache', return_value=cache):
+        result = await value.process_article_outcome(article(
+            title='Quantum research result', content='', url='https://arxiv.org/abs/test'), {})
+    assert result.state == 'completed'
+    assert client._build_combined_analysis_prompt_enhanced.await_args.args[1] == 'Quantum research result'
+    client._make_structured_ai_request.assert_awaited_once()
+
+
+@pytest.mark.asyncio
+async def test_forced_telegram_external_article_keeps_original_message_context(fresh_smart_filter):
+    value = AIProcessor.__new__(AIProcessor)
+    value.ai_client = SimpleNamespace(analyze_article_complete=AsyncMock(return_value=valid_analysis()))
+    context = AsyncMock()
+    context.__aenter__.return_value = SimpleNamespace(extract_article_content_with_metadata=AsyncMock(return_value={
+        'content': 'A detailed article extracted from the external source. ' * 12}))
+    with patch('news_aggregator.extraction.ContentExtractor', return_value=context):
+        result = await value.process_article_outcome(article(source_type='telegram'), {}, force_refresh=True)
+    assert result.state == 'completed'
+    assert value.ai_client.analyze_article_complete.await_args.kwargs['original_context'] == article()['content']
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize('bad_page', ['Subscribe now. ' * 30, 'Buy now and claim this offer. ' * 12])
+async def test_unusable_extracted_page_falls_back_to_valid_original_without_saving_junk(fresh_smart_filter, bad_page):
+    from news_aggregator.services.ai_client import AIClient
+    client = AIClient.__new__(AIClient)
+    client.analyze_article_complete = AsyncMock(return_value=valid_analysis())
+    context = AsyncMock()
+    extractor = SimpleNamespace(extract_article_content_with_metadata=AsyncMock(return_value={
+        'content': bad_page, 'image_url': 'https://example.org/junk.jpg'}))
+    context.__aenter__.return_value = extractor
+    value = AIProcessor.__new__(AIProcessor)
+    value.ai_client = client
+    original = article()
+    with patch('news_aggregator.extraction.ContentExtractor', return_value=context):
+        result = await value.process_article_outcome(original, {})
+    assert result.state == 'completed'
+    assert 'content' not in result.fields and 'image_url' not in result.fields
+    client.analyze_article_complete.assert_awaited_once()
+    assert client.analyze_article_complete.await_args.kwargs['content'] == original['content']
+    extractor.extract_article_content_with_metadata.assert_awaited_once()

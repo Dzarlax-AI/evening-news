@@ -473,7 +473,7 @@ class NewsOrchestrator:
                         Article.source_id, Source.source_type, Article.published_at,
                         Article.summary_processed, Article.category_processed, Article.ad_processed,
                         Article.is_advertisement,
-                        Article.processing_attempts,
+                        Article.processing_attempts, Article.image_url, Article.media_files,
                     ).outerjoin(Source, Source.id == Article.source_id).where(
                         Article.id > cursor,
                         Article.processing_attempts < limits['max_attempts'],
@@ -481,8 +481,6 @@ class NewsOrchestrator:
                             Article.processing_state == 'retry_wait',
                             Article.next_attempt_at <= cycle_time)),
                     ).order_by(Article.id).limit(remaining)
-                    if force_refresh:
-                        query = query.add_columns(Article.image_url)
                     if selected_ids is not None:
                         query = query.where(Article.id.in_(selected_ids))
                     else:
@@ -570,7 +568,8 @@ class NewsOrchestrator:
         except Exception as exc:
             stats.setdefault('errors', []).append(f'Error processing unprocessed articles: {exc}')
             logger.exception('Article processing failed')
-            return counters
+            # Infrastructure failures must abort the cycle before digest delivery.
+            raise
 
     async def retry_selected_articles(self, article_ids, reservation=None):
         """Reset only explicit selections, preserving successful stage results."""
@@ -759,7 +758,7 @@ class NewsOrchestrator:
                 category_id = categories_by_name.get(ai_category_name.lower())
                 if category_id is None:
                     # Fallback: try mapping service for free-form AI categories
-                    display = await category_display_service.map_ai_category_to_display(ai_category_name)
+                    display = await category_display_service.map_ai_category_to_display(ai_category_name, commit=False)
                     display_name = (display.get('name') or display.get('display_name') or ai_category_name).lower()
                     category_id = categories_by_name.get(display_name) or other_id
 

@@ -90,6 +90,7 @@ class ExtractionStrategies:
                 url=url,
                 source_type="extraction",
                 allow_extraction=False,
+                check_duplicates=False,
             )
 
             if not should_process and "Metadata/low-quality content detected" in reason:

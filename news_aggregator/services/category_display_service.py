@@ -156,8 +156,8 @@ class CategoryDisplayService:
             logger.debug(f"DB category lookup failed for '{category_name}': {e}")
         return self.FALLBACK_CATEGORIES.get(category_name, self.FALLBACK_CATEGORIES['Other'])
 
-    async def map_ai_category_to_display(self, ai_category: str) -> Dict[str, Any]:
-        """Map AI category to display category with details."""
+    async def map_ai_category_to_display(self, ai_category: str, *, commit: bool = True) -> Dict[str, Any]:
+        """Map a category; commit=False keeps usage writes in the caller's transaction."""
         if not ai_category or ai_category.strip() == '':
             ai_category = 'Other'
         
@@ -175,7 +175,8 @@ class CategoryDisplayService:
                 # Update usage stats
                 db_mapping.usage_count = (db_mapping.usage_count or 0) + 1
                 db_mapping.last_used = func.now()
-                await self.db.commit()
+                if commit:
+                    await self.db.commit()
 
                 fixed_category = db_mapping.fixed_category
                 display_info = await self._get_category_info(fixed_category)
@@ -189,6 +190,8 @@ class CategoryDisplayService:
                 }
         except Exception as e:
             logger.warning(f"  ⚠️ Database mapping lookup failed for '{ai_category}': {e}")
+            if not commit:
+                raise
 
         # Try default mapping rules
         ai_lower = ai_category.lower().strip()

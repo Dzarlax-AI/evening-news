@@ -59,7 +59,9 @@ class AIClient:
     # which provides combined analysis (summarization + categorization + ad detection) in a single request.
     
     async def get_article_summary_with_metadata(self, article_url: str,
-                                                    original_context: str = None) -> Dict[str, Optional[str]]:
+                                                    original_context: str = None,
+                                                    article_title: str = None,
+                                                    source_type: str = 'rss') -> Dict[str, Any]:
         """
         Get AI summary with metadata for article URL.
 
@@ -75,6 +77,7 @@ class AIClient:
             return {'summary': None, 'publication_date': None}
         
         metadata_result = {'publication_date': None, 'full_article_url': None}
+        extracted_fields = {}
         
         try:
             logger.info(f"  🔗 Extracting content with metadata from URL: {article_url}")
@@ -111,6 +114,8 @@ class AIClient:
                     'full_article_url': metadata_result.get('full_article_url')
                 }
 
+            enforce_text_limit(content)
+
             # Detect bot-protection / consent / error pages before wasting an AI call
             _bot_content_markers = [
                 # Bot protection
@@ -140,6 +145,12 @@ class AIClient:
                     'full_article_url': metadata_result.get('full_article_url')
                 }
 
+            extracted_fields = {'content': content, 'image_url': metadata_result.get('image_url')}
+            # A short extraction is an enrichment miss. Let the caller use its
+            # full original source content without classifying the stub as junk.
+            if len(content.strip()) < 30 and len((original_context or '').strip()) >= 30:
+                return {'summary': None, '_extraction_rejected': True}
+
             # Use unified analysis to get summary (more reliable than separate summarization)
             # Extract title from content if available, otherwise use URL as fallback
             title = "Article"  # Default title if not available
@@ -148,13 +159,29 @@ class AIClient:
                 lines = content.split('\n')
                 if lines:
                     title = lines[0].strip()[:200]  # Use first line as title, limit length
+
+            from .smart_filter import get_smart_filter
+            analysis_title = article_title or metadata_result.get('title') or title
+            scientific_title = len(analysis_title.strip()) > 20 and any(
+                domain in article_url.lower() for domain in ('nplus1.ru', 'arxiv.org', 'nature.com', 'sciencedirect.com'))
+            should_process, _ = await get_smart_filter().should_process_with_ai(
+                title=analysis_title,
+                content=analysis_title if len(content.strip()) < 30 and scientific_title else content,
+                url=article_url, source_type=source_type,
+                allow_extraction=False, check_duplicates=False,
+            )
+            if not should_process:
+                return {'summary': None, '_extraction_rejected': True}
+            if len(content.strip()) < 30:
+                extracted_fields = {}
             
-            analysis_result = await self.analyze_article_complete(title, content, article_url, original_context=original_context)
+            analysis_result = await self.analyze_article_complete(analysis_title, content, article_url, original_context=original_context)
             summary = analysis_result.get('summary') if analysis_result else None
             optimized_title = analysis_result.get('optimized_title') if analysis_result else None
 
             return {
                 **(analysis_result or {}),
+                **extracted_fields,
                 'summary': summary,
                 'optimized_title': optimized_title,
                 'publication_date': metadata_result.get('publication_date'),
@@ -166,6 +193,7 @@ class AIClient:
         except Exception as e:
             logger.error(f"  ❌ Error getting article summary with metadata: {e}")
             return {
+                **extracted_fields,
                 '_processing_error': type(e).__name__,
                 '_processing_terminal': getattr(e, 'status_code', None) in {400, 413, 422},
                 '_retry_after_seconds': getattr(e, 'retry_after_seconds', None),
@@ -878,7 +906,8 @@ class AIClient:
                 content = title
             else:
                 logger.warning(f"  ⚠️ Content too short for analysis: {len(content.strip()) if content else 0} chars < 30")
-                return {**self._get_fallback_analysis(), '_processing_error': None}
+                return {'summary': None, 'categories': [], 'is_advertisement': None,
+                        '_insufficient_content': True}
         
         max_retries = 0
         for attempt in range(max_retries + 1):
