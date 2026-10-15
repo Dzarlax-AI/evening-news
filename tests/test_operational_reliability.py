@@ -15,6 +15,14 @@ from news_aggregator.services.telegram_service import TelegramSendResult
 
 
 @pytest.mark.asyncio
+async def test_stopping_disabled_scheduler_does_not_construct_integrations():
+    from news_aggregator.services import scheduler
+    with patch.object(scheduler, "_scheduler", None), patch.object(scheduler, "TaskScheduler") as factory:
+        await scheduler.stop_scheduler()
+    factory.assert_not_called()
+
+
+@pytest.mark.asyncio
 async def test_operational_alerts_deduplicate_and_send_one_recovery():
     sender = AsyncMock(return_value=True)
     alerts = OperationalAlertManager(sender, repeat_interval_seconds=3600)

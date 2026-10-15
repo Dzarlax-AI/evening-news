@@ -1,0 +1,176 @@
+<!doctype html>
+<html lang="ru"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1">
+<title>План фиксов Evening News — Sol и Astra</title>
+<style>
+body{margin:0;background:#fcfaf7;color:#252525;font:16px/1.6 system-ui,sans-serif}main{max-width:1120px;margin:auto;padding:32px 24px 64px}h1{font:38px/1.2 Georgia,serif}h2{font:27px/1.25 Georgia,serif;margin-top:34px}h3{line-height:1.35}section{border-top:1px solid #d5d0c7;margin-top:24px;padding-top:6px}table{border-collapse:collapse;width:100%;font-size:14px}td,th{padding:10px;border-bottom:1px solid #d5d0c7;text-align:left;vertical-align:top}code{background:#eeeae3;padding:1px 4px;overflow-wrap:anywhere}pre{background:#eeeae3;padding:16px;white-space:pre-wrap;overflow-wrap:anywhere}.note{border-left:3px solid #a57628;background:#f3eee4;padding:12px 18px}.meta{font-size:14px;color:#666}li{margin:8px 0}a{color:#315d88}@media(max-width:700px){main{padding:18px}h1{font-size:29px}table{display:block;overflow-x:auto}}
+</style></head><body><main>
+<p class="meta">15 октября 2026 · статус: реализация согласована и завершена локально · production не изменен</p>
+<h1>Evening News: фиксы памяти с распределением по моделям</h1>
+<p><strong>Цель:</strong> устранить накопление объектов и соединений CDP, прекратить бесконечные повторы обработки и ограничить объем работы в памяти, сохранив функции сервиса. Сначала отдельный выпуск без миграции БД, затем надежность обработки и ограничения ресурсов. Перенос на Go — отдельное решение после замеров.</p>
+<p><strong>Архитектура:</strong> сохраняем Python/FastAPI, PostgreSQL, отдельный общий Chrome и существующие API/UI. Исправляем владение ресурсами в общем browser pool; затем вводим однозначный итог обработки, ограниченные попытки, небольшие пакеты и единые пределы кешей.</p>
+<p><strong>Стек:</strong> Python 3.12, asyncio, nodriver 0.50.3 с установленными патчами, aiohttp, SQLAlchemy/asyncpg, PostgreSQL, pytest, Docker.</p>
+<div class="note">Первоначально план был сохранен в workspace артефактов из-за отсутствия каталога проекта. На этапе 0 восстановлен настоящий checkout, и этот же план перенесен в его <code>docs/ai-plans/</code>. Установленные библиотечные файлы в контейнере не редактировались.</div>
+
+<section><h2>1. Основания и границы</h2>
+<p>В предыдущем живом замере news_web занимал около 1,1 GiB, Chrome отдельно около 436 MiB; Python PID 1 держал 111 TCP-соединений к Chrome. Девять старых записей без summary снова выбирались при уже установленных флагах завершения. Эти значения — исходные наблюдения, не целевые показатели и не свежий замер этой итерации планирования.</p>
+<p>Основание: <a href="2026-10-15-memory-review.html">совместное ревью Sol/Codex и Astra</a>, <a href="2026-10-15-memory-evidence.txt">сохраненные доказательства</a>. Ревизия production: <code>785d28a5dc1af11e6b748ecc2d4926c5135c99af</code>. Пакет nodriver уже содержит исправления истории транзакций; нельзя заменять его произвольной upstream-сборкой по одному номеру версии.</p>
+<p>В этой итерации дополнительно прочитана production-схема <code>aistack.news.articles</code>: полей состояния попыток/next retry в ней нет. Есть действующий менеджер миграций; его контракт и регистрацию проверяем в восстановленном checkout. API, категории, локальные категории, даты, источники, auth и формат дайджеста сохраняем.</p>
+<p>Нет обещания конкретного RSS или процента экономии. Открытый технический вопрос — какая доля памяти удерживается живыми графами объектов, а какая остается у allocator после временных пиков.</p>
+</section>
+
+<section><h2>2. Распределение по моделям</h2>
+<p>Роли ниже — схема выполнения задач для этого запуска, не постоянные владельцы проекта. После реализации каждой части другая модель читает итоговый diff и результаты тестов. Автор не принимает собственный фикс.</p>
+<table><tr><th>Этап</th><th>Исполнение</th><th>Независимая проверка</th><th>Результат</th></tr>
+<tr><td>0. Checkout, версия библиотеки, исходные измерения</td><td>GPT-6.1 Sol · high</td><td>Astra · high: контракт nodriver</td><td>Воспроизводимые исходники и стенд</td></tr>
+<tr><td>1. Владение CDP и освобождение ресурсов</td><td>GPT-6 Astra · xhigh</td><td>Sol · high: regression, независимый lifecycle-прогон</td><td>Выпуск A: исправление утечки без миграции БД</td></tr>
+<tr><td>2. Состояния, попытки, качество summary</td><td>Sol · high</td><td>Astra · high: миграция, повтор/сбой/перезапуск</td><td>Конечные и повторяемые исходы обработки</td></tr>
+<tr><td>3a. Ограничение HTTP/browser-данных</td><td>Sol · high</td><td>Astra · high: ограничения до выделения памяти</td><td>Предсказуемый объем входных данных</td></tr>
+<tr><td>3b. Пакеты и сохранение прогресса</td><td>Sol · high</td><td>Astra · high: частичный сбой и повторный запуск</td><td>Память не зависит от размера backlog</td></tr>
+<tr><td>4. Все пути роста кешей</td><td>Luna · high</td><td>Sol · high: startup/load/failed/AI paths</td><td>Пределы соблюдаются во всех путях</td></tr>
+<tr><td>5. Сводный прогон, отчет, подготовка выпуска</td><td>Sol · high</td><td>Astra · xhigh: итоговое ревью доказательств</td><td>Выпуск B: проверенные состояния и ограничения</td></tr>
+<tr><td>6. Решение о Go</td><td>Sol · high: сравнительный прототип после отдельного плана</td><td>Astra · high: паритет поведения и архитектура</td><td>Измеренное решение, за рамками текущей реализации</td></tr></table>
+<p>Одновременно допустимы только независимые изменения в разных файлах. Этапы 1 и 3a пересекаются по browser pool — выполняются последовательно. Этапы 2 и 3b пересекаются по orchestrator — тоже последовательно. Этап 4 можно делать параллельно с 3b после фиксации общих контрактов. Интеграцию и единый diff ведет Sol.</p>
+</section>
+
+<section><h2>3. Выпуск A — остановить накопление CDP</h2>
+<h3>Этап 0. Воспроизводимая основа</h3>
+<ol>
+<li>Проверить реальный репозиторий, ветку, рабочее дерево и текущий origin/main. Восстановить checkout исходников production и сравнить с main; сохранить пользовательские изменения. Не выполнять checkout поверх измененных файлов.</li>
+<li>Найти исходники патчей nodriver и шаг их применения в сборке. Сопоставить SHA256 установленного <code>browser.py</code>, <code>connection.py</code>, <code>tab.py</code>, <code>util.py</code> с воспроизводимым образом. Сохранить имеющиеся исправления лимита 25 транзакций и unsolicited events.</li>
+<li>Изолировать стенд: отдельная тестовая БД/схема, локальный или выделенный Chrome, отключенный scheduler, фиктивные Telegram/Telegraph transport, отсутствие production bot credentials. Gemini по умолчанию mock. Не запускать полный app lifespan на реальной БД ради теста.</li>
+<li>Снять baseline до и после одинаковых циклов: RSS/PSS, private anonymous, FD/TCP, живые Browser/Tab, listeners, pending и detached tasks, registry count. Диагностика приватная, без тел страниц, токенов и открытого debug API.</li>
+</ol>
+<h3>Этап 1. Полный lifecycle вместо одного closeTarget</h3>
+<p><strong>Файлы:</strong> <code>news_aggregator/core/browser_pool.py</code>, существующий <code>tests/test_browser_pool.py</code>; новые тесты <code>tests/test_browser_lifecycle.py</code> и изолированный harness <code>tests/test_browser_memory_soak.py</code>. Если требуется патч nodriver — менять найденный на этапе 0 исходник патча и сборочный шаг, а не site-packages. Проверить все потребители: extraction strategies, Telegram source, page monitor.</p>
+<ol>
+<li>Sol пишет воспроизводящий тест на оставшийся listener/socket после закрытия вкладки. Astra фиксирует контракт владения вкладкой и браузером: закрытие remote target, закрытие транспорта, завершение фоновых задач, освобождение retained data, удаление Browser из сильного registry — разные действия.</li>
+<li>Astra реализует идемпотентный cleanup. Вкладка учитывается с момента создания, включая частично созданные экземпляры и детей, уже удаленных библиотекой из targets. Во всех выходах закрыть transport/listener; remote target закрывать только свой.</li>
+<li>Сначала завершить/отменить операции и listeners, затем освобождать историю/handlers/другие ссылки. Не очищать транзакции с ожидающими futures. Незавершаемые detached tasks имеют счетчик/возраст и видимый отказ теста, а не скрываются удалением ссылок.</li>
+<li>У закрываемого Browser закрыть принадлежащие ему дочерние соединения и убрать сам экземпляр из registry. Не трогать чужие Browser/targets в общем Chrome. Обработать успешный цикл, failed startup, reconnect, timeout, cancellation и повторную отмену.</li>
+<li>Sol независимо проверяет общий pool и все три пути его использования. Не упрощать действующие cooldown, deadlines и leases, пока regression-тесты не докажут эквивалентность.</li>
+</ol>
+<p><strong>Приемка A:</strong> после освобождения цикла собственные transports/listeners и registrations возвращаются к исходной нулевой величине; чужие targets живы. Pending/detached tasks не накапливаются. Успешное извлечение, reconnect и обработка отмены сохранены. Миграции БД и изменения пользовательского поведения в этот выпуск не входят.</p>
+</section>
+
+<section><h2>4. Выпуск B — остановить повторы и ограничить работу</h2>
+<h3>Этап 2. Явные исходы и ограниченный retry</h3>
+<p><strong>Предлагаемые файлы:</strong> <code>orchestrator.py</code>, <code>models.py</code>, новый <code>processing/processing_outcome.py</code>, <code>processing/ai_processor.py</code> и <code>services/ai_client.py</code> для передачи типизированного результата; новая миграция <code>migrations/article_processing_state.py</code>, регистрация в существующем startup migration path, <code>db/init.sql</code>. Тесты: <code>tests/test_processing_outcomes.py</code>, <code>tests/test_article_processing_migration.py</code>. Пути без префикса относятся к <code>news_aggregator/</code>, кроме tests и db.</p>
+<p><strong>Предлагаемый контракт:</strong> состояния <code>pending</code>, <code>completed</code>, <code>rejected</code>, <code>retry_wait</code>, <code>exhausted</code>; поля <code>processing_state</code>, <code>processing_attempts</code>, <code>next_attempt_at</code>, <code>last_processing_error</code>. Это новые предлагаемые имена, не существующая схема. Legacy boolean-поля сохраняем для API; выборкой управляет новое состояние.</p>
+<ul>
+<li>Completed: все нужные стадии завершены; rejected: достоверная реклама/неподходящая страница/другой окончательный отказ с кодом причины; retry_wait: временный transport/API/DB-сбой; exhausted: бюджет попыток исчерпан. Настоящий challenge тоже не вызывает бесконечный retry.</li>
+<li>Предлагаем максимум 3 попытки конвейера на статью, задержки перед второй и третьей — 30 минут и 6 часов. Соблюдать более поздний Retry-After. Числа — параметры политики на согласование, не измеренные оптимумы. Учитывать внутренние HTTP/API retry в общем конечном бюджете.</li>
+<li>Убирать широкое совпадение по слову cloudflare. Для challenge/error использовать признаки страницы и результат извлечения; нормальная новость или репозиторий про Cloudflare проходят. Пустой summary обязательно получает явный исход.</li>
+<li>Миграция аддитивная и повторяемая: старые строки с полным набором флагов считать исторически completed, даже без summary; не объявлять их рекламой и не возвращать всю историю в очередь. Неоконченные строки — pending. Новые строки — pending. Старые девять записей автоматически больше не перечитываются.</li>
+<li>Явный ручной повтор сбрасывает состояние/бюджет выбранной статьи после действия пользователя. Не сбрасывать все статьи массово. Сохранять уже полученные корректные результаты стадий.</li>
+<li>Один общий processing lock для scheduler и ручного запуска в текущем однопроцессном deployment. Повторный запуск получает понятный busy-результат. Поддержку нескольких процессов не заявлять: для нее нужен отдельный DB claim/lease контракт.</li>
+<li>Попытки и срок восстановления сохранять до внешнего вызова, результат — после него. После аварии незавершенная попытка восстанавливается по конечному сроку, не остается навечно и не обнуляет бюджет. Ошибки сохранения нельзя трактовать как success. Тестировать сбои между каждым переходом.</li>
+</ul>
+<p>Astra проверяет миграцию с legacy NULL-флагами, девятью проблемными строками, сохраненными summary и несовместимыми комбинациями флагов. Значения NULL трактовать по явной таблице переходов, а не случайной SQL truthiness. Если критерий «завершено» нельзя однозначно вывести, оставлять pending с конечным бюджетом и фиксировать число таких строк в dry-run.</p>
+
+<h3>Этап 3a. Ограничить вход до дорогой аллокации</h3>
+<p><strong>Файлы:</strong> <code>config.py</code>, <code>core/http_client.py</code>, <code>extraction/extraction_strategies.py</code>, <code>extraction/html_processor.py</code>, <code>telegram/telegram_source.py</code>, <code>sources/page_monitor_source.py</code>; тесты <code>tests/test_extraction_resource_limits.py</code>. Проверить RSS fetch и все fallback HTTP-клиенты на аналогичный обход лимита.</p>
+<ul>
+<li>Предлагаемые стартовые пределы: 5 MiB распакованного HTTP HTML, 5 MiB возвращаемого browser HTML и 100 000 символов текста для дальнейшей обработки. Они настраиваемые и проверяются на fixtures; не выдаются за оптимальные.</li>
+<li>HTTP читать потоково с подсчетом фактически распакованных байтов; Content-Length только подсказка. При превышении закрыть ответ и вернуть типизированный resource_limit. Проверить chunked, gzip/brotli, редиректы и fallback.</li>
+<li>Browser не должен сначала получить весь рекурсивный DOM через get_content(), а потом проверить размер. Выбирать нужный текст/HTML внутри страницы с ограничением возвращаемого результата; сохранить title/date/image и selectors custom-источников. Не передавать пользовательский selector через конкатенацию JS.</li>
+<li>Проверку существующего DOM, издержек JS и байтовой/символьной границы оформить отдельными тестами. Лимит результата Python не ограничивает общий heap Chrome — это отдельный контейнер и отдельный предел.</li>
+<li>Один общий HTTP fetch и один parser на попытку, где позволяет текущая логика. Resource limit не считать плохим качеством статьи и не записывать как неуспешный выученный selector.</li>
+</ul>
+
+<h3>Этап 3b. Ограниченные пакеты и сохранение прогресса</h3>
+<p><strong>Файлы:</strong> <code>orchestrator.py</code>, <code>services/article_limiter.py</code>, <code>config.py</code>, <code>tests/test_processing_batches.py</code>.</p>
+<ul>
+<li>Предлагаемый размер пакета — 25 записей; реальная параллельность из проверенного <code>MAX_WORKERS</code>, а не захардкоженные 5. Browser остается последовательным.</li>
+<li>Выбирать только нужные поля с устойчивым порядком/ID-курсором и конечным пакетом; не создавать gather на всю историю. Критерии due/retry определены этапом 2; изменяемая выборка не должна пропускать строки или читать их повторно в одном проходе.</li>
+<li>Сохранять итог статьи/небольшого пакета по завершении, освобождать DTO/ORM-ссылки до следующего пакета. Не держать транзакцию во время HTTP/Chrome/Gemini.</li>
+<li>При падении после сохранения части результатов возобновление не перерабатывает completed и не дублирует категории/публикации. Не менять контракт автоматического commit менеджера БД.</li>
+</ul>
+
+<h3>Этап 4. Одинаковые пределы кешей на всех путях</h3>
+<p><strong>Файлы:</strong> <code>services/extraction_memory.py</code>, <code>sources/ai_page_analyzer.py</code>, <code>config.py</code>, <code>tests/test_extraction_cache_limits.py</code>.</p>
+<ul>
+<li>Единая процедура admission/eviction после DB-load, успешного/неудачного извлечения и AI-discovery. Предлагаем 500 доменов, 10 patterns на домен, 2 000 patterns суммарно; сохраняем существующий предел 500 attempts.</li>
+<li>DB-load тоже ограничить SQL-запросом, а не загружать всю таблицу для последующего удаления. Стабильный порядок по качеству/использованию и идентификатору при равенстве. Кеш не удаляет сохраненные настройки из БД.</li>
+<li>Кеш AI-анализатора: предлагаемый предел 128 элементов, TTL 24 часа и 8 MiB общего payload; oversized item не кешируется. Значения сверить с реальными ответами. Учитывать максимальный размер входного ключа/context до вставки.</li>
+<li>Тестировать startup load, ошибки, AI-путь, повторный insert, истечение TTL и детерминированный eviction. Мониторить счетчики, не содержимое.</li>
+</ul>
+</section>
+
+<section><h2>5. Проверки и критерии приемки</h2>
+<p>Команды ниже выполняются в восстановленном checkout и изолированном Python 3.12 окружении; новые файлы тестов создает соответствующий этап. Результаты сейчас не заявляются.</p>
+<pre>python -m pytest tests/test_browser_pool.py tests/test_browser_lifecycle.py -q
+python -m pytest tests/test_processing_outcomes.py tests/test_article_processing_migration.py -q
+python -m pytest tests/test_extraction_resource_limits.py tests/test_processing_batches.py tests/test_extraction_cache_limits.py -q
+python -m pytest tests/ -q
+python -m pytest tests/test_browser_memory_soak.py -q</pre>
+<p>Ожидание: все соответствующие deterministic/regression-тесты проходят; до исправления воспроизводящие тесты падают на найденном дефекте. Реальные Chrome/network-тесты запускаются отдельно на выделенном стенде с явным opt-in. Имена флагов и команд такого стенда фиксируются на этапе 0 после проверки актуального checkout; не использовать прежние скрипты с production credentials.</p>
+<table><tr><th>Проверка</th><th>Принимаем</th><th>Не принимаем</th></tr>
+<tr><td>Lifecycle</td><td>100 последовательных открытий/закрытий, плюс отдельные timeout/cancel/reconnect/fail-start сценарии; собственные FD/listeners/registry возвращаются к baseline</td><td>Убыли только вкладки Chrome, а сокеты/задачи остались</td></tr>
+<tr><td>Memory soak</td><td>Не менее 6 одинаковых последовательных циклов после прогрева, idle-интервалы; live object counts и retained heap стабилизируются, повторный прогон подтверждает результат</td><td>Только упал RSS после рестарта; растут Browser/Tab/heap или detached tasks</td></tr>
+<tr><td>Повторы</td><td>Старые completed без summary не возвращаются; retryable соблюдают budget/time; terminal перестают выбираться</td><td>Те же девять записей опять выбираются по summary=NULL</td></tr>
+<tr><td>Лимиты</td><td>Большие и сжатые страницы завершаются контролируемым resource_limit до передачи большого результата в Python</td><td>Проверка после полного read/get_content или тихая потеря метаданных</td></tr>
+<tr><td>Миграция</td><td>Fresh install, legacy fixture и повторный запуск дают одинаковую схему/состояния; план изменения строк виден до применения</td><td>Вся история внезапно pending или существующие summary/категории потеряны</td></tr>
+<tr><td>Регрессии</td><td>RSS, Telegram, custom page monitor, date/image/title, категории, сайт и digest сохраняют контракт</td><td>Экономия получена отключением нужных функций без решения пользователя</td></tr></table>
+<p>100 повторов и 6 циклов — начальная глубина проверки, не доказательство отсутствия любых утечек. Численный допуск для колебаний heap/RSS выводим из повторных baseline-прогонов и записываем перед оценкой исправления. Не подгонять допуск после результата. Allocator high-water учитывать отдельно от живых объектов.</p>
+<p>CI: проверить реальную workflow в актуальном checkout; добавить deterministic-тесты и сборку образа после них, если такого gate еще нет. Локальная старая копия workflow не является доказательством состояния production CI.</p>
+</section>
+
+<section><h2>6. Риски, ручная QA и откат</h2>
+<ul>
+<li><strong>Общий Chrome:</strong> не перезапускать его и не закрывать чужие targets; cleanup только принадлежащих текущему приложению объектов. Проверить, что другой клиент продолжает работать.</li>
+<li><strong>Миграция и rollback:</strong> сначала staging-копия и schema/data diff. Аддитивные колонки при откате оставлять. Старый образ может игнорировать состояния и возобновить повторы: перед откатом выпуска B остановить processing scheduler, проверить manual-run, откатить образ и только после проверки возобновить обработку.</li>
+<li><strong>Сбой после внешнего вызова:</strong> повтор Gemini может потребоваться, но повтор Telegram/Telegraph запрещен в тестовом конвейере. Отправку не смешивать с восстановлением обработки статей.</li>
+<li><strong>False rejection:</strong> fixtures для легитимной новости о Cloudflare и реального challenge, пустой страницы, consent и рекламы; проверить русский и английский контент.</li>
+<li><strong>Потеря custom-поведения:</strong> сохранить выбранные selectors и метаданные; не сокращать функции ради результата замера.</li>
+</ul>
+<p><strong>Ручная QA на staging:</strong> открыть публичную ленту, фильтры, статью и админку; проверить статус цикла и запрет конкурирующего ручного запуска; провести все три типа источников; сгенерировать preview дайджеста с mock-transport. Проверить health и логи, отсутствие сообщений и инвайтов.</p>
+<p><strong>Релизы:</strong> A и B раздельные, каждый — единый проверенный diff и тестовые артефакты. Никаких commit/push/PR без явной команды пользователя. Для production использовать неизменяемый digest образа, сохранить предыдущий digest; после разрешенного деплоя проверить health, сайт, логи, соединения и фактическую работу. Суточное наблюдение — отдельный согласованный запуск, без автоматической постановки расписания.</p>
+</section>
+
+<section><h2>7. Решение о Go и открытые вопросы</h2>
+<p>После A/B сравнить расход и сложность. Если перенос остается полезным, отдельный план: Go-worker с SQL-пулом, ограниченной очередью и пакетами, конечными retry, browser fallback и профилями heap/goroutine; UI сначала сохраняется. Прототип сравнивается на тех же fixtures без рассылки. Память отдельного Chrome остается отдельным расходом.</p>
+<ul><li>По умолчанию сохраняем все текущие функции; сокращение custom scraping или AI-selector learning не утверждено.</li>
+<li>Настоящий checkout и исходники nodriver-патчей нужно установить на этапе 0. Если точная сборка не воспроизводится, это блокирует фиксы библиотеки и выпуск A; диагностику и тестовые fixtures можно готовить независимо.</li>
+<li>Числа retry, batch и resource/cache limits выше — предлагаемые defaults данного плана. Они проверяются fixtures и меняются явно по результату, а не выдаются за готовый benchmark.</li></ul>
+</section>
+
+<section class="note"><h2>8. Gate согласования</h2>
+<p><strong>Этапы 0–5 утверждены пользователем и реализованы по схеме Luna/Sol/Astra.</strong> Этап 6/Go — отдельное решение. Утверждение разрешает код и изолированные тесты; production-деплой, применение production-миграции, отправка сообщений, push и создание PR требуют отдельной явной команды, если она не дана дополнительно.</p>
+<p>До утверждения не менять production-код. После реализации обновить этот же HTML: фактические изменения, команды и результаты, измерения, пропуски и оставшиеся риски. Проверка плана Astra выполнена; поправки о дочерних соединениях, владении detached tasks, пределах до аллокации и migration policy включены.</p>
+</section>
+<section><h2>9. Фактический результат реализации</h2>
+<p>Восстановлен checkout <code>D:\Projects\Code\Personal\RSS-summuriser-1</code>, исходный main совпал с production <code>785d28a</code>; повторный git fetch 15 октября подтвердил ту же последнюю origin/main и отсутствие более новых remote-веток; изменения находятся в ветке <code>fix/memory-lifecycle-and-processing</code>, без commit/push/PR. Все четыре файла nodriver 0.50.3 из локального установленного пакета совпали SHA256 с production: отдельных downstream-патчей нет.</p>
+<ul>
+<li><strong>Astra:</strong> явное владение Browser/Tab, закрытие target и WebSocket/listener, очистка pending/history после остановки писателей, удаление из registry, cleanup частичного старта и позднего открытия после отмены. Общий Chrome и чужие targets не закрываются.</li>
+<li><strong>Sol:</strong> состояния и миграция 008, сохраняемый бюджет попыток и deadlines, пакеты 25 с MAX_WORKERS, TaskGroup с отменой и ожиданием соседних задач при сбое, общая блокировка scheduler/manual, выбранный ручной retry с сохранением force-семантики. Автоматический массовый сброс старых статей удален.</li>
+<li><strong>Luna:</strong> пределы шаблонов и доменов при DB-load и всех путях добавления; TTL/число/байты AI-кеша с защитой от мутации результатов; регрессии распространения resource-limit, loopback CDP soak и проверка реального Chrome.</li>
+<li><strong>Sol, интеграция:</strong> потоковое ограничение wire и распакованного тела для identity/gzip/deflate/Brotli; ограниченный JSON envelope из browser вместо рекурсивного DOM. Все resource-limit выходы отделены от обучения selector/AI. Исправлен обнаруженный deadlock повторного захвата собственного rate-limit lock.</li>
+<li>Нормализатор AI сохраняет отсутствующую/неверную ad-классификацию как невалидную; строка false больше не становится рекламой. Найденные smoke-тестом локальные startup-дефекты исправлены: logger создается до optional magic import; остановка незапущенного scheduler не конструирует интеграции.</li>
+<li>CI уже имел gate tests→image build; к нему добавлен PostgreSQL 16 service и TEST_DATABASE_URL, чтобы миграционные тесты выполнялись в CI, а не пропускались постоянно.</li>
+</ul>
+<h3>Выполненные проверки</h3>
+<pre>TEST_DATABASE_URL=postgresql+asyncpg://postgres@127.0.0.1:55439/postgres
+RUN_MEMORY_BROWSER_TESTS=1
+MEMORY_BROWSER_ENDPOINT=ws://127.0.0.1:59229
+.venv\Scripts\python.exe -m pytest tests/ -q --disable-warnings
+179 passed, 4 skipped
+.venv\Scripts\python.exe -m compileall -q news_aggregator tests
+Passed
+ git diff --check
+Passed</pre>
+<p>Среда: Windows, Python 3.12.11, локальный PostgreSQL 18.3, отдельный headless Chrome 154. Четыре старых внешних smoke-теста требуют других реальных сервисов и остались skipped. CI/Linux/PostgreSQL 16 и Docker image build в этой сессии не запускались: локальный Docker daemon отсутствует. Предупреждения набора: существующие deprecation/certificate warnings.</p>
+<p>На настоящем PostgreSQL проверены legacy-backfill, повторная миграция с сохранением budget, сбой между попыткой/результатом, транзакционность категорий и повторный запуск. Astra независимо проверила матрицу из 171 строки с NULL/false/true и историческими completed без summary.</p>
+<p>Loopback soak использует реальный установленный nodriver и WebSocket/listener, без browser engine: 100 target creates/closes за 6 циклов, все 100 weakrefs собраны, счетчики pool в нуле после каждого цикла. При сравнении циклов 2–6 traced live memory выросла на 18 465 байт, project-filtered allocations — на 1 088 байт; nodriver-filtered — 96 байт без роста. Списки метрик самого теста накапливаются; численного критерия RSS не применяли. Это не сравнение полного приложения с production и не доказательство отсутствия любой утечки. <a href="2026-10-15-memory-soak.json">Полный отчет метрик</a>.</p>
+<p>Настоящий изолированный Chrome подтвердил сохранение title/meta/time/image/custom attributes и отказ по лимиту без DOM.getDocument; отдельно Astra выполнила 9 вкладок / 3 цикла с сохранением чужих targets.</p>
+<p>Полный app smoke на отдельной пустой БД, с отключенным scheduler и пустыми Telegram/Telegraph credentials: старт успешен, <code>/health</code>, публичная страница <code>/</code> и <code>/api/v1/feed</code> ответили HTTP 200. Дайджесты и сообщения не отправлялись. Тестовые сервисы после проверки останавливаются.</p>
+<h3>Проверки моделей и ограничения</h3>
+<p>Sol независимо проверила CDP и работу Luna, Astra — состояния/миграцию/manual paths; у root resource-limits пройдены spec и quality review Sol. Обнаруженные замечания исправлены и повторно проверены. Изменения в installed/generated библиотечных файлах не вносились.</p>
+<ul>
+<li>Потерянный ответ Target.createTarget до получения ID может оставить неизвестный remote target. Он не удаляется по догадке: это мог бы быть чужой target общего Chrome.</li>
+<li>Гарантия исключения параллельных processing циклов действует в одном процессе, как в текущем Docker CMD. Для нескольких процессов нужен отдельный контракт DB claim/lease.</li>
+<li>Экономия RAM на реальной нагрузке production еще не измерена. Production-restart, применение миграции, Docker-сборка/публикация, push и PR не выполнялись.</li>
+<li>Выпуски A/B дополнительно выделены в отдельные patch-файлы в папке артефактов. Patch A применяется к чистому 785d28a и прошел полный отдельный набор: 115 passed, 4 skipped (в том числе 57 lifecycle-тестов); patch B проверен через git apply --check после A. Ни одна часть не опубликована.</li>
+</ul>
+<p>Следующий разрешаемый шаг — проверенная сборка/CI и затем отдельное согласование production rollout с сохранением предыдущего image digest. Go остается отдельным этапом после production-замеров исправленного сервиса.</p>
+</section>
+</main></body></html>

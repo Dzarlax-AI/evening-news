@@ -12,6 +12,7 @@ from aiohttp import ClientTimeout, ClientError
 from tenacity import retry, stop_after_attempt, wait_exponential, retry_if_exception_type
 
 from ..config import settings
+from .resource_limits import read_page_text
 
 
 class RateLimiter:
@@ -26,19 +27,15 @@ class RateLimiter:
     async def acquire(self):
         """Acquire permission to make a call."""
         async with self.lock:
-            now = time.time()
-            # Remove old calls outside the time window
-            while self.calls and now - self.calls[0] >= self.time_window:
-                self.calls.popleft()
-
-            if len(self.calls) >= self.max_calls:
-                # Wait until we can make another call
-                sleep_time = self.time_window - (now - self.calls[0])
-                if sleep_time > 0:
-                    await asyncio.sleep(sleep_time)
-                    return await self.acquire()
-
-            self.calls.append(now)
+            while True:
+                now = time.monotonic()
+                while self.calls and now - self.calls[0] >= self.time_window:
+                    self.calls.popleft()
+                if len(self.calls) < self.max_calls:
+                    self.calls.append(now)
+                    return
+                # Recursively acquiring this non-reentrant lock would deadlock.
+                await asyncio.sleep(max(0.0, self.time_window - (now - self.calls[0])))
 
 
 class AsyncHTTPClient:
@@ -116,9 +113,10 @@ class AsyncHTTPClient:
     
     async def fetch_text(self, url: str, **kwargs) -> str:
         """Fetch URL and return text content."""
+        kwargs["auto_decompress"] = False
         async with await self.get(url, **kwargs) as response:
             response.raise_for_status()
-            return await response.text()
+            return await read_page_text(response)
     
     async def fetch_json(self, url: str, **kwargs) -> Dict[str, Any]:
         """Fetch URL and return JSON content."""

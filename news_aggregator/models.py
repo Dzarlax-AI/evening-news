@@ -5,7 +5,7 @@ from typing import List, Optional
 
 from sqlalchemy import (
     Boolean, Column, DateTime, Date, Float, ForeignKey, Integer,
-    String, Text, JSON, DECIMAL, UniqueConstraint
+    String, Text, JSON, DECIMAL, UniqueConstraint, Index, text
 )
 from sqlalchemy.orm import relationship
 from sqlalchemy.sql import func
@@ -53,6 +53,10 @@ class Article(Base):
     processed = Column(Boolean, default=False)  # Legacy field for backward compatibility
     summary_processed = Column(Boolean, default=False)  # True if AI summarization was attempted
     category_processed = Column(Boolean, default=False)  # True if AI categorization was attempted
+    processing_state = Column(String(20), nullable=False, default="pending", server_default="pending")
+    processing_attempts = Column(Integer, nullable=False, default=0, server_default="0")
+    next_attempt_at = Column(DateTime)
+    last_processing_error = Column(Text)
     hash_content = Column(String(64), index=True)
     
     # Advertising detection fields
@@ -66,6 +70,11 @@ class Article(Base):
     # Relationships
     source = relationship("Source", back_populates="articles")
     article_categories = relationship("ArticleCategory", back_populates="article", cascade="all, delete-orphan")
+
+    __table_args__ = (
+        Index("idx_articles_processing_due", "processing_state", "next_attempt_at", "id",
+              postgresql_where=text("processing_state IN ('pending', 'retry_wait')")),
+    )
 
     @property
     def categories(self) -> List[str]:

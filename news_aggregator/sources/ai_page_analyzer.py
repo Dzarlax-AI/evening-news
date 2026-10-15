@@ -1,14 +1,22 @@
 import logging
 """AI-powered page structure analysis for better content extraction."""
 
+import copy
 import json
+import hashlib
 import re
+import time
+from dataclasses import asdict, dataclass
 from typing import List, Dict, Optional, Tuple
-from dataclasses import dataclass
 from bs4 import BeautifulSoup
 
 logger = logging.getLogger(__name__)
 
+ANALYSIS_CACHE_MAX_ENTRIES = 128
+ANALYSIS_CACHE_TTL_SECONDS = 24 * 60 * 60
+ANALYSIS_CACHE_MAX_BYTES = 8 * 1024 * 1024
+ANALYSIS_CACHE_MAX_KEY_BYTES = 4096
+ANALYSIS_CACHE_MAX_ENTRY_BYTES = ANALYSIS_CACHE_MAX_BYTES
 
 
 
@@ -29,6 +37,61 @@ class AIPageAnalyzer:
     
     def __init__(self):
         self.analysis_cache: Dict[str, PageAnalysis] = {}
+        self._analysis_cache_metadata: Dict[str, tuple[float, int]] = {}
+        self._analysis_cache_bytes = 0
+
+    def _cache_key(self, url: str, context: str) -> Optional[str]:
+        """Return a fixed-size key, declining cache use for oversized inputs."""
+        url = url or ""
+        context = context or ""
+        if len(url) + len(context) > ANALYSIS_CACHE_MAX_KEY_BYTES:
+            return None
+        url_bytes = url.encode("utf-8")
+        context_bytes = context.encode("utf-8")
+        if len(url_bytes) + len(context_bytes) > ANALYSIS_CACHE_MAX_KEY_BYTES:
+            return None
+        digest = hashlib.sha256()
+        digest.update(url_bytes)
+        digest.update(b"\0")
+        digest.update(context_bytes)
+        return digest.hexdigest()
+
+    def _remove_cache_entry(self, key: str) -> None:
+        self.analysis_cache.pop(key, None)
+        metadata = self._analysis_cache_metadata.pop(key, None)
+        if metadata:
+            self._analysis_cache_bytes -= metadata[1]
+
+    def _prune_expired_cache_entries(self, now: float) -> None:
+        expired = [
+            key for key, (created_at, _) in self._analysis_cache_metadata.items()
+            if now - created_at >= ANALYSIS_CACHE_TTL_SECONDS
+        ]
+        for key in expired:
+            self._remove_cache_entry(key)
+
+    def _store_cache_entry(self, key: str, analysis: PageAnalysis) -> None:
+        payload = json.dumps(asdict(analysis), ensure_ascii=False, separators=(",", ":")).encode("utf-8")
+        size = len(key.encode("ascii")) + len(payload)
+        if size > min(ANALYSIS_CACHE_MAX_ENTRY_BYTES, ANALYSIS_CACHE_MAX_BYTES):
+            return
+
+        now = time.monotonic()
+        self._prune_expired_cache_entries(now)
+        self._remove_cache_entry(key)
+        while self.analysis_cache and (
+            len(self.analysis_cache) >= ANALYSIS_CACHE_MAX_ENTRIES
+            or self._analysis_cache_bytes + size > ANALYSIS_CACHE_MAX_BYTES
+        ):
+            oldest = min(
+                self._analysis_cache_metadata,
+                key=lambda candidate: (self._analysis_cache_metadata[candidate][0], candidate),
+            )
+            self._remove_cache_entry(oldest)
+
+        self.analysis_cache[key] = copy.deepcopy(analysis)
+        self._analysis_cache_metadata[key] = (now, size)
+        self._analysis_cache_bytes += size
     
     async def analyze_page_structure(self, url: str, html: str, context: str = "news") -> Optional[PageAnalysis]:
         """
@@ -39,10 +102,12 @@ class AIPageAnalyzer:
             html: Raw HTML content
             context: What we're looking for ("changelog", "news", "blog")
         """
-        # Check cache first
-        cache_key = f"{url}_{context}"
-        if cache_key in self.analysis_cache:
-            return self.analysis_cache[cache_key]
+        # Oversized URL/context inputs still get analyzed, but never enter the cache.
+        cache_key = self._cache_key(url, context)
+        now = time.monotonic()
+        self._prune_expired_cache_entries(now)
+        if cache_key is not None and cache_key in self.analysis_cache:
+            return copy.deepcopy(self.analysis_cache[cache_key])
         
         try:
             # Extract domain for tracking
@@ -70,7 +135,8 @@ class AIPageAnalyzer:
                 
                 if analysis:
                     # Cache successful analysis
-                    self.analysis_cache[cache_key] = analysis
+                    if cache_key is not None:
+                        self._store_cache_entry(cache_key, analysis)
                     logger.info(f"  ✅ AI discovered {len(analysis.content_selectors)} content selectors")
                     return analysis
             

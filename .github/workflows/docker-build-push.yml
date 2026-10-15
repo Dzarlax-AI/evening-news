@@ -37,6 +37,20 @@ env:
 jobs:
   test:
     runs-on: ubuntu-latest
+    services:
+      postgres:
+        image: postgres:16-alpine
+        env:
+          POSTGRES_USER: postgres
+          POSTGRES_PASSWORD: test-only
+          POSTGRES_DB: evening_news_test
+        ports:
+          - 5432:5432
+        options: >-
+          --health-cmd "pg_isready -U postgres -d evening_news_test"
+          --health-interval 5s
+          --health-timeout 5s
+          --health-retries 10
     permissions:
       contents: read
 
@@ -59,6 +73,7 @@ jobs:
         env:
           CI: 'true'
           NO_BROWSER: '1'
+          TEST_DATABASE_URL: postgresql+asyncpg://postgres:test-only@127.0.0.1:5432/evening_news_test
         run: python -m pytest tests/ -q
 
   build-and-push:

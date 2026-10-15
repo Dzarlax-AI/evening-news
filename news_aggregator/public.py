@@ -13,6 +13,9 @@ from sqlalchemy.orm import selectinload
 from datetime import datetime, timedelta
 from typing import Optional
 from pathlib import Path
+
+logger = logging.getLogger(__name__)
+
 try:
     import magic
     MAGIC_AVAILABLE = True
@@ -27,8 +30,6 @@ from .services.data_service import DataService, get_data_service
 from .services.database_queue import get_database_queue
 from .security import verify_jwt_token
 from .api.articles_router import ReprocessRequest, reprocess_article
-
-logger = logging.getLogger(__name__)
 
 router = APIRouter()
 templates = Jinja2Templates(directory="web/templates")

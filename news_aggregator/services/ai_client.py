@@ -11,6 +11,7 @@ from ..config import settings
 from ..core.http_client import get_http_client
 from ..core.cache import cached
 from ..core.exceptions import APIError
+from ..core.resource_limits import ResourceLimitError, enforce_text_limit
 from ..core.circuit_breaker import CircuitBreakerError, ai_service_breaker
 
 logger = logging.getLogger(__name__)
@@ -19,6 +20,10 @@ logger = logging.getLogger(__name__)
 def is_retryable_api_error(exception):
     """Check if API error is transient and should be retried."""
     if isinstance(exception, APIError):
+        # Long provider cooldowns belong to durable article scheduling, not an
+        # immediate transport retry that ignores Retry-After.
+        if getattr(exception, 'retry_after_seconds', 0):
+            return False
         # Retry on rate limits (429) or server errors (5xx)
         return exception.status_code in [429, 500, 502, 503, 504]
     return False
@@ -64,6 +69,7 @@ class AIClient:
         Returns:
             Dictionary with 'summary', 'publication_date', and other metadata
         """
+        enforce_text_limit(original_context or '')
         if not article_url:
             return {'summary': None, 'publication_date': None}
         
@@ -90,6 +96,8 @@ class AIClient:
                     if not content:
                         content = await content_extractor.extract_article_content(article_url)
                     
+            except ResourceLimitError:
+                raise
             except Exception as e:
                 logger.warning(f"  ⚠️ Content extraction failed: {e}")
                 content = None
@@ -145,15 +153,21 @@ class AIClient:
             optimized_title = analysis_result.get('optimized_title') if analysis_result else None
 
             return {
+                **(analysis_result or {}),
                 'summary': summary,
                 'optimized_title': optimized_title,
                 'publication_date': metadata_result.get('publication_date'),
                 'full_article_url': metadata_result.get('full_article_url')
             }
             
+        except ResourceLimitError:
+            raise
         except Exception as e:
             logger.error(f"  ❌ Error getting article summary with metadata: {e}")
             return {
+                '_processing_error': type(e).__name__,
+                '_processing_terminal': getattr(e, 'status_code', None) in {400, 401, 403, 404, 413, 422},
+                '_retry_after_seconds': getattr(e, 'retry_after_seconds', None),
                 'summary': None,
                 'publication_date': metadata_result.get('publication_date'),
                 'full_article_url': metadata_result.get('full_article_url')
@@ -485,7 +499,18 @@ class AIClient:
                         self._track_ai_usage(data, analysis_type, domain)
                         return data
                     elif response.status == 429:
-                        raise APIError("Rate limit exceeded", status_code=429)
+                        error = APIError("Rate limit exceeded", status_code=429)
+                        from email.utils import parsedate_to_datetime
+                        from datetime import datetime, timezone
+                        retry_after = response.headers.get('Retry-After')
+                        try:
+                            error.retry_after_seconds = max(0, float(retry_after))
+                        except (TypeError, ValueError):
+                            try:
+                                error.retry_after_seconds = max(0, (parsedate_to_datetime(retry_after) - datetime.now(timezone.utc)).total_seconds())
+                            except (TypeError, ValueError, OverflowError):
+                                pass
+                        raise error
                     else:
                         error_text = await response.text()
                         logger.error(f"  ❌ Gemini API error {response.status}: {error_text[:500]}...")
@@ -613,7 +638,18 @@ class AIClient:
                         return data
 
                     elif response.status == 429:
-                        raise APIError("Rate limit exceeded", status_code=429)
+                        error = APIError("Rate limit exceeded", status_code=429)
+                        from email.utils import parsedate_to_datetime
+                        from datetime import datetime, timezone
+                        retry_after = response.headers.get('Retry-After')
+                        try:
+                            error.retry_after_seconds = max(0, float(retry_after))
+                        except (TypeError, ValueError):
+                            try:
+                                error.retry_after_seconds = max(0, (parsedate_to_datetime(retry_after) - datetime.now(timezone.utc)).total_seconds())
+                            except (TypeError, ValueError, OverflowError):
+                                pass
+                        raise error
                     else:
                         error_text = await response.text()
                         logger.error(f"  ❌ Gemini API error {response.status}: {error_text[:500]}...")
@@ -828,6 +864,8 @@ class AIClient:
         Returns:
             Dictionary with all analysis results
         """
+        enforce_text_limit(content or '')
+        enforce_text_limit(original_context or '')
         # Enhanced content length protection  
         if not content or not isinstance(content, str) or len(content.strip()) < 30:
             # Special case for scientific sources: allow analysis of informative titles
@@ -841,7 +879,7 @@ class AIClient:
                 logger.warning(f"  ⚠️ Content too short for analysis: {len(content.strip()) if content else 0} chars < 30")
                 return self._get_fallback_analysis()
         
-        max_retries = 3
+        max_retries = 0
         for attempt in range(max_retries + 1):
             try:
                 # Build enhanced combined prompt with dynamic category metadata
@@ -944,13 +982,18 @@ class AIClient:
                         continue
                     return self._parse_fallback_response(response)
                     
+            except ResourceLimitError:
+                raise
             except Exception as e:
                 logger.error(f"  ❌ Error in combined analysis: {e}")
                 if attempt < max_retries:
                     logger.info(f"  🔄 Retrying in 2 seconds...")
                     await asyncio.sleep(2)
                     continue
-                return self._get_fallback_analysis()
+                return {**self._get_fallback_analysis(),
+                        '_processing_error': type(e).__name__,
+                        '_processing_terminal': getattr(e, 'status_code', None) in {400, 401, 403, 404, 413, 422},
+                        '_retry_after_seconds': getattr(e, 'retry_after_seconds', None)}
         
         # Fallback if all retries failed
         return self._get_fallback_analysis()
@@ -989,8 +1032,8 @@ class AIClient:
         primary_category = categories[0] if categories else None
         
         return {
-            'optimized_title': result.get('optimized_title', '').strip() or None,  # Add optimized title support
-            'summary': result.get('summary', '').strip() or None,
+            'optimized_title': (result.get('optimized_title') or '').strip() or None,  # Add optimized title support
+            'summary': (result.get('summary') or '').strip() or None,
             'category': primary_category,  # Return primary category for processing by orchestrator
             'categories': categories,  # New: support multiple categories
             'category_confidences': result.get('category_confidences', []),  # New: confidence scores
@@ -998,10 +1041,10 @@ class AIClient:
             'summary_confidence': max(0.0, min(1.0, safe_float(result.get('summary_confidence'), 0.8))),
             'categories_parsed': parse_category(primary_category, valid_categories=valid_categories, title=title, content=content[:500] if content else None, return_multiple=True),
             'original_categories': result.get('original_categories', []),  # Enhanced: AI descriptive categories before mapping
-            'is_advertisement': bool(result.get('is_advertisement', False)),
+            'is_advertisement': result.get('is_advertisement') if type(result.get('is_advertisement')) is bool else None,
             'ad_type': result.get('ad_type', 'news_article'),
             'ad_confidence': max(0.0, min(1.0, safe_float(result.get('ad_confidence'), 0.0))),
-            'ad_reasoning': result.get('ad_reasoning', '').strip() or 'Combined analysis',
+            'ad_reasoning': (result.get('ad_reasoning') or '').strip() or 'Combined analysis',
             'publication_date': result.get('publication_date'),
             'content_quality': max(0.0, min(1.0, safe_float(result.get('content_quality'), 0.7))),
             'confidence': max(0.0, min(1.0, safe_float(result.get('confidence'), 0.8)))  # Legacy field
@@ -1010,6 +1053,7 @@ class AIClient:
     def _get_fallback_analysis(self) -> Dict[str, Any]:
         """Get fallback analysis when AI fails."""
         return {
+            '_processing_error': 'ai_unavailable',
             'optimized_title': None,  # No title optimization in fallback
             'summary': None,
             'categories': ['Other'],  # Updated to new array format

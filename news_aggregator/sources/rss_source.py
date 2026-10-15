@@ -189,10 +189,11 @@ class RSSSource(BaseSource):
         """Test RSS feed connectivity."""
         try:
             async with get_http_client() as client:
-                response = await client.get(self.url)
+                response = await client.get(self.url, auto_decompress=False)
                 async with response:
                     if response.status == 200:
-                        content = await response.text()
+                        from ..core.resource_limits import read_page_text
+                        content = await read_page_text(response)
                         feed = feedparser.parse(content)
                         return not feed.bozo or len(feed.entries) > 0
                     return False

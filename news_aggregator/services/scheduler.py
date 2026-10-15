@@ -839,5 +839,5 @@ async def start_scheduler():
 
 async def stop_scheduler():
     """Stop the global scheduler."""
-    scheduler = get_scheduler()
-    await scheduler.stop()
+    if _scheduler is not None:
+        await _scheduler.stop()

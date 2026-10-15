@@ -1,6 +1,7 @@
 """HTML processing and content extraction from DOM elements."""
 
 import re
+from ..core.resource_limits import ResourceLimitError
 from typing import Optional, List
 from bs4 import BeautifulSoup, Comment, NavigableString
 
@@ -53,6 +54,8 @@ class HTMLProcessor:
                     content = self._extract_text_from_element(element)
                     if content and self.utils.is_good_content(content):
                         return content, selector
+            except ResourceLimitError:
+                raise
             except Exception:
                 continue
         
@@ -174,6 +177,8 @@ class HTMLProcessor:
         """Clean and normalize extracted text."""
         if not text:
             return ""
+        from ..core.resource_limits import enforce_text_limit
+        enforce_text_limit(text)
         
         # Remove excessive whitespace
         text = re.sub(r'\s+', ' ', text)

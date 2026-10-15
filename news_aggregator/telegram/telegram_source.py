@@ -8,6 +8,7 @@ import pytz
 import asyncio
 from typing import AsyncGenerator, Optional, Dict, List, Any
 from bs4 import BeautifulSoup
+from ..core.resource_limits import ResourceLimitError, read_page_text, read_browser_html
 
 from ..sources.base import BaseSource, Article
 from ..core.http_client import get_http_client
@@ -125,6 +126,8 @@ class TelegramSource(BaseSource):
                     logger.info(f"  ✅ Browser method successful - found {articles_found} articles")
                     return
                     
+            except ResourceLimitError:
+                raise
             except Exception as e:
                 last_error = e
                 logger.error(f"  ❌ Browser method failed: {e}")
@@ -141,6 +144,8 @@ class TelegramSource(BaseSource):
                 logger.info(f"  ✅ HTTP method successful - found {articles_found} articles")
                 return
                 
+        except ResourceLimitError:
+            raise
         except Exception as e:
             last_error = e
             logger.error(f"  ❌ HTTP method failed: {e}")
@@ -159,9 +164,9 @@ class TelegramSource(BaseSource):
                 try:
                     headers = random.choice(self.BROWSER_HEADERS)
                     
-                    async with session.get(url, headers=headers, timeout=30) as response:
+                    async with session.get(url, headers=headers, timeout=30, auto_decompress=False) as response:
                         if response.status == 200:
-                            html = await response.text()
+                            html = await read_page_text(response)
                             articles = await self._parse_html(html, url)
                             
                             for article in articles:
@@ -171,6 +176,8 @@ class TelegramSource(BaseSource):
                                 return  # Success with this URL
                         else:
                             logger.warning(f"  ⚠️ HTTP {response.status} for {url}")
+                except ResourceLimitError:
+                    raise
                 except Exception as e:
                     logger.error(f"  ❌ HTTP error for {url}: {e}")
                     continue
@@ -217,11 +224,7 @@ class TelegramSource(BaseSource):
                         logger.warning(f"  Scrolling failed: {scroll_error}")
 
                     # Get HTML content
-                    html = await run_browser_operation(
-                        tab.get_content(),
-                        "Telegram content retrieval",
-                        browser_session=tab,
-                    )
+                    html = await read_browser_html(tab)
                     articles = await self._parse_html(html, url)
 
                     for article in articles:
@@ -230,6 +233,8 @@ class TelegramSource(BaseSource):
                     if articles:
                         return  # Success with this URL
 
+            except ResourceLimitError:
+                raise
             except Exception as e:
                 logger.error(f"  Browser error for {url}: {e}")
                 continue

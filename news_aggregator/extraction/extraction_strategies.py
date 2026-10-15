@@ -3,6 +3,7 @@ import logging
 
 import asyncio
 import html as html_lib
+import json
 import time
 from typing import Optional, Dict, Any, List
 from urllib.parse import urljoin
@@ -10,6 +11,7 @@ from urllib.parse import urljoin
 import aiohttp
 import chardet
 from bs4 import BeautifulSoup
+from ..core.resource_limits import ResourceLimitError, read_page_bytes, read_browser_html, enforce_text_limit
 from readability.readability import Document
 import nodriver as uc
 from nodriver import cdp
@@ -73,6 +75,7 @@ class ExtractionStrategies:
         """Check if extracted content passes quality checks using Smart Filter."""
         if not content or not content.strip():
             return False
+        enforce_text_limit(content)
 
         try:
             from ..services.smart_filter import get_smart_filter
@@ -116,11 +119,14 @@ class ExtractionStrategies:
                 async with await client.get(
                     json_url,
                     headers={**self.utils.get_headers(), 'Accept': 'application/json'},
+                    auto_decompress=False,
                 ) as resp:
                     if resp.status != 200:
                         logger.warning(f"    ⚠️ Reddit JSON API returned {resp.status}")
                         return None
-                    data = await resp.json(content_type=None)
+                    data = json.loads(await read_page_bytes(resp))
+        except ResourceLimitError:
+            raise
         except Exception as e:
             logger.warning(f"    ⚠️ Reddit JSON fetch failed: {e}")
             return None
@@ -189,6 +195,7 @@ class ExtractionStrategies:
 
         if not content.strip():
             return None
+        enforce_text_limit(content)
 
         # Publication date from created_utc
         pub_date = None
@@ -243,6 +250,8 @@ class ExtractionStrategies:
                                 result['content'] = linked_content
                                 if not result.get('image_url'):
                                     result['image_url'] = self.metadata_extractor.extract_primary_image(linked_soup)
+                    except ResourceLimitError:
+                        raise
                     except Exception as e:
                         logger.warning(f"    ⚠️ Reddit linked URL extraction failed: {e}")
                 return result
@@ -254,6 +263,8 @@ class ExtractionStrategies:
             shared_html = await self.fetch_html_content(url)
             if shared_html:
                 shared_soup = BeautifulSoup(shared_html, "html.parser")
+        except ResourceLimitError:
+            raise
         except Exception as e:
             logger.warning(f"    ⚠️ Initial HTML fetch failed: {e}")
 
@@ -302,6 +313,8 @@ class ExtractionStrategies:
                             domain, "browser_rendering", sel, len(content)
                         )
                         return result
+            except ResourceLimitError:
+                raise
             except Exception as e:
                 logger.error(f"    ❌ Learned browser pattern failed: {e}")
 
@@ -334,6 +347,8 @@ class ExtractionStrategies:
                 await extraction_memory.degrade_pattern(
                     domain, selector, learned_pattern.get("method", "unknown")
                 )
+            except ResourceLimitError:
+                raise
             except Exception as e:
                 logger.error(f"    ❌ Learned pattern failed: {e}")
                 if selector:
@@ -361,6 +376,8 @@ class ExtractionStrategies:
                         domain, "enhanced_selectors", selector, len(content)
                     )
                     return result
+            except ResourceLimitError:
+                raise
             except Exception as e:
                 logger.error(f"    ❌ Enhanced selectors failed: {e}")
 
@@ -388,6 +405,8 @@ class ExtractionStrategies:
                             domain, "readability", "readability", len(content)
                         )
                         return result
+            except ResourceLimitError:
+                raise
             except Exception as e:
                 logger.error(f"    ❌ Readability extraction failed: {e}")
         # Strategy 4: Browser rendering (more expensive) — extracts metadata in same session
@@ -418,6 +437,8 @@ class ExtractionStrategies:
                             _fill_metadata(result, shared_soup)
 
                 return result
+        except ResourceLimitError:
+            raise
         except Exception as e:
             logger.error(f"    ❌ Browser rendering failed: {e}")
 
@@ -442,6 +463,8 @@ class ExtractionStrategies:
                 else:
                     content = res
 
+                if content:
+                    enforce_text_limit(content)
                 if content and self.utils.is_good_content(content):
                     result["content"] = content
                     result["selector_used"] = selector
@@ -451,6 +474,8 @@ class ExtractionStrategies:
                         domain, "fallback_extraction", selector, len(content)
                     )
                     return result
+        except ResourceLimitError:
+            raise
         except Exception as e:
             logger.error(f"    ❌ Fallback extraction failed: {e}")
 
@@ -538,12 +563,7 @@ class ExtractionStrategies:
                 content_budget = remaining_s()
                 if content_budget <= 0:
                     return None, None, None
-                page_html = await run_browser_operation(
-                    tab.get_content(),
-                    "content retrieval",
-                    timeout_seconds=content_budget,
-                    browser_session=tab,
-                )
+                page_html = await read_browser_html(tab, timeout_seconds=content_budget)
 
                 # Extract content from rendered HTML using existing logic
                 content = None
@@ -557,6 +577,8 @@ class ExtractionStrategies:
 
                 return content, selector_used, page_html
 
+            except ResourceLimitError:
+                raise
             except Exception as e:
                 raise ContentExtractionError(f"Browser extraction failed: {e}")
 
@@ -577,15 +599,17 @@ class ExtractionStrategies:
         try:
             async with get_http_client() as client:
                 async with await client.get(
-                    url, headers=self.utils.get_headers()
+                    url, headers=self.utils.get_headers(), auto_decompress=False
                 ) as response:
                     if response.status == 200:
-                        data = await response.read()
+                        data = await read_page_bytes(response)
                         return self._decode_response_bytes(data, response.charset)
                     else:
                         logger.warning(f"    ⚠️ HTTP {response.status} for {url}")
                         return None
 
+        except ResourceLimitError:
+            raise
         except Exception as e:
             logger.error(f"    ❌ HTML fetch failed: {e}")
             return None
@@ -600,13 +624,15 @@ class ExtractionStrategies:
                 "AppleWebKit/605.1.15 (KHTML, like Gecko) Version/17.0 Safari/605.1.15"
             )
             async with aiohttp.ClientSession() as session:
-                async with session.get(url, headers=fallback_headers, timeout=aiohttp.ClientTimeout(total=15)) as response:
+                async with session.get(url, headers=fallback_headers, timeout=aiohttp.ClientTimeout(total=15), auto_decompress=False) as response:
                     if response.status == 200:
-                        data = await response.read()
+                        data = await read_page_bytes(response)
                         return self._decode_response_bytes(data, response.charset)
                     else:
                         logger.warning(f"    ⚠️ Fallback fetch HTTP {response.status} for {url}")
                         return None
+        except ResourceLimitError:
+            raise
         except Exception as e:
             logger.error(f"    ❌ Fallback fetch failed: {e}")
             return None

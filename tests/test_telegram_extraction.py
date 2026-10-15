@@ -1,6 +1,7 @@
 """Tests for Telegram article extraction via browser."""
 
 import asyncio
+import json
 from unittest.mock import AsyncMock, MagicMock, patch
 
 import pytest
@@ -78,7 +79,8 @@ def mock_browser():
 def mock_tab():
     tab = AsyncMock()
     tab.get_content = AsyncMock(return_value=SAMPLE_TELEGRAM_HTML)
-    tab.evaluate = AsyncMock(return_value=None)
+    tab.evaluate = AsyncMock(side_effect=lambda expression, **kwargs:
+        json.dumps({"html": SAMPLE_TELEGRAM_HTML}) if "JSON.stringify" in expression else None)
     tab.wait_for = AsyncMock()
     tab.close = AsyncMock()
     return tab
@@ -165,7 +167,8 @@ async def test_fetch_with_browser_tries_multiple_urls(telegram_source, mock_brow
     success_tab = AsyncMock()
     success_tab.wait_for = AsyncMock()
     success_tab.get_content = AsyncMock(return_value=SAMPLE_TELEGRAM_HTML)
-    success_tab.evaluate = AsyncMock()
+    success_tab.evaluate = AsyncMock(side_effect=lambda expression, **kwargs:
+        json.dumps({"html": SAMPLE_TELEGRAM_HTML}) if "JSON.stringify" in expression else None)
     success_tab.close = AsyncMock()
 
     # First call fails, second succeeds

@@ -39,6 +39,11 @@ from .migrations.scheduler_run_outcomes import (
 )
 migration_manager.register_migration(FeedPerformanceOptimization())
 migration_manager.register_migration(SchedulerRunOutcomesMigration())
+from .migrations.article_processing_state import (
+    ArticleProcessingStateMigration,
+    ensure_article_processing_migration,
+)
+migration_manager.register_migration(ArticleProcessingStateMigration())
 
 
 
@@ -58,6 +63,7 @@ async def lifespan(app: FastAPI):
         logger.info("🔍 Checking for database migrations...")
         migration_results = await migration_manager.check_and_run_migrations()
         ensure_scheduler_outcome_migration(migration_results)
+        ensure_article_processing_migration(migration_results)
         
         if migration_results['migrations_run']:
             logger.info(f"✅ Applied {len(migration_results['migrations_run'])} migrations")

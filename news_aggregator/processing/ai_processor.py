@@ -834,151 +834,100 @@ class AIProcessor:
         logger.info(f"  ✅ Article marked as fully processed")
         return {'success': True, 'content_length': len(article_data.get('content', ''))}
 
-    async def get_summary_by_source_type(self, article, source_type: str, stats: Dict[str, Any]) -> Dict[str, Any]:
-        """Get article summary and optimized title based on source type.
+    async def process_article_outcome(self, article_data, stats):
+        """Compute a typed outcome outside a database transaction.
 
-        Returns dict with 'summary' and 'optimized_title' keys.
+        Successful stages survive a later failure. Missing AI output is never a
+        successful summary, and source/title fallbacks do not hide API failures.
         """
-        def _make(summary, optimized_title=None):
-            return {'summary': summary, 'optimized_title': optimized_title}
+        from types import SimpleNamespace
+        from .processing_outcome import ProcessingOutcome, is_challenge_text
+        from ..core.resource_limits import ResourceLimitError, enforce_text_limit
 
+        fields = {}
+        summary_done = bool(article_data.get('summary_processed') and article_data.get('summary'))
+        category_done = bool(article_data.get('category_processed'))
+        ad_done = bool(article_data.get('ad_processed'))
+        if ad_done and article_data.get('is_advertisement') is True:
+            return ProcessingOutcome('rejected', error='advertisement')
+        if summary_done and category_done and ad_done:
+            return ProcessingOutcome('completed')
         try:
-            if source_type == 'rss':
-                rss_content = article.content or ''
-                # Try extracting from page first (may have richer content)
-                # Pass RSS content as original_context so AI can fall back to it if page is junk
-                ai_result = await self.ai_client.get_article_summary_with_metadata(
-                    article.url,
-                    original_context=rss_content if len(rss_content.strip()) >= 50 else None,
-                )
-                stats['api_calls_made'] += 1
-                self._update_article_publication_date(article, ai_result.get('publication_date'), 'RSS')
-
-                summary = ai_result.get('summary')
-                optimized_title = ai_result.get('optimized_title')
-
-                # Detect bot-protection / consent / error page summaries
-                _bot_markers = [
-                    # Bot protection
-                    'недоступен', 'защиты от ботов', 'проверки безопасности',
-                    'является ли пользователь ботом', 'включить javascript',
-                    'just a moment', 'access denied', 'cloudflare',
-                    'enable javascript', 'checking your browser',
-                    'temporarily unavailable', 'bot detection',
-                    # Cookie consent pages
-                    'согласие на использование файлов cookie',
-                    'consent to the use of cookies',
-                    'cookie policy', 'политика использования файлов cookie',
-                    'before you continue to google',
-                    'конфиденциальности и использование файлов cookie',
-                ]
-                if summary and any(m in summary.lower() for m in _bot_markers):
-                    logger.warning(f"  ⚠️ Extracted summary looks like bot-protection page, discarding: {article.url}")
-                    summary = None
-                    optimized_title = None
-
-                # If page extraction failed but RSS has content, use it as fallback
-                if not summary and len(rss_content.strip()) >= 100:
-                    logger.info(f"  📄 Page extraction failed, falling back to RSS content ({len(rss_content)} chars)")
-                    fallback_result = await self.ai_client.analyze_article_complete(
-                        title=article.title or '',
-                        content=rss_content,
-                        url=article.url,
-                    )
-                    stats['api_calls_made'] += 1
-                    summary = (fallback_result or {}).get('summary')
-                    optimized_title = (fallback_result or {}).get('optimized_title')
-
-                return _make(
-                    summary or rss_content[:500] or article.title,
-                    optimized_title,
-                )
-
-            elif source_type == 'telegram':
-                from urllib.parse import urlparse
-
-                def _is_telegram_domain(url: str) -> bool:
-                    try:
-                        host = urlparse(url).netloc.lower()
-                        return ('t.me' in host) or ('telegram.me' in host)
-                    except Exception:
-                        return False
-
-                def _is_non_article_url(url: str) -> bool:
-                    """Check if URL points to a non-article resource (maps, app stores, etc.)."""
-                    try:
-                        parsed = urlparse(url)
-                        host = parsed.netloc.lower()
-                        path = parsed.path.lower()
-                        _non_article_domains = (
-                            'maps.app.goo.gl', 'maps.google.com', 'maps.google.ru',
-                            'goo.gl/maps', 'yandex.ru/maps', 'yandex.com/maps',
-                            '2gis.ru', '2gis.com', 'waze.com',
-                            'play.google.com', 'apps.apple.com',
-                        )
-                        if any(d in host for d in _non_article_domains):
-                            return True
-                        if 'google.com' in host and '/maps' in path:
-                            return True
-                        if 'yandex' in host and '/maps' in path:
-                            return True
-                    except Exception:
-                        pass
-                    return False
-
-                # article.url is already the external URL (final_url = original_link or message_url)
-                # raw_data is not persisted to DB, so use article.url directly
-                external_url = article.url if not _is_telegram_domain(article.url) else None
-                telegram_content = article.content or article.title or ''
-
-                # Skip fetching non-article URLs (maps, app stores) — summarize Telegram content directly
-                if external_url and _is_non_article_url(external_url):
-                    logger.info(f"  🗺️ Non-article URL detected ({external_url}), using Telegram content")
-                    external_url = None
-
-                if external_url:
-                    try:
-                        # Pass Telegram content as original_context so AI can fall back to it
-                        ai_result = await self.ai_client.get_article_summary_with_metadata(
-                            external_url,
-                            original_context=telegram_content if len(telegram_content.strip()) >= 30 else None,
-                        )
-                        self._update_article_publication_date(article, ai_result.get('publication_date'), 'Telegram')
-                        if ai_result.get('summary'):
-                            return _make(ai_result['summary'], ai_result.get('optimized_title'))
-                    except Exception as e:
-                        logger.warning(f"  ⚠️ Skipping Telegram AI extraction (external link failed): {e}")
-
-                # No external link or extraction failed — summarize the Telegram message content directly
-                if len(telegram_content.strip()) >= 30:
-                    try:
-                        ai_result = await self.ai_client.analyze_article_complete(
-                            title=article.title or '',
-                            content=telegram_content,
-                            url=article.url or '',
-                        )
-                        stats['api_calls_made'] += 1
-                        if ai_result.get('summary'):
-                            return _make(ai_result['summary'], ai_result.get('optimized_title'))
-                    except Exception as e:
-                        logger.warning(f"  ⚠️ Telegram content summarization failed: {e}")
-                return _make(telegram_content or article.title)
-
-            elif source_type == 'custom':
-                ai_result = await self.ai_client.get_article_summary_with_metadata(article.url)
-                stats['api_calls_made'] += 1
-                self._update_article_publication_date(article, ai_result.get('publication_date'), 'Custom')
-                return _make(
-                    ai_result.get('summary') or article.content or article.title,
-                    ai_result.get('optimized_title'),
-                )
-
+            content = enforce_text_limit(article_data.get('content') or '')
+            enforce_text_limit(article_data.get('summary') or '')
+            if is_challenge_text(content):
+                return ProcessingOutcome('retry_wait', error='extraction_challenge')
+            article = SimpleNamespace(**{**article_data, 'content': content})
+            if not summary_done:
+                analysis = await self.get_summary_by_source_type(
+                    article, article_data.get('source_type') or 'rss', stats)
             else:
-                return _make(article.content or article.title)
+                stats['api_calls_made'] = stats.get('api_calls_made', 0) + 1
+                analysis = await self.ai_client.analyze_article_complete(
+                    article.title, article.summary or content, article.url)
+            if analysis.get('_processing_error'):
+                return ProcessingOutcome('rejected' if analysis.get('_processing_terminal') else 'retry_wait', fields,
+                    analysis['_processing_error'], analysis.get('_retry_after_seconds'))
+            summary = analysis.get('summary')
+            if not summary_done:
+                if not isinstance(summary, str) or not summary.strip():
+                    return ProcessingOutcome('retry_wait', error='missing_summary')
+                if is_challenge_text(summary):
+                    return ProcessingOutcome('retry_wait', error='summary_describes_challenge')
+                fields.update(summary=summary.strip(), summary_processed=True)
+                title = analysis.get('optimized_title')
+                if title and not is_challenge_text(title):
+                    fields['title'] = title
+                if article.published_at != article_data.get('published_at'):
+                    fields['published_at'] = article.published_at
+            if not category_done:
+                categories = analysis.get('categories')
+                if not isinstance(categories, list) or not categories:
+                    return ProcessingOutcome('retry_wait', fields, 'missing_categories')
+                normalized = []
+                for category in categories:
+                    if isinstance(category, str) and category.strip():
+                        normalized.append({'name': category.strip(), 'confidence': analysis.get('category_confidence', 0.8)})
+                    elif isinstance(category, dict) and category.get('name'):
+                        normalized.append(category)
+                if not normalized:
+                    return ProcessingOutcome('retry_wait', fields, 'missing_categories')
+                fields.update(categories=normalized, category_processed=True)
+            if not ad_done:
+                if not isinstance(analysis.get('is_advertisement'), bool):
+                    return ProcessingOutcome('retry_wait', fields, 'missing_ad_classification')
+                fields.update(ad_processed=True, is_advertisement=analysis['is_advertisement'],
+                              ad_confidence=analysis.get('ad_confidence', 0),
+                              ad_type=analysis.get('ad_type'), ad_reasoning=analysis.get('ad_reasoning'))
+                if analysis['is_advertisement']:
+                    return ProcessingOutcome('rejected', fields, 'advertisement')
+            return ProcessingOutcome('completed', fields)
+        except ResourceLimitError as exc:
+            return ProcessingOutcome('rejected', fields, 'resource_limit')
+        except Exception as exc:
+            return ProcessingOutcome('retry_wait', fields,
+                type(exc).__name__, getattr(exc, 'retry_after_seconds', None))
 
-        except Exception as e:
-            logger.error(f"  ❌ Summary generation failed for {source_type}: {e}")
-            return _make(article.content or article.title or "Summary unavailable")
+    async def get_summary_by_source_type(self, article, source_type: str, stats: Dict[str, Any]) -> Dict[str, Any]:
+        """Return explicit analysis; a failed summary remains failed."""
+        from .processing_outcome import is_challenge_text
+        from ..core.resource_limits import enforce_text_limit
+
+        content = enforce_text_limit(article.content or '')
+        analysis = {}
+        if source_type in {'rss', 'custom'} or (source_type == 'telegram' and not
+                any(host in article.url for host in ('t.me/', 'telegram.me/'))):
+            stats['api_calls_made'] = stats.get('api_calls_made', 0) + 1
+            analysis = await self.ai_client.get_article_summary_with_metadata(
+                article.url, original_context=content or None)
+            self._update_article_publication_date(article, analysis.get('publication_date'), source_type)
+            if analysis.get('_processing_error'):
+                return analysis
+        if (not analysis.get('summary') or is_challenge_text(analysis.get('summary'))) and len(content.strip()) >= 30:
+            stats['api_calls_made'] = stats.get('api_calls_made', 0) + 1
+            analysis = await self.ai_client.analyze_article_complete(
+                title=article.title or '', content=content, url=article.url or '')
+        return analysis
 
     def _update_article_publication_date(self, article, pub_date: str, source_type: str):
         """Update article publication date if provided."""

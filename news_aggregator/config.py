@@ -78,14 +78,22 @@ class Settings(BaseSettings):
     ga_measurement_id: Optional[str] = Field(default=None, alias="GA_MEASUREMENT_ID")
     
     # Processing
-    max_workers: int = Field(default=5, alias="MAX_WORKERS")
+    max_workers: int = Field(default=5, gt=0, le=32, alias="MAX_WORKERS")
+    processing_batch_size: int = Field(default=25, gt=0, le=100, alias="PROCESSING_BATCH_SIZE")
+    processing_max_attempts: int = Field(default=3, gt=0, le=10, alias="PROCESSING_MAX_ATTEMPTS")
+    processing_retry_initial_seconds: int = Field(default=1800, gt=0, alias="PROCESSING_RETRY_INITIAL_SECONDS")
+    processing_retry_later_seconds: int = Field(default=21600, gt=0, alias="PROCESSING_RETRY_LATER_SECONDS")
+    processing_attempt_timeout_seconds: int = Field(default=600, gt=0, alias="PROCESSING_ATTEMPT_TIMEOUT_SECONDS")
+    extraction_http_max_bytes: int = Field(default=5 * 1024 * 1024, gt=0, alias="EXTRACTION_HTTP_MAX_BYTES")
+    extraction_browser_max_bytes: int = Field(default=5 * 1024 * 1024, gt=0, alias="EXTRACTION_BROWSER_MAX_BYTES")
+    extraction_text_max_chars: int = Field(default=100000, gt=0, alias="EXTRACTION_TEXT_MAX_CHARS")
     cache_ttl: int = Field(default=86400, alias="CACHE_TTL")
     cache_dir: str = Field(default="/tmp/rss_cache", alias="CACHE_DIR")
     cache_max_size_mb: float = Field(default=500.0, alias="CACHE_MAX_SIZE_MB")  # Maximum cache size in MB
     cache_max_entries: int = Field(default=10000, alias="CACHE_MAX_ENTRIES")  # Maximum number of cache entries
     
     # API Rate Limiting
-    api_rate_limit: int = Field(default=3, alias="RPS")  # Requests per second
+    api_rate_limit: int = Field(default=3, gt=0, alias="RPS")  # Requests per second
     
     
     # Database Connection Pool

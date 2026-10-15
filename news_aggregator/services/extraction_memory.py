@@ -15,7 +15,9 @@ logger = logging.getLogger(__name__)
 
 # Limits to prevent unbounded memory growth
 MAX_ATTEMPTS_IN_MEMORY = 500
-MAX_PATTERNS_PER_DOMAIN = 50
+MAX_PATTERNS_PER_DOMAIN = 10
+MAX_DOMAINS_IN_MEMORY = 500
+MAX_PATTERNS_IN_MEMORY = 2000
 MAX_DOMAINS_STATS = 500
 
 
@@ -38,6 +40,7 @@ class ExtractionMemoryEntry:
     last_success_at: Optional[datetime] = None
     created_at: Optional[datetime] = None
     updated_at: Optional[datetime] = None
+    id: Optional[int] = None
 
 
 @dataclass
@@ -87,43 +90,111 @@ class ExtractionMemoryService:
                 self._initialized = True
 
     async def _load_patterns_from_db(self):
-        """Load all patterns from database into memory cache."""
+        """Load the best bounded pattern set without materializing the full table."""
         async with AsyncSessionLocal() as session:
             result = await session.execute(text("""
-                SELECT domain, selector_pattern, extraction_strategy,
-                       success_count, failure_count, quality_score_avg,
-                       content_length_avg, discovered_by, is_stable,
-                       consecutive_successes, consecutive_failures,
-                       first_success_at, last_success_at, created_at, updated_at
-                FROM extraction_patterns
-                WHERE success_count > 0 OR failure_count < 5
-                ORDER BY domain, success_count DESC
-            """))
+                WITH eligible AS (
+                    SELECT id, domain, selector_pattern, extraction_strategy,
+                           success_count, failure_count, quality_score_avg,
+                           content_length_avg, discovered_by, is_stable,
+                           consecutive_successes, consecutive_failures,
+                           first_success_at, last_success_at, created_at, updated_at,
+                           ROW_NUMBER() OVER (
+                               PARTITION BY domain
+                               ORDER BY COALESCE(quality_score_avg, 0) DESC,
+                                        COALESCE(success_count, 0) + COALESCE(failure_count, 0) DESC,
+                                        id ASC
+                           ) AS pattern_rank
+                    FROM extraction_patterns
+                    WHERE success_count > 0 OR failure_count < 5
+                ), domain_scores AS (
+                    SELECT domain, MAX(COALESCE(quality_score_avg, 0)) AS best_quality,
+                           SUM(COALESCE(success_count, 0) + COALESCE(failure_count, 0)) AS total_usage,
+                           MIN(id) AS first_id
+                    FROM eligible
+                    WHERE pattern_rank <= :per_domain_limit
+                    GROUP BY domain
+                ), ranked_domains AS (
+                    SELECT domain,
+                           ROW_NUMBER() OVER (
+                               ORDER BY best_quality DESC, total_usage DESC, first_id ASC, domain ASC
+                           ) AS domain_rank
+                    FROM domain_scores
+                )
+                SELECT e.id, e.domain, e.selector_pattern, e.extraction_strategy,
+                       e.success_count, e.failure_count, e.quality_score_avg,
+                       e.content_length_avg, e.discovered_by, e.is_stable,
+                       e.consecutive_successes, e.consecutive_failures,
+                       e.first_success_at, e.last_success_at, e.created_at, e.updated_at
+                FROM eligible e
+                JOIN ranked_domains d ON d.domain = e.domain
+                WHERE e.pattern_rank <= :per_domain_limit
+                  AND d.domain_rank <= :domain_limit
+                ORDER BY d.domain_rank, e.pattern_rank
+                LIMIT :total_limit
+            """), {
+                "per_domain_limit": MAX_PATTERNS_PER_DOMAIN,
+                "domain_limit": MAX_DOMAINS_IN_MEMORY,
+                "total_limit": MAX_PATTERNS_IN_MEMORY,
+            })
 
             for row in result.fetchall():
-                domain = row[0]
+                domain = row[1]
                 if domain not in self._patterns:
                     self._patterns[domain] = []
 
                 entry = ExtractionMemoryEntry(
+                    id=row[0],
                     domain=domain,
-                    selector_pattern=row[1],
-                    extraction_strategy=row[2],
-                    success_count=row[3] or 0,
-                    failure_count=row[4] or 0,
-                    success_rate=self._calc_success_rate(row[3] or 0, row[4] or 0),
-                    quality_score_avg=float(row[5] or 0),
-                    content_length_avg=row[6] or 0,
-                    discovered_by=row[7] or 'manual',
-                    is_stable=row[8] or False,
-                    consecutive_successes=row[9] or 0,
-                    consecutive_failures=row[10] or 0,
-                    first_success_at=row[11],
-                    last_success_at=row[12],
-                    created_at=row[13],
-                    updated_at=row[14]
+                    selector_pattern=row[2],
+                    extraction_strategy=row[3],
+                    success_count=row[4] or 0,
+                    failure_count=row[5] or 0,
+                    success_rate=self._calc_success_rate(row[4] or 0, row[5] or 0),
+                    quality_score_avg=float(row[6] or 0),
+                    content_length_avg=row[7] or 0,
+                    discovered_by=row[8] or 'manual',
+                    is_stable=row[9] or False,
+                    consecutive_successes=row[10] or 0,
+                    consecutive_failures=row[11] or 0,
+                    first_success_at=row[12],
+                    last_success_at=row[13],
+                    created_at=row[14],
+                    updated_at=row[15]
                 )
                 self._patterns[domain].append(entry)
+            self._enforce_pattern_limits()
+
+    @staticmethod
+    def _pattern_rank(pattern: ExtractionMemoryEntry):
+        """Stable rank used for cache admission and eviction."""
+        return (
+            -float(pattern.quality_score_avg or 0),
+            -(int(pattern.success_count or 0) + int(pattern.failure_count or 0)),
+            pattern.id if pattern.id is not None else 2**63,
+            pattern.domain,
+            pattern.selector_pattern,
+            pattern.extraction_strategy,
+        )
+
+    def _enforce_pattern_limits(self) -> None:
+        """Apply the same deterministic admission limits to every insertion path."""
+        nonempty = {
+            domain: sorted(patterns, key=self._pattern_rank)[:MAX_PATTERNS_PER_DOMAIN]
+            for domain, patterns in self._patterns.items()
+            if patterns
+        }
+        domains_by_quality = sorted(
+            nonempty,
+            key=lambda domain: (self._pattern_rank(nonempty[domain][0]), domain),
+        )[:MAX_DOMAINS_IN_MEMORY]
+        candidates = [pattern for domain in domains_by_quality for pattern in nonempty[domain]]
+        candidates.sort(key=self._pattern_rank)
+        admitted = candidates[:MAX_PATTERNS_IN_MEMORY]
+        rebuilt: Dict[str, List[ExtractionMemoryEntry]] = {}
+        for pattern in admitted:
+            rebuilt.setdefault(pattern.domain, []).append(pattern)
+        self._patterns = rebuilt
 
     def _calc_success_rate(self, success_count: int, failure_count: int) -> float:
         """Calculate success rate percentage."""
@@ -332,23 +403,13 @@ class ExtractionMemoryService:
             # Save to database
             asyncio.create_task(self._save_pattern_to_db(pattern))
 
-        # Evict dead patterns if over limit
-        self._evict_patterns(domain)
+        self._enforce_pattern_limits()
 
         logger.info(f"  🎯 Updated pattern: {selector[:40]}... for {domain}")
 
     def _evict_patterns(self, domain: str):
-        """Remove low-quality patterns to keep memory bounded."""
-        patterns = self._patterns.get(domain, [])
-        if len(patterns) <= MAX_PATTERNS_PER_DOMAIN:
-            return
-
-        # Sort: keep high success_rate and recent patterns, evict old failures
-        patterns.sort(
-            key=lambda p: (p.success_rate, p.success_count, -(p.consecutive_failures)),
-            reverse=True,
-        )
-        self._patterns[domain] = patterns[:MAX_PATTERNS_PER_DOMAIN]
+        """Compatibility wrapper for bounded deterministic admission."""
+        self._enforce_pattern_limits()
 
     async def _add_failed_pattern(
         self, domain: str, selector: str, strategy: str
@@ -394,6 +455,8 @@ class ExtractionMemoryService:
 
             # Save to database
             asyncio.create_task(self._save_pattern_to_db(new_pattern))
+
+        self._enforce_pattern_limits()
 
     async def degrade_pattern(self, domain: str, selector: str, strategy: str) -> None:
         """Public API to decrease a selector's weight after poor result."""
@@ -637,6 +700,7 @@ class ExtractionMemoryService:
                     )
                     self._patterns[domain].append(pattern)
                     asyncio.create_task(self._save_pattern_to_db(pattern))
+                    self._enforce_pattern_limits()
 
             logger.info(f"  🤖 Recorded {len(patterns)} AI-discovered patterns for {domain}")
             return True

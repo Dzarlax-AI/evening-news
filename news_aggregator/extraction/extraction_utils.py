@@ -63,6 +63,8 @@ class ExtractionUtils:
         """
         if not content:
             return False
+        from ..core.resource_limits import enforce_text_limit
+        enforce_text_limit(content)
 
         # Relax min length if it's a known full article extraction
         min_len = self.min_content_length if not is_full_article else max(100, self.min_content_length // 2)

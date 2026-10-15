@@ -1,4 +1,5 @@
 import logging
+from ..core.resource_limits import ResourceLimitError
 """AI-powered extraction optimization service."""
 
 import json
@@ -156,6 +157,8 @@ class AIExtractionOptimizer:
             
             return None
             
+        except ResourceLimitError:
+            raise
         except Exception as e:
             logger.error(f"  ❌ AI analysis failed for {domain}: {e}")
             return None
@@ -172,12 +175,15 @@ class AIExtractionOptimizer:
             }
             
             async with get_http_client() as client:
-                response = await client.session.get(url, headers=headers, timeout=15)
-                if response.status == 200:
-                    html = await response.text()
-                    # Return first 8000 characters to keep prompt size manageable
-                    return html[:8000] if html else None
+                from ..core.resource_limits import read_page_text
+                async with await client.get(url, headers=headers, timeout=15, auto_decompress=False) as response:
+                    if response.status == 200:
+                        html = await read_page_text(response)
+                        # Bound the body before reducing the AI sample.
+                        return html[:8000] if html else None
                     
+        except ResourceLimitError:
+            raise
         except Exception as e:
             logger.warning(f"    ⚠️ Failed to fetch sample HTML from {url}: {e}")
         return None

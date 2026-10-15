@@ -1,0 +1,218 @@
+Thu Oct 15 11:13:49 AM UTC 2026
+sha256:c6ffb6098d85ab7e083d2b8bfc0414eea4d4890d6d77480e314dc6f5d6dbecae 2026-10-15T08:59:42.97485609Z 785d28a5dc1af11e6b748ecc2d4926c5135c99af
+PID                 PPID                RSS                 VSZ                 ELAPSED             COMMAND
+2389767             2389743             1142908             1545416             02:14:07            uvicorn
+5638740a5000-7ffe0ce86000 ---p 00000000 00:00 0                          [rollup]
+Rss:             1143308 kB
+Pss:             1142198 kB
+Pss_Anon:        1114320 kB
+Pss_File:          27878 kB
+Pss_Shmem:             0 kB
+Shared_Clean:       1756 kB
+Shared_Dirty:          0 kB
+Private_Clean:     27232 kB
+Private_Dirty:   1114320 kB
+Referenced:      1143124 kB
+Anonymous:       1114320 kB
+LazyFree:              0 kB
+AnonHugePages:         0 kB
+ShmemPmdMapped:        0 kB
+FilePmdMapped:         0 kB
+Shared_Hugetlb:        0 kB
+Private_Hugetlb:       0 kB
+Swap:                  0 kB
+SwapPss:               0 kB
+Locked:                0 kB
+APP_POOL
+async def _close_browser_instance(browser: Optional[Browser]) -> None:
+    """Await connection cleanup and terminate only a locally launched process."""
+    if browser is None:
+        return
+
+    close_error = None
+    aclose = getattr(browser, "aclose", None)
+    if callable(aclose):
+        try:
+            close_task = asyncio.create_task(aclose())
+            done, _ = await asyncio.wait({close_task}, timeout=_CLOSE_TIMEOUT_SECONDS)
+            if close_task not in done:
+                close_task.cancel()
+                _track_detached_task(close_task)
+                raise TimeoutError("browser aclose exceeded its deadline")
+            await close_task
+        except Exception as exc:  # Cleanup must not hide the primary failure.
+            close_error = exc
+
+    if getattr(browser, "_process", None) is not None:
+        try:
+            browser.stop()
+        except Exception as exc:
+            close_error = close_error or exc
+
+    if close_error is not None:
+        logger.warning(
+            "Browser cleanup failed (%s): %s",
+            type(close_error).__name__,
+            close_error,
+        )
+async def release_browser_cycle(lease: object) -> None:
+    """Release a cycle lease and close CDP only after the last cycle exits."""
+    global _close_when_idle
+    async with _cycle_lock:
+        if lease not in _active_cycle_leases:
+            return
+        _active_cycle_leases.remove(lease)
+        if _active_cycle_leases:
+            return
+        if _active_tab_leases:
+            _close_when_idle = True
+            return
+        _close_when_idle = False
+        await close_browser()
+        setattr(tab, "_browser_pool_browser", browser)
+        setattr(tab, "_browser_pool_generation", _browser_generation)
+        yield tab
+    finally:
+        try:
+            if tab:
+                try:
+                    await run_browser_operation(
+                        tab.close(),
+                        "close tab",
+                        timeout_seconds=settings.browser_tab_close_timeout_seconds,
+                        confirm_success=False,
+                        browser_session=tab,
+                        invalidate_on_timeout=True,
+                    )
+                except Exception as exc:
+                    logger.warning(
+                        "Browser tab cleanup failed for %s (%s): %s",
+                        url[:60],
+                        type(exc).__name__,
+                        exc,
+                    )
+        finally:
+            if acquired:
+                _tab_semaphore.release()
+            release_task = asyncio.create_task(
+NODRIVER_TAB
+    async def close(self):
+        """
+        close the current target (ie: tab,window,page)
+        :return:
+        :rtype:
+        """
+        if self.target and self.target.target_id:
+            await self.send(cdp.target.close_target(target_id=self.target.target_id))
+
+    async def get_window(self) -> Tuple[cdp.browser.WindowID, cdp.browser.Bounds]:
+        """
+        get the window Bounds
+        :return:
+        :rtype:
+        """
+        window_id, bounds = await self.send(
+            cdp.browser.get_window_for_target(self.target_id)
+        )
+        return window_id, bounds
+
+    async def get_content(self):
+        """
+        gets the current page source content (html)
+        :return:
+        :rtype:
+        """
+        doc: cdp.dom.Node = await self.send(cdp.dom.get_document(-1, True))
+        return await self.send(
+            cdp.dom.get_outer_html(backend_node_id=doc.backend_node_id)
+        )
+NODRIVER_CONNECTION
+    async def aopen(self):
+        """ """
+        if not self.websocket_url:
+            raise RuntimeError("having no parent and no websocket url")
+
+        if not self.socket or bool(self.socket.close_code):
+            self.socket = await websockets.connect(
+                self.websocket_url,
+                ping_timeout=PING_TIMEOUT,
+                max_size=MAX_SIZE,
+            )
+            self._listener_task = asyncio.create_task(self._listener())
+
+    async def aclose(self):
+        """ """
+        self._fail_pending_futures(ConnectionError("Connection closing"))
+        if self._listener_task is not None:
+            self._listener_task.cancel()
+            with contextlib.suppress(asyncio.CancelledError):
+                await self._listener_task
+            self._listener_task = None
+        if self.socket:
+            await self.socket.close()
+            await self.socket.wait_closed()
+        self.socket = None
+        if not _attach:
+            message["sessionId"] = self.session_id
+        message.update(kwargs)
+
+        tx = Transaction(message)
+        self.transactions.append(tx)
+        self._tx_by_id[_id] = tx
+
+        future = asyncio.get_running_loop().create_future()
+        self._mapper[_id] = future
+
+        while len(self.transactions) > 25:
+            # clears the oldest request/response pair from transactions
+            removed_tx = self.transactions.pop(0)
+            if removed_tx.id is not None:
+                self._tx_by_id.pop(removed_tx.id, None)
+NODRIVER_REGISTRY
+    from .browser import Browser, PathLike
+
+from .. import cdp
+from .config import Config
+
+__registered__instances__: Set[Browser] = set()
+
+logger = logging.getLogger(__name__)
+                )
+            )
+            self._process_pid = self._process.pid
+
+        self._http = HTTPApi((self.config.host, self.config.port))
+        util.get_registered_instances().add(self)
+        await asyncio.sleep(0.25)
+        for _ in range(5):
+            try:
+BEGIN
+ total | pending | content_bytes
+-------+---------+---------------
+ 16137 |       9 | 32 MB
+(1 row)
+
+ count
+-------
+     9
+(1 row)
+
+COMMIT
+Thu Oct 15 11:15:50 AM UTC 2026
+PID1_socket_fds 115
+ESTABLISHED_CHROME 111
+388:                    sa_and(Article.summary.is_(None), Article.content.isnot(None))
+450:                                    'access denied', 'cloudflare', 'enable javascript',
+463:                                    'cloudflare', 'captcha', 'robot', 'bot detection',
+5638740a5000-7ffe0ce86000 ---p 00000000 00:00 0                          [rollup]
+Rss:             1143308 kB
+Pss:             1142022 kB
+Pss_Anon:        1114320 kB
+Pss_File:          27702 kB
+Pss_Shmem:             0 kB
+Shared_Clean:       1832 kB
+Shared_Dirty:          0 kB
+Private_Clean:     27156 kB
+Private_Dirty:   1114320 kB
+Referenced:      1143124 kB
+Anonymous:       1114320 kB

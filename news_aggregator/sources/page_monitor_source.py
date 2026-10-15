@@ -21,6 +21,7 @@ except ImportError:
     cdp = None
 
 from bs4 import BeautifulSoup
+from ..core.resource_limits import ResourceLimitError, read_page_text, read_browser_html
 
 from .base import BaseSource, SourceInfo, Article, SourceType
 from ..core.http_client import get_http_client
@@ -230,6 +231,8 @@ class PageMonitorSource(BaseSource):
             logger.info(f"📊 Found {len(new_articles)} new articles")
             return new_articles
             
+        except ResourceLimitError:
+            raise
         except Exception as e:
             self.failure_count += 1
             logger.error(f"❌ Error monitoring page: {e}")
@@ -242,6 +245,8 @@ class PageMonitorSource(BaseSource):
                 return await self._take_browser_snapshot()
             else:
                 return await self._take_http_snapshot()
+        except ResourceLimitError:
+            raise
         except Exception as e:
             logger.warning(f"⚠️ Snapshot failed: {e}")
             return None
@@ -281,12 +286,7 @@ class PageMonitorSource(BaseSource):
                 await asyncio.sleep(2)  # Let JS finish
 
             # Get page content
-            html = await run_browser_operation(
-                tab.get_content(),
-                "page-monitor content retrieval",
-                timeout_seconds=operation_timeout,
-                browser_session=tab,
-            )
+            html = await read_browser_html(tab, timeout_seconds=operation_timeout)
 
             # Extract articles using various selectors
             articles = await self._extract_articles_from_html(html, tab)
@@ -316,9 +316,9 @@ class PageMonitorSource(BaseSource):
         }
         
         async with get_http_client() as client:
-            response = await client.session.get(self.config.url, headers=headers)
-            response.raise_for_status()
-            html = await response.text()
+            async with await client.get(self.config.url, headers=headers, auto_decompress=False) as response:
+                response.raise_for_status()
+                html = await read_page_text(response)
         
         articles = await self._extract_articles_from_html(html)
         
@@ -905,10 +905,10 @@ class PageMonitorSource(BaseSource):
                 }
                 
                 async with get_http_client() as client:
-                    response = await client.session.get(self.config.url, headers=headers)
-                    response.raise_for_status()
-                    logger.info("✅ HTTP connection successful")
-                    return True
+                    async with await client.get(self.config.url, headers=headers, auto_decompress=False) as response:
+                        response.raise_for_status()
+                        logger.info("✅ HTTP connection successful")
+                        return True
                     
         except Exception as e:
             logger.error(f"❌ Connection test failed: {e}")
