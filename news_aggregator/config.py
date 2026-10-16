@@ -1,7 +1,7 @@
 """Configuration management."""
 
 import os
-from typing import Optional, List, Dict, Any
+from typing import Optional, List, Dict, Any, Literal
 from datetime import datetime, timedelta
 
 from pydantic import Field, SecretStr, field_validator
@@ -87,6 +87,12 @@ class Settings(BaseSettings):
     extraction_http_max_bytes: int = Field(default=5 * 1024 * 1024, gt=0, alias="EXTRACTION_HTTP_MAX_BYTES")
     extraction_browser_max_bytes: int = Field(default=5 * 1024 * 1024, gt=0, alias="EXTRACTION_BROWSER_MAX_BYTES")
     extraction_text_max_chars: int = Field(default=100000, gt=0, alias="EXTRACTION_TEXT_MAX_CHARS")
+    extraction_service_mode: Literal['python', 'shadow', 'go'] = Field(default='python', alias='EXTRACTION_SERVICE_MODE')
+    extraction_service_url: Optional[str] = Field(default=None, alias='EXTRACTION_SERVICE_URL')
+    extraction_service_token: Optional[SecretStr] = Field(default=None, alias='EXTRACTION_SERVICE_TOKEN')
+    extraction_service_timeout_seconds: float = Field(default=30, gt=0, le=30, allow_inf_nan=False, alias='EXTRACTION_SERVICE_TIMEOUT_SECONDS')
+    extraction_service_total_budget_seconds: float = Field(default=120, gt=0, le=600, allow_inf_nan=False, alias='EXTRACTION_SERVICE_TOTAL_BUDGET_SECONDS')
+    extraction_service_python_fallback: bool = Field(default=False, alias='EXTRACTION_SERVICE_PYTHON_FALLBACK')
     cache_ttl: int = Field(default=86400, alias="CACHE_TTL")
     cache_dir: str = Field(default="/tmp/rss_cache", alias="CACHE_DIR")
     cache_max_size_mb: float = Field(default=500.0, alias="CACHE_MAX_SIZE_MB")  # Maximum cache size in MB

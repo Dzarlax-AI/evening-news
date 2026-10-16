@@ -1,0 +1,36 @@
+{
+  "version": 1,
+  "cases": [
+    {
+      "id": "article.readability_after_selector_miss",
+      "source_type": "article",
+      "source_name": "Synthetic article fixture",
+      "methods": [
+        "E08",
+        "E09"
+      ],
+      "provenance": {
+        "kind": "synthetic",
+        "derived_from": [
+          "news_aggregator/extraction/extraction_strategies.py",
+          "news_aggregator/extraction/html_processor.py"
+        ]
+      },
+      "input": {
+        "strategy": "readability",
+        "url": "https://article-readability_after_selector_miss.example.test/article",
+        "html": "<html><body><header>Site masthead</header><nav>Sections and menus</nav><div><h1>Archive report</h1><div>A cooperative of small libraries has started a shared preservation project for local newspapers and oral histories. Its public update explains how volunteers scan fragile pages, attach dates and contributor names, and keep source files available for future researchers. The organizers say the first collection will cover several decades of neighborhood reporting, with clear notes where an original issue or recording is missing.</div><aside>Related posts</aside><footer>Copyright</footer></div></body></html>"
+      },
+      "expected": {
+        "contains": [
+          "A cooperative of small libraries has started a shared preservation p"
+        ],
+        "not_contains": [],
+        "fields": {},
+        "state": "extracted",
+        "trace_contains": [],
+        "method": "readability"
+      }
+    }
+  ]
+}

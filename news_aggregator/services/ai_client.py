@@ -83,6 +83,7 @@ class AIClient:
             logger.info(f"  🔗 Extracting content with metadata from URL: {article_url}")
             # Step 1: Extract article content using enhanced extractor with metadata
             from ..extraction import ContentExtractor
+            from ..extraction.service_client import ExtractionServiceError
             
             # Try AI-enhanced extraction first
             try:
@@ -101,6 +102,9 @@ class AIClient:
                         content = await content_extractor.extract_article_content(article_url)
                     
             except ResourceLimitError:
+                raise
+            except ExtractionServiceError:
+                # A service outage must reach durable retry without analyzing stale input.
                 raise
             except Exception as e:
                 logger.warning(f"  ⚠️ Content extraction failed: {e}")
@@ -146,6 +150,8 @@ class AIClient:
                 }
 
             extracted_fields = {'content': content, 'image_url': metadata_result.get('image_url')}
+            if metadata_result.get('media_files'):
+                extracted_fields['media_files'] = metadata_result['media_files']
             # A short extraction is an enrichment miss. Let the caller use its
             # full original source content without classifying the stub as junk.
             if len(content.strip()) < 30 and len((original_context or '').strip()) >= 30:
@@ -194,8 +200,8 @@ class AIClient:
             logger.error(f"  ❌ Error getting article summary with metadata: {e}")
             return {
                 **extracted_fields,
-                '_processing_error': type(e).__name__,
-                '_processing_terminal': getattr(e, 'status_code', None) in {400, 413, 422},
+                '_processing_error': getattr(e, 'code', type(e).__name__),
+                '_processing_terminal': getattr(e, 'terminal', False) or getattr(e, 'status_code', None) in {400, 413, 422},
                 '_retry_after_seconds': getattr(e, 'retry_after_seconds', None),
                 'summary': None,
                 'publication_date': metadata_result.get('publication_date'),

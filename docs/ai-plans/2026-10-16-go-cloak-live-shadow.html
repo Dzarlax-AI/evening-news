@@ -1,0 +1,124 @@
+<!doctype html>
+<html lang="ru"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1">
+<title>Evening News — Go/Cloak на реальных production URL</title>
+<style>body{margin:0;background:#f7f5ef;color:#292929;font:16px/1.6 system-ui,sans-serif}main{max-width:1000px;margin:auto;padding:30px 20px 60px}section{background:white;padding:22px;margin:20px 0;border:1px solid #ddd9d0;border-radius:8px}h1,h2{line-height:1.25}h1{font-family:Georgia,serif}a{color:#315a79}code,pre{background:#f1f0ec}code{padding:2px 4px;overflow-wrap:anywhere}pre{padding:15px;overflow:auto}table{border-collapse:collapse;width:100%}td,th{text-align:left;vertical-align:top;padding:9px;border-bottom:1px solid #ddd}.gate{border-left:4px solid #987135}@media(max-width:650px){table{display:block;overflow:auto}}</style>
+</head><body><main>
+<h1>Go/Cloak: теневой прогон на реальных URL</h1>
+<p>16 октября 2026. <strong>Статус: live batch выполнен; Go release gate не пройден.</strong> Python завершил 50 заданий; Go остановлен на восьмом. Production-конвейер не переключен. <a href="../go-cloak-live-shadow-2026-10-16.md">Полный отчет</a>.</p>
+<p>Цель — проверить native Go/Cloak на ограниченной выборке настоящих публичных статей, которыми занимается production, сравнить с изолированным Python-контролем и собрать ошибки/качество/ресурсы. Рабочие маршрутизация, scheduler, AI, learning и доставка не меняются.</p>
+
+<section><h2>1. Проверенная исходная точка и варианты</h2>
+<p>Read-only проверка VPS подтвердила <code>news_web</code> на <code>ghcr.io/dzarlax-ai/rss-summarizer@sha256:b6abbb428543e846d0310b86ff41236a6df028985a00ebfe4714357d22e67060</code> и shared <code>infra-chrome</code> на <code>cloakhq/cloakbrowser:0.5.2@sha256:2c0d257802f54c4f86c9ccae336864baf63e118612732127cb96df35756a57a4</code>. Они подключены к <code>infra</code>. Текущий synthetic soak находится в отдельных контейнерах и не имеет внешнего доступа. Он продолжается по своему четырехчасовому плану.</p>
+<p>На VPS доступны <code>nsenter</code>, <code>iptables</code>, <code>nft</code>, <code>ip</code>. Снимок MemAvailable при подготовке — около 3027 MiB; это не резерв памяти и не гарантия доступной емкости к моменту запуска.</p>
+<table><thead><tr><th>Вариант</th><th>Решение</th></tr></thead><tbody>
+<tr><td>Ограниченная read-only выборка из БД → отдельный batch shadow</td><td><strong>Первый этап.</strong> Настоящие URL и архивные результаты, нет дополнительной работы внутри production-задания.</td></tr>
+<tr><td>Непрерывно зеркалировать новые задания</td><td>Следующий этап после результатов batch. Нужны постоянный источник событий/курсор, backpressure и отдельный gate; сейчас не добавляем.</td></tr>
+<tr><td>Inline shadow в production ContentExtractor</td><td>Не использовать: добавляет задержку и работу в критический путь. Это также запрещено существующим <code>deploy/news-extractor/README.md</code>.</td></tr>
+</tbody></table>
+<p>Существующий <code>scripts/compare_extractor_service.py</code> — offline supplied-HTML сравнение с браузером выключенным; он не доказывает live native path. <code>scripts/benchmark_native_cloak.py</code> ограничен synthetic origin/readiness. Их нельзя просто назвать production shadow без отдельного адаптера.</p>
+</section>
+
+<section><h2>2. Выборка и работа с данными</h2>
+<ol>
+<li>Проверить реальную схему <code>articles</code>/<code>sources</code> и взять ограниченную выборку через прямой PostgreSQL SELECT в транзакции <code>READ ONLY</code>, с <code>statement_timeout=3s</code>, <code>lock_timeout=1s</code>. Использовать имеющееся соединение приложения только внутри отдельного короткого export-процесса; не запускать lifespan, migrations или orchestrator.</li>
+<li>Верхняя граница — 50 уникальных публичных HTTPS article URL на порту 443, максимум 10 на hostname, за последние 7 дней по <code>articles.fetched_at</code>, с <code>processing_state='completed'</code>, <code>is_advertisement IS FALSE</code> и <code>sources.source_type IN ('rss','custom')</code>. Source type не равен extraction method: выборка не доказывает покрытие всех методов.</li>
+<li>Прочитать не более 1000 последних кандидатов, ограничивая SQL-объем архивного content до существующего предела 100000 символов на запись. Дедупликация и отбор публичных URL выполняются до любой загрузки; меньше 50 доступных подходящих URL — допустимый фактический размер, а не повод ослабить правила.</li>
+<li>Исключить credentials, query string и fragment, IP literals, single-label hostnames, private/special адреса, локальные/административные URL и Telegram-message URL. Это консервативный первый subset; все исключения считаются и отражаются в покрытии. Список URL берется только из выбранных записей, без обхода ссылок и добавления случайных сайтов.</li>
+<li>Экспортировать только id, source type, URL, title, ограниченный content, publication time и необходимые media/metadata. Не копировать summary, source config, cookies, profile, full .env или ключи AI/Telegram. Доступы БД не попадают в worker/controller/gateway.</li>
+<li>Raw corpus, URL→case mapping и ограниченные результаты остаются на собственном VPS в root-only каталоге (0700/0600), максимум 64 MiB corpus и 256 MiB capture/reports. При достижении лимита — остановка, без перезаписи evidence. Локально забирается только обезличенный отчет, без URL/body/токенов. Срок хранения raw — 7 дней; timestamp истечения записывается в manifest, удаление только этого каталога выполняется при последующей явной уборке artifacts.</li>
+</ol>
+<p>Архивный <code>articles.content</code> не считается эталоном свежей загрузки: он может быть RSS-snippet, устаревшим или прошедшим другую обработку. Отдельно учитывать различия во времени, paywall/challenge и намеренные улучшения.</p>
+</section>
+
+<section><h2>3. Выделенный стенд и обязательный сетевой gate</h2>
+<pre>Read-only DB export → root-only bounded corpus
+                             ↓
+                    isolated shadow runner
+                       ↙             ↘
+            Python B control     Go C service
+                       ↘             ↙
+                 fresh dedicated Cloak per variant
+                             ↓
+                 authenticated CONNECT gateway → public HTTPS</pre>
+<p>B и C запускаются последовательно, каждый на свежем выделенном Cloak того же проверенного digest, с disposable context/job и concurrency 1. Контейнеры и сети получают новый префикс <code>news-native-shadow-</code>; точные IP назначаются Docker и проверяются, не заимствуются у <code>infra</code>. Порты не публикуются, Traefik labels выключены. Действующий synthetic soak и shared браузер не используются для live URL.</p>
+<p>Browser namespace допускает новые исходящие TCP-соединения только к точному IP/порту gateway. Отдельные control connections инициируются controller→CDP; browser не может инициировать соединения обратно к API/CDP, loopback или другим внутренним сервисам. Прямые Internet/LAN/DNS/UDP/IPv6 обходы блокируются. Для этого установить default-deny правила <strong>только внутри новых test network namespaces</strong> до запуска браузера/страниц; никакого изменения host firewall, shared namespace, host routing или сетей production. Если Docker/namespace lifecycle не позволяет доказать эту границу, live URL не запускаются.</p>
+<p>Gateway имеет отдельный namespace с публичным egress, новым случайным токеном, отключенными <code>EGRESS_TEST_MODE</code>/<code>EGRESS_TEST_ALLOWLIST</code>, DNS-проверкой всех ответов и pinned numeric dial. На сетевом уровне также закрыть gateway→private/special/LAN/control destinations; DNS разрешить только проверенному resolver. Изолированный worker/runner не получает свободного origin egress. Не использовать synthetic CA/SPKI flags, host-resolver fixture mapping, UA/hints overrides или private-origin bypass.</p>
+<p>До экспорта корпуса и public-origin прогонов — controlled TLS/network fixture проверки на отдельной bootstrap fixture-конфигурации (точечный test allowlist/SPKI допустим только там, без публичного egress): положительный путь proxy/TLS/JS/cookies; прямой IPv4/IPv6 и UDP/DNS bypass; private/mixed DNS/rebind; redirects/subresources/iframe/worker/WS/download/popup; loopback/control plane и proxy-auth leakage. Закрытые destinations проверяются trap endpoints и счетчиками namespace, без обращения к реальной БД/metadata endpoint. Проверять возможность реального handshake, а не только CDP rejection. Несовпадение expected deny или недоступность нормального пути блокирует запуск. После fixture gate пересоздать gateway/browser для live-профиля без test allowlist/SPKI; повторно проверить firewall traps и sanitized args. Первый выбранный публичный URL — проверка обычного certificate trust/native TLS; при ее отказе не обходить сертификаты и не запускать остальной corpus.</p>
+<p>Прокси ограничивает TLS-трафик, не decoded response bytes; CDP filters не заменяют firewall. Эти ограничения остаются и явно входят в отчет. При необходимости менять Go policy сначала добавить regression test и повторить gate, без ослабления ради сайта.</p>
+</section>
+
+<section><h2>4. Порядок запуска и ограничения нагрузки</h2>
+<ol>
+<li>Зафиксировать текущие git revision, dirty-source manifest/SHA-256, Python/Cloak image digests, Go binary hashes и фактические limits; не обозначать рабочее дерево как опубликованный release. Компиляция тестовых бинарников в отдельном Go-контейнере допустима; Docker images на VPS не собирать, ничего не публиковать.</li>
+<li>Реализовать и проверить network fixture stand; затем получить read-only corpus. Перед новым стендом требовать MemAvailable ≥ 2 GiB. Во время теста проверять память хоста каждые 10 s; ниже 1 GiB — завершить только shadow stand и сохранить incomplete report. Текущий soak не останавливать ради емкости.</li>
+<li>Первый smoke: не более 5 URL из корпуса, сначала Go C, затем изолированный Python B на свежем Cloak. При исправном lifecycle/telemetry перейти к оставшейся выборке. Не повторять уже обработанные URL автоматически: максимум одна B и одна C main navigation на выбранный URL, общий максимум 100 navigations; page subrequests отдельно ограничены policy.</li>
+<li>Один запрос одновременно, не чаще одной main navigation в 10 s. Каждое задание ≤ 30 s; весь shadow ≤ 2 h включая setup/gates и cleanup. На 429 учитывать Retry-After, не повторять запрос; больше заданий этому hostname в текущем варианте не отправлять. В HTTP/DOM errors нет неявного Python fallback.</li>
+<li>Предлагаемые hard limits активного варианта: Cloak 768 MiB / CPU 0.5 / pids 256 / shm 1 GiB; Go либо Python controller 384 MiB / CPU 0.5 / pids 128; gateway 128 MiB / CPU 0.25 / pids 64; внешний observer при отдельном процессе 256 MiB / CPU 0.25. Read-only rootfs, bounded tmpfs/logs, без restart policy. Профиль отличается от прежнего CPU=1 benchmark; численные результаты не смешивать.</li>
+<li>Health и OOM/restart counters проверять перед/после задания; cgroup memory/CPU/PIDs — каждую секунду, idle 5/30/60 s после smoke и финального задания. Ошибка ownership/cleanup/readiness, OOM, restart или потеря обязательной telemetry останавливает вариант, без автоматического восстановления. Обычная ошибка сайта сохраняется как исход задания и не исключается из denominator.</li>
+<li>Сохранить redacted report и полный failure/exclusion ledger. Cleanup по trap/timeout удаляет только зарегистрированные shadow containers/networks, оставляя root-only evidence. До финального сообщения проверить, что контейнеры остановлены, production не перезапускался и не осталось неожиданных ресурсов.</li>
+</ol>
+<p>Ни <code>EXTRACTION_SERVICE_MODE</code> production, ни его image/env, очередь, scheduler, source configuration и <code>infra-chrome</code> не меняются. AI, запись learning, reprocess и Telegram delivery в тесте отсутствуют по коду и конфигурации, а не только по флагу «dry run».</p>
+</section>
+
+<section><h2>5. Сравнение, файлы и проверки</h2>
+<p>Python B — DB-free native control на существующем nodriver, с тем же proxy/context/readiness/budgets и Python parsing helpers. Это сопоставимый контроль, а не утверждение о полном воспроизведении production method graph. C — настоящий <code>/v1/extract</code>, <code>use_browser=true</code>, без supplied HTML/content и без synthetic readiness selector. Сравнение с архивным production content публикуется отдельно как историческое.</p>
+<p>Фиксировать per-case state, native error/status/Retry-After, extraction method, длину и совпадение нормализованного текста, metadata/media, final URL provenance (raw только root-only), latency; отдельно source-change/expected refusal/quality difference. Равная длина или HTTP 200 не доказывают успешную экстракцию. Все различия требуют source-backed разбора; одинаковые Python и Go failures не считаются правильным результатом без проверки источника.</p>
+<table><thead><tr><th>Планируемые файлы</th><th>Содержание</th></tr></thead><tbody>
+<tr><td><code>scripts/export_native_shadow_corpus.py</code>, <code>tests/test_native_shadow_corpus.py</code> — новые</td><td>Bounded direct read-only SQL, schema/version check, фильтрация/manifest/exclusion counts, safe artifacts и отсутствие доступа к write helpers.</td></tr>
+<tr><td><code>scripts/run_native_shadow.py</code>, <code>tests/test_native_shadow.py</code> — новые</td><td>Real-origin B/C runner, matched generic readiness, DB-free parsing, auth/timeout/rate/lifecycle, source comparisons и redaction. Переиспользовать reviewed cgroup/cleanup логику без копирования fixture assumptions.</td></tr>
+<tr><td><code>scripts/native_shadow_stand.py</code>, <code>tests/test_native_shadow_stand.py</code> — новые</td><td>Учет только своих ресурсов, ephemeral namespaces/networks, deny rules и trap probes, fail-closed запуск, host budget watchdog и cleanup. Никаких production overlays.</td></tr>
+<tr><td><code>go/transport/</code>, <code>go/egress/</code>, существующие benchmark helpers — только при необходимости</td><td>Исправления конкретных найденных дефектов с regression tests; не менять default backend/API contract ради нового теста.</td></tr>
+<tr><td>Этот HTML и <code>docs/go-cloak-native-worker.md</code></td><td>Фактические команды, статусы gates, hashes/digests, реальные counts, результаты и ограничения после выполнения.</td></tr>
+</tbody></table>
+<pre>go -C go test ./...
+go -C go vet ./...
+go -C go mod verify
+# Linux with CGO:
+go -C go test -race ./...
+.venv/Scripts/python.exe -m pytest tests/test_native_cloak_benchmark.py tests/test_native_cloak_soak.py -q
+# После создания новых файлов:
+.venv/Scripts/python.exe -m pytest tests/test_native_shadow_corpus.py tests/test_native_shadow.py tests/test_native_shadow_stand.py -q</pre>
+<p>До live URL тесты подтверждают: SELECT read-only/timeout и ограничение объема до загрузки; URL exclusion без утечки; default-deny до browser startup; отказ при недоступной telemetry; сохранение failures и 429 без retry; отсутствие DB/AI/delivery в B/C; bounded storage, cancel, interrupted cleanup и сохранение чужих ресурсов. Live команды записываются после реализации CLI; выдуманные существующие флаги не используются.</p>
+<p>Ручная QA: inspect sanitized topology/args; controlled traps и TLS evidence; пять первых source-backed результатов; полный denominator/exclusions; версии и matched profile; отсутствие test allowlist/SPKI и публичных ports; cleanup; read-only проверка неизменности production image/start time/restart count.</p>
+</section>
+
+<section><h2>6. Ограничения, риски и откат</h2>
+<p>Первый batch — выборка реальных production URL, а не непрерывное зеркало и не весь application pipeline. Неполное покрытие HTTP, Telegram-message/collections/authenticated pages, query URL, всех extraction strategies и source configs должно быть видно в отчете. Он не доказывает экономию RAM полной будущей системы: Python app остается.</p>
+<p>Повторный browser fetch создает реальную дополнительную нагрузку на сайты и может получить изменившуюся страницу или anti-bot отказ. Полные URL и content чувствительны, поэтому raw не уходят с собственного VPS и не попадают в общий отчет. Нет обхода auth/paywall/challenge и production profiles.</p>
+<p>Откат — остановить только runner/worker/Cloak/gateway shadow и удалить их новые сети/namespaces после bounded drain. Production не требует восстановления env, маршрутов или БД, поскольку они не изменяются. Не включать fallback при network gate failure. Rollout, публикация image, canary и постоянное зеркалирование требуют следующего конкретного решения.</p>
+</section>
+
+<section class="gate"><h2>7. Открытые проверки и approval gate</h2>
+<p>До запуска неизвестны фактический размер подходящего корпуса, доступность сайтов, реальная схема/семантика archived content и работоспособность namespace restrictions с pinned Cloak. Это проверки этапа, не основания ослаблять лимиты. Если нужен иной охват, например Telegram или URL с query, сначала уточнить scope.</p>
+<p><strong>Запрашиваемое одобрение:</strong> реализовать описанный isolated batch shadow; выполнить его network gates; сделать bounded read-only export из production DB внутри VPS; запустить ≤ 50 публичных URL в отдельных Go C / Python B окружениях с суммарно ≤ 100 main navigations; сохранить raw на собственном VPS и вернуть redacted report. Не разрешает изменения production-конвейера, AI/learning/delivery, commit/push/PR, публикацию image или новый production deploy.</p>
+<p>После явного одобрения этого плана начать реализацию и изолированный запуск. Если gate не пройден, фиксировать blocker и продолжать только независимые безопасные проверки. Результаты и оставшиеся ограничения обновляются в этом же документе.</p>
+<p>Контекст: <a href="2026-10-16-go-cloak-native-worker.html">native worker plan</a>, <a href="../go-cloak-native-worker.md">проверки и замеры</a>, <a href="2026-10-16-go-backend-migration-roadmap.html">долгосрочный план Go backend</a>.</p>
+</section>
+<section id="execution"><h2>8. Фактическое выполнение</h2>
+<p>Python завершил 50 попыток: 3 непустых результата, 10 HTTP 403, 25 resource_limit, 10 timeout, 2 site_error. Go остановлен после 8 попыток: 7 HTTP 403 и native_browser_unavailable на case-0008; остальные 42 не запускались. Повторных загрузок не было. Точная причина сбоя пока не установлена; OOM и crash markers не обнаружены. Независимый здоровый Python-контроль завершен по правилу остановки отдельного варианта.</p>
+<ul>
+<li>Gate <code>news-native-shadow-f65d6c3bd3</code>: успешная JS/cookie страница; восемь ожидаемых отказов для приватного subrequest/redirect/iframe, worker, popup, WebSocket, download и origin auth. Trap accepted = 0, origin auth leak = 0. Все ресурсы gate удалены.</li>
+<li>Read-only export: 260 lightweight кандидатов, 50 выбранных URL; 206 исключены по hostname cap, 4 по общему cap. Corpus 150389 bytes, raw только на VPS; срок хранения до 23 октября 2026, 12:01:31 UTC, уборка вручную.</li>
+<li>Финальные focused Python проверки shadow/benchmark: 145 passed. Linux Go: <code>go test -race ./...</code>, <code>go vet ./...</code>, <code>go mod verify</code> пройдены после финального изменения Go.</li>
+<li>Найдены и исправлены: Unix transport для X11 вместо блокируемого IPv6 TCP fallback; shared cleanup budget 5 s вместо 2 s; best-effort stopLoading при обязательном atomic dispose и двух absence receipts; обработка <code>Page.navigate.isDownload</code>; sibling import для запуска mounted runner.</li>
+</ul>
+<p>В этом стенде pinned browser binary запускается напрямую с аргументами из pinned image; CDP проходит через ограниченный relay UID 65534. Это изменение wrapper lifecycle относительно production cloakserve, а не полная копия production запуска. Browser UID 0 не может открыть CDP loopback; разрешение есть только у relay. Все дополнительные controller/observer/relay/namespace cgroups учитываются.</p>
+<p>Клиентский лимит задания 30 s сохранен. Серверная очистка может выполняться независимо до 5 s; клиентский или внешний C timeout сохраняет failed row и останавливает весь вариант, без следующего задания и повторной навигации. Таймаут не доказывает недоступность самого сайта.</p>
+<p>Первый typed main-document HTTP 403 подтвердил обычный TLS без SPKI/CA обхода. Первоначальная реализация ошибочно требовала extraction success для продолжения; после сверки с разделами 3–4 проверка исправлена на подтвержденный origin HTTP response и здоровый lifecycle/telemetry. Proxy 407, transport/policy/deadline failures не принимаются за подтверждение TLS. Повторных навигаций не добавлено.</p>
+</section>
+<section><h2>9. Итог и следующие проверки</h2>
+<p>Mixed/private DNS и rebinding проверены unit tests с injected resolver и реальными namespace private-egress traps; внешнего controlled public-DNS rebinding integration test не было.</p>
+<p>На 12:37:24 UTC все временные live/diagnostic стенды удалены; production image/start time/restart count совпали с исходным снимком. Отдельный synthetic soak продолжается. 62 staged source hashes совпали с рабочими исходниками.</p>
+<p>Offline Go-парсер без сети отдельно проверен на трех сохраненных Python DOM: 218/0/5144 символов против Python 212/1433/5132; два success и один no_content, есть различия media. Это не заменяет live Go и не подтверждает качество или экономию RAM.</p>
+<p>Diagnostic binary прошел Linux race/vet/mod и synthetic gate news-native-shadow-d265994441; 286 diagnostic records прошли privacy check. Публичный повтор case-0008 не выполнялся. Для него требуется отдельное явное разрешение как исключение из правила одного Go-визита на URL; исходный failed report остается неизменным.</p>
+</section>
+<section><h2>10. Отдельно разрешенный диагностический повтор</h2>
+<p>После отдельного явного разрешения выполнен один повтор case-0008 на diagnostic binary: стенд news-native-shadow-30eb166075, запрос 12998 ms, снова native_browser_unavailable и ready=false. Исходный batch report/ledger сохранен.</p>
+<p>Контекст, конфигурация и Page.navigate прошли. Затем event_queue overflow: очередь CDP на 256 событий переполнилась, reader завершился, последующие команды и cleanup receipts получили event_overflow. Worker корректно tainted; весь выделенный стенд удален. Это подтвержденная причина диагностического повтора; точная причина первого неинструментированного сбоя остается недоказанной.</p>
+<p>На 13:33:15 UTC production images/start times/restart counts прежние, оба контейнера работают; временных native-shadow-run containers/networks нет. Следующая работа: bounded event dispatch с работоспособными replies/cleanup при overload и synthetic flood regression; новый public run не выполнялся и этим повтором не разрешается.</p>
+</section>
+<section><h2>11. Согласованная локальная фильтрация событий</h2>
+<p>После разрешения пользователя CDP reader фильтрует неиспользуемые события до очереди. Сохранены 16 методов, используемых обоими browser handlers; ответы команд не фильтруются. Размер 256 и fail-closed при переполнении нужными событиями сохранены. Неиспользуемые уведомления больше не обновляют activity timestamp; существующие DOM/readiness guards сохранены.</p>
+<p>WebSocket regression с 1024 ненужными событиями до ответа команды падал до исправления и проходит после; все 16 нужных событий сохраняют порядок/session ID. Отдельно проверен bounded overload нужными событиями. Windows tests/vet и Linux offline race/vet/mod verify пройдены. Browser-dependent live tests без endpoint пропущены. Повторных обращений к сайтам, изменения рабочих binary и deployment не было; практический эффект на Cloak пока не измерен.</p>
+</section>
+</main></body></html>

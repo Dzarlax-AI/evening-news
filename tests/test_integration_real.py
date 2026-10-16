@@ -17,6 +17,19 @@ pytestmark = pytest.mark.skipif(
 )
 
 
+async def close_test_browser(browser):
+    """Reap the owned process before pytest closes its Windows event loop."""
+    process = getattr(browser, "_process", None)
+    browser.stop()
+    if process is not None:
+        try:
+            await asyncio.wait_for(process.communicate(), timeout=10)
+        except asyncio.TimeoutError:
+            process.kill()
+            await asyncio.wait_for(process.communicate(), timeout=5)
+        assert process.returncode is not None
+
+
 # ── Website extraction ──────────────────────────────────────────────
 
 
@@ -31,7 +44,7 @@ async def test_real_website_get_content():
         assert "example domain" in html.lower()
         assert len(html) > 100
     finally:
-        browser.stop()
+        await close_test_browser(browser)
 
 
 @pytest.mark.asyncio
@@ -53,7 +66,7 @@ async def test_real_news_site_extraction():
             assert len(t.get_text(strip=True)) > 0
             assert t.get("href")
     finally:
-        browser.stop()
+        await close_test_browser(browser)
 
 
 # ── Telegram extraction ─────────────────────────────────────────────
@@ -75,7 +88,7 @@ async def test_real_telegram_channel():
 
         assert len(messages) >= 1, "Should find at least 1 Telegram message"
     finally:
-        browser.stop()
+        await close_test_browser(browser)
 
 
 @pytest.mark.asyncio
@@ -104,4 +117,4 @@ async def test_real_telegram_full_pipeline():
             assert a.title
             assert len(a.title) > 0
     finally:
-        browser.stop()
+        await close_test_browser(browser)

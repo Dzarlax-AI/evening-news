@@ -1,0 +1,28 @@
+name: evening-news-extractor-test
+services:
+  extractor:
+    image: evening-news-extractor-test:${EXTRACTOR_TEST_VERSION:-development}
+    build:
+      context: ./go
+      dockerfile: ../docker/Dockerfile.extractor
+      args:
+        BUILD_VERSION: ${EXTRACTOR_TEST_VERSION:-development}
+    environment:
+      LISTEN_ADDR: ':8080'
+      EXTRACTOR_SERVICE_TOKEN: ${EXTRACTOR_TEST_TOKEN:?Set a dedicated test token}
+      EXTRACTOR_MAX_CONCURRENT: '2'
+      EXTRACTOR_BROWSER_CONCURRENT: '1'
+      EXTRACTOR_HTTP_ONLY: 'true'
+    ports:
+      - '127.0.0.1:18080:8080'
+    read_only: true
+    cap_drop: [ALL]
+    security_opt: ['no-new-privileges:true']
+    pids_limit: 128
+    mem_limit: 256m
+    cpus: 1
+    restart: 'no'
+    stop_grace_period: 40s
+    networks: [extractor-test]
+networks:
+  extractor-test: {}

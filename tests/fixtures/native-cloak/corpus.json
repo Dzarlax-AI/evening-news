@@ -1,0 +1,10 @@
+{
+  "version": 1,
+  "cases": [
+    {"id": "article-js-cookie", "path": "/js-article", "expected_contains": ["Fixture signal alpha", "cookie confirmed"], "expected_state": "success"},
+    {"id": "redirect-article", "path": "/redirect", "expected_contains": ["Fixture signal beta"], "expected_state": "success"},
+    {"id": "slow-article", "path": "/slow", "expected_contains": ["Fixture signal gamma"], "expected_state": "success"},
+    {"id": "large-dom", "path": "/huge-dom", "expected_contains": ["Fixture signal delta"], "expected_state": "success"},
+    {"id": "challenge-page", "path": "/challenge", "expected_contains": [], "expected_state": "rejected", "expected_error": "native_browser_challenge"}
+  ]
+}

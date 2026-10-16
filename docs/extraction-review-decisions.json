@@ -1,0 +1,1153 @@
+{
+  "version": 1,
+  "reviews": [
+    {
+      "kind": "difference",
+      "case_id": "live.s1.article2.auto",
+      "field": "content",
+      "case_sha256": "ed9db3bfe7dafb1226a942d27dc19da5058fe47e897d530ada7866301d0fb701",
+      "python_sha256": "1675338e33562b803449f982e0d983d86e0d01391274921bdeffa8b2e2220854",
+      "go_sha256": "eea489cb9df9e30fdcf48648f23a8a08bb6acde970c4937529c42e5fa393a9fc",
+      "classification": "improvement",
+      "reason": "Provided captured rendered HTML populates source table: 15 rows / 30 cells, including all price pairs; Go uses browser_rendering. Remaining differences remove phone/contact form and duplicated popup form UI. Inert template Button contamination fixed. Source pricing loss is resolved.",
+      "evidence": "Astra source review; https://vroomservice.rs/ru/tire-fitting?utm_source=telegram&amp;utm_medium=cpc&amp;utm_campaign=srbnews; captured HTML SHA256 46aa56f26f3ba2f78f13b3a590ba86b896f5720f135f9a4f1b46d65467521a34",
+      "golden": {
+        "state": "extracted",
+        "contains": [
+          "R10-15",
+          "4300",
+          "R21 Runflat",
+          "15400",
+          "Размер колес Стоимость (динар)",
+          "R10-15 4300",
+          "R21 Runflat 15400",
+          "R22 - R26 11000"
+        ],
+        "fields": {
+          "url": "https://vroomservice.rs/ru/tire-fitting?utm_source=telegram&amp;utm_medium=cpc&amp;utm_campaign=srbnews",
+          "title": "Vroom Service Шиномонтаж",
+          "method": "browser_rendering"
+        },
+        "not_contains": [
+          "Button",
+          "Удобный способ сязи Не выбрано",
+          "Согласен с политикой конфиденциальности ЗАПИСАТЬСЯ"
+        ]
+      }
+    },
+    {
+      "kind": "difference",
+      "case_id": "live.s1.article2.auto",
+      "field": "media",
+      "case_sha256": "ed9db3bfe7dafb1226a942d27dc19da5058fe47e897d530ada7866301d0fb701",
+      "python_sha256": "746d78960755ff432de5138d0e5eae6ee997e2e325ba8ff4cf59d8b09ed62531",
+      "go_sha256": "717dc42568a0fee81511b94fed0df16426678dd5970194babb46061cfd66c4a7",
+      "classification": "improvement",
+      "reason": "Go uses actual rendered hero src (600x300 webp) instead of initial low-resolution 20px thumbnail; identical data-original and imgfield confirm same promotional image, alt retained. Only other omissions are Yandex/Facebook noscript tracking beacons; no primary image is lost.",
+      "evidence": "Astra source review; https://vroomservice.rs/ru/tire-fitting?utm_source=telegram&amp;utm_medium=cpc&amp;utm_campaign=srbnews; captured HTML SHA256 46aa56f26f3ba2f78f13b3a590ba86b896f5720f135f9a4f1b46d65467521a34",
+      "golden": {
+        "state": "extracted",
+        "contains": [
+          "R10-15",
+          "4300",
+          "R21 Runflat",
+          "15400",
+          "Размер колес Стоимость (динар)",
+          "R10-15 4300",
+          "R21 Runflat 15400",
+          "R22 - R26 11000"
+        ],
+        "fields": {
+          "url": "https://vroomservice.rs/ru/tire-fitting?utm_source=telegram&amp;utm_medium=cpc&amp;utm_campaign=srbnews",
+          "title": "Vroom Service Шиномонтаж",
+          "method": "browser_rendering"
+        },
+        "not_contains": [
+          "Button",
+          "Удобный способ сязи Не выбрано",
+          "Согласен с политикой конфиденциальности ЗАПИСАТЬСЯ"
+        ]
+      }
+    },
+    {
+      "kind": "difference",
+      "case_id": "live.s1.article2.readability",
+      "field": "state",
+      "case_sha256": "b39d95fa821a93715933cb7210d3941d3bc3f9a8b31dc1bc9da9132786d12e53",
+      "python_sha256": "33d04bd775e7b6c6436742508b41fa693a15bd2c902fcd994253392abd717740",
+      "go_sha256": "3466d77536c0dcc64a3bbf8815f0a316293c652c8073c78336b7c32a38c52d8a",
+      "classification": "improvement",
+      "reason": "Go extracts source service description from a commercial service page; Python forced readability rejects. This is service content, not an editorial article.",
+      "evidence": "Astra source review; https://vroomservice.rs/ru/tire-fitting?utm_source=telegram&amp;utm_medium=cpc&amp;utm_campaign=srbnews; captured HTML SHA256 46aa56f26f3ba2f78f13b3a590ba86b896f5720f135f9a4f1b46d65467521a34",
+      "golden": {
+        "state": "extracted",
+        "fields": {
+          "url": "https://vroomservice.rs/ru/tire-fitting?utm_source=telegram&amp;utm_medium=cpc&amp;utm_campaign=srbnews",
+          "title": "Vroom Service Шиномонтаж"
+        },
+        "contains": [
+          "Шиномонтаж Vroom"
+        ]
+      }
+    },
+    {
+      "kind": "difference",
+      "case_id": "live.s10.article1.auto",
+      "field": "media",
+      "case_sha256": "76cb4eb14cb9eea255bf6f4dd9d7c655c57ceaaa008f57631347c1e01600235b",
+      "python_sha256": "5a844fd1f232cabeac00fa6e0660f1bb65898f4d25ed0c5ae436f37be2aa3480",
+      "go_sha256": "9cf802e5d9002f01c3db88a2078646de70554fb9974b8a076292ab3e60092890",
+      "classification": "equivalent",
+      "reason": "Each camo src is paired with Python canonical URL on the same source img via data-canonical-src. License MIT SVG MIME now preserved as image/svg. Remaining URL/alt entity decoding and empty optional fields are equivalent.",
+      "evidence": "Astra source review; https://github.com/onehumanbeing/esp32-iphone-agent; captured HTML SHA256 feec4da27e13ba2ba326e4f5d508c4d92baf5a82e62a5c30abab8e1f6ea7b683",
+      "golden": {
+        "state": "extracted",
+        "fields": {
+          "url": "https://github.com/onehumanbeing/esp32-iphone-agent",
+          "title": "GitHub - onehumanbeing/esp32-iphone-agent: Let an AI model use a real iPhone with a $7 ESP32: AirPlay eyes, USB HID hands, any OpenAI-compatible vision model. No Mac, no developer account, no jailbreak."
+        }
+      }
+    },
+    {
+      "kind": "difference",
+      "case_id": "live.s10.article1.readability",
+      "field": "content",
+      "case_sha256": "cca956337489ae72416dd14fbe4f533beea353e454d02662abefc70074f661af",
+      "python_sha256": "b36e47ba5ad68eec43585a85474727663427c9d92c2b8e11ff3baebe6d4df533",
+      "go_sha256": "bb81d33dc367fe04283656df2ef3567a6dd21bd3ecf2e0432915a88ca500b176",
+      "classification": "improvement",
+      "reason": "All previous missing README headings are restored. Remaining additions are source README headings and real Roadmap list items; no baseline prose is lost.",
+      "evidence": "Astra source review; https://github.com/onehumanbeing/esp32-iphone-agent; captured HTML SHA256 feec4da27e13ba2ba326e4f5d508c4d92baf5a82e62a5c30abab8e1f6ea7b683",
+      "golden": {
+        "state": "extracted",
+        "fields": {
+          "url": "https://github.com/onehumanbeing/esp32-iphone-agent",
+          "title": "GitHub - onehumanbeing/esp32-iphone-agent: Let an AI model use a real iPhone with a $7 ESP32: AirPlay eyes, USB HID hands, any OpenAI-compatible vision model. No Mac, no developer account, no jailbreak."
+        },
+        "contains": [
+          "1. Flash the board (plugged into the Mac)",
+          "3. Set up (once, in the app)",
+          "How it works",
+          "Roadmap"
+        ]
+      }
+    },
+    {
+      "kind": "difference",
+      "case_id": "live.s10.article1.readability",
+      "field": "media",
+      "case_sha256": "cca956337489ae72416dd14fbe4f533beea353e454d02662abefc70074f661af",
+      "python_sha256": "5a844fd1f232cabeac00fa6e0660f1bb65898f4d25ed0c5ae436f37be2aa3480",
+      "go_sha256": "9cf802e5d9002f01c3db88a2078646de70554fb9974b8a076292ab3e60092890",
+      "classification": "equivalent",
+      "reason": "Each camo src is paired with Python canonical URL on the same source img via data-canonical-src. License MIT SVG MIME now preserved as image/svg. Remaining URL/alt entity decoding and empty optional fields are equivalent.",
+      "evidence": "Astra source review; https://github.com/onehumanbeing/esp32-iphone-agent; captured HTML SHA256 feec4da27e13ba2ba326e4f5d508c4d92baf5a82e62a5c30abab8e1f6ea7b683",
+      "golden": {
+        "state": "extracted",
+        "fields": {
+          "url": "https://github.com/onehumanbeing/esp32-iphone-agent",
+          "title": "GitHub - onehumanbeing/esp32-iphone-agent: Let an AI model use a real iPhone with a $7 ESP32: AirPlay eyes, USB HID hands, any OpenAI-compatible vision model. No Mac, no developer account, no jailbreak."
+        },
+        "contains": [
+          "1. Flash the board (plugged into the Mac)",
+          "3. Set up (once, in the app)",
+          "How it works",
+          "Roadmap"
+        ]
+      }
+    },
+    {
+      "kind": "difference",
+      "case_id": "live.s10.article2.auto",
+      "field": "media",
+      "case_sha256": "83b6b9ab0d951904eb9c401ae8cf799138bfc016fe9d8fa5c28d866e16550986",
+      "python_sha256": "0533e8e22ada383c05ff0d048b1c17156e788c090ddf6b721ae8ff13478a496b",
+      "go_sha256": "f25497f641ed69681c8a3aa342ae0c7987b35eaa53511c3e6912370c6ffd7381",
+      "classification": "equivalent",
+      "reason": "Lists become identical after HTML entity decoding and removal of empty optional values; URL, image order and nonempty metadata are preserved.",
+      "evidence": "Astra source review; https://github.com/Arekejoker/qwen21-nsfw-pose-skill; captured HTML SHA256 e1daa2b80d3a2332eefff4de9df3ae1bbec3a21c6ec6ac43b592068731da6ad1",
+      "golden": {
+        "state": "extracted",
+        "fields": {
+          "url": "https://github.com/Arekejoker/qwen21-nsfw-pose-skill",
+          "title": "GitHub - Arekejoker/qwen21-nsfw-pose-skill: Qwen-Image 2.1 NSFW/姿势出图 skill：作者级提示词配方 + NSFW LoRA + 136 姿势 VNCCS 人偶控制；适用 Claude Code / Codex / Cursor / OpenClaw"
+        }
+      }
+    },
+    {
+      "kind": "difference",
+      "case_id": "live.s10.article2.readability",
+      "field": "content",
+      "case_sha256": "e1c7f99c712161bf01cd1634bbd4ffdb88c0fbd7a0a7d03a6f316fffac502f12",
+      "python_sha256": "d6b853f4ebb116fe01721b1ed8e2e1e8a4ea7d6f03497a430063588cc11bc1fa",
+      "go_sha256": "77073a05d9b76a716674ea7c4c55abb529476d71ccebe308ea6c7760243fd728",
+      "classification": "improvement",
+      "reason": "All previous missing README headings are restored. Remaining additions are source README headings and real Roadmap list items; no baseline prose is lost.",
+      "evidence": "Astra source review; https://github.com/Arekejoker/qwen21-nsfw-pose-skill; captured HTML SHA256 e1daa2b80d3a2332eefff4de9df3ae1bbec3a21c6ec6ac43b592068731da6ad1",
+      "golden": {
+        "state": "extracted",
+        "fields": {
+          "url": "https://github.com/Arekejoker/qwen21-nsfw-pose-skill",
+          "title": "GitHub - Arekejoker/qwen21-nsfw-pose-skill: Qwen-Image 2.1 NSFW/姿势出图 skill：作者级提示词配方 + NSFW LoRA + 136 姿势 VNCCS 人偶控制；适用 Claude Code / Codex / Cursor / OpenClaw"
+        },
+        "contains": [
+          "本配方输出：同一海边场景的三级对照（L0 → L1 → L2）",
+          "3D 人偶精确姿势（Route ④，136 姿势库）",
+          "效果展示"
+        ]
+      }
+    },
+    {
+      "kind": "difference",
+      "case_id": "live.s10.article2.readability",
+      "field": "media",
+      "case_sha256": "e1c7f99c712161bf01cd1634bbd4ffdb88c0fbd7a0a7d03a6f316fffac502f12",
+      "python_sha256": "0533e8e22ada383c05ff0d048b1c17156e788c090ddf6b721ae8ff13478a496b",
+      "go_sha256": "f25497f641ed69681c8a3aa342ae0c7987b35eaa53511c3e6912370c6ffd7381",
+      "classification": "equivalent",
+      "reason": "Lists become identical after HTML entity decoding and removal of empty optional values; URL, image order and nonempty metadata are preserved.",
+      "evidence": "Astra source review; https://github.com/Arekejoker/qwen21-nsfw-pose-skill; captured HTML SHA256 e1daa2b80d3a2332eefff4de9df3ae1bbec3a21c6ec6ac43b592068731da6ad1",
+      "golden": {
+        "state": "extracted",
+        "fields": {
+          "url": "https://github.com/Arekejoker/qwen21-nsfw-pose-skill",
+          "title": "GitHub - Arekejoker/qwen21-nsfw-pose-skill: Qwen-Image 2.1 NSFW/姿势出图 skill：作者级提示词配方 + NSFW LoRA + 136 姿势 VNCCS 人偶控制；适用 Claude Code / Codex / Cursor / OpenClaw"
+        },
+        "contains": [
+          "本配方输出：同一海边场景的三级对照（L0 → L1 → L2）",
+          "3D 人偶精确姿势（Route ④，136 姿势库）",
+          "效果展示"
+        ]
+      }
+    },
+    {
+      "kind": "difference",
+      "case_id": "live.s11.article1.auto",
+      "field": "content",
+      "case_sha256": "835281f3ce0158a3e8987957a68030fc136a03ec6eb9a301eba32e154e1b87bd",
+      "python_sha256": "95abcd404b944f077c62d240b94a7ee1daae260d312a09e0eb37f3a7f06604e1",
+      "go_sha256": "53d4946ccd36f0bfab10ef3480af2965d60b369ffd7749f538fd7871e8172d1d",
+      "classification": "improvement",
+      "reason": "Added date/title are source article header metadata; added share tokens are ordinary paragraph verbs removed incorrectly by Python. No added UI is present in this exact difference.",
+      "evidence": "Astra source review; https://snscratchpad.com/posts/models-as-insider-risks/; captured HTML SHA256 062f0589a58f812e2a2b8d50e050ceda8ed928ede875d4418231e6c311fa135f",
+      "golden": {
+        "state": "extracted",
+        "fields": {
+          "url": "https://snscratchpad.com/posts/models-as-insider-risks/",
+          "title": "Models as Insider Risks in the Super Intelligence Era"
+        },
+        "contains": [
+          "mechanisms to share what went wrong",
+          "share learnings industrywide"
+        ]
+      }
+    },
+    {
+      "kind": "difference",
+      "case_id": "live.s11.article1.readability",
+      "field": "content",
+      "case_sha256": "0f68c598082981dd779184a653a5baeacc520d8a929e35d33e4ce464aa190b45",
+      "python_sha256": "95abcd404b944f077c62d240b94a7ee1daae260d312a09e0eb37f3a7f06604e1",
+      "go_sha256": "b2aaf7631000192e93ee8fa471423bff02c83b7fae539f24a477989436f79b87",
+      "classification": "improvement",
+      "reason": "Added date/title are source article header metadata; added share tokens are ordinary paragraph verbs removed incorrectly by Python. No added UI is present in this exact difference.",
+      "evidence": "Astra source review; https://snscratchpad.com/posts/models-as-insider-risks/; captured HTML SHA256 062f0589a58f812e2a2b8d50e050ceda8ed928ede875d4418231e6c311fa135f",
+      "golden": {
+        "state": "extracted",
+        "fields": {
+          "url": "https://snscratchpad.com/posts/models-as-insider-risks/",
+          "title": "Models as Insider Risks in the Super Intelligence Era"
+        },
+        "contains": [
+          "mechanisms to share what went wrong",
+          "share learnings industrywide"
+        ]
+      }
+    },
+    {
+      "kind": "difference",
+      "case_id": "live.s11.article2.auto",
+      "field": "content",
+      "case_sha256": "7e9d6c08f919845ef4af2372bbdade99fd5d0eed42748198adbcaffaa6a59199",
+      "python_sha256": "4a09c20f5e0aa0575f4dc10e4f296e6c15dd55a2ddc875d759bf05b3d9e2cd28",
+      "go_sha256": "ba6e38e574fa362042ccf05768ef501cd0b57b16a2bc6dfca17a47d19be4eab1",
+      "classification": "improvement",
+      "reason": "Added date/title are source article header metadata; added share tokens are ordinary paragraph verbs removed incorrectly by Python. No added UI is present in this exact difference.",
+      "evidence": "Astra source review; https://snscratchpad.com/posts/reverse-information-paradox/; captured HTML SHA256 524f8f4e9025d750e5a0bb52da2bd249174f49500961b8865b958059249ff7f7",
+      "golden": {
+        "state": "extracted",
+        "fields": {
+          "url": "https://snscratchpad.com/posts/reverse-information-paradox/",
+          "title": "The Reverse Information Paradox"
+        },
+        "contains": [
+          "In the age of intelligence, how should firms protect their core IP?"
+        ]
+      }
+    },
+    {
+      "kind": "difference",
+      "case_id": "live.s2.article1.auto",
+      "field": "state",
+      "case_sha256": "39d0de480ad38628a543637643d617a563a2bf611be6dadc8e25659ce061ebab",
+      "python_sha256": "3466d77536c0dcc64a3bbf8815f0a316293c652c8073c78336b7c32a38c52d8a",
+      "go_sha256": "33d04bd775e7b6c6436742508b41fa693a15bd2c902fcd994253392abd717740",
+      "classification": "improvement",
+      "reason": "Source article is membership-gated (This story is for members / Create a free account to continue reading), no substantive body. Python falsely accepts surrounding subscription UI.",
+      "evidence": "Astra source review; https://aisecret.us/coreweaves-lenders-want-out/; captured HTML SHA256 e1a9a6923e93dc2fd63c45e39c26f16cac594733c8ef7bf54653e8696110af8e",
+      "golden": {
+        "state": "failed",
+        "fields": {
+          "content": ""
+        },
+        "not_contains": [
+          "This story is for members",
+          "Create a free account to continue reading."
+        ]
+      }
+    },
+    {
+      "kind": "difference",
+      "case_id": "live.s2.article1.readability",
+      "field": "state",
+      "case_sha256": "5967dce17d6a440121b2d0b89a7fec28ff5cecb4aa75bf1855130602d65cd39d",
+      "python_sha256": "3466d77536c0dcc64a3bbf8815f0a316293c652c8073c78336b7c32a38c52d8a",
+      "go_sha256": "33d04bd775e7b6c6436742508b41fa693a15bd2c902fcd994253392abd717740",
+      "classification": "improvement",
+      "reason": "Source article is membership-gated (This story is for members / Create a free account to continue reading), no substantive body. Python falsely accepts surrounding subscription UI.",
+      "evidence": "Astra source review; https://aisecret.us/coreweaves-lenders-want-out/; captured HTML SHA256 e1a9a6923e93dc2fd63c45e39c26f16cac594733c8ef7bf54653e8696110af8e",
+      "golden": {
+        "state": "failed",
+        "fields": {
+          "content": ""
+        },
+        "not_contains": [
+          "This story is for members",
+          "Create a free account to continue reading."
+        ]
+      }
+    },
+    {
+      "kind": "difference",
+      "case_id": "live.s2.article2.auto",
+      "field": "content",
+      "case_sha256": "0df33f01306131fb0b5e33c99c5fd466746e9e051ee0db2b2c2fbc2d9e1cc670",
+      "python_sha256": "952a2d722fee86b93111afff49e10b88a5066569d99641004c9f02bec7209fd5",
+      "go_sha256": "3a8de2f574a027199e9cc5ce0edf6c6f2ab3ef81d284230c3b18e452194afc74",
+      "classification": "improvement",
+      "reason": "Recovered source subtitle and substantive section headings, plus source-authored cross-promotion list in .real-body. Bookmark attribution and Latest/Share/Next-edition navigation removed. Readability omits isolated Apply Here / Reach out CTA link controls; surrounding article prose preserved.",
+      "evidence": "Astra source review; https://aisecret.us/a-tool-claims-to-end-all-software/; captured HTML SHA256 e3c9aa484d27cb03178d5ae26468eb7a34eafd40935a0d82d57061fa46087538",
+      "golden": {
+        "state": "extracted",
+        "fields": {
+          "url": "https://aisecret.us/a-tool-claims-to-end-all-software/",
+          "title": "🛎️ A Tool Claims to End All Software"
+        },
+        "contains": [
+          "Plus: Anthropic Blames Open AI for Doomsday, Musk Wants Your Credit Card",
+          "Good Morning, AI Enthusiasts!",
+          "A Tool Claims to End All Software",
+          "Build With Meta’s Newest AI Models"
+        ],
+        "not_contains": [
+          "AI Secret Magna Ding",
+          "AI Secret Magna",
+          "Next edition",
+          "← Latest Daily Newsletter",
+          "Share ↗"
+        ]
+      }
+    },
+    {
+      "kind": "difference",
+      "case_id": "live.s2.article2.readability",
+      "field": "content",
+      "case_sha256": "7d8f266cdea296617c2906f48a2b04b19674b3a4808136a01bf8762d3c4885d4",
+      "python_sha256": "952a2d722fee86b93111afff49e10b88a5066569d99641004c9f02bec7209fd5",
+      "go_sha256": "5e723b3e8da84ebb2832939f83146fe3213db2d6d044147b277c43e6223554a2",
+      "classification": "improvement",
+      "reason": "Recovered source subtitle and substantive section headings, plus source-authored cross-promotion list in .real-body. Bookmark attribution and Latest/Share/Next-edition navigation removed. Readability omits isolated Apply Here / Reach out CTA link controls; surrounding article prose preserved.",
+      "evidence": "Astra source review; https://aisecret.us/a-tool-claims-to-end-all-software/; captured HTML SHA256 e3c9aa484d27cb03178d5ae26468eb7a34eafd40935a0d82d57061fa46087538",
+      "golden": {
+        "state": "extracted",
+        "fields": {
+          "url": "https://aisecret.us/a-tool-claims-to-end-all-software/",
+          "title": "🛎️ A Tool Claims to End All Software"
+        },
+        "contains": [
+          "Plus: Anthropic Blames Open AI for Doomsday, Musk Wants Your Credit Card",
+          "Good Morning, AI Enthusiasts!",
+          "A Tool Claims to End All Software",
+          "Build With Meta’s Newest AI Models"
+        ],
+        "not_contains": [
+          "AI Secret Magna Ding",
+          "AI Secret Magna",
+          "Next edition",
+          "← Latest Daily Newsletter",
+          "Share ↗"
+        ]
+      }
+    },
+    {
+      "kind": "difference",
+      "case_id": "live.s3.article1.auto",
+      "field": "content",
+      "case_sha256": "af128dffe22a1eeb2ed1d1cd6948692b60d866a4f0cdfa402d119882f010e3f0",
+      "python_sha256": "ef94105d962d83ee7e15104725578cdf68f62c5566a3ea913609c4a997578aba",
+      "go_sha256": "a2e7c229aa022acb61d050a70f517b187b21e85c4c2d24ae724fb756cf0cd430",
+      "classification": "improvement",
+      "reason": "Only remaining difference is the source editorial subtitle, recovered once. Author bio, share UI and recommendation list contamination are removed.",
+      "evidence": "Astra source review; https://www.theverge.com/news/1012293/meta-apple-muse-spark-open-ai-model-mlx; captured HTML SHA256 328e9b02dcf59e64099368b1a901aaa8ba92574c8c4443bb7b70491d809a21b4",
+      "golden": {
+        "state": "extracted",
+        "fields": {
+          "url": "https://www.theverge.com/news/1012293/meta-apple-muse-spark-open-ai-model-mlx",
+          "title": "Meta and Apple team up to make Muse AI models run better on Macs"
+        },
+        "contains": [
+          "Meta and Apple’s CEOs are publicly supporting each company’s work on Muse Spark Open."
+        ],
+        "not_contains": [
+          "Most Popular",
+          "Link Share Gift",
+          "Jay Peters is a senior reporter",
+          "Terrence O'Brien is the Verge’s weekend editor"
+        ]
+      }
+    },
+    {
+      "kind": "difference",
+      "case_id": "live.s3.article1.auto",
+      "field": "media",
+      "case_sha256": "af128dffe22a1eeb2ed1d1cd6948692b60d866a4f0cdfa402d119882f010e3f0",
+      "python_sha256": "a5c6ce047bc8ba17af2b3af9bfe24cb91389c9936d8c9214cf29270c89ced427",
+      "go_sha256": "14ee84006dcbee5c4a625dbc133b46f06ae79cb33d4a4621b5e2e99b02095fce",
+      "classification": "equivalent",
+      "reason": "Lists become identical after HTML entity decoding and removal of empty optional values; URL, image order and nonempty metadata are preserved.",
+      "evidence": "Astra source review; https://www.theverge.com/news/1012293/meta-apple-muse-spark-open-ai-model-mlx; captured HTML SHA256 328e9b02dcf59e64099368b1a901aaa8ba92574c8c4443bb7b70491d809a21b4",
+      "golden": {
+        "state": "extracted",
+        "fields": {
+          "url": "https://www.theverge.com/news/1012293/meta-apple-muse-spark-open-ai-model-mlx",
+          "title": "Meta and Apple team up to make Muse AI models run better on Macs"
+        },
+        "contains": [
+          "Meta and Apple’s CEOs are publicly supporting each company’s work on Muse Spark Open."
+        ],
+        "not_contains": [
+          "Most Popular",
+          "Link Share Gift",
+          "Jay Peters is a senior reporter",
+          "Terrence O'Brien is the Verge’s weekend editor"
+        ]
+      }
+    },
+    {
+      "kind": "difference",
+      "case_id": "live.s3.article1.readability",
+      "field": "content",
+      "case_sha256": "6c66771132107c31c83df17655eb112cdedbfe21bc7c695111ad14727ad6672c",
+      "python_sha256": "ef94105d962d83ee7e15104725578cdf68f62c5566a3ea913609c4a997578aba",
+      "go_sha256": "a2e7c229aa022acb61d050a70f517b187b21e85c4c2d24ae724fb756cf0cd430",
+      "classification": "improvement",
+      "reason": "Only remaining difference is the source editorial subtitle, recovered once. Author bio, share UI and recommendation list contamination are removed.",
+      "evidence": "Astra source review; https://www.theverge.com/news/1012293/meta-apple-muse-spark-open-ai-model-mlx; captured HTML SHA256 328e9b02dcf59e64099368b1a901aaa8ba92574c8c4443bb7b70491d809a21b4",
+      "golden": {
+        "state": "extracted",
+        "fields": {
+          "url": "https://www.theverge.com/news/1012293/meta-apple-muse-spark-open-ai-model-mlx",
+          "title": "Meta and Apple team up to make Muse AI models run better on Macs"
+        },
+        "contains": [
+          "Meta and Apple’s CEOs are publicly supporting each company’s work on Muse Spark Open."
+        ],
+        "not_contains": [
+          "Most Popular",
+          "Link Share Gift",
+          "Jay Peters is a senior reporter",
+          "Terrence O'Brien is the Verge’s weekend editor"
+        ]
+      }
+    },
+    {
+      "kind": "difference",
+      "case_id": "live.s3.article1.readability",
+      "field": "media",
+      "case_sha256": "6c66771132107c31c83df17655eb112cdedbfe21bc7c695111ad14727ad6672c",
+      "python_sha256": "a5c6ce047bc8ba17af2b3af9bfe24cb91389c9936d8c9214cf29270c89ced427",
+      "go_sha256": "14ee84006dcbee5c4a625dbc133b46f06ae79cb33d4a4621b5e2e99b02095fce",
+      "classification": "equivalent",
+      "reason": "Lists become identical after HTML entity decoding and removal of empty optional values; URL, image order and nonempty metadata are preserved.",
+      "evidence": "Astra source review; https://www.theverge.com/news/1012293/meta-apple-muse-spark-open-ai-model-mlx; captured HTML SHA256 328e9b02dcf59e64099368b1a901aaa8ba92574c8c4443bb7b70491d809a21b4",
+      "golden": {
+        "state": "extracted",
+        "fields": {
+          "url": "https://www.theverge.com/news/1012293/meta-apple-muse-spark-open-ai-model-mlx",
+          "title": "Meta and Apple team up to make Muse AI models run better on Macs"
+        },
+        "contains": [
+          "Meta and Apple’s CEOs are publicly supporting each company’s work on Muse Spark Open."
+        ],
+        "not_contains": [
+          "Most Popular",
+          "Link Share Gift",
+          "Jay Peters is a senior reporter",
+          "Terrence O'Brien is the Verge’s weekend editor"
+        ]
+      }
+    },
+    {
+      "kind": "difference",
+      "case_id": "live.s3.article2.auto",
+      "field": "content",
+      "case_sha256": "9146c33e80dded8b38b42007717ccea438e3834c20196cb9b1212cd322516a15",
+      "python_sha256": "3093fc19d90c1abf056011199983e95695a33cc7c815f2ef19a3b65056c12c7e",
+      "go_sha256": "1203140327f76af0491b116161d56fb6b94a6b4b70b92b2785b8a9c89060f953",
+      "classification": "improvement",
+      "reason": "Only remaining difference is the source editorial subtitle, recovered once. Author bio, share UI and recommendation list contamination are removed.",
+      "evidence": "Astra source review; https://www.theverge.com/tech/1012200/sony-made-a-5900-gold-plated-walkman-mp3-player; captured HTML SHA256 1509607f2bc8e94d9294b53e2e8db815efc383115fa394c87dc47d8d01742c3d",
+      "golden": {
+        "state": "extracted",
+        "fields": {
+          "url": "https://www.theverge.com/tech/1012200/sony-made-a-5900-gold-plated-walkman-mp3-player",
+          "title": "Sony made a $5,900 gold-plated Walkman MP3 player"
+        },
+        "contains": [
+          "A $6,000 media player slathered is gold is the perfect gift for the millionaire audiophile in your life."
+        ],
+        "not_contains": [
+          "Most Popular",
+          "Link Share Gift",
+          "Jay Peters is a senior reporter",
+          "Terrence O'Brien is the Verge’s weekend editor"
+        ]
+      }
+    },
+    {
+      "kind": "difference",
+      "case_id": "live.s3.article2.auto",
+      "field": "media",
+      "case_sha256": "9146c33e80dded8b38b42007717ccea438e3834c20196cb9b1212cd322516a15",
+      "python_sha256": "a4203d578a7a8878921dc857b79894d71d8cc28e1392f4190ee0fd32f9d26dda",
+      "go_sha256": "63f128c60cdc66358070965115be01cc5b1980a6a8e29f91d90faa3374b5128f",
+      "classification": "equivalent",
+      "reason": "Lists become identical after HTML entity decoding and removal of empty optional values; URL, image order and nonempty metadata are preserved.",
+      "evidence": "Astra source review; https://www.theverge.com/tech/1012200/sony-made-a-5900-gold-plated-walkman-mp3-player; captured HTML SHA256 1509607f2bc8e94d9294b53e2e8db815efc383115fa394c87dc47d8d01742c3d",
+      "golden": {
+        "state": "extracted",
+        "fields": {
+          "url": "https://www.theverge.com/tech/1012200/sony-made-a-5900-gold-plated-walkman-mp3-player",
+          "title": "Sony made a $5,900 gold-plated Walkman MP3 player"
+        },
+        "contains": [
+          "A $6,000 media player slathered is gold is the perfect gift for the millionaire audiophile in your life."
+        ],
+        "not_contains": [
+          "Most Popular",
+          "Link Share Gift",
+          "Jay Peters is a senior reporter",
+          "Terrence O'Brien is the Verge’s weekend editor"
+        ]
+      }
+    },
+    {
+      "kind": "difference",
+      "case_id": "live.s3.article2.readability",
+      "field": "content",
+      "case_sha256": "973f4d007cd7839b08498e6a02f6a8f743444b189831f407c7a904c4e3fbb6e0",
+      "python_sha256": "3093fc19d90c1abf056011199983e95695a33cc7c815f2ef19a3b65056c12c7e",
+      "go_sha256": "1203140327f76af0491b116161d56fb6b94a6b4b70b92b2785b8a9c89060f953",
+      "classification": "improvement",
+      "reason": "Only remaining difference is the source editorial subtitle, recovered once. Author bio, share UI and recommendation list contamination are removed.",
+      "evidence": "Astra source review; https://www.theverge.com/tech/1012200/sony-made-a-5900-gold-plated-walkman-mp3-player; captured HTML SHA256 1509607f2bc8e94d9294b53e2e8db815efc383115fa394c87dc47d8d01742c3d",
+      "golden": {
+        "state": "extracted",
+        "fields": {
+          "url": "https://www.theverge.com/tech/1012200/sony-made-a-5900-gold-plated-walkman-mp3-player",
+          "title": "Sony made a $5,900 gold-plated Walkman MP3 player"
+        },
+        "contains": [
+          "A $6,000 media player slathered is gold is the perfect gift for the millionaire audiophile in your life."
+        ],
+        "not_contains": [
+          "Most Popular",
+          "Link Share Gift",
+          "Jay Peters is a senior reporter",
+          "Terrence O'Brien is the Verge’s weekend editor"
+        ]
+      }
+    },
+    {
+      "kind": "difference",
+      "case_id": "live.s3.article2.readability",
+      "field": "media",
+      "case_sha256": "973f4d007cd7839b08498e6a02f6a8f743444b189831f407c7a904c4e3fbb6e0",
+      "python_sha256": "a4203d578a7a8878921dc857b79894d71d8cc28e1392f4190ee0fd32f9d26dda",
+      "go_sha256": "63f128c60cdc66358070965115be01cc5b1980a6a8e29f91d90faa3374b5128f",
+      "classification": "equivalent",
+      "reason": "Lists become identical after HTML entity decoding and removal of empty optional values; URL, image order and nonempty metadata are preserved.",
+      "evidence": "Astra source review; https://www.theverge.com/tech/1012200/sony-made-a-5900-gold-plated-walkman-mp3-player; captured HTML SHA256 1509607f2bc8e94d9294b53e2e8db815efc383115fa394c87dc47d8d01742c3d",
+      "golden": {
+        "state": "extracted",
+        "fields": {
+          "url": "https://www.theverge.com/tech/1012200/sony-made-a-5900-gold-plated-walkman-mp3-player",
+          "title": "Sony made a $5,900 gold-plated Walkman MP3 player"
+        },
+        "contains": [
+          "A $6,000 media player slathered is gold is the perfect gift for the millionaire audiophile in your life."
+        ],
+        "not_contains": [
+          "Most Popular",
+          "Link Share Gift",
+          "Jay Peters is a senior reporter",
+          "Terrence O'Brien is the Verge’s weekend editor"
+        ]
+      }
+    },
+    {
+      "kind": "difference",
+      "case_id": "live.s7.article1.auto",
+      "field": "content",
+      "case_sha256": "8bd79329ccd6d668b5de5ce71e8cba88fe766673f5951af2b3982680191d2ba3",
+      "python_sha256": "4c072b659cbd6f3c4135de0a0a85e6c3ba8bacfad77222dfecf047ca35a290d3",
+      "go_sha256": "1cfbc9d972e7dbe7b475f0a066e76b1227df4fedf39d9e2711b9709563567dab",
+      "classification": "improvement",
+      "reason": "Only additions are authored paragraph/section labels in podcast body. Player controls, discussion and sidebar descriptions removed.",
+      "evidence": "Astra source review; https://www.lennysnewsletter.com/p/metas-new-muse-wonder-model-good; captured HTML SHA256 d90fdaecdf4fdf6e01169d01384987a57c7203db2576acc2ff2f817196f02e4e",
+      "golden": {
+        "state": "extracted",
+        "fields": {
+          "url": "https://www.lennysnewsletter.com/p/metas-new-muse-wonder-model-good",
+          "title": "Meta’s new ‘Muse Wonder’ model: good for AI agents, bad for design"
+        },
+        "contains": [
+          "Listen or watch on YouTube, Spotify, or Apple Podcasts",
+          "What you’ll learn:",
+          "In this episode, we cover:",
+          "Tools referenced:",
+          "Where to find Claire Vo:"
+        ],
+        "not_contains": [
+          "Playback speed",
+          "Share post at current time",
+          "Discussion about this video",
+          "Appears in episode"
+        ]
+      }
+    },
+    {
+      "kind": "difference",
+      "case_id": "live.s7.article1.auto",
+      "field": "media",
+      "case_sha256": "8bd79329ccd6d668b5de5ce71e8cba88fe766673f5951af2b3982680191d2ba3",
+      "python_sha256": "4654bb9a461ce64b65a669c27e7bf239b7b82ed4b977ae275ef32321489bf2ef",
+      "go_sha256": "f1ca4ca9001d5c304f2bd9e93bba3606f90338a3482232a8c2d14127aff3da62",
+      "classification": "improvement",
+      "reason": "Only tracking pixels removed (Twitter adsct or Yandex/Facebook noscript beacons); remaining differences are entity decoding and absent empty optional fields. Source tracker URLs and noscript context confirm they are not article images.",
+      "evidence": "Astra source review; https://www.lennysnewsletter.com/p/metas-new-muse-wonder-model-good; captured HTML SHA256 d90fdaecdf4fdf6e01169d01384987a57c7203db2576acc2ff2f817196f02e4e",
+      "golden": {
+        "state": "extracted",
+        "fields": {
+          "url": "https://www.lennysnewsletter.com/p/metas-new-muse-wonder-model-good",
+          "title": "Meta’s new ‘Muse Wonder’ model: good for AI agents, bad for design"
+        },
+        "contains": [
+          "Listen or watch on YouTube, Spotify, or Apple Podcasts",
+          "What you’ll learn:",
+          "In this episode, we cover:",
+          "Tools referenced:",
+          "Where to find Claire Vo:"
+        ],
+        "not_contains": [
+          "Playback speed",
+          "Share post at current time",
+          "Discussion about this video",
+          "Appears in episode"
+        ]
+      }
+    },
+    {
+      "kind": "difference",
+      "case_id": "live.s7.article1.readability",
+      "field": "media",
+      "case_sha256": "c0590d5eae05432a11df805513e8ad6254646b2d903d6cf2a581adfca2f03711",
+      "python_sha256": "4654bb9a461ce64b65a669c27e7bf239b7b82ed4b977ae275ef32321489bf2ef",
+      "go_sha256": "f1ca4ca9001d5c304f2bd9e93bba3606f90338a3482232a8c2d14127aff3da62",
+      "classification": "improvement",
+      "reason": "Only tracking pixels removed (Twitter adsct or Yandex/Facebook noscript beacons); remaining differences are entity decoding and absent empty optional fields. Source tracker URLs and noscript context confirm they are not article images.",
+      "evidence": "Astra source review; https://www.lennysnewsletter.com/p/metas-new-muse-wonder-model-good; captured HTML SHA256 d90fdaecdf4fdf6e01169d01384987a57c7203db2576acc2ff2f817196f02e4e",
+      "golden": {
+        "state": "extracted",
+        "fields": {
+          "url": "https://www.lennysnewsletter.com/p/metas-new-muse-wonder-model-good",
+          "title": "Meta’s new ‘Muse Wonder’ model: good for AI agents, bad for design"
+        }
+      }
+    },
+    {
+      "kind": "difference",
+      "case_id": "live.s7.article2.auto",
+      "field": "content",
+      "case_sha256": "a40e486b49649329d49aec825062f393d4bf488dff76c35d310c9da4987e6c21",
+      "python_sha256": "42e69199d36b5a60fe3ac57d9746a35fe05d5b5411857cb09f3eed5ed17b73fc",
+      "go_sha256": "e1dec5e24c7695556d63c1b5aeede92b47f524497640ed283ff478eefcfcf261",
+      "classification": "improvement",
+      "reason": "Source subtitle, section headings (auto), and ordinary share/subscribe verbs are preserved. Later prose displacement is declared sentence_or_word_8000 presentation cap; raw original_chars remains larger. No added reaction/share UI remains.",
+      "evidence": "Astra source review; https://www.lennysnewsletter.com/p/how-to-tell-if-a-startup-has-a-moat; captured HTML SHA256 e1d88d8c81e437b0a5e2410ceebca9c72b51cae40bca1f70bfe0902e36c9a680",
+      "golden": {
+        "state": "extracted",
+        "fields": {
+          "url": "https://www.lennysnewsletter.com/p/how-to-tell-if-a-startup-has-a-moat",
+          "title": "How to tell if a startup has a moat"
+        },
+        "contains": [
+          "A framework for assessing whether the company you’re considering joining is built to last",
+          "Each week, I share deeply researched product",
+          "definitely subscribe to his fabulous newsletter"
+        ],
+        "not_contains": [
+          "307 2 11 Share"
+        ]
+      }
+    },
+    {
+      "kind": "difference",
+      "case_id": "live.s7.article2.auto",
+      "field": "media",
+      "case_sha256": "a40e486b49649329d49aec825062f393d4bf488dff76c35d310c9da4987e6c21",
+      "python_sha256": "7837326ca98a996156f9a39f25648e7dbc1111579572e445bf12ddb3489e373d",
+      "go_sha256": "217ff409ee0b2f3c48c22fc10a0c9a99617a712c776522a7eee1ba31a4bac959",
+      "classification": "improvement",
+      "reason": "Only tracking pixels removed (Twitter adsct or Yandex/Facebook noscript beacons); remaining differences are entity decoding and absent empty optional fields. Source tracker URLs and noscript context confirm they are not article images.",
+      "evidence": "Astra source review; https://www.lennysnewsletter.com/p/how-to-tell-if-a-startup-has-a-moat; captured HTML SHA256 e1d88d8c81e437b0a5e2410ceebca9c72b51cae40bca1f70bfe0902e36c9a680",
+      "golden": {
+        "state": "extracted",
+        "fields": {
+          "url": "https://www.lennysnewsletter.com/p/how-to-tell-if-a-startup-has-a-moat",
+          "title": "How to tell if a startup has a moat"
+        },
+        "contains": [
+          "A framework for assessing whether the company you’re considering joining is built to last",
+          "Each week, I share deeply researched product",
+          "definitely subscribe to his fabulous newsletter"
+        ],
+        "not_contains": [
+          "307 2 11 Share"
+        ]
+      }
+    },
+    {
+      "kind": "difference",
+      "case_id": "live.s7.article2.readability",
+      "field": "content",
+      "case_sha256": "b198ed8915ba086944b3e9a68a1c144b9ce299d9b3ce5fc3811e034108ece83e",
+      "python_sha256": "42e69199d36b5a60fe3ac57d9746a35fe05d5b5411857cb09f3eed5ed17b73fc",
+      "go_sha256": "0d5964a3089c886bab2517c7060eb393497dd3b832eabbfafa0fa6c74b565935",
+      "classification": "improvement",
+      "reason": "Source subtitle, section headings (auto), and ordinary share/subscribe verbs are preserved. Later prose displacement is declared sentence_or_word_8000 presentation cap; raw original_chars remains larger. No added reaction/share UI remains.",
+      "evidence": "Astra source review; https://www.lennysnewsletter.com/p/how-to-tell-if-a-startup-has-a-moat; captured HTML SHA256 e1d88d8c81e437b0a5e2410ceebca9c72b51cae40bca1f70bfe0902e36c9a680",
+      "golden": {
+        "state": "extracted",
+        "fields": {
+          "url": "https://www.lennysnewsletter.com/p/how-to-tell-if-a-startup-has-a-moat",
+          "title": "How to tell if a startup has a moat"
+        },
+        "contains": [
+          "A framework for assessing whether the company you’re considering joining is built to last",
+          "Each week, I share deeply researched product",
+          "definitely subscribe to his fabulous newsletter"
+        ],
+        "not_contains": [
+          "307 2 11 Share"
+        ]
+      }
+    },
+    {
+      "kind": "difference",
+      "case_id": "live.s7.article2.readability",
+      "field": "media",
+      "case_sha256": "b198ed8915ba086944b3e9a68a1c144b9ce299d9b3ce5fc3811e034108ece83e",
+      "python_sha256": "7837326ca98a996156f9a39f25648e7dbc1111579572e445bf12ddb3489e373d",
+      "go_sha256": "217ff409ee0b2f3c48c22fc10a0c9a99617a712c776522a7eee1ba31a4bac959",
+      "classification": "improvement",
+      "reason": "Only tracking pixels removed (Twitter adsct or Yandex/Facebook noscript beacons); remaining differences are entity decoding and absent empty optional fields. Source tracker URLs and noscript context confirm they are not article images.",
+      "evidence": "Astra source review; https://www.lennysnewsletter.com/p/how-to-tell-if-a-startup-has-a-moat; captured HTML SHA256 e1d88d8c81e437b0a5e2410ceebca9c72b51cae40bca1f70bfe0902e36c9a680",
+      "golden": {
+        "state": "extracted",
+        "fields": {
+          "url": "https://www.lennysnewsletter.com/p/how-to-tell-if-a-startup-has-a-moat",
+          "title": "How to tell if a startup has a moat"
+        },
+        "contains": [
+          "A framework for assessing whether the company you’re considering joining is built to last",
+          "Each week, I share deeply researched product",
+          "definitely subscribe to his fabulous newsletter"
+        ],
+        "not_contains": [
+          "307 2 11 Share"
+        ]
+      }
+    },
+    {
+      "kind": "difference",
+      "case_id": "live.s8.article1.auto",
+      "field": "content",
+      "case_sha256": "307d60f825da7738d6fa2120582ea9d8baed602bef6e6390dcfc72d187813375",
+      "python_sha256": "77ec18ed5e6bf6ab63d9eb3475de6a582fa121ea30e67cbcad08030c3590d979",
+      "go_sha256": "c7df4f48d3c4d8d444250ab8e342f3031b6662393865fba2f01a12d0b278e8db",
+      "classification": "improvement",
+      "reason": "Go recovers substantive source summary/transcript where Python reduces output to description. Source main contains headings and extensive paragraphs.",
+      "evidence": "Astra source review; https://karpathy.bearblog.dev/sequoia-ascent-2026/; captured HTML SHA256 8ae5e75e3e4e7ab4dd4f7bc496f8be4f205b3b50ac4b2536be4f3c9399f554e3",
+      "golden": {
+        "state": "extracted",
+        "contains": [
+          "cleaned up transcript",
+          "Agentic Engineering"
+        ],
+        "fields": {
+          "url": "https://karpathy.bearblog.dev/sequoia-ascent-2026/",
+          "title": "Sequoia Ascent 2026 summary"
+        }
+      }
+    },
+    {
+      "kind": "difference",
+      "case_id": "live.s8.article1.readability",
+      "field": "state",
+      "case_sha256": "79304f05eab80d7e4bd42ec13ba31f8667682bb40e8a71288ba987d76e57b132",
+      "python_sha256": "33d04bd775e7b6c6436742508b41fa693a15bd2c902fcd994253392abd717740",
+      "go_sha256": "3466d77536c0dcc64a3bbf8815f0a316293c652c8073c78336b7c32a38c52d8a",
+      "classification": "improvement",
+      "reason": "Go accepts real long source main transcript which Python quality policy rejects.",
+      "evidence": "Astra source review; https://karpathy.bearblog.dev/sequoia-ascent-2026/; captured HTML SHA256 8ae5e75e3e4e7ab4dd4f7bc496f8be4f205b3b50ac4b2536be4f3c9399f554e3",
+      "golden": {
+        "state": "extracted",
+        "contains": [
+          "cleaned up transcript",
+          "Agentic Engineering"
+        ],
+        "fields": {
+          "url": "https://karpathy.bearblog.dev/sequoia-ascent-2026/",
+          "title": "Sequoia Ascent 2026 summary"
+        }
+      }
+    },
+    {
+      "kind": "difference",
+      "case_id": "live.s8.article2.auto",
+      "field": "content",
+      "case_sha256": "e245731aae76c453bfaa13e04c605647204cdf11b04b5a2d210be302a8831948",
+      "python_sha256": "4df7ac69ca9afa14b119279018577171138466dd9c15acf356f64ea73398bf79",
+      "go_sha256": "bf09940b83a66ef469938af579250e4d6982fd2f7091e544212685a65bf35044",
+      "classification": "improvement",
+      "reason": "Added tweet is part of linked prose this shower of thoughts tweet; added Animals vs. Ghosts / Verifiability / The Space of Minds are article links. Readability omits repeated title from content while title metadata remains available.",
+      "evidence": "Astra source review; https://karpathy.bearblog.dev/year-in-review-2025/; captured HTML SHA256 589f136185b36662d03c1ec74ab0b7d8ccfdda2bde581a22ef623c3534d2553d",
+      "golden": {
+        "state": "extracted",
+        "fields": {
+          "url": "https://karpathy.bearblog.dev/year-in-review-2025/",
+          "title": "2025 LLM Year in Review"
+        },
+        "contains": [
+          "this shower of thoughts tweet"
+        ]
+      }
+    },
+    {
+      "kind": "difference",
+      "case_id": "live.s8.article2.readability",
+      "field": "content",
+      "case_sha256": "fb05389584c0df11549db2144b302342d2166d800ee8f38a5e4915bdbab9f6e7",
+      "python_sha256": "db49e3f4a37c6ef8d49ddb8ec53de563d719abb755ad038ef8c15d6d19187152",
+      "go_sha256": "94a6ecdde497a5cffdcacce218b5d763cc50386857edbcf8c5e89a2c6ea6153b",
+      "classification": "improvement",
+      "reason": "Added tweet is part of linked prose this shower of thoughts tweet; added Animals vs. Ghosts / Verifiability / The Space of Minds are article links. Readability omits repeated title from content while title metadata remains available.",
+      "evidence": "Astra source review; https://karpathy.bearblog.dev/year-in-review-2025/; captured HTML SHA256 589f136185b36662d03c1ec74ab0b7d8ccfdda2bde581a22ef623c3534d2553d",
+      "golden": {
+        "state": "extracted",
+        "fields": {
+          "url": "https://karpathy.bearblog.dev/year-in-review-2025/",
+          "title": "2025 LLM Year in Review"
+        },
+        "contains": [
+          "this shower of thoughts tweet"
+        ]
+      }
+    },
+    {
+      "kind": "baseline_failure",
+      "case_id": "live.s1.article2.readability",
+      "case_sha256": "b39d95fa821a93715933cb7210d3941d3bc3f9a8b31dc1bc9da9132786d12e53",
+      "python_sha256": "21b1a580237138ad8583b41bd71b8aba69c5d1cfa22bc8b58a258983793bff3c",
+      "go_sha256": "1cc2271758dd5291068a124759ecb62cd8c084d3e4fb5ed71303c9e14b3f2224",
+      "classification": "baseline_defect",
+      "reason": "Go extracts source service description from a commercial service page; Python forced readability rejects. This is service content, not an editorial article.",
+      "evidence": "Astra source review; https://vroomservice.rs/ru/tire-fitting?utm_source=telegram&amp;utm_medium=cpc&amp;utm_campaign=srbnews; HTML SHA256 46aa56f26f3ba2f78f13b3a590ba86b896f5720f135f9a4f1b46d65467521a34",
+      "golden": {
+        "state": "extracted",
+        "fields": {
+          "url": "https://vroomservice.rs/ru/tire-fitting?utm_source=telegram&amp;utm_medium=cpc&amp;utm_campaign=srbnews",
+          "title": "Vroom Service Шиномонтаж"
+        },
+        "contains": [
+          "Шиномонтаж Vroom"
+        ]
+      }
+    },
+    {
+      "kind": "baseline_failure",
+      "case_id": "live.s2.article1.auto",
+      "case_sha256": "39d0de480ad38628a543637643d617a563a2bf611be6dadc8e25659ce061ebab",
+      "python_sha256": "64b9b14c90dce53aed48b59901711d3530585e75f68ac1ef05bcc6d749c2c740",
+      "go_sha256": "3a8e87681a69be66705a390aa4d207df8ecbadeba6f4a8e5b760ef5d468a0e9b",
+      "classification": "baseline_defect",
+      "reason": "Source article is membership-gated (This story is for members / Create a free account to continue reading), no substantive body. Python falsely accepts surrounding subscription UI.",
+      "evidence": "Astra source review; https://aisecret.us/coreweaves-lenders-want-out/; HTML SHA256 e1a9a6923e93dc2fd63c45e39c26f16cac594733c8ef7bf54653e8696110af8e",
+      "golden": {
+        "state": "failed",
+        "fields": {
+          "content": ""
+        },
+        "not_contains": [
+          "This story is for members",
+          "Create a free account to continue reading."
+        ]
+      }
+    },
+    {
+      "kind": "baseline_failure",
+      "case_id": "live.s2.article1.readability",
+      "case_sha256": "5967dce17d6a440121b2d0b89a7fec28ff5cecb4aa75bf1855130602d65cd39d",
+      "python_sha256": "64b9b14c90dce53aed48b59901711d3530585e75f68ac1ef05bcc6d749c2c740",
+      "go_sha256": "c061417f00408beb4e3b7b0480585019c6b4d536ff6e41ab06b409593824f6f6",
+      "classification": "baseline_defect",
+      "reason": "Source article is membership-gated (This story is for members / Create a free account to continue reading), no substantive body. Python falsely accepts surrounding subscription UI.",
+      "evidence": "Astra source review; https://aisecret.us/coreweaves-lenders-want-out/; HTML SHA256 e1a9a6923e93dc2fd63c45e39c26f16cac594733c8ef7bf54653e8696110af8e",
+      "golden": {
+        "state": "failed",
+        "fields": {
+          "content": ""
+        },
+        "not_contains": [
+          "This story is for members",
+          "Create a free account to continue reading."
+        ]
+      }
+    },
+    {
+      "kind": "baseline_failure",
+      "case_id": "live.s8.article1.auto",
+      "case_sha256": "307d60f825da7738d6fa2120582ea9d8baed602bef6e6390dcfc72d187813375",
+      "python_sha256": "b2ba36294aa309bc05422858285880fc12fe521f8f7207969659f060dfad9a14",
+      "go_sha256": "353b6ac754d2df76313e7b9dd00f9cf9c9941e0c0ea2b4891a06b76a407e6b30",
+      "classification": "baseline_defect",
+      "reason": "Go recovers substantive source summary/transcript where Python reduces output to description. Source main contains headings and extensive paragraphs.",
+      "evidence": "Astra source review; https://karpathy.bearblog.dev/sequoia-ascent-2026/; HTML SHA256 8ae5e75e3e4e7ab4dd4f7bc496f8be4f205b3b50ac4b2536be4f3c9399f554e3",
+      "golden": {
+        "state": "extracted",
+        "contains": [
+          "cleaned up transcript",
+          "Agentic Engineering"
+        ],
+        "fields": {
+          "url": "https://karpathy.bearblog.dev/sequoia-ascent-2026/",
+          "title": "Sequoia Ascent 2026 summary"
+        }
+      }
+    },
+    {
+      "kind": "baseline_failure",
+      "case_id": "live.s8.article1.readability",
+      "case_sha256": "79304f05eab80d7e4bd42ec13ba31f8667682bb40e8a71288ba987d76e57b132",
+      "python_sha256": "9deb1fe67112168298efb06b0cbed5d8c1a6cd4dff2d8308217c2003c9ca5464",
+      "go_sha256": "ab1bbae3f5a09a31095c80e1cb4a7fe581a41a908f3c5b7aeec1b306137efb16",
+      "classification": "baseline_defect",
+      "reason": "Go accepts real long source main transcript which Python quality policy rejects.",
+      "evidence": "Astra source review; https://karpathy.bearblog.dev/sequoia-ascent-2026/; HTML SHA256 8ae5e75e3e4e7ab4dd4f7bc496f8be4f205b3b50ac4b2536be4f3c9399f554e3",
+      "golden": {
+        "state": "extracted",
+        "contains": [
+          "cleaned up transcript",
+          "Agentic Engineering"
+        ],
+        "fields": {
+          "url": "https://karpathy.bearblog.dev/sequoia-ascent-2026/",
+          "title": "Sequoia Ascent 2026 summary"
+        }
+      }
+    },
+    {
+      "kind": "difference",
+      "case_id": "live.source.s3.entry1",
+      "field": "content",
+      "case_sha256": "555a80301ac9a65263a0c5cd20ceec44517b4bbe7538a23b68d128170ab389ae",
+      "python_sha256": "9a6628939e6cde1dd1a1a16f769dd606cb05565d8e846fc7b34b9d499d3118cb",
+      "go_sha256": "6ae5963c71c15d58b053c824d6676025a0a958cfcadc9d68c75525422f1a4c91",
+      "classification": "equivalent",
+      "reason": "semantic content equivalent; source-faithful metadata/media retention difference only",
+      "evidence": "Reviewed exact RSS/Atom capture; https://www.theverge.com/rss/index.xml; raw capture SHA256 13cdf5b21dafd7e0ca821513f5cf9749fe792abc93e55822fa3b9cbd935a4633",
+      "golden": {
+        "state": "extracted",
+        "fields": {
+          "title": "Meta and Apple team up to make Muse AI models run better on Macs",
+          "url": "https://www.theverge.com/news/1012293/meta-apple-muse-spark-open-ai-model-mlx"
+        },
+        "contains": []
+      }
+    },
+    {
+      "kind": "difference",
+      "case_id": "live.source.s3.entry2",
+      "field": "content",
+      "case_sha256": "2f4920316c3f1207500025097595a915a600426e21b6051b95a6660f8eb640b3",
+      "python_sha256": "4071ad8ceea18b35506f251229aadc4ba57b245938775b455b49de33607ef7bf",
+      "go_sha256": "c19666909bf77724b67a148d1894f65aeff125a72ffc1901481d9c0726d20fd7",
+      "classification": "equivalent",
+      "reason": "semantic content equivalent; source-faithful metadata/media retention difference only",
+      "evidence": "Reviewed exact RSS/Atom capture; https://www.theverge.com/rss/index.xml; raw capture SHA256 13cdf5b21dafd7e0ca821513f5cf9749fe792abc93e55822fa3b9cbd935a4633",
+      "golden": {
+        "state": "extracted",
+        "fields": {
+          "title": "Sony made a $5,900 gold-plated Walkman MP3 player",
+          "url": "https://www.theverge.com/tech/1012200/sony-made-a-5900-gold-plated-walkman-mp3-player"
+        },
+        "contains": []
+      }
+    },
+    {
+      "kind": "difference",
+      "case_id": "live.source.s7.entry1",
+      "field": "content",
+      "case_sha256": "a8391768d23b07c649d692d28237d40b2f0ec6d38959e41b034bdefe23681b0e",
+      "python_sha256": "6565406485f5b49a14bbbffacb60f4d21a2531092b7bd0d37a932a99ba8a9dcd",
+      "go_sha256": "5ac8d74178e698ca638d345d11beefda04536692388938519e7f2523f667944b",
+      "classification": "improvement",
+      "reason": "semantic content equivalent; source-faithful metadata/media retention difference only",
+      "evidence": "Reviewed exact RSS/Atom capture; https://www.lennysnewsletter.com/feed; raw capture SHA256 33c729932f95e6add031a99e831c067050a96f458029037ef6e16622cd63df6f",
+      "golden": {
+        "state": "extracted",
+        "fields": {
+          "title": "Meta’s new ‘Muse Wonder’ model: good for AI agents, bad for design",
+          "url": "https://www.lennysnewsletter.com/p/metas-new-muse-wonder-model-good"
+        },
+        "contains": []
+      }
+    },
+    {
+      "kind": "difference",
+      "case_id": "live.source.s7.entry2",
+      "field": "content",
+      "case_sha256": "01e35859cb93d4f3047b48bde7707b11a9e6032f2c83d7368accdb87e685deb2",
+      "python_sha256": "e896d59ff429e47a52a2d8e2e2df9315a83f16dff73eb09d4f0678ce29819093",
+      "go_sha256": "275c4a927d3247ec4d54bf73791ef7bb1bc779ee27f541c7adf20e4183e2bcbe",
+      "classification": "equivalent",
+      "reason": "semantic content equivalent; source-faithful metadata/media retention difference only",
+      "evidence": "Reviewed exact RSS/Atom capture; https://www.lennysnewsletter.com/feed; raw capture SHA256 33c729932f95e6add031a99e831c067050a96f458029037ef6e16622cd63df6f",
+      "golden": {
+        "state": "extracted",
+        "fields": {
+          "title": "How to tell if a startup has a moat",
+          "url": "https://www.lennysnewsletter.com/p/how-to-tell-if-a-startup-has-a-moat"
+        },
+        "contains": []
+      }
+    },
+    {
+      "kind": "difference",
+      "case_id": "live.source.s8.entry1",
+      "field": "content",
+      "case_sha256": "ef082f593598e9abc3932e6ed405f93bfba022d18663191bfb39a3d00cec7d4d",
+      "python_sha256": "f33a2399885c714417c0ebd8382ae3a74f5376ab75ea5c86222777cf0c97bab7",
+      "go_sha256": "f36f8561dbccb5a3b73336e328982e7b5bbb2fa488f2e0c2c22ace4a4a113722",
+      "classification": "equivalent",
+      "reason": "semantic content equivalent; source-faithful metadata/media retention difference only",
+      "evidence": "Reviewed exact RSS/Atom capture; https://karpathy.bearblog.dev/feed/?type=rss; raw capture SHA256 851cfd6a535ee4b3e9ef2973f635ab6afd0fec80c879c82a68bd5c11a541b5be",
+      "golden": {
+        "state": "extracted",
+        "fields": {
+          "title": "Sequoia Ascent 2026 summary",
+          "url": "https://karpathy.bearblog.dev/sequoia-ascent-2026/"
+        },
+        "contains": []
+      }
+    },
+    {
+      "kind": "difference",
+      "case_id": "live.source.s8.entry2",
+      "field": "content",
+      "case_sha256": "5583f995405c8be368262bc75270fb34cfba16e07bf4575da523574b1564e9ca",
+      "python_sha256": "957606f02340eefb3e81c4eed3b8019c49658a01927abd2f2db0cd6f16d9d452",
+      "go_sha256": "b418f8e04d9e4adcf4b8da1cb24e94f4a59a821080935f653b15e09aea5ee5ac",
+      "classification": "equivalent",
+      "reason": "semantic content equivalent; source-faithful metadata/media retention difference only",
+      "evidence": "Reviewed exact RSS/Atom capture; https://karpathy.bearblog.dev/feed/?type=rss; raw capture SHA256 851cfd6a535ee4b3e9ef2973f635ab6afd0fec80c879c82a68bd5c11a541b5be",
+      "golden": {
+        "state": "extracted",
+        "fields": {
+          "title": "2025 LLM Year in Review",
+          "url": "https://karpathy.bearblog.dev/year-in-review-2025/"
+        },
+        "contains": []
+      }
+    },
+    {
+      "kind": "difference",
+      "case_id": "article.auto_readability_after_selector_miss",
+      "field": "content",
+      "case_sha256": "1c8bb2ae8c95bc190d3691a07effe5cd25dab32199f579914e4cf428f1113a13",
+      "python_sha256": "4458b2e470715a53e0059e89afd4bcb140fc169c8ec6314122021c570f9dba97",
+      "go_sha256": "74a295152d6f5b441e0d17e563446a599ecbd25ce8bc8f82cd6c47a91047b0f6",
+      "classification": "improvement",
+      "reason": "Removes the fixture navigation prefix; the complete remaining article text is identical.",
+      "evidence": "Synthetic source structure and focused Go date/navigation regressions",
+      "golden": {
+        "contains": [
+          "A cooperative of small libraries has started a shared preservation p"
+        ],
+        "not_contains": [],
+        "fields": {},
+        "state": "extracted"
+      }
+    },
+    {
+      "kind": "difference",
+      "case_id": "article.readability_after_selector_miss",
+      "field": "content",
+      "case_sha256": "5125c6107360f0fe6a5bcbafebd7a6018b38a157f52899aabfce6a9095cf2314",
+      "python_sha256": "4458b2e470715a53e0059e89afd4bcb140fc169c8ec6314122021c570f9dba97",
+      "go_sha256": "74a295152d6f5b441e0d17e563446a599ecbd25ce8bc8f82cd6c47a91047b0f6",
+      "classification": "improvement",
+      "reason": "Removes the fixture navigation prefix; the complete remaining article text is identical.",
+      "evidence": "Synthetic source structure and focused Go date/navigation regressions",
+      "golden": {
+        "contains": [
+          "A cooperative of small libraries has started a shared preservation p"
+        ],
+        "not_contains": [],
+        "fields": {},
+        "state": "extracted"
+      }
+    },
+    {
+      "kind": "difference",
+      "case_id": "metadata.regression_displayed_comma",
+      "field": "publication_date",
+      "case_sha256": "79872625c2b7e8180990d4f17334c119b2ad2acf0910151e9b24320e10ffa2d0",
+      "python_sha256": "12ae32cb1ec02d01eda3581b127c1fee3b0dc53572ed6baf239721a03d82e126",
+      "go_sha256": "637c7cb77305b24d198fb9082234f8f7605239742d3a0a1107431d464ef05138",
+      "classification": "improvement",
+      "reason": "Correctly parses the source displayed date 30 Apr, 2026; date regression tests assert the exact publication date.",
+      "evidence": "Synthetic source structure and focused Go date/navigation regressions",
+      "golden": {
+        "state": "extracted",
+        "contains": [
+          "four independent stations"
+        ],
+        "fields": {
+          "publication_date": "2026-04-30T00:00:00"
+        }
+      }
+    }
+  ]
+}

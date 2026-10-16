@@ -1,0 +1,5 @@
+# Last overlay restores authoritative Python routing without touching the DB.
+services:
+  app:
+    environment:
+      EXTRACTION_SERVICE_MODE: python

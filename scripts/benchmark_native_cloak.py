@@ -1,0 +1,954 @@
+#!/usr/bin/env python3
+"""Bounded, opt-in A/B/C/D native-browser benchmark controller.
+
+The runner accepts only fixture route IDs from the checked-in corpus. It never
+fetches an arbitrary user supplied URL, and reports no URLs, response text, or
+credentials. A real run requires explicitly supplied cgroup-v2 files; absent
+resource data is an error, never a synthetic zero.
+"""
+
+from __future__ import annotations
+
+import argparse
+import asyncio
+import hashlib
+import json
+import math
+import os
+import re
+import statistics
+import sys
+import time
+from contextlib import asynccontextmanager
+from datetime import datetime, timezone
+from email.utils import parsedate_to_datetime
+from pathlib import Path
+from typing import Any
+from urllib.parse import urlsplit
+
+ROOT = Path(__file__).resolve().parents[1]
+DEFAULT_CORPUS = ROOT / "tests" / "fixtures" / "native-cloak" / "corpus.json"
+MAX_CORPUS_BYTES = 1024 * 1024
+MAX_CASES = 16
+MAX_CYCLES = 6
+MAX_IDLE = 60
+SAFE_ID = re.compile(r"^[a-z0-9][a-z0-9_-]{0,47}$")
+CGROUP_FILES = ("memory.current", "memory.stat", "cpu.stat", "pids.current", "memory.events")
+READY_SELECTOR = '[data-ready="true"]'
+MIN_NAVIGATION_MS = 500
+DOM_STABLE_MS = 250
+NETWORK_QUIET_MS = 250
+
+
+class BenchmarkError(RuntimeError):
+    pass
+
+
+class FatalBenchmarkError(BenchmarkError):
+    """Ownership/capability loss makes further measurements invalid."""
+
+
+def load_corpus(path: Path) -> tuple[dict[str, Any], str]:
+    try:
+        raw = path.read_bytes()
+    except OSError as exc:
+        raise BenchmarkError("corpus_unavailable") from exc
+    if len(raw) > MAX_CORPUS_BYTES:
+        raise BenchmarkError("corpus_too_large")
+    digest = hashlib.sha256(raw).hexdigest()
+    try:
+        data = json.loads(raw)
+    except (ValueError, UnicodeError):
+        raise BenchmarkError("invalid_corpus") from None
+    if not isinstance(data, dict) or data.get("version") != 1 or not isinstance(data.get("cases"), list):
+        raise BenchmarkError("invalid_corpus")
+    cases = data["cases"]
+    if not 1 <= len(cases) <= MAX_CASES:
+        raise BenchmarkError("invalid_case_count")
+    seen: set[str] = set()
+    for case in cases:
+        if not isinstance(case, dict) or not {"id", "path", "expected_contains", "expected_state"}.issubset(case) or set(case) - {
+            "id", "path", "expected_contains", "expected_state", "expected_error"
+        }:
+            raise BenchmarkError("invalid_case_fields")
+        ident, route = case["id"], case["path"]
+        if not isinstance(ident, str) or not SAFE_ID.fullmatch(ident) or ident in seen:
+            raise BenchmarkError("invalid_case_id")
+        if not isinstance(route, str) or not re.fullmatch(r"/[a-z0-9_-]{1,48}", route):
+            raise BenchmarkError("invalid_fixture_route")
+        if case["expected_state"] not in {"success", "rejected"}:
+            raise BenchmarkError("invalid_expected_state")
+        if case.get("expected_error") is not None and (
+            case["expected_error"] != "native_browser_challenge" or case["expected_state"] != "rejected"
+        ):
+            raise BenchmarkError("invalid_expected_error")
+        anchors = case["expected_contains"]
+        if not isinstance(anchors, list) or len(anchors) > 8 or any(
+            not isinstance(x, str) or not 1 <= len(x) <= 100 for x in anchors
+        ):
+            raise BenchmarkError("invalid_expected_anchors")
+        seen.add(ident)
+    return data, digest
+
+
+def validate_origin(origin: str) -> str:
+    u = urlsplit(origin)
+    if (u.scheme != "https" or u.hostname != "native-fixture.test"
+            or u.username or u.password or u.path not in {"", "/"} or u.query or u.fragment
+            or (u.port not in {None, 443})):
+        raise BenchmarkError("invalid_fixture_origin")
+    return f"https://{u.hostname}"
+
+
+def _validate_internal_endpoint(raw: str | None, failure_code: str) -> str:
+    if not raw:
+        raise BenchmarkError(failure_code)
+    u = urlsplit(raw)
+    if (u.scheme not in {"http", "https"} or not u.hostname or u.username or u.password
+            or u.query or u.fragment or u.path not in {"", "/"}):
+        raise BenchmarkError(failure_code)
+    # Service credentials and benchmark traffic stay on local/private test infrastructure.
+    host = u.hostname.lower()
+    if host not in {"extractor", "gateway", "localhost"}:
+        try:
+            import ipaddress
+            address = ipaddress.ip_address(host)
+        except ValueError:
+            raise BenchmarkError(failure_code) from None
+        if not (address.is_private or address.is_loopback or address.is_link_local):
+            raise BenchmarkError(failure_code)
+    return raw.rstrip("/")
+
+
+def parse_cgroups(values: list[str], *, allowed_names: set[str] | None = None) -> dict[str, Path]:
+    allowed = {"app", "worker", "cloak", "gateway"} if allowed_names is None else allowed_names
+    out: dict[str, Path] = {}
+    for item in values:
+        name, sep, raw_path = item.partition("=")
+        if not sep or name not in allowed or name in out:
+            raise BenchmarkError("invalid_cgroup_argument")
+        path = Path(raw_path)
+        if not path.is_absolute():
+            raise BenchmarkError("cgroup_path_must_be_absolute")
+        try:
+            path = path.resolve(strict=True)
+        except OSError:
+            raise BenchmarkError("cgroup_path_unavailable") from None
+        if not path.is_dir():
+            raise BenchmarkError("cgroup_path_unavailable")
+        out[name] = path
+    paths = list(out.values())
+    identities: set[tuple[int, int]] = set()
+    for index, path in enumerate(paths):
+        stat = path.stat()
+        identity = (stat.st_dev, stat.st_ino)
+        if identity in identities:
+            raise BenchmarkError("overlapping_cgroup_paths")
+        identities.add(identity)
+        if any(path == other or path in other.parents or other in path.parents for other in paths[index + 1:]):
+            raise BenchmarkError("overlapping_cgroup_paths")
+    return out
+
+
+def _read_scalar(path: Path, filename: str) -> int:
+    try:
+        value = (path / filename).read_text(encoding="ascii").strip()
+        if not value.isdigit():
+            raise ValueError
+        return int(value)
+    except (OSError, ValueError):
+        raise BenchmarkError("cgroup_metric_unavailable") from None
+
+
+def _read_pairs(path: Path, filename: str, required: set[str]) -> dict[str, int]:
+    try:
+        lines = (path / filename).read_text(encoding="ascii").splitlines()
+        values = {fields[0]: int(fields[1]) for line in lines
+                  if len(fields := line.split()) == 2 and fields[1].isdigit()}
+    except (OSError, ValueError):
+        raise BenchmarkError("cgroup_metric_unavailable") from None
+    if not required.issubset(values):
+        raise BenchmarkError("cgroup_metric_unavailable")
+    return values
+
+
+def sample_cgroups(cgroups: dict[str, Path]) -> dict[str, Any]:
+    if not cgroups:
+        raise BenchmarkError("cgroup_metrics_required")
+    snapshots = {}
+    for name, path in cgroups.items():
+        if not path.is_dir() or any(not (path / f).is_file() for f in CGROUP_FILES):
+            raise BenchmarkError("cgroup_metric_unavailable")
+        mem = _read_pairs(path, "memory.stat", {"anon", "file", "shmem"})
+        cpu = _read_pairs(path, "cpu.stat", {"usage_usec"})
+        events = _read_pairs(path, "memory.events", {"oom", "oom_kill"})
+        peak_path = path / "memory.peak"
+        snapshots[name] = {
+            "memory_current_bytes": _read_scalar(path, "memory.current"),
+            "memory_lifetime_peak_bytes": _read_scalar(path, "memory.peak") if peak_path.is_file() else None,
+            "memory_anon_bytes": mem["anon"], "memory_file_bytes": mem["file"],
+            "memory_shmem_bytes": mem["shmem"], "cpu_usage_usec": cpu["usage_usec"],
+            "pids": _read_scalar(path, "pids.current"),
+            "oom_events": events["oom"], "oom_kill_events": events["oom_kill"],
+        }
+    return snapshots
+
+
+class Sampler:
+    def __init__(self, cgroups: dict[str, Path], interval: float = 1.0):
+        self.cgroups = cgroups
+        self.interval = interval
+        self.samples: list[dict[str, Any]] = []
+        self.baseline: dict[str, Any] | None = None
+        self.task: asyncio.Task | None = None
+        self.error: Exception | None = None
+        self.started_at: float | None = None
+
+    def _elapsed_ms(self) -> int:
+        if self.started_at is None:
+            return 0
+        return round((time.monotonic() - self.started_at) * 1000)
+
+    async def _run(self) -> None:
+        while True:
+            try:
+                self.samples.append({"elapsed_ms": self._elapsed_ms(),
+                                     "cgroups": sample_cgroups(self.cgroups)})
+            except Exception as exc:
+                self.error = exc
+                return
+            await asyncio.sleep(self.interval)
+
+    async def start(self) -> None:
+        self.started_at = time.monotonic()
+        self.baseline = sample_cgroups(self.cgroups)  # Fail before any work if telemetry is incomplete.
+        self.samples.append({"elapsed_ms": 0, "phase": "baseline", "cgroups": self.baseline})
+        self.task = asyncio.create_task(self._run())
+
+    async def stop(self) -> None:
+        if self.task:
+            self.task.cancel()
+            await asyncio.gather(self.task, return_exceptions=True)
+        if self.error:
+            raise BenchmarkError("cgroup_metric_unavailable") from None
+
+
+def _safe_error(exc: Exception) -> str:
+    # Error strings from HTTP/CDP layers can embed URLs or headers. Emit only a class label.
+    return type(exc).__name__[:48]
+
+
+def _safe_method(value: Any) -> str:
+    allowed = {"browser_rendering", "browser_heuristics", "readability", "enhanced_selectors",
+               "learned_pattern_browser_rendering", "learned_pattern", "none", "unknown"}
+    return value if isinstance(value, str) and value in allowed else "other"
+
+
+def _safe_state(value: Any) -> str:
+    allowed = {"extracted", "failed", "unsupported", "resource_limit", "unknown"}
+    return value if isinstance(value, str) and value in allowed else "other"
+
+
+def _safe_error_code(value: Any) -> str | None:
+    if value is None:
+        return None
+    return value if isinstance(value, str) and re.fullmatch(r"[a-z][a-z0-9_]{0,47}", value) else "other"
+
+
+def _retry_after_seconds(value: Any) -> int | None:
+    raw = str(value).strip() if value is not None else ""
+    if raw.isdigit():
+        return min(int(raw), 86400)
+    try:
+        target = parsedate_to_datetime(raw)
+        if target.tzinfo is None:
+            return None
+        return min(max(0, math.ceil((target - datetime.now(timezone.utc)).total_seconds())), 86400)
+    except (TypeError, ValueError, OverflowError):
+        return None
+
+
+def _is_challenge_html(value: str) -> bool:
+    # Match go/transport.IsChallengePage exactly for the captured challenge fixture.
+    lowered = value.lower()
+    return ('id="challenge-form"' in lowered or "id='challenge-form'" in lowered
+            or 'id="cf-challenge-running"' in lowered or "id='cf-challenge-running'" in lowered
+            or ("<title>just a moment" in lowered and "cf_chl_" in lowered))
+
+
+def proxy_challenge_matches(source: Any, origin: str, proxy: str) -> bool:
+    source_value = getattr(source, "value", source)
+    parsed = urlsplit(proxy)
+    return source_value == "Proxy" and origin == f"{parsed.scheme}://{parsed.netloc}"
+
+
+def _record_request_event(state: dict[str, Any], event: Any) -> bool:
+    """Track a real CDP Network.requestWillBeSent without mixing frames and requests."""
+    from nodriver import cdp
+
+    state["request_count"] += 1
+    request_id = str(event.request_id)
+    state["requests"][request_id] = True
+    if event.type_ == cdp.network.ResourceType.DOCUMENT:
+        state["request_frames"][request_id] = str(event.frame_id or "")
+    return state["request_count"] > 128 or len(state["requests"]) > 128
+
+
+def _native_ready_gate(*, now: float, started: float, stable_since: float,
+                       last_activity: float, active_requests: int, main_status: int) -> bool:
+    """Match the elapsed-time and network conditions in Go NativeBrowser.Fetch."""
+    return (now - started >= MIN_NAVIGATION_MS / 1000
+            and now - stable_since >= DOM_STABLE_MS / 1000
+            and now - last_activity >= NETWORK_QUIET_MS / 1000
+            and active_requests == 0 and main_status == 200)
+
+
+async def _run_python_case(variant: str, url: str, proxy: str | None,
+                           proxy_token: str | None) -> dict[str, Any]:
+    """Use the existing Python browser strategy for A and the isolated B adapter."""
+    if variant == "B" and (not proxy or not proxy_token or len(proxy_token) < 16):
+        raise BenchmarkError("variant_b_proxy_credentials_required")
+    os.environ.pop("DATABASE_URL", None)
+    os.environ.pop("TEST_DATABASE_URL", None)
+    import news_aggregator.extraction.extraction_strategies as strategies_module
+    from news_aggregator.extraction.extraction_strategies import ExtractionStrategies
+    from news_aggregator.extraction.extraction_utils import ExtractionUtils
+    from news_aggregator.extraction.html_processor import HTMLProcessor
+    from news_aggregator.extraction.date_extractor import DateExtractor
+    from news_aggregator.extraction.metadata_extractor import MetadataExtractor
+    import news_aggregator.core.browser_pool as pool
+
+    class FixedTracker:
+        def get_method_timeout(self, _domain, _method, default):
+            return min(5000, default)
+
+    async def fixed_tracker():
+        return FixedTracker()
+
+    old_tracker = strategies_module.get_stability_tracker
+    strategies_module.get_stability_tracker = fixed_tracker
+    try:
+        utils = ExtractionUtils()
+        html_processor = HTMLProcessor(utils)
+        strategy = ExtractionStrategies(utils, html_processor, DateExtractor(utils), MetadataExtractor(utils))
+        if variant == "B":
+            return await _run_native_policy_page(pool, strategy, url, proxy, proxy_token)
+        content, selector, rendered = await strategy._extract_with_browser_and_html(url)
+    finally:
+        strategies_module.get_stability_tracker = old_tracker
+    challenge = _is_challenge_html(rendered or "")
+    return {"outcome": "rejected" if challenge else "success" if content and content.strip() else "rejected",
+            "state": "extracted" if content and content.strip() else "failed",
+            "content_chars": len(content or ""), "html_bytes": len((rendered or "").encode("utf-8")),
+            "method": "browser_rendering" if content else "none",
+            "selector_present": bool(selector), "content": content or "",
+            "error": "native_browser_challenge" if challenge else None}
+
+
+def _fixture_https_url(raw: str) -> bool:
+    try:
+        u = urlsplit(raw)
+        return (u.scheme == "https" and u.hostname == "native-fixture.test"
+                and (u.port in {None, 443}) and not u.username and not u.password and not u.fragment)
+    except ValueError:
+        return False
+
+
+async def _run_native_policy_page(pool, strategy, url: str, proxy: str, token: str,
+                                  *, url_policy=None, ready_expression=None,
+                                  capture_raw=False) -> dict[str, Any]:
+    try:
+        async with asyncio.timeout(30):
+            return await _run_native_policy_page_inner(
+                pool, strategy, url, proxy, token, url_policy=url_policy,
+                ready_expression=ready_expression, capture_raw=capture_raw)
+    except TimeoutError:
+        raise BenchmarkError("benchmark_timeout") from None
+
+
+async def _run_native_policy_page_inner(pool, strategy, url: str, proxy: str, token: str,
+                                        *, url_policy=None, ready_expression=None,
+                                        capture_raw=False) -> dict[str, Any]:
+    """B: native Nodriver navigation under disposable-context policy, then Python parser only."""
+    from nodriver import cdp
+    from bs4 import BeautifulSoup
+    from news_aggregator.core.resource_limits import read_browser_html
+
+    url_policy = url_policy or _fixture_https_url
+    if not url_policy(url):
+        raise BenchmarkError("fixture_url_denied")
+    state: dict[str, Any] = {"error": None, "request_count": 0, "wire_bytes": 0,
+                             "main_frame": "", "requests": {}, "request_frames": {},
+                             "encoded": {}, "frames": set(),
+                             "authenticated": set(), "main_status": 0,
+                             "last_network_activity": time.monotonic()}
+
+    def fail(code: str):
+        if state["error"] is None:
+            state["error"] = code
+
+    async with _disposable_context_tab(pool, proxy, token)(url) as tab:
+        browser = tab.parent
+        context_id = tab.__dict__.get("_browser_pool_context_id")
+        if not context_id:
+            # The context ID is attached by the adapter before yield.
+            raise FatalBenchmarkError("browser_context_ownership_lost")
+
+        async def auth_required(event):
+            challenge = getattr(event, "auth_challenge", None)
+            source = getattr(getattr(challenge, "source", None), "value", getattr(challenge, "source", None))
+            origin = getattr(challenge, "origin", "")
+            if (proxy_challenge_matches(source, origin, proxy)
+                    and event.request_id not in state["authenticated"]):
+                state["authenticated"].add(event.request_id)
+                response = cdp.fetch.AuthChallengeResponse(
+                    response="ProvideCredentials", username="extractor", password=token)
+            else:
+                response = cdp.fetch.AuthChallengeResponse(response="CancelAuth")
+                fail("upstream_auth_required")
+            await tab.send(cdp.fetch.continue_with_auth(event.request_id, response))
+
+        async def request_paused(event):
+            if state["request_count"] > 128:
+                fail("resource_limit")
+                await tab.send(cdp.fetch.fail_request(event.request_id, cdp.network.ErrorReason.BLOCKED_BY_CLIENT))
+                return
+            request_id = event.request_id
+            resource_type = getattr(getattr(event, "resource_type", None), "value", getattr(event, "resource_type", None))
+            request_url = event.request.url
+            if resource_type == "WebSocket":
+                fail("native_browser_unsupported")
+                await tab.send(cdp.fetch.fail_request(request_id, cdp.network.ErrorReason.BLOCKED_BY_CLIENT))
+                return
+            if not url_policy(request_url):
+                fail("public_url_denied")
+                await tab.send(cdp.fetch.fail_request(request_id, cdp.network.ErrorReason.BLOCKED_BY_CLIENT))
+                return
+            await tab.send(cdp.fetch.continue_request(request_id))
+
+        async def request_will_be_sent(event):
+            if _record_request_event(state, event):
+                fail("resource_limit")
+
+        async def data_received(event):
+            request_id = str(event.request_id)
+            encoded = int(event.encoded_data_length or 0)
+            state["wire_bytes"] += encoded
+            state["encoded"][request_id] = state["encoded"].get(request_id, 0) + encoded
+            if state["wire_bytes"] > 5 * 1024 * 1024:
+                fail("resource_limit")
+
+        async def loading_finished(event):
+            request_id = str(event.request_id)
+            final_size = max(0, int(event.encoded_data_length or 0) - state["encoded"].pop(request_id, 0))
+            state["wire_bytes"] += final_size
+            state["requests"].pop(request_id, None)
+            state["request_frames"].pop(request_id, None)
+            if state["wire_bytes"] > 5 * 1024 * 1024:
+                fail("resource_limit")
+
+        async def loading_failed(event):
+            request_id = str(event.request_id)
+            state["requests"].pop(request_id, None)
+            state["request_frames"].pop(request_id, None)
+
+        async def response_received(event):
+            frame_id = str(event.frame_id or state["request_frames"].get(str(event.request_id), ""))
+            if event.type_ == cdp.network.ResourceType.DOCUMENT and frame_id == state["main_frame"]:
+                state["main_status"] = int(event.response.status)
+                if state["main_status"] == 429:
+                    headers = getattr(event.response, "headers", {}) or {}
+                    retry = next((value for key, value in headers.items()
+                                  if key.lower() == "retry-after"), None)
+                    state["retry_after_seconds"] = _retry_after_seconds(retry)
+                if state["main_status"] != 200:
+                    fail("native_browser_http_rejected")
+
+        async def frame_navigated(event):
+            frame = event.frame
+            if not getattr(frame, "parent_id", None):
+                state["main_frame"] = str(frame.id_)
+                state["frames"].add(str(frame.id_))
+                if len(state["frames"]) > 128:
+                    fail("resource_limit")
+
+        async def frame_attached(event):
+            if event.parent_frame_id and str(event.parent_frame_id) in state["frames"]:
+                state["frames"].add(str(event.frame_id))
+                if len(state["frames"]) > 128:
+                    fail("resource_limit")
+
+        async def window_open(_event):
+            fail("native_browser_unsupported")
+
+        async def child_target(_event):
+            fail("native_browser_unsupported")
+
+        async def websocket_created(_event):
+            fail("native_browser_unsupported")
+
+        async def download_begin(_event):
+            fail("native_browser_unsupported")
+
+        def guard(callback):
+            async def guarded(event):
+                state["last_network_activity"] = time.monotonic()
+                try:
+                    await callback(event)
+                except Exception:
+                    fail("native_browser_event_error")
+                    if isinstance(event, cdp.fetch.RequestPaused):
+                        try:
+                            await tab.send(cdp.fetch.fail_request(
+                                event.request_id, cdp.network.ErrorReason.BLOCKED_BY_CLIENT))
+                        except Exception:
+                            pass
+            return guarded
+
+        for event_type, callback in (
+            (cdp.fetch.AuthRequired, auth_required), (cdp.fetch.RequestPaused, request_paused),
+            (cdp.network.RequestWillBeSent, request_will_be_sent),
+            (cdp.network.DataReceived, data_received), (cdp.network.LoadingFinished, loading_finished),
+            (cdp.network.LoadingFailed, loading_failed), (cdp.network.ResponseReceived, response_received),
+            (cdp.page.FrameNavigated, frame_navigated), (cdp.page.FrameAttached, frame_attached),
+            (cdp.page.WindowOpen, window_open), (cdp.target.AttachedToTarget, child_target),
+            (cdp.network.WebSocketCreated, websocket_created),
+        ):
+            tab.add_handler(event_type, guard(callback))
+        browser.add_handler(cdp.browser.DownloadWillBegin, download_begin)
+        tab.__dict__["_benchmark_download_handler"] = download_begin
+        await pool.run_browser_operation(tab.send(cdp.page.enable()), "enable page domain", browser_session=tab)
+        await pool.run_browser_operation(tab.send(cdp.network.enable()), "enable network domain", browser_session=tab)
+        await pool.run_browser_operation(browser.send(cdp.browser.set_download_behavior(
+            behavior="deny", browser_context_id=context_id, events_enabled=True)),
+            "deny downloads", browser_session=browser)
+        await pool.run_browser_operation(tab.send(cdp.target.set_auto_attach(
+            auto_attach=True, wait_for_debugger_on_start=True, flatten=True)),
+            "attach child targets", browser_session=tab)
+        await pool.run_browser_operation(tab.send(cdp.fetch.enable(handle_auth_requests=True,
+            patterns=[cdp.fetch.RequestPattern(url_pattern="*", request_stage=cdp.fetch.RequestStage.REQUEST)])),
+            "enable request policy", browser_session=tab)
+        tree = await pool.run_browser_operation(tab.send(cdp.page.get_frame_tree()),
+            "get main frame", browser_session=tab)
+        state["main_frame"] = str(tree.frame.id_)
+        state["frames"].add(state["main_frame"])
+        navigation = await pool.run_browser_operation(tab.send(cdp.page.navigate(url)), "navigation",
+            timeout_seconds=30, browser_session=tab)
+        if navigation[2]:
+            fail("native_browser_navigation_failed")
+        if navigation[0]:
+            state["main_frame"] = str(navigation[0])
+        started = time.monotonic()
+        ready_deadline = time.monotonic() + 30
+        rendered = None
+        previous_html = None
+        stable_since = started
+        while time.monotonic() < ready_deadline:
+            if state["error"]:
+                break
+            ready = await pool.run_browser_operation(tab.evaluate(
+                ready_expression or
+                "document.body && document.readyState === 'complete' && "
+                "document.querySelector('[data-ready=true]') && document.body.innerText.trim() ? 1 : 0"),
+                "fixture readiness", timeout_seconds=max(.1, ready_deadline-time.monotonic()), browser_session=tab)
+            if ready:
+                candidate = await read_browser_html(tab, timeout_seconds=5)
+                now = time.monotonic()
+                if candidate != previous_html:
+                    previous_html = candidate
+                    stable_since = now
+                if _native_ready_gate(now=now, started=started, stable_since=stable_since,
+                                      last_activity=state["last_network_activity"],
+                                      active_requests=len(state["requests"]),
+                                      main_status=state["main_status"]):
+                    rendered = candidate
+                    break
+            await asyncio.sleep(.05)
+        if not rendered and state["error"] is None:
+            state["error"] = "native_browser_timeout"
+        if state["error"]:
+            error = state["error"]
+            return {"outcome": "rejected", "state": "failed", "content_chars": 0,
+                    "html_bytes": 0, "method": "none", "selector_present": False,
+                    "content": "", "error": error,
+                    **({"upstream_status": state["main_status"],
+                        "retry_after_seconds": state.get("retry_after_seconds")}
+                       if capture_raw else {})}
+        if capture_raw:
+            state["final_url"] = await pool.run_browser_operation(
+                tab.evaluate("location.href"), "read final URL", timeout_seconds=2,
+                browser_session=tab)
+
+    final_url = state.get("final_url") or url
+    if capture_raw and not url_policy(final_url):
+        return {"outcome": "rejected", "state": "failed", "content_chars": 0,
+                "html_bytes": 0, "method": "none", "selector_present": False,
+                "content": "", "error": "public_url_denied", "upstream_status": state["main_status"]}
+    soup = BeautifulSoup(rendered, "html.parser")
+    content, selector = strategy.html_processor.extract_by_enhanced_selectors(soup)
+    if not content:
+        content = strategy.html_processor.extract_by_enhanced_heuristics(soup)
+    challenge = _is_challenge_html(rendered or "")
+    return {"outcome": "rejected" if challenge else "success" if content and content.strip() else "rejected",
+            "state": "extracted" if content and content.strip() else "failed",
+            "content_chars": len(content or ""), "html_bytes": len((rendered or "").encode()),
+            "method": "browser_rendering" if content else "none", "selector_present": bool(selector),
+            "content": content or "", "error": "native_browser_challenge" if challenge else None,
+            **({"rendered_html": rendered, "final_url": final_url, "upstream_status": state["main_status"]}
+               if capture_raw else {})}
+
+
+def _disposable_context_tab(pool, proxy: str, token: str):
+    @asynccontextmanager
+    async def context_tab(_url: str):
+        from nodriver import cdp
+
+        settings = __import__("news_aggregator.config", fromlist=["settings"]).settings
+        await asyncio.wait_for(pool._tab_semaphore.acquire(), timeout=settings.browser_tab_acquire_timeout_seconds)
+        lease = None
+        acquired = True
+        browser = None
+        context_id = None
+        tab = None
+        try:
+            lease = await pool._acquire_browser_tab_usage()
+            browser = await pool.get_browser()
+            try:
+                context_id = await asyncio.wait_for(browser.send(cdp.target.create_browser_context(
+                    dispose_on_detach=True, proxy_server=proxy, proxy_bypass_list="<-loopback>")), timeout=5)
+            except Exception:
+                # The command may have created a context before its response was lost.
+                raise FatalBenchmarkError("browser_context_ownership_lost") from None
+            target_id = await asyncio.wait_for(browser.send(cdp.target.create_target(
+                "about:blank", browser_context_id=context_id)), timeout=5)
+            await asyncio.wait_for(browser.update_targets(), timeout=5)
+            tab = next((item for item in browser.targets
+                        if str(item.target.target_id) == str(target_id)), None)
+            if tab is None:
+                raise FatalBenchmarkError("browser_context_ownership_lost")
+            await asyncio.wait_for(tab.attach(), timeout=5)
+            pool._register_tab(browser, tab)
+            tab.__dict__["_browser_pool_context_id"] = context_id
+            yield tab
+        finally:
+            try:
+                if tab is not None and context_id is not None and browser is not None:
+                    await pool._await_shielded(_dispose_context_and_retire(pool, browser, context_id, tab))
+                elif context_id is not None and browser is not None:
+                    try:
+                        await asyncio.wait_for(browser.send(cdp.target.dispose_browser_context(context_id)), timeout=3)
+                    except Exception:
+                        raise FatalBenchmarkError("browser_context_ownership_lost") from None
+                    raise FatalBenchmarkError("browser_context_ownership_lost")
+                elif tab is not None:
+                    # Context creation failed before a context ID was returned; retire local transport only.
+                    await pool._await_shielded(_retire_context_tab_transport(pool, browser, tab))
+            finally:
+                if acquired:
+                    pool._tab_semaphore.release()
+                if lease is not None:
+                    await pool._release_browser_tab_usage(lease)
+    return context_tab
+
+
+async def _retire_context_tab_transport(pool, browser, tab) -> None:
+    """Retire this Tab's local transport/registries without issuing CDP target commands."""
+    try:
+        await pool._close_transport(tab)
+    finally:
+        state = getattr(browser, "__dict__", {}) if browser is not None else {}
+        state.get("_browser_pool_tabs", {}).pop(id(tab), None)
+        targets = state.get("_targets", [])
+        if isinstance(targets, list):
+            targets[:] = [target for target in targets if target is not tab]
+        pool._managed_connections.pop(id(tab), None)
+
+
+async def _dispose_context_and_retire(pool, browser, context_id, tab) -> None:
+    """Stop navigation, atomically dispose its context, then retire only local ownership."""
+    from nodriver import cdp
+
+    dispose_error = None
+    download_handler = tab.__dict__.pop("_benchmark_download_handler", None)
+    if download_handler is not None:
+        browser.remove_handler(cdp.browser.DownloadWillBegin, download_handler)
+    try:
+        await asyncio.wait_for(tab.send(cdp.page.stop_loading()), timeout=3)
+    except Exception:
+        # Context disposal is still required to release this owned browser context.
+        pass
+    try:
+        await asyncio.wait_for(browser.send(cdp.target.dispose_browser_context(context_id)), timeout=3)
+    except Exception as exc:
+        dispose_error = exc
+    finally:
+        await _retire_context_tab_transport(pool, browser, tab)
+    if dispose_error is not None:
+        raise FatalBenchmarkError("browser_context_ownership_lost") from None
+
+
+async def _run_service_case(url: str, endpoint: str, token: str) -> dict[str, Any]:
+    from news_aggregator.extraction.service_client import ExtractionServiceClient
+    client = ExtractionServiceClient(endpoint, token)
+    data = await client.extract(url, timeout_seconds=30, strategy="browser_rendering",
+                                source_type="article", use_browser=True)
+    result = data["result"]
+    return {"outcome": data["outcome"], "state": result.get("state", "unknown"),
+            "content_chars": len(result.get("content") or ""),
+            "html_bytes": None, "method": _safe_method(result.get("method") or result.get("method_used") or "unknown"),
+            "selector_present": bool(result.get("selector_used")), "content": result.get("content") or "",
+            "error": _safe_error_code((data.get("error") or {}).get("code"))}
+
+
+def _validate_native_capability_payload(data: Any) -> dict[str, Any]:
+    caps = data.get("capabilities") if isinstance(data, dict) else None
+    native_profile = data.get("native_profile") if isinstance(data, dict) else None
+    selector_hash = hashlib.sha256(READY_SELECTOR.encode("utf-8")).hexdigest()
+    if (not isinstance(data, dict) or data.get("ready") is not True or not isinstance(caps, dict)
+            or any(caps.get(key) is not True for key in ("browser", "native_browser", "native_ready_selector"))
+            or not isinstance(native_profile, dict)
+            or native_profile.get("ready_selector_sha256") != selector_hash):
+        raise BenchmarkError("native_capability_unavailable")
+    return {"ready": True, "browser": True, "native_browser": True,
+            "native_ready_selector": True, "ready_selector_sha256": selector_hash,
+            "expected_selector_matches_fixture": True}
+
+
+async def _probe_native_capabilities(endpoint: str) -> dict[str, bool]:
+    """Require live native readiness and selector capability before measuring C/D."""
+    import aiohttp
+
+    try:
+        timeout = aiohttp.ClientTimeout(total=5)
+        async with aiohttp.ClientSession(timeout=timeout, trust_env=False) as session:
+            async with session.get(endpoint.rstrip("/") + "/health/ready", allow_redirects=False) as response:
+                raw = await response.content.read(16385)
+                if response.status != 200 or len(raw) > 16384:
+                    raise BenchmarkError("native_capability_unavailable")
+        return _validate_native_capability_payload(json.loads(raw))
+    except BenchmarkError:
+        raise
+    except Exception:
+        raise BenchmarkError("native_capability_unavailable") from None
+
+
+def compare_case(case: dict[str, Any], result: dict[str, Any]) -> dict[str, Any]:
+    state_match = result.get("outcome") == case["expected_state"]
+    content = result.get("content", "")
+    anchor_match = None
+    if case["expected_state"] == "success":
+        anchor_match = (bool(content.strip()) and result.get("state") != "failed"
+                        and all(anchor.casefold() in content.casefold() for anchor in case["expected_contains"]))
+        state_match = state_match and result.get("state") != "failed" and bool(content.strip())
+    error_match = None
+    if case.get("expected_error"):
+        error_match = result.get("error") == case["expected_error"]
+    ok = state_match and (anchor_match is not False) and (error_match is not False)
+    return {"passed": bool(ok), "expected_state": case["expected_state"],
+            "state_match": state_match, "anchor_match": anchor_match,
+            "expected_error_match": error_match}
+
+
+def summarize_samples(samples: list[dict[str, Any]]) -> dict[str, Any]:
+    if not samples:
+        raise BenchmarkError("no_cgroup_samples")
+    names = set(samples[0]["cgroups"])
+    result = {"sample_count": len(samples), "cgroups": {}}
+    for name in names:
+        values = [s["cgroups"][name] for s in samples]
+        kernel_peak_available = all(v["memory_lifetime_peak_bytes"] is not None for v in values)
+        result["cgroups"][name] = {
+            "memory_current_sampled_max_bytes": max(v["memory_current_bytes"] for v in values),
+            "memory_current_last_bytes": values[-1]["memory_current_bytes"],
+            "memory_lifetime_peak_bytes": (values[-1]["memory_lifetime_peak_bytes"]
+                                           if kernel_peak_available else None),
+            "memory_lifetime_peak_source": ("kernel_memory.peak" if kernel_peak_available
+                                            else "unavailable_on_host"),
+            "memory_anon_last_bytes": values[-1]["memory_anon_bytes"],
+            "memory_file_last_bytes": values[-1]["memory_file_bytes"],
+            "memory_shmem_last_bytes": values[-1]["memory_shmem_bytes"],
+            "cpu_usage_usec_delta": values[-1]["cpu_usage_usec"] - values[0]["cpu_usage_usec"],
+            "pids_last": values[-1]["pids"],
+            "oom_events_delta": values[-1]["oom_events"] - values[0]["oom_events"],
+            "oom_kill_events_delta": values[-1]["oom_kill_events"] - values[0]["oom_kill_events"],
+        }
+    result["aggregate_sampled_memory_current_bytes_max"] = max(
+        sum(s["cgroups"][n]["memory_current_bytes"] for n in names) for s in samples)
+    result["kernel_peak_available"] = all(
+        group["memory_lifetime_peak_source"] == "kernel_memory.peak"
+        for group in result["cgroups"].values())
+    return result
+
+
+async def run(args: argparse.Namespace) -> dict[str, Any]:
+    origin = validate_origin(args.origin)
+    corpus, corpus_digest = load_corpus(Path(args.corpus))
+    cgroups = parse_cgroups(args.cgroup)
+    required = {"A": {"app", "cloak"}, "B": {"app", "cloak", "gateway"},
+                "C": {"worker", "cloak", "gateway"}, "D": {"app", "worker", "cloak", "gateway"}}[args.variant]
+    if not required.issubset(cgroups):
+        raise BenchmarkError("required_cgroups_missing")
+    cases = corpus["cases"]
+    if args.case:
+        selected = set(args.case)
+        if not selected.issubset({c["id"] for c in cases}):
+            raise BenchmarkError("unknown_case_id")
+        cases = [c for c in cases if c["id"] in selected]
+    token = os.environ.get(args.token_env) if args.token_env else None
+    proxy_token = os.environ.get(args.proxy_token_env) if args.proxy_token_env else None
+    if args.variant in {"C", "D"} and not token:
+        raise BenchmarkError("service_token_missing")
+    if args.variant == "B" and not proxy_token:
+        raise BenchmarkError("proxy_token_missing")
+    native_capabilities = None
+    if args.variant in {"C", "D"}:
+        args.endpoint = _validate_internal_endpoint(args.endpoint, "endpoint_required")
+        if args.native_ready_selector != READY_SELECTOR:
+            raise BenchmarkError("native_ready_selector_mismatch")
+        native_capabilities = await _probe_native_capabilities(args.endpoint)
+    if args.variant == "B":
+        args.proxy = _validate_internal_endpoint(args.proxy, "proxy_required")
+    sampler = Sampler(cgroups)
+    await sampler.start()
+    timings = []
+    rows = []
+    failures = 0
+    warmup = {"case_id": cases[0]["id"]}
+    try:
+        warmup_start = time.perf_counter()
+        warmup_url = origin + cases[0]["path"]
+        try:
+            if args.variant in {"A", "B"}:
+                warmup_result = await _run_python_case(args.variant, warmup_url, args.proxy, proxy_token)
+            else:
+                warmup_result = await _run_service_case(warmup_url, args.endpoint, token)
+            warmup.update({"outcome": warmup_result["outcome"], "state": _safe_state(warmup_result["state"]),
+                           "method": _safe_method(warmup_result["method"])})
+        except Exception as exc:
+            if isinstance(exc, FatalBenchmarkError):
+                raise
+            warmup.update({"outcome": "failed", "state": "failed", "method": "none",
+                           "error": _safe_error(exc)})
+        warmup["duration_ms"] = round((time.perf_counter() - warmup_start) * 1000, 2)
+        for cycle in range(1, args.cycles + 1):
+            for case in cases:
+                start = time.perf_counter()
+                url = origin + case["path"]
+                try:
+                    if args.variant in {"A", "B"}:
+                        result = await _run_python_case(args.variant, url, args.proxy, proxy_token)
+                    else:
+                        result = await _run_service_case(url, args.endpoint, token)
+                except Exception as exc:
+                    if isinstance(exc, FatalBenchmarkError):
+                        raise
+                    result = {"outcome": "failed", "state": "failed", "content_chars": 0,
+                              "html_bytes": None, "method": "none", "selector_present": False,
+                              "content": "", "error": _safe_error(exc)}
+                elapsed = (time.perf_counter() - start) * 1000
+                check = compare_case(case, result)
+                if not check["passed"]:
+                    failures += 1
+                timings.append(elapsed)
+                rows.append({"case_id": case["id"], "cycle": cycle,
+                             "outcome": result["outcome"], "state": _safe_state(result["state"]),
+                             "error": _safe_error_code(result.get("error")), "method": _safe_method(result["method"]),
+                             "duration_ms": round(elapsed, 2), "content_chars": result["content_chars"],
+                             "html_bytes": result["html_bytes"], "selector_present": result["selector_present"],
+                             "expectation": check})
+            if args.idle_seconds:
+                for seconds in args.idle_seconds:
+                    await asyncio.sleep(seconds)
+                    # An actual sample during each idle gate is mandatory.
+                    sampler.samples.append({"elapsed_ms": sampler._elapsed_ms(),
+                                            "cgroups": sample_cgroups(cgroups), "idle_seconds": seconds})
+    finally:
+        await sampler.stop()
+    idle_samples = [{"idle_seconds": sample["idle_seconds"],
+                     "cgroups": {name: {"memory_current_bytes": metrics["memory_current_bytes"],
+                                        "pids": metrics["pids"]}
+                                 for name, metrics in sample["cgroups"].items()}}
+                    for sample in sampler.samples if "idle_seconds" in sample]
+    return {"schema_version": 1, "variant": args.variant,
+            "measurement_scope": ("controller_and_native_service_client; full_application_processing_not_measured"
+                                  if args.variant == "D" else "variant_controller_and_measured_cgroups"),
+            "readiness_profile": ({"policy": "production_python_body_text_with_fixed_db_free_timeout"}
+                                  if args.variant == "A" else {
+                                      "policy": "native_fixture_selector_and_network_gate",
+                                      "selector": READY_SELECTOR,
+                                      "minimum_navigation_ms": MIN_NAVIGATION_MS,
+                                      "dom_stable_ms": DOM_STABLE_MS,
+                                      "network_quiet_ms": NETWORK_QUIET_MS,
+                                      "active_requests": 0,
+                                      "main_document_status": 200,
+                                      "go_profile_basis": "checked_in_source_not_live_attestation",
+                                  }),
+            "corpus_sha256": corpus_digest,
+            "case_ids": [c["id"] for c in cases], "cycles": args.cycles,
+            "repeat_scope": "single_invocation; independent comparisons require fresh invocations",
+            "ready_selector": READY_SELECTOR, "native_capabilities": native_capabilities,
+            "baseline_cgroups": sampler.baseline,
+            "warmup": warmup, "measure_interval_seconds": 1,
+            "idle_samples": idle_samples, "outcomes": rows,
+            "latency_ms": {"count": len(timings), "p50": round(statistics.median(timings), 2),
+                           "p95": round(sorted(timings)[max(0, math.ceil(len(timings) * .95) - 1)], 2),
+                           "p95_method": "nearest_rank"},
+            "resource_metrics": summarize_samples(sampler.samples), "mismatch_count": failures,
+            "status": "passed" if failures == 0 else "mismatch"}
+
+
+def build_parser() -> argparse.ArgumentParser:
+    parser = argparse.ArgumentParser(description=__doc__)
+    parser.add_argument("--variant", choices=("A", "B", "C", "D"), required=True)
+    parser.add_argument("--corpus", default=str(DEFAULT_CORPUS))
+    parser.add_argument("--origin", default="https://native-fixture.test")
+    parser.add_argument("--output", required=True)
+    parser.add_argument("--case", action="append", default=[])
+    parser.add_argument("--cycles", type=int, default=1)
+    parser.add_argument("--idle-seconds", type=lambda s: [int(x) for x in s.split(",")], default=[5, 30, 60])
+    parser.add_argument("--cgroup", action="append", default=[], metavar="NAME=/CGROUP/PATH")
+    parser.add_argument("--endpoint")
+    parser.add_argument("--native-ready-selector", default=READY_SELECTOR,
+                        help="must match the native extractor service's configured fixture readiness selector")
+    parser.add_argument("--token-env", default="EXTRACTOR_TEST_TOKEN", help="name of environment variable containing API token")
+    parser.add_argument("--proxy", help="controlled CONNECT gateway address")
+    parser.add_argument("--proxy-token-env", default="EGRESS_TOKEN", help="name of environment variable containing gateway credential")
+    parser.add_argument("--serve-fixtures", action="store_true", help="run the fixed HTTPS fixture origin")
+    parser.add_argument("--fixture-host", default="127.0.0.1")
+    parser.add_argument("--fixture-port", type=int, default=443)
+    parser.add_argument("--fixture-cert")
+    parser.add_argument("--fixture-key")
+    return parser
+
+
+def main(argv: list[str] | None = None) -> int:
+    args = build_parser().parse_args(argv)
+    if args.serve_fixtures:
+        fixture_path = ROOT / "tests" / "fixtures" / "native-cloak" / "origin.py"
+        import importlib.util
+        spec = importlib.util.spec_from_file_location("native_cloak_fixture_origin", fixture_path)
+        fixture = importlib.util.module_from_spec(spec)
+        spec.loader.exec_module(fixture)
+        if not args.fixture_cert or not args.fixture_key:
+            raise SystemExit("--serve-fixtures requires --fixture-cert and --fixture-key")
+        if args.fixture_host not in {"127.0.0.1", "::1", "0.0.0.0"}:
+            raise SystemExit("fixture host must be loopback or isolated-container wildcard")
+        fixture.serve(args.fixture_host, args.fixture_port, args.fixture_cert, args.fixture_key)
+        return 0
+    if not 1 <= args.cycles <= MAX_CYCLES:
+        raise SystemExit("cycles outside supported bounds")
+    if any(x < 0 or x > MAX_IDLE for x in args.idle_seconds):
+        raise SystemExit("idle duration outside supported bounds")
+    try:
+        report = asyncio.run(run(args))
+        output = Path(args.output)
+        output.parent.mkdir(parents=True, exist_ok=True)
+        output.write_text(json.dumps(report, indent=2, sort_keys=True) + "\n", encoding="utf-8")
+    except BenchmarkError as exc:
+        print(f"benchmark failed: {exc}", file=sys.stderr)
+        return 2
+    return 0 if report["status"] == "passed" else 1
+
+
+if __name__ == "__main__":
+    raise SystemExit(main())

@@ -1,0 +1,55 @@
+# Extraction replay contract
+
+Baseline: Python release `72d39a6514fb86b57eadc98b2e6510855f946088`.
+The [method ledger](extraction-methods.md) is authoritative for active and dormant paths.
+The user approved prototype stages A–C with the explicit condition that every extraction method be accounted for. Passing the current replay does not complete those stages.
+
+## Data
+
+`tests/fixtures/go-parity/manifest.json` is a version-1 JSON object with a nonempty `cases` array. Case IDs are unique. Every case has `source_type`, `source_name`, ledger `methods`, explicit provenance, `input`, and an `expected.state`. The committed corpus is synthetic; it must never be described as an actual capture of the eight production sources.
+
+Inputs contain inline HTML/XML/JSON strings, not remote references. `html` is an HTTP capture, `rendered_html` is already-rendered markup, `rss_xml` and `telegram_html` are source documents, and `reddit_json` is a JSON string. Additional capture data includes `linked_html`, URL-keyed `alternative_html`, learned selector/method, custom selectors, explicit source browser mode and entry index. `strategy` can force a component; `auto` exercises supported strategy transitions. A forced successful component is not proof that the complete production pipeline would accept it.
+
+`input.now` is an optional RFC3339 clock. Source fixtures use a fixed clock so missing-date fallbacks are asserted rather than omitted. Ordinary article metadata may still have no publication date. This is separate from source date fallback.
+
+`limits.max_bytes` and `limits.max_chars` control bounded input. Byte limits, Unicode character admission and the final 8000-character sentence/word truncation are distinct contracts. An oversized DOM candidate can be skipped while a smaller candidate succeeds; it is not equivalent to exceeding the transport-body limit.
+
+## Assertions
+
+Every expected block specifies `extracted`, `failed`, `resource_limit` or, for explicitly unsupported Go capabilities, `unsupported`. The Python baseline does not classify unsupported methods as passing expected failures. Missing or unknown assertions must fail, not silently succeed. Required object projections compare recursively with key-existence checks; arrays preserve count and order. This permits semantic poll/contact/location comparisons without process-randomized identifiers.
+
+`contains` and `not_contains` apply to content; `fields` applies to required metadata/media. `method`, `error` and `trace_contains` are optional additional assertions. Trace evidence must come from actual replay branches. `cancel_at=browser_html_capture` injects cancellation at a simulated capture boundary; neither implementation may claim it closed a real tab.
+
+Both runners write one record per `(id, cycle)`, with cycles starting at 1. Python emits `errors`; Go emits `passed` and `failures`. Comparison first requires equal nonempty identifier/cycle sets. It then checks common metadata/content even when fixture assertions pass. Content whitespace and equivalent aware/naive-UTC date formatting can be normalized; discarded dates, changed titles, original URLs or text remain review items. Randomized media references require semantic review rather than byte identity.
+
+Reviewed quality acceptance is now explicit: pass `--corpus`, `--cycles`, `--decisions docs/extraction-review-decisions.json` and `--golden docs/extraction-golden-cases.json`. Exact case/value pins and independent source outcomes are required; the global golden runs even for equal outputs. Missing corpus cases/cycles and any Go assertion failure cannot be waived. The broader migration gate remains open when this captured comparison passes. See [the adjudication record](go-extraction-adjudication-2026-10-15.md).
+
+## Isolation and measurements
+
+Go replay has no HTTP client, DB writer, scheduler, AI credentials or sender. Python uses actual parsing helpers with replaced network/DB/AI boundaries and a fail-closed TCP guard. The capture fixture is not a live transport. `DecodePage` tests compressed readers separately; real headers, chunked transfer and browser ownership require dedicated adapters and tests.
+
+Independent `go/transport` adapters now have controlled loopback HTTP and dedicated-Chrome tests. They are separate from the replay CLI and do not establish production source orchestration.
+
+Forced Python article components now use production basic acceptance, the applicable SmartFilter check, and the same final presentation boundary, rather than comparing raw Python text with finalized Go output. Raw library comparisons remain separate diagnostic artifacts. A rejected article body cannot become successful solely because attachments were found; Telegram deliberately supports media-only posts.
+
+`source_content` and the original-source fallback after `auto` retain already-fetched input. This is a distinct retention contract, **not article-quality acceptance**. Article/web/unspecified types finalize retained text to the presentation cap; RSS, Telegram and custom retained text preserve their source contract. Both runners admit all alternative-page captures through the UTF-8 byte limit before parsing.
+
+Both CLIs are offline components. Python RSS includes its imports and harness; Go heap is not process RSS. Windows Go RSS is explicitly unavailable. Total deployed savings cannot be inferred from these values. Compare equivalent Linux processes and the full Python/Go/Chrome deployment before any migration decision.
+
+## Reproduce
+
+From the repository root:
+
+```powershell
+.venv\Scripts\python.exe -m pytest tests/test_extraction_replay.py -q
+.venv\Scripts\python.exe scripts/benchmark_python_pipeline.py --corpus tests/fixtures/go-parity/manifest.json --cycles 6 --output artifacts/python-replay.jsonl
+cd go
+go test -count=1 ./...
+go vet ./...
+go mod verify
+go run ./cmd/extract-replay -corpus ../tests/fixtures/go-parity/manifest.json -cycles 6 -workers 1 -output ../artifacts/go-replay.jsonl
+cd ..
+.venv\Scripts\python.exe scripts/compare_extraction_replays.py --python artifacts/python-replay.jsonl --go artifacts/go-replay.jsonl --output artifacts/field-differences.json
+```
+
+Comparison exits nonzero if field differences need review even when both corpus assertions pass. The prepared `go-prototype.yml` workflow runs regression tests, Go race/static checks and both replays on Linux. It has not been executed merely because its YAML exists. Full persistence/AI/live-source/browser/snapshot coverage and soak are tracked as open gates in the plan and `coverage.json`.

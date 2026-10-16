@@ -1,0 +1,2529 @@
+{
+  "version": 1,
+  "cases": [
+    {
+      "id": "rss.content_preferred",
+      "source_type": "rss",
+      "source_name": "Synthetic RSS feed",
+      "methods": [
+        "R01"
+      ],
+      "provenance": {
+        "kind": "synthetic",
+        "derived_from": [
+          "news_aggregator/sources/rss_source.py"
+        ]
+      },
+      "input": {
+        "strategy": "rss",
+        "url": "https://rss.example.test/story",
+        "rss_xml": "<rss><channel><item><title>Sensor report</title><link>https://rss.example.test/story</link><description>Short summary</description><content:encoded xmlns:content=\"http://purl.org/rss/1.0/modules/content/\">Researchers at the fictional Northstar Institute released an open archive describing a new method for repairing damaged river sensors. The team compared readings from four independent stations and published the calibration procedure, sample data, and known limitations so other laboratories can reproduce the result. The report says the method improves consistency during heavy rain, while warning that measurements near industrial discharge still require manual review.</content:encoded></item></channel></rss>",
+        "now": "2026-10-15T12:00:00Z"
+      },
+      "expected": {
+        "contains": [
+          "four independent stations"
+        ],
+        "not_contains": [
+          "Short summary"
+        ],
+        "fields": {
+          "title": "Sensor report",
+          "publication_date": "2026-10-15T12:00:00"
+        },
+        "method": "rss_content",
+        "state": "extracted",
+        "trace_contains": []
+      }
+    },
+    {
+      "id": "rss.media_content_image",
+      "source_type": "rss",
+      "source_name": "Synthetic RSS feed",
+      "methods": [
+        "R01",
+        "R02"
+      ],
+      "provenance": {
+        "kind": "synthetic",
+        "derived_from": [
+          "news_aggregator/sources/rss_source.py"
+        ]
+      },
+      "input": {
+        "strategy": "rss",
+        "url": "https://rss-media_content_image.example.test/story",
+        "rss_xml": "<rss version=\"2.0\" xmlns:media=\"http://search.yahoo.com/mrss/\"><channel><item><title>Library preservation project</title><link>https://rss.example.test/library</link><description>A cooperative of small libraries has started a shared preservation project for local newspapers and oral histories. Its public update explains how volunteers scan fragile pages, attach dates and contributor names, and keep source files available for future researchers. The organizers say the first collection will cover several decades of neighborhood reporting, with clear notes where an original issue or recording is missing.</description><media:content url=\"https://cdn.example.test/archive-cover.png\" medium=\"image\"/></item></channel></rss>",
+        "now": "2026-10-15T12:00:00Z"
+      },
+      "expected": {
+        "contains": [
+          "fragile pages"
+        ],
+        "not_contains": [],
+        "fields": {
+          "title": "Library preservation project",
+          "image_url": "https://cdn.example.test/archive-cover.png",
+          "url": "https://rss.example.test/library",
+          "publication_date": "2026-10-15T12:00:00"
+        },
+        "state": "extracted",
+        "trace_contains": []
+      }
+    },
+    {
+      "id": "rss.enclosure_priority",
+      "source_type": "rss",
+      "source_name": "Synthetic RSS feed",
+      "methods": [
+        "R01",
+        "R02"
+      ],
+      "provenance": {
+        "kind": "synthetic",
+        "derived_from": [
+          "news_aggregator/sources/rss_source.py"
+        ]
+      },
+      "input": {
+        "strategy": "rss",
+        "url": "https://rss-enclosure_priority.example.test/story",
+        "rss_xml": "<rss version=\"2.0\" xmlns:media=\"http://search.yahoo.com/mrss/\"><channel><item><title>River archive</title><link>https://rss.example.test/river</link><description>Researchers at the fictional Northstar Institute released an open archive describing a new method for repairing damaged river sensors. The team compared readings from four independent stations and published the calibration procedure, sample data, and known limitations so other laboratories can reproduce the result. The report says the method improves consistency during heavy rain, while warning that measurements near industrial discharge still require manual review.</description><enclosure url=\"https://cdn.example.test/lead.png\" length=\"100\" type=\"image/png\"/><media:thumbnail url=\"https://cdn.example.test/thumb.png\"/></item></channel></rss>",
+        "now": "2026-10-15T12:00:00Z"
+      },
+      "expected": {
+        "contains": [
+          "calibration procedure"
+        ],
+        "not_contains": [],
+        "fields": {
+          "title": "River archive",
+          "image_url": "https://cdn.example.test/lead.png",
+          "publication_date": "2026-10-15T12:00:00"
+        },
+        "state": "extracted",
+        "trace_contains": []
+      }
+    },
+    {
+      "id": "atom.updated_and_author",
+      "source_type": "rss",
+      "source_name": "Synthetic Atom feed",
+      "methods": [
+        "R01"
+      ],
+      "provenance": {
+        "kind": "synthetic",
+        "derived_from": [
+          "news_aggregator/sources/rss_source.py"
+        ]
+      },
+      "input": {
+        "strategy": "atom",
+        "url": "https://atom-updated_and_author.example.test/story",
+        "rss_xml": "<feed xmlns=\"http://www.w3.org/2005/Atom\"><title>Transit Lab</title><entry><title>Rural transit field report</title><link href=\"https://atom.example.test/transit\"/><author><name>Sample Desk</name></author><updated>2025-10-13T12:45:00Z</updated><summary>A cooperative of small libraries has started a shared preservation project for local newspapers and oral histories. Its public update explains how volunteers scan fragile pages, attach dates and contributor names, and keep source files available for future researchers. The organizers say the first collection will cover several decades of neighborhood reporting, with clear notes where an original issue or recording is missing.</summary></entry></feed>",
+        "now": "2026-10-15T12:00:00Z"
+      },
+      "expected": {
+        "contains": [
+          "fragile pages"
+        ],
+        "not_contains": [],
+        "fields": {
+          "title": "Rural transit field report",
+          "url": "https://atom.example.test/transit",
+          "author": "Sample Desk"
+        },
+        "state": "extracted",
+        "trace_contains": []
+      }
+    },
+    {
+      "id": "rss.entry_without_link_skipped",
+      "source_type": "rss",
+      "source_name": "Synthetic RSS feed",
+      "methods": [
+        "R01"
+      ],
+      "provenance": {
+        "kind": "synthetic",
+        "derived_from": [
+          "news_aggregator/sources/rss_source.py"
+        ]
+      },
+      "input": {
+        "strategy": "rss",
+        "url": "https://rss-entry_without_link_skipped.example.test/story",
+        "rss_xml": "<rss><channel><item><title>Orphan item</title><description>Researchers at the fictional Northstar Institute released an open archive describing a new method for repairing damaged river sensors. The team compared readings from four independent stations and published the calibration procedure, sample data, and known limitations so other laboratories can reproduce the result. The report says the method improves consistency during heavy rain, while warning that measurements near industrial discharge still require manual review.</description></item></channel></rss>",
+        "now": "2026-10-15T12:00:00Z"
+      },
+      "expected": {
+        "contains": [],
+        "not_contains": [],
+        "fields": {},
+        "state": "failed",
+        "trace_contains": []
+      }
+    },
+    {
+      "id": "telegram.message_with_permalink_and_date",
+      "source_type": "telegram",
+      "source_name": "Synthetic Telegram channel",
+      "methods": [
+        "T02",
+        "T03"
+      ],
+      "provenance": {
+        "kind": "synthetic",
+        "derived_from": [
+          "tests/test_telegram_extraction.py"
+        ]
+      },
+      "input": {
+        "strategy": "telegram_http",
+        "url": "https://telegram-message_with_permalink_and_date.example.test/story",
+        "telegram_html": "<html><head><meta property=\"og:title\" content=\"Sample Channel\"/></head><body><div class=\"tgme_widget_message\" data-post=\"samplechannel/101\"><div class=\"tgme_widget_message_text\">Researchers at the fictional Northstar Institute released an open archive describing a new method for repairing damaged river sensors. The team compared readings from four independent stations and published the calibration procedure, sample data, and known limitations so other laboratories can reproduce the result. The report says the method improves consistency during heavy rain, while warning that measurements near industrial discharge still require manual review.</div><a class=\"tgme_widget_message_date\" href=\"https://t.me/samplechannel/101\"><time datetime=\"2025-10-14T10:00:00+00:00\">10:00</time></a></div></body></html>",
+        "now": "2026-10-15T12:00:00Z"
+      },
+      "expected": {
+        "contains": [
+          "four independent stations"
+        ],
+        "not_contains": [],
+        "fields": {
+          "url": "https://t.me/samplechannel/101"
+        },
+        "state": "extracted",
+        "trace_contains": []
+      }
+    },
+    {
+      "id": "telegram.message_with_external_link",
+      "source_type": "telegram",
+      "source_name": "Synthetic Telegram channel",
+      "methods": [
+        "T02",
+        "T03"
+      ],
+      "provenance": {
+        "kind": "synthetic",
+        "derived_from": [
+          "tests/test_telegram_extraction.py"
+        ]
+      },
+      "input": {
+        "strategy": "telegram_http",
+        "url": "https://telegram-message_with_external_link.example.test/story",
+        "telegram_html": "<html><body><div class=\"tgme_widget_message\" data-post=\"samplechannel/102\"><div class=\"tgme_widget_message_text\">A cooperative of small libraries has started a shared preservation project for local newspapers and oral histories. Its public update explains how volunteers scan fragile pages, attach dates and contributor names, and keep source files available for future researchers. The organizers say the first collection will cover several decades of neighborhood reporting, with clear notes where an original issue or recording is missing. <a href=\"https://archive.example.test\">source archive</a></div></div></body></html>",
+        "now": "2026-10-15T12:00:00Z"
+      },
+      "expected": {
+        "contains": [
+          "source archive",
+          "fragile pages"
+        ],
+        "not_contains": [],
+        "fields": {
+          "publication_date": "2026-10-15T12:00:00"
+        },
+        "state": "extracted",
+        "trace_contains": []
+      }
+    },
+    {
+      "id": "telegram.short_message_skipped",
+      "source_type": "telegram",
+      "source_name": "Synthetic Telegram channel",
+      "methods": [
+        "T02",
+        "T03"
+      ],
+      "provenance": {
+        "kind": "synthetic",
+        "derived_from": [
+          "tests/test_telegram_extraction.py"
+        ]
+      },
+      "input": {
+        "strategy": "telegram_http",
+        "url": "https://telegram-short_message_skipped.example.test/story",
+        "telegram_html": "<html><body><div class=\"tgme_widget_message\" data-post=\"samplechannel/103\"><div class=\"tgme_widget_message_text\">Short</div></div></body></html>",
+        "now": "2026-10-15T12:00:00Z"
+      },
+      "expected": {
+        "contains": [],
+        "not_contains": [],
+        "fields": {},
+        "state": "failed",
+        "trace_contains": []
+      }
+    },
+    {
+      "id": "telegram.empty_history",
+      "source_type": "telegram",
+      "source_name": "Synthetic Telegram channel",
+      "methods": [
+        "T02",
+        "T03"
+      ],
+      "provenance": {
+        "kind": "synthetic",
+        "derived_from": [
+          "tests/test_telegram_extraction.py"
+        ]
+      },
+      "input": {
+        "strategy": "telegram_http",
+        "url": "https://telegram-empty_history.example.test/story",
+        "telegram_html": "<html><body><section class=\"tgme_channel_history\"></section></body></html>",
+        "now": "2026-10-15T12:00:00Z"
+      },
+      "expected": {
+        "contains": [],
+        "not_contains": [],
+        "fields": {},
+        "state": "failed",
+        "trace_contains": []
+      }
+    },
+    {
+      "id": "telegram.rendered_browser_history",
+      "source_type": "telegram",
+      "source_name": "Synthetic Telegram channel",
+      "methods": [
+        "T01",
+        "T02",
+        "T03"
+      ],
+      "provenance": {
+        "kind": "synthetic",
+        "derived_from": [
+          "tests/test_telegram_extraction.py"
+        ]
+      },
+      "input": {
+        "strategy": "telegram_browser",
+        "url": "https://telegram-rendered_browser_history.example.test/story",
+        "html": "<html><body><div id=\"history\"></div></body></html>",
+        "rendered_html": "<html><body><div class=\"tgme_widget_message\" data-post=\"samplechannel/104\"><div class=\"tgme_widget_message_text\">Researchers at the fictional Northstar Institute released an open archive describing a new method for repairing damaged river sensors. The team compared readings from four independent stations and published the calibration procedure, sample data, and known limitations so other laboratories can reproduce the result. The report says the method improves consistency during heavy rain, while warning that measurements near industrial discharge still require manual review.</div></div></body></html>",
+        "now": "2026-10-15T12:00:00Z"
+      },
+      "expected": {
+        "contains": [
+          "river sensors"
+        ],
+        "not_contains": [],
+        "fields": {
+          "publication_date": "2026-10-15T12:00:00"
+        },
+        "state": "extracted",
+        "trace_contains": []
+      }
+    },
+    {
+      "id": "custom.configured_selectors_relative_url",
+      "source_type": "custom",
+      "source_name": "Synthetic custom page monitor",
+      "methods": [
+        "C02"
+      ],
+      "provenance": {
+        "kind": "synthetic",
+        "derived_from": [
+          "tests/test_website_extraction.py"
+        ]
+      },
+      "input": {
+        "strategy": "custom_selectors",
+        "url": "https://custom-configured_selectors_relative_url.example.test/story",
+        "html": "<html><body><main><article><h2><a href=\"/reports/rural-transit\">Rural transit displays</a></h2><time datetime=\"2025-10-12\">Oct 12</time><p>A cooperative of small libraries has started a shared preservation project for local newspapers and oral histories. Its public update explains how volunteers scan fragile pages, attach dates and contributor names, and keep source files available for future researchers. The organizers say the first collection will cover several decades of neighborhood reporting, with clear notes where an original issue or recording is missing.</p></article></main></body></html>",
+        "selectors": {
+          "article": [
+            "article",
+            ".post"
+          ],
+          "title": [
+            "h2",
+            "h3",
+            ".title"
+          ],
+          "link": [
+            "a[href]"
+          ],
+          "date": [
+            "time",
+            ".date"
+          ],
+          "content": [
+            "p",
+            ".excerpt"
+          ]
+        },
+        "now": "2026-10-15T12:00:00Z"
+      },
+      "expected": {
+        "contains": [
+          "fragile pages"
+        ],
+        "not_contains": [],
+        "fields": {
+          "title": "Rural transit displays",
+          "url": "https://custom-configured_selectors_relative_url.example.test/reports/rural-transit"
+        },
+        "state": "extracted",
+        "trace_contains": []
+      }
+    },
+    {
+      "id": "custom.blog_classes",
+      "source_type": "custom",
+      "source_name": "Synthetic custom page monitor",
+      "methods": [
+        "C02"
+      ],
+      "provenance": {
+        "kind": "synthetic",
+        "derived_from": [
+          "tests/test_website_extraction.py"
+        ]
+      },
+      "input": {
+        "strategy": "custom_selectors",
+        "url": "https://custom-blog_classes.example.test/story",
+        "html": "<html><body><div class=\"blog-posts\"><div class=\"post\"><h3>Archive preservation guide</h3><span class=\"date\">2025-10-11</span><div class=\"excerpt\">Researchers at the fictional Northstar Institute released an open archive describing a new method for repairing damaged river sensors. The team compared readings from four independent stations and published the calibration procedure, sample data, and known limitations so other laboratories can reproduce the result. The report says the method improves consistency during heavy rain, while warning that measurements near industrial discharge still require manual review.</div></div></div></body></html>",
+        "selectors": {
+          "article": [
+            ".post"
+          ],
+          "title": [
+            "h3"
+          ],
+          "link": [
+            "a[href]"
+          ],
+          "date": [
+            ".date"
+          ],
+          "content": [
+            ".excerpt"
+          ]
+        },
+        "now": "2026-10-15T12:00:00Z"
+      },
+      "expected": {
+        "contains": [
+          "reproduce the result"
+        ],
+        "not_contains": [],
+        "fields": {
+          "title": "Archive preservation guide"
+        },
+        "state": "extracted",
+        "trace_contains": []
+      }
+    },
+    {
+      "id": "custom.browser_rendered_cards",
+      "source_type": "custom",
+      "source_name": "Synthetic custom page monitor",
+      "methods": [
+        "C01",
+        "C02"
+      ],
+      "provenance": {
+        "kind": "synthetic",
+        "derived_from": [
+          "tests/test_website_extraction.py"
+        ]
+      },
+      "input": {
+        "strategy": "browser_rendering",
+        "url": "https://custom-browser_rendered_cards.example.test/story",
+        "rendered_html": "<html><body><main><article><h2><a href=\"/updates/libraries\">Library update</a></h2><p>A cooperative of small libraries has started a shared preservation project for local newspapers and oral histories. Its public update explains how volunteers scan fragile pages, attach dates and contributor names, and keep source files available for future researchers. The organizers say the first collection will cover several decades of neighborhood reporting, with clear notes where an original issue or recording is missing.</p></article></main></body></html>",
+        "selectors": {
+          "article": [
+            "article",
+            ".post"
+          ],
+          "title": [
+            "h2",
+            "h3",
+            ".title"
+          ],
+          "link": [
+            "a[href]"
+          ],
+          "date": [
+            "time",
+            ".date"
+          ],
+          "content": [
+            "p",
+            ".excerpt"
+          ]
+        },
+        "use_browser": true,
+        "now": "2026-10-15T12:00:00Z"
+      },
+      "expected": {
+        "contains": [
+          "oral histories"
+        ],
+        "not_contains": [],
+        "fields": {
+          "title": "Library update",
+          "publication_date": "2026-10-15T12:00:00"
+        },
+        "state": "extracted",
+        "trace_contains": []
+      }
+    },
+    {
+      "id": "custom.no_article_cards",
+      "source_type": "custom",
+      "source_name": "Synthetic custom page monitor",
+      "methods": [
+        "C02"
+      ],
+      "provenance": {
+        "kind": "synthetic",
+        "derived_from": [
+          "tests/test_website_extraction.py"
+        ]
+      },
+      "input": {
+        "strategy": "custom_selectors",
+        "url": "https://custom-no_article_cards.example.test/story",
+        "html": "<html><body><p>Navigation page without article cards.</p></body></html>",
+        "selectors": {
+          "article": [
+            "article",
+            ".post"
+          ],
+          "title": [
+            "h2",
+            "h3",
+            ".title"
+          ],
+          "link": [
+            "a[href]"
+          ],
+          "date": [
+            "time",
+            ".date"
+          ],
+          "content": [
+            "p",
+            ".excerpt"
+          ]
+        },
+        "now": "2026-10-15T12:00:00Z"
+      },
+      "expected": {
+        "contains": [],
+        "not_contains": [],
+        "fields": {},
+        "state": "failed",
+        "trace_contains": []
+      }
+    },
+    {
+      "id": "article.learned_css_success",
+      "source_type": "article",
+      "source_name": "Synthetic article fixture",
+      "methods": [
+        "E06",
+        "E08"
+      ],
+      "provenance": {
+        "kind": "synthetic",
+        "derived_from": [
+          "news_aggregator/extraction/extraction_strategies.py",
+          "news_aggregator/extraction/html_processor.py"
+        ]
+      },
+      "input": {
+        "strategy": "learned_pattern",
+        "url": "https://article-learned_css_success.example.test/article",
+        "content": "Researchers at the fictional Northstar Institute released an open archive describing a new method for repairing damaged river sensors. The team compared readings from four independent stations and published the calibration procedure, sample data, and known limitations so other laboratories can reproduce the result. The report says the method improves consistency during heavy rain, while warning that measurements near industrial discharge still require manual review.",
+        "learned_selector": ".story-copy",
+        "learned_method": "css",
+        "html": "<html><body><div class=\"story-copy\">Researchers at the fictional Northstar Institute released an open archive describing a new method for repairing damaged river sensors. The team compared readings from four independent stations and published the calibration procedure, sample data, and known limitations so other laboratories can reproduce the result. The report says the method improves consistency during heavy rain, while warning that measurements near industrial discharge still require manual review.</div></body></html>"
+      },
+      "expected": {
+        "contains": [
+          "Researchers at the fictional Northstar Institute released an open ar"
+        ],
+        "not_contains": [],
+        "fields": {
+          "selector_used": ".story-copy"
+        },
+        "state": "extracted",
+        "trace_contains": [],
+        "method": "learned_pattern_css"
+      }
+    },
+    {
+      "id": "article.learned_selector_miss_falls_back",
+      "source_type": "article",
+      "source_name": "Synthetic article fixture",
+      "methods": [
+        "E06",
+        "E08"
+      ],
+      "provenance": {
+        "kind": "synthetic",
+        "derived_from": [
+          "news_aggregator/extraction/extraction_strategies.py",
+          "news_aggregator/extraction/html_processor.py"
+        ]
+      },
+      "input": {
+        "strategy": "learned_pattern",
+        "url": "https://article-learned_selector_miss_falls_back.example.test/article",
+        "content": "A cooperative of small libraries has started a shared preservation project for local newspapers and oral histories. Its public update explains how volunteers scan fragile pages, attach dates and contributor names, and keep source files available for future researchers. The organizers say the first collection will cover several decades of neighborhood reporting, with clear notes where an original issue or recording is missing.",
+        "learned_selector": ".missing-copy",
+        "learned_method": "css",
+        "html": "<html><head><title>Archive report</title></head><body><nav>Categories</nav><main><article><h1>Archive report</h1><p>A cooperative of small libraries has started a shared preservation project for local newspapers and oral histories. Its public update explains how volunteers scan fragile pages, attach dates and contributor names, and keep source files available for future researchers. The organizers say the first collection will cover several decades of neighborhood reporting, with clear notes where an original issue or recording is missing.</p></article></main><footer>Footer</footer></body></html>"
+      },
+      "expected": {
+        "contains": [
+          "A cooperative of small libraries has started a shared preservation p"
+        ],
+        "not_contains": [],
+        "fields": {},
+        "state": "extracted",
+        "trace_contains": [
+          "learned_pattern",
+          "enhanced_selectors"
+        ],
+        "method": "enhanced_selectors"
+      }
+    },
+    {
+      "id": "article.learned_browser_pattern",
+      "source_type": "article",
+      "source_name": "Synthetic article fixture",
+      "methods": [
+        "E07",
+        "E10"
+      ],
+      "provenance": {
+        "kind": "synthetic",
+        "derived_from": [
+          "news_aggregator/extraction/extraction_strategies.py",
+          "news_aggregator/extraction/html_processor.py"
+        ]
+      },
+      "input": {
+        "strategy": "learned_pattern_browser_rendering",
+        "url": "https://article-learned_browser_pattern.example.test/article",
+        "content": "Engineers at the fictional Meridian Observatory described a low-power instrument for measuring changes in coastal wind patterns. Their technical note includes the sensor layout, a week of sample readings, and a discussion of uncertainty around salt spray and seasonal storms. The authors invite independent groups to repeat the measurements before drawing conclusions about long-term climate trends.",
+        "learned_selector": "article",
+        "learned_method": "browser_rendering",
+        "rendered_html": "<html><head><title>Observatory note</title></head><body><nav>Categories</nav><main><article><h1>Observatory note</h1><p>Engineers at the fictional Meridian Observatory described a low-power instrument for measuring changes in coastal wind patterns. Their technical note includes the sensor layout, a week of sample readings, and a discussion of uncertainty around salt spray and seasonal storms. The authors invite independent groups to repeat the measurements before drawing conclusions about long-term climate trends.</p></article></main><footer>Footer</footer></body></html>"
+      },
+      "expected": {
+        "contains": [
+          "Engineers at the fictional Meridian Observatory described a low-powe"
+        ],
+        "not_contains": [],
+        "fields": {
+          "selector_used": "article"
+        },
+        "state": "extracted",
+        "trace_contains": [],
+        "method": "learned_pattern_browser_rendering"
+      }
+    },
+    {
+      "id": "article.enhanced_selectors_semantic_article",
+      "source_type": "article",
+      "source_name": "Synthetic article fixture",
+      "methods": [
+        "E08"
+      ],
+      "provenance": {
+        "kind": "synthetic",
+        "derived_from": [
+          "news_aggregator/extraction/extraction_strategies.py",
+          "news_aggregator/extraction/html_processor.py"
+        ]
+      },
+      "input": {
+        "strategy": "enhanced_selectors",
+        "url": "https://article-enhanced_selectors_semantic_article.example.test/article",
+        "content": "Researchers at the fictional Northstar Institute released an open archive describing a new method for repairing damaged river sensors. The team compared readings from four independent stations and published the calibration procedure, sample data, and known limitations so other laboratories can reproduce the result. The report says the method improves consistency during heavy rain, while warning that measurements near industrial discharge still require manual review.",
+        "html": "<html><head><title>River sensor report</title></head><body><nav>Categories</nav><main><article><h1>River sensor report</h1><p>Researchers at the fictional Northstar Institute released an open archive describing a new method for repairing damaged river sensors. The team compared readings from four independent stations and published the calibration procedure, sample data, and known limitations so other laboratories can reproduce the result. The report says the method improves consistency during heavy rain, while warning that measurements near industrial discharge still require manual review.</p></article></main><footer>Footer</footer></body></html>"
+      },
+      "expected": {
+        "contains": [
+          "Researchers at the fictional Northstar Institute released an open ar"
+        ],
+        "not_contains": [],
+        "fields": {},
+        "state": "extracted",
+        "trace_contains": [
+          "enhanced_selectors"
+        ],
+        "method": "enhanced_selectors"
+      }
+    },
+    {
+      "id": "article.enhanced_selectors_itemprop",
+      "source_type": "article",
+      "source_name": "Synthetic article fixture",
+      "methods": [
+        "E08"
+      ],
+      "provenance": {
+        "kind": "synthetic",
+        "derived_from": [
+          "news_aggregator/extraction/extraction_strategies.py",
+          "news_aggregator/extraction/html_processor.py"
+        ]
+      },
+      "input": {
+        "strategy": "enhanced_selectors",
+        "url": "https://article-enhanced_selectors_itemprop.example.test/article",
+        "content": "The fictional Open Transit Lab published a field report on bus arrival displays in rural towns. Researchers interviewed riders, recorded missed connections over several weeks, and compared those observations with the timetable data supplied by operators. The report recommends publishing service alerts in a machine-readable format and explains where the small study cannot support broader claims.",
+        "html": "<html><body><div itemprop=\"articleBody\">The fictional Open Transit Lab published a field report on bus arrival displays in rural towns. Researchers interviewed riders, recorded missed connections over several weeks, and compared those observations with the timetable data supplied by operators. The report recommends publishing service alerts in a machine-readable format and explains where the small study cannot support broader claims.</div></body></html>"
+      },
+      "expected": {
+        "contains": [
+          "The fictional Open Transit Lab published a field report on bus arriv"
+        ],
+        "not_contains": [],
+        "fields": {},
+        "state": "extracted",
+        "trace_contains": [],
+        "method": "enhanced_selectors"
+      }
+    },
+    {
+      "id": "article.readability_after_selector_miss",
+      "source_type": "article",
+      "source_name": "Synthetic article fixture",
+      "methods": [
+        "E08",
+        "E09"
+      ],
+      "provenance": {
+        "kind": "synthetic",
+        "derived_from": [
+          "news_aggregator/extraction/extraction_strategies.py",
+          "news_aggregator/extraction/html_processor.py"
+        ]
+      },
+      "input": {
+        "strategy": "readability",
+        "url": "https://article-readability_after_selector_miss.example.test/article",
+        "content": "A cooperative of small libraries has started a shared preservation project for local newspapers and oral histories. Its public update explains how volunteers scan fragile pages, attach dates and contributor names, and keep source files available for future researchers. The organizers say the first collection will cover several decades of neighborhood reporting, with clear notes where an original issue or recording is missing.",
+        "html": "<html><body><header>Site masthead</header><nav>Sections and menus</nav><div><h1>Archive report</h1><div>A cooperative of small libraries has started a shared preservation project for local newspapers and oral histories. Its public update explains how volunteers scan fragile pages, attach dates and contributor names, and keep source files available for future researchers. The organizers say the first collection will cover several decades of neighborhood reporting, with clear notes where an original issue or recording is missing.</div><aside>Related posts</aside><footer>Copyright</footer></div></body></html>"
+      },
+      "expected": {
+        "contains": [
+          "A cooperative of small libraries has started a shared preservation p"
+        ],
+        "not_contains": [],
+        "fields": {},
+        "state": "extracted",
+        "trace_contains": [],
+        "method": "readability"
+      }
+    },
+    {
+      "id": "article.browser_rendered_dom",
+      "source_type": "article",
+      "source_name": "Synthetic article fixture",
+      "methods": [
+        "E10"
+      ],
+      "provenance": {
+        "kind": "synthetic",
+        "derived_from": [
+          "news_aggregator/extraction/extraction_strategies.py",
+          "news_aggregator/extraction/html_processor.py"
+        ]
+      },
+      "input": {
+        "strategy": "browser_rendering",
+        "url": "https://article-browser_rendered_dom.example.test/article",
+        "content": "Engineers at the fictional Meridian Observatory described a low-power instrument for measuring changes in coastal wind patterns. Their technical note includes the sensor layout, a week of sample readings, and a discussion of uncertainty around salt spray and seasonal storms. The authors invite independent groups to repeat the measurements before drawing conclusions about long-term climate trends.",
+        "html": "<html><body><div id=\"app\"></div></body></html>",
+        "rendered_html": "<html><head><title>Dynamic observatory report</title></head><body><main><article><h1>Dynamic observatory report</h1><p>Engineers at the fictional Meridian Observatory described a low-power instrument for measuring changes in coastal wind patterns. Their technical note includes the sensor layout, a week of sample readings, and a discussion of uncertainty around salt spray and seasonal storms. The authors invite independent groups to repeat the measurements before drawing conclusions about long-term climate trends.</p></article></main></body></html>"
+      },
+      "expected": {
+        "contains": [
+          "Engineers at the fictional Meridian Observatory described a low-powe"
+        ],
+        "not_contains": [],
+        "fields": {
+          "title": "Dynamic observatory report"
+        },
+        "state": "extracted",
+        "trace_contains": [],
+        "method": "browser_rendering"
+      }
+    },
+    {
+      "id": "article.jsonld_graph_body",
+      "source_type": "article",
+      "source_name": "Synthetic article fixture",
+      "methods": [
+        "E11",
+        "M02",
+        "M03"
+      ],
+      "provenance": {
+        "kind": "synthetic",
+        "derived_from": [
+          "news_aggregator/extraction/extraction_strategies.py",
+          "news_aggregator/extraction/metadata_extractor.py",
+          "news_aggregator/extraction/date_extractor.py"
+        ]
+      },
+      "input": {
+        "strategy": "json_ld",
+        "url": "https://article-jsonld_graph_body.example.test/article",
+        "content": "Researchers at the fictional Northstar Institute released an open archive describing a new method for repairing damaged river sensors. The team compared readings from four independent stations and published the calibration procedure, sample data, and known limitations so other laboratories can reproduce the result. The report says the method improves consistency during heavy rain, while warning that measurements near industrial discharge still require manual review.",
+        "html": "<html><head><script type=\"application/ld+json\">{\"@context\":\"https://schema.org\",\"@graph\":[{\"@type\":\"WebSite\",\"name\":\"Synthetic\"},{\"@type\":\"NewsArticle\",\"headline\":\"River sensor archive\",\"articleBody\":\"Researchers at the fictional Northstar Institute released an open archive describing a new method for repairing damaged river sensors. The team compared readings from four independent stations and published the calibration procedure, sample data, and known limitations so other laboratories can reproduce the result. The report says the method improves consistency during heavy rain, while warning that measurements near industrial discharge still require manual review.\",\"datePublished\":\"2025-10-14\",\"author\":{\"@type\":\"Person\",\"name\":\"N. Researcher\"},\"image\":{\"url\":\"https://cdn.example.test/river.png\"}}]}</script></head><body></body></html>"
+      },
+      "expected": {
+        "contains": [
+          "Researchers at the fictional Northstar Institute released an open ar"
+        ],
+        "not_contains": [],
+        "fields": {
+          "publication_date": "2025-10-14",
+          "image_url": "https://cdn.example.test/river.png"
+        },
+        "state": "extracted",
+        "trace_contains": [
+          "json_ld"
+        ],
+        "method": "fallback_extraction"
+      }
+    },
+    {
+      "id": "article.jsonld_text_field",
+      "source_type": "article",
+      "source_name": "Synthetic article fixture",
+      "methods": [
+        "E11",
+        "M02",
+        "M03"
+      ],
+      "provenance": {
+        "kind": "synthetic",
+        "derived_from": [
+          "news_aggregator/extraction/extraction_strategies.py",
+          "news_aggregator/extraction/metadata_extractor.py"
+        ]
+      },
+      "input": {
+        "strategy": "json_ld",
+        "url": "https://article-jsonld_text_field.example.test/article",
+        "content": "Engineers at the fictional Meridian Observatory described a low-power instrument for measuring changes in coastal wind patterns. Their technical note includes the sensor layout, a week of sample readings, and a discussion of uncertainty around salt spray and seasonal storms. The authors invite independent groups to repeat the measurements before drawing conclusions about long-term climate trends.",
+        "html": "<html><head><script type=\"application/ld+json\">{\"@type\":\"NewsArticle\",\"text\":\"Engineers at the fictional Meridian Observatory described a low-power instrument for measuring changes in coastal wind patterns. Their technical note includes the sensor layout, a week of sample readings, and a discussion of uncertainty around salt spray and seasonal storms. The authors invite independent groups to repeat the measurements before drawing conclusions about long-term climate trends.\",\"dateCreated\":\"2025-10-10\"}</script></head><body></body></html>"
+      },
+      "expected": {
+        "contains": [
+          "Engineers at the fictional Meridian Observatory described a low-powe"
+        ],
+        "not_contains": [],
+        "fields": {},
+        "state": "extracted",
+        "trace_contains": [
+          "json_ld"
+        ],
+        "method": "fallback_extraction"
+      }
+    },
+    {
+      "id": "article.open_graph_description",
+      "source_type": "article",
+      "source_name": "Synthetic article fixture",
+      "methods": [
+        "E12"
+      ],
+      "provenance": {
+        "kind": "synthetic",
+        "derived_from": [
+          "news_aggregator/extraction/extraction_strategies.py",
+          "news_aggregator/extraction/metadata_extractor.py"
+        ]
+      },
+      "input": {
+        "strategy": "open_graph",
+        "url": "https://article-open_graph_description.example.test/article",
+        "content": "A cooperative of small libraries has started a shared preservation project for local newspapers and oral histories. Its public update explains how volunteers scan fragile pages, attach dates and contributor names, and keep source files available for future researchers. The organizers say the first collection will cover several decades of neighborhood reporting, with clear notes where an original issue or recording is missing.",
+        "html": "<html><head><meta property=\"og:description\" content=\"A cooperative of small libraries has started a shared preservation project for local newspapers and oral histories. Its public update explains how volunteers scan fragile pages, attach dates and contributor names, and keep source files available for future researchers. The organizers say the first collection will cover several decades of neighborhood reporting, with clear notes where an original issue or recording is missing.\"></head><body><p>Short visible page.</p></body></html>"
+      },
+      "expected": {
+        "contains": [
+          "A cooperative of small libraries has started a shared preservation p"
+        ],
+        "not_contains": [],
+        "fields": {},
+        "state": "extracted",
+        "trace_contains": [
+          "open_graph"
+        ],
+        "method": "fallback_extraction"
+      }
+    },
+    {
+      "id": "article.meta_description_fallback",
+      "source_type": "article",
+      "source_name": "Synthetic article fixture",
+      "methods": [
+        "E12"
+      ],
+      "provenance": {
+        "kind": "synthetic",
+        "derived_from": [
+          "news_aggregator/extraction/extraction_strategies.py",
+          "news_aggregator/extraction/metadata_extractor.py"
+        ]
+      },
+      "input": {
+        "strategy": "meta_description",
+        "url": "https://article-meta_description_fallback.example.test/article",
+        "content": "Researchers at the fictional Northstar Institute released an open archive describing a new method for repairing damaged river sensors. The team compared readings from four independent stations and published the calibration procedure, sample data, and known limitations so other laboratories can reproduce the result. The report says the method improves consistency during heavy rain, while warning that measurements near industrial discharge still require manual review.",
+        "html": "<html><head><meta name=\"description\" content=\"Researchers at the fictional Northstar Institute released an open archive describing a new method for repairing damaged river sensors. The team compared readings from four independent stations and published the calibration procedure, sample data, and known limitations so other laboratories can reproduce the result. The report says the method improves consistency during heavy rain, while warning that measurements near industrial discharge still require manual review.\"></head><body></body></html>"
+      },
+      "expected": {
+        "contains": [
+          "Researchers at the fictional Northstar Institute released an open ar"
+        ],
+        "not_contains": [],
+        "fields": {},
+        "state": "extracted",
+        "trace_contains": [
+          "meta_description"
+        ],
+        "method": "fallback_extraction"
+      }
+    },
+    {
+      "id": "article.heuristics_main_text",
+      "source_type": "article",
+      "source_name": "Synthetic article fixture",
+      "methods": [
+        "E08",
+        "E13",
+        "E15"
+      ],
+      "provenance": {
+        "kind": "synthetic",
+        "derived_from": [
+          "news_aggregator/extraction/extraction_strategies.py",
+          "news_aggregator/extraction/html_processor.py"
+        ]
+      },
+      "input": {
+        "strategy": "enhanced_heuristics",
+        "url": "https://article-heuristics_main_text.example.test/article",
+        "content": "The fictional Open Transit Lab published a field report on bus arrival displays in rural towns. Researchers interviewed riders, recorded missed connections over several weeks, and compared those observations with the timetable data supplied by operators. The report recommends publishing service alerts in a machine-readable format and explains where the small study cannot support broader claims.",
+        "html": "<html><body><div class=\"sidebar\">Subscribe and navigate</div><div>The fictional Open Transit Lab published a field report on bus arrival displays in rural towns. Researchers interviewed riders, recorded missed connections over several weeks, and compared those observations with the timetable data supplied by operators. The report recommends publishing service alerts in a machine-readable format and explains where the small study cannot support broader claims.</div></body></html>"
+      },
+      "expected": {
+        "contains": [
+          "The fictional Open Transit Lab published a field report on bus arriv"
+        ],
+        "not_contains": [],
+        "fields": {},
+        "state": "extracted",
+        "trace_contains": [
+          "enhanced_heuristics"
+        ],
+        "method": "fallback_extraction"
+      }
+    },
+    {
+      "id": "article.reddit_self_post_filters_comments",
+      "source_type": "article",
+      "source_name": "Synthetic Reddit post",
+      "methods": [
+        "E04"
+      ],
+      "provenance": {
+        "kind": "synthetic",
+        "derived_from": [
+          "news_aggregator/extraction/extraction_strategies.py"
+        ]
+      },
+      "input": {
+        "strategy": "reddit_json",
+        "url": "https://www.reddit.com/r/news/comments/a1/post",
+        "reddit_json": "[{\"data\":{\"children\":[{\"data\":{\"title\":\"Field notes from public meetings\",\"selftext\":\"The transit lab report documents missed rural connections and gaps in published service alerts. Researchers interviewed riders at several bus stops, compared answers with schedules, and recorded uncertainty when two accounts differed. Their notes identify where a public timetable helped and where additional operator records are still needed.\",\"url\":\"https://reddit.example.test/r/news/comments/a1/post\",\"post_hint\":\"self\",\"is_self\":true,\"author\":\"sample_writer\",\"created_utc\":1760400000}}]}},{\"data\":{\"children\":[{\"data\":{\"author\":\"AutoModerator\",\"body\":\"Automated disclaimer that should be omitted.\"}},{\"data\":{\"author\":\"helpful_reader\",\"body\":\"A reader cites the missing town minutes and asks the clerk to publish a scan.\"}}]}}]"
+      },
+      "expected": {
+        "contains": [
+          "missed rural connections"
+        ],
+        "not_contains": [
+          "Automated disclaimer"
+        ],
+        "fields": {
+          "title": "Field notes from public meetings",
+          "author": "sample_writer"
+        },
+        "method": "reddit_json",
+        "state": "extracted",
+        "trace_contains": []
+      }
+    },
+    {
+      "id": "article.reddit_image_preview_unescaped",
+      "source_type": "article",
+      "source_name": "Synthetic Reddit post",
+      "methods": [
+        "E04"
+      ],
+      "provenance": {
+        "kind": "synthetic",
+        "derived_from": [
+          "news_aggregator/extraction/extraction_strategies.py"
+        ]
+      },
+      "input": {
+        "strategy": "reddit_json",
+        "url": "https://www.reddit.com/r/news/comments/a2/image",
+        "reddit_json": "[{\"data\":{\"children\":[{\"data\":{\"title\":\"Coastal instrument photograph\",\"selftext\":\"\",\"url\":\"https://images.example.test/coast.jpg\",\"post_hint\":\"image\",\"is_self\":false,\"author\":\"field_observer\",\"created_utc\":1760313600,\"preview\":{\"images\":[{\"source\":{\"url\":\"https://preview.example.test/coast&amp;wide.jpg\"}}]}}}]}},{\"data\":{\"children\":[]}}]"
+      },
+      "expected": {
+        "contains": [
+          "Coastal instrument photograph"
+        ],
+        "not_contains": [],
+        "fields": {
+          "title": "Coastal instrument photograph",
+          "author": "field_observer",
+          "image_url": "https://preview.example.test/coast&wide.jpg"
+        },
+        "method": "reddit_json",
+        "state": "extracted",
+        "trace_contains": []
+      }
+    },
+    {
+      "id": "article.reddit_linked_article",
+      "source_type": "article",
+      "source_name": "Synthetic Reddit post",
+      "methods": [
+        "E04",
+        "E05",
+        "E08"
+      ],
+      "provenance": {
+        "kind": "synthetic",
+        "derived_from": [
+          "news_aggregator/extraction/extraction_strategies.py"
+        ]
+      },
+      "input": {
+        "strategy": "reddit_linked_article",
+        "url": "https://www.reddit.com/r/news/comments/a3/guide",
+        "reddit_json": "[{\"data\":{\"children\":[{\"data\":{\"title\":\"Preservation guide discussion\",\"selftext\":\"\",\"url\":\"https://linked.example.test/guide\",\"post_hint\":\"link\",\"is_self\":false,\"author\":\"archivist\",\"created_utc\":1760313600}}]}},{\"data\":{\"children\":[]}}]",
+        "linked_html": "<html><body><article><p>A group of archivists has released a practical guide to preserving community radio recordings. It covers file naming, checksum verification, consent records, and a review process for uncertain dates. The guide includes sample forms and explains why original audio should remain available alongside cleaned listening copies, allowing later researchers to check edits and context.</p></article></body></html>"
+      },
+      "expected": {
+        "contains": [
+          "checksum verification"
+        ],
+        "not_contains": [],
+        "fields": {
+          "title": "Preservation guide discussion"
+        },
+        "method": "reddit_json",
+        "state": "extracted",
+        "trace_contains": [
+          "reddit_json",
+          "reddit_linked_article"
+        ]
+      }
+    },
+    {
+      "id": "article.reddit_malformed_json_fallback",
+      "source_type": "article",
+      "source_name": "Synthetic Reddit response",
+      "methods": [
+        "E04"
+      ],
+      "provenance": {
+        "kind": "synthetic",
+        "derived_from": [
+          "news_aggregator/extraction/extraction_strategies.py"
+        ]
+      },
+      "input": {
+        "strategy": "reddit_json",
+        "url": "https://www.reddit.com/r/news/comments/a4/broken",
+        "reddit_json": "{\"data\":[]}",
+        "html": "<html><body><main><article><h1>Transit report</h1><p>A group of archivists has released a practical guide to preserving community radio recordings. It covers file naming, checksum verification, consent records, and a review process for uncertain dates. The guide includes sample forms and explains why original audio should remain available alongside cleaned listening copies, allowing later researchers to check edits and context.</p></article></main></body></html>"
+      },
+      "expected": {
+        "contains": [
+          "checksum verification"
+        ],
+        "not_contains": [],
+        "fields": {
+          "title": "Transit report"
+        },
+        "method": "enhanced_selectors",
+        "state": "extracted",
+        "trace_contains": [
+          "reddit_json",
+          "enhanced_selectors"
+        ]
+      }
+    },
+    {
+      "id": "metadata.og_title_author_image",
+      "source_type": "article",
+      "source_name": "Synthetic metadata article",
+      "methods": [
+        "M01",
+        "M02",
+        "M03"
+      ],
+      "provenance": {
+        "kind": "synthetic",
+        "derived_from": [
+          "news_aggregator/extraction/extraction_strategies.py",
+          "news_aggregator/extraction/metadata_extractor.py"
+        ]
+      },
+      "input": {
+        "strategy": "auto",
+        "url": "https://metadata-og_title_author_image.example.test/story",
+        "html": "<html><head><meta property=\"og:title\" content=\"Preferred Open Graph title\"><meta name=\"author\" content=\"Mira Example\"><meta property=\"og:image\" content=\"https://cdn.example.test/lead.jpg\"></head><body><main><article><h1>Preferred Open Graph title</h1><p>Researchers at the fictional Northstar Institute released an open archive describing a new method for repairing damaged river sensors. The team compared readings from four independent stations and published the calibration procedure, sample data, and known limitations so other laboratories can reproduce the result. The report says the method improves consistency during heavy rain, while warning that measurements near industrial discharge still require manual review.</p></article></main></body></html>"
+      },
+      "expected": {
+        "contains": [
+          "Researchers at the fictional Northstar Institute released "
+        ],
+        "not_contains": [],
+        "fields": {
+          "title": "Preferred Open Graph title",
+          "author": "Mira Example",
+          "image_url": "https://cdn.example.test/lead.jpg"
+        },
+        "method": "enhanced_selectors",
+        "state": "extracted",
+        "trace_contains": []
+      }
+    },
+    {
+      "id": "metadata.twitter_title_fallback",
+      "source_type": "article",
+      "source_name": "Synthetic metadata article",
+      "methods": [
+        "M01",
+        "M02",
+        "M03"
+      ],
+      "provenance": {
+        "kind": "synthetic",
+        "derived_from": [
+          "news_aggregator/extraction/extraction_strategies.py",
+          "news_aggregator/extraction/metadata_extractor.py"
+        ]
+      },
+      "input": {
+        "strategy": "auto",
+        "url": "https://metadata-twitter_title_fallback.example.test/story",
+        "html": "<html><head><meta name=\"twitter:title\" content=\"Social card headline\"><title>Document fallback headline</title></head><body><main><article><p>A cooperative of small libraries has started a shared preservation project for local newspapers and oral histories. Its public update explains how volunteers scan fragile pages, attach dates and contributor names, and keep source files available for future researchers. The organizers say the first collection will cover several decades of neighborhood reporting, with clear notes where an original issue or recording is missing.</p></article></main></body></html>"
+      },
+      "expected": {
+        "contains": [
+          "A cooperative of small libraries has started a shared pres"
+        ],
+        "not_contains": [],
+        "fields": {
+          "title": "Social card headline"
+        },
+        "method": "enhanced_selectors",
+        "state": "extracted",
+        "trace_contains": []
+      }
+    },
+    {
+      "id": "metadata.date_time_datetime",
+      "source_type": "article",
+      "source_name": "Synthetic metadata article",
+      "methods": [
+        "M01",
+        "M02",
+        "M03"
+      ],
+      "provenance": {
+        "kind": "synthetic",
+        "derived_from": [
+          "news_aggregator/extraction/extraction_strategies.py",
+          "news_aggregator/extraction/date_extractor.py"
+        ]
+      },
+      "input": {
+        "strategy": "auto",
+        "url": "https://metadata-date_time_datetime.example.test/story",
+        "html": "<html><head></head><body><main><article><p>Engineers at the fictional Meridian Observatory described a low-power instrument for measuring changes in coastal wind patterns. Their technical note includes the sensor layout, a week of sample readings, and a discussion of uncertainty around salt spray and seasonal storms. The authors invite independent groups to repeat the measurements before drawing conclusions about long-term climate trends.</p><time datetime=\"2025-10-12\">October 12, 2025</time></article></main></body></html>"
+      },
+      "expected": {
+        "contains": [
+          "Engineers at the fictional Meridian Observatory described "
+        ],
+        "not_contains": [],
+        "fields": {
+          "publication_date": "2025-10-12T00:00:00"
+        },
+        "method": "enhanced_selectors",
+        "state": "extracted",
+        "trace_contains": []
+      }
+    },
+    {
+      "id": "metadata.date_article_published_time",
+      "source_type": "article",
+      "source_name": "Synthetic metadata article",
+      "methods": [
+        "M01",
+        "M02",
+        "M03"
+      ],
+      "provenance": {
+        "kind": "synthetic",
+        "derived_from": [
+          "news_aggregator/extraction/extraction_strategies.py",
+          "news_aggregator/extraction/date_extractor.py"
+        ]
+      },
+      "input": {
+        "strategy": "auto",
+        "url": "https://metadata-date_article_published_time.example.test/story",
+        "html": "<html><head><meta property=\"article:published_time\" content=\"2025-10-11\"></head><body><main><article><p>A cooperative of small libraries has started a shared preservation project for local newspapers and oral histories. Its public update explains how volunteers scan fragile pages, attach dates and contributor names, and keep source files available for future researchers. The organizers say the first collection will cover several decades of neighborhood reporting, with clear notes where an original issue or recording is missing.</p></article></main></body></html>"
+      },
+      "expected": {
+        "contains": [
+          "A cooperative of small libraries has started a shared pres"
+        ],
+        "not_contains": [],
+        "fields": {
+          "publication_date": "2025-10-11T00:00:00"
+        },
+        "method": "enhanced_selectors",
+        "state": "extracted",
+        "trace_contains": []
+      }
+    },
+    {
+      "id": "metadata.jsonld_date_author_image",
+      "source_type": "article",
+      "source_name": "Synthetic metadata article",
+      "methods": [
+        "M01",
+        "M02",
+        "M03"
+      ],
+      "provenance": {
+        "kind": "synthetic",
+        "derived_from": [
+          "news_aggregator/extraction/extraction_strategies.py",
+          "news_aggregator/extraction/metadata_extractor.py",
+          "news_aggregator/extraction/date_extractor.py"
+        ]
+      },
+      "input": {
+        "strategy": "json_ld",
+        "url": "https://metadata-jsonld_date_author_image.example.test/story",
+        "html": "<html><head><script type=\"application/ld+json\">{\"@type\":\"NewsArticle\",\"articleBody\":\"Researchers at the fictional Northstar Institute released an open archive describing a new method for repairing damaged river sensors. The team compared readings from four independent stations and published the calibration procedure, sample data, and known limitations so other laboratories can reproduce the result. The report says the method improves consistency during heavy rain, while warning that measurements near industrial discharge still require manual review.\",\"datePublished\":\"2025-10-10\",\"author\":\"Sam Example\",\"image\":\"https://cdn.example.test/jsonld.jpg\"}</script></head><body></body></html>"
+      },
+      "expected": {
+        "contains": [
+          "Researchers at the fictional Northstar Institute released "
+        ],
+        "not_contains": [],
+        "fields": {
+          "publication_date": "2025-10-10",
+          "image_url": "https://cdn.example.test/jsonld.jpg"
+        },
+        "method": "fallback_extraction",
+        "state": "extracted",
+        "trace_contains": []
+      }
+    },
+    {
+      "id": "metadata.author_byline_and_og_image",
+      "source_type": "article",
+      "source_name": "Synthetic metadata article",
+      "methods": [
+        "M01",
+        "M02",
+        "M03"
+      ],
+      "provenance": {
+        "kind": "synthetic",
+        "derived_from": [
+          "news_aggregator/extraction/extraction_strategies.py",
+          "news_aggregator/extraction/metadata_extractor.py"
+        ]
+      },
+      "input": {
+        "strategy": "auto",
+        "url": "https://metadata-author_byline_and_og_image.example.test/story",
+        "html": "<html><head><meta property=\"og:image\" content=\"https://cdn.example.test/observatory.jpg\"></head><body><main><article><p>Engineers at the fictional Meridian Observatory described a low-power instrument for measuring changes in coastal wind patterns. Their technical note includes the sensor layout, a week of sample readings, and a discussion of uncertainty around salt spray and seasonal storms. The authors invite independent groups to repeat the measurements before drawing conclusions about long-term climate trends.</p><span class=\"byline\">Mira Analyst</span></article></main></body></html>"
+      },
+      "expected": {
+        "contains": [
+          "Engineers at the fictional Meridian Observatory described "
+        ],
+        "not_contains": [],
+        "fields": {
+          "author": "Mira Analyst",
+          "image_url": "https://cdn.example.test/observatory.jpg"
+        },
+        "method": "enhanced_selectors",
+        "state": "extracted",
+        "trace_contains": []
+      }
+    },
+    {
+      "id": "limits.http_body_at_cap",
+      "source_type": "article",
+      "source_name": "Synthetic bounded input",
+      "methods": [
+        "X01"
+      ],
+      "provenance": {
+        "kind": "synthetic",
+        "derived_from": [
+          "tests/test_extraction_resource_limits.py"
+        ]
+      },
+      "input": {
+        "strategy": "auto",
+        "url": "https://limits-http_body_at_cap.example.test/limit",
+        "limits": {
+          "max_bytes": 2042,
+          "max_chars": 4096
+        },
+        "html": "<html><body><main><article><p>Researchers at the fictional Northstar Institute released an open archive describing a new method for repairing damaged river sensors. The team compared readings from four independent stations and published the calibration procedure, sample data, and known limitations so other laboratories can reproduce the result. The report says the method improves consistency during heavy rain, while warning that measurements near industrial discharge still require manual review.</p></article></main><!--                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                            --></body></html>"
+      },
+      "expected": {
+        "contains": [],
+        "not_contains": [],
+        "fields": {},
+        "state": "extracted",
+        "trace_contains": []
+      }
+    },
+    {
+      "id": "limits.http_body_one_byte_over",
+      "source_type": "article",
+      "source_name": "Synthetic bounded input",
+      "methods": [
+        "X01"
+      ],
+      "provenance": {
+        "kind": "synthetic",
+        "derived_from": [
+          "tests/test_extraction_resource_limits.py"
+        ]
+      },
+      "input": {
+        "strategy": "auto",
+        "url": "https://limits-http_body_one_byte_over.example.test/limit",
+        "limits": {
+          "max_bytes": 2041,
+          "max_chars": 4096
+        },
+        "html": "<html><body><main><article><p>Researchers at the fictional Northstar Institute released an open archive describing a new method for repairing damaged river sensors. The team compared readings from four independent stations and published the calibration procedure, sample data, and known limitations so other laboratories can reproduce the result. The report says the method improves consistency during heavy rain, while warning that measurements near industrial discharge still require manual review.</p></article></main><!--                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                            --></body></html>"
+      },
+      "expected": {
+        "contains": [],
+        "not_contains": [],
+        "fields": {},
+        "state": "resource_limit",
+        "trace_contains": []
+      }
+    },
+    {
+      "id": "limits.browser_multibyte_over_cap",
+      "source_type": "article",
+      "source_name": "Synthetic bounded input",
+      "methods": [
+        "X01"
+      ],
+      "provenance": {
+        "kind": "synthetic",
+        "derived_from": [
+          "tests/test_extraction_resource_limits.py"
+        ]
+      },
+      "input": {
+        "strategy": "auto",
+        "url": "https://limits-browser_multibyte_over_cap.example.test/limit",
+        "rendered_html": "<html><body>яяяяяяяяяяяяяяяяяяяяяяяяяяяяяяяяяяяяяяяяяяяяяяяяяяяяяяяяяяяяяяяяяяяяяяяяяяяяяяяяяяяяяяяяяяяяяяяяяяяяяяяяяяяяяяяяяяяяяяяяяяяяяяяяяяяяяяяяяяяяяяяяяяяяяяяяяяяяяяяяяяяяяяяяяяяяяяяяяяяяяяяяяяяяяяяяяяяяяяяяяяяяяяяяяяяяяяяяяяяяяяяяяяяяяяяяяяяяяяяяяяяяяяяяяяяяяяяяяяяяяяяяяяяяяяяяяяяяяяяяяяяяяяяяяяяяяяяяяяяяяяяяяяяяяяяяяяяяяяяяяяяяяяяяяяяяяяяяяяяяяяяяяяяяяяяяяяяяяяяяяяяяяяяяяяяяяяяяяяяяяяяяяяяяяяяяяяяяяяяяяяяяяяяяяяяяяяяяяяяяяяяяяяяяяяяяяяяяяяяяяяяяяяяяяяяяяяяяяяяяяяяяяяяяяяяяяяяяяяяяяяяяяяяяяяяяяяяяяяяяяяяяяяяяяяяяяяяяяяяяяяяяяяяяяяяяяяяяяяяяяяяяяяяяяяяяяяяяяяяяяяяяяяяяяяяяяяяяяяяяяяяяяяяяяяяяяяяяяяяя</body></html>",
+        "limits": {
+          "max_bytes": 1024,
+          "max_chars": 4096
+        }
+      },
+      "expected": {
+        "contains": [],
+        "not_contains": [],
+        "fields": {},
+        "state": "resource_limit",
+        "trace_contains": []
+      }
+    },
+    {
+      "id": "limits.text_char_cap",
+      "source_type": "article",
+      "source_name": "Synthetic bounded input",
+      "methods": [
+        "X01"
+      ],
+      "provenance": {
+        "kind": "synthetic",
+        "derived_from": [
+          "tests/test_extraction_resource_limits.py"
+        ]
+      },
+      "input": {
+        "strategy": "auto",
+        "url": "https://limits-text_char_cap.example.test/limit",
+        "limits": {
+          "max_bytes": 4096,
+          "max_chars": 300
+        },
+        "html": "<html><body><main><article><p>Researchers at the fictional Northstar Institute released an open archive describing a new method for repairing damaged river sensors. The team compared readings from four independent stations and published the calibration procedure, sample data, and known limitations so other laboratories can reproduce the result. The report says the method improves consistency during heavy rain, while warning that measurements near industrial discharge still require manual review.</p></article></main></body></html>"
+      },
+      "expected": {
+        "contains": [],
+        "not_contains": [],
+        "fields": {},
+        "state": "failed",
+        "trace_contains": []
+      }
+    },
+    {
+      "id": "cancel.browser_cancellation_cleanup",
+      "source_type": "article",
+      "source_name": "Synthetic browser cancellation",
+      "methods": [
+        "E10"
+      ],
+      "provenance": {
+        "kind": "synthetic",
+        "derived_from": [
+          "tests/test_browser_lifecycle.py",
+          "tests/test_orchestrator_browser_cleanup.py"
+        ]
+      },
+      "input": {
+        "strategy": "browser_rendering",
+        "url": "https://cancel.example.test/article",
+        "rendered_html": "<html><body><main><article><p>Researchers at the fictional Northstar Institute released an open archive describing a new method for repairing damaged river sensors. The team compared readings from four independent stations and published the calibration procedure, sample data, and known limitations so other laboratories can reproduce the result. The report says the method improves consistency during heavy rain, while warning that measurements near industrial discharge still require manual review.</p></article></main></body></html>",
+        "cancel_at": "browser_html_capture"
+      },
+      "expected": {
+        "contains": [],
+        "not_contains": [],
+        "fields": {},
+        "state": "failed",
+        "error": "cancelled",
+        "trace_contains": [
+          "cancelled"
+        ]
+      }
+    },
+    {
+      "id": "telegram.media_photo",
+      "source_type": "telegram",
+      "source_name": "Synthetic Telegram media message",
+      "methods": [
+        "T02",
+        "T05"
+      ],
+      "provenance": {
+        "kind": "synthetic",
+        "derived_from": [
+          "news_aggregator/telegram/message_parser.py",
+          "news_aggregator/telegram/media_extractor.py"
+        ]
+      },
+      "input": {
+        "strategy": "telegram_http",
+        "url": "https://telegram-media_photo.example.test/story",
+        "telegram_html": "<html><body><div class=\"tgme_widget_message\" data-post=\"fixture/201\"><div class=\"tgme_widget_message_text\">Researchers at the fictional Northstar Institute released an open archive describing a new method for repairing damaged river sensors. The team compared readings from four independent stations and published the calibration procedure, sample data, and known limitations so other laboratories can reproduce the result. The report says the method improves consistency during heavy rain, while warning that measurements near industrial discharge still require manual review.</div><div class=\"tgme_widget_message_photo\"><img src=\"https://cdn.example.test/photo.jpg\"></div></div></body></html>",
+        "now": "2026-10-15T12:00:00Z"
+      },
+      "expected": {
+        "contains": [
+          "damaged river sensors"
+        ],
+        "not_contains": [],
+        "fields": {
+          "media": [
+            {
+              "url": "https://cdn.example.test/photo.jpg",
+              "type": "image",
+              "thumbnail": "https://cdn.example.test/photo.jpg"
+            }
+          ],
+          "image_url": "https://cdn.example.test/photo.jpg",
+          "publication_date": "2026-10-15T12:00:00"
+        },
+        "state": "extracted",
+        "trace_contains": []
+      }
+    },
+    {
+      "id": "telegram.media_video",
+      "source_type": "telegram",
+      "source_name": "Synthetic Telegram media message",
+      "methods": [
+        "T02",
+        "T05"
+      ],
+      "provenance": {
+        "kind": "synthetic",
+        "derived_from": [
+          "news_aggregator/telegram/message_parser.py",
+          "news_aggregator/telegram/media_extractor.py"
+        ]
+      },
+      "input": {
+        "strategy": "telegram_http",
+        "url": "https://telegram-media_video.example.test/story",
+        "telegram_html": "<html><body><div class=\"tgme_widget_message\" data-post=\"fixture/201\"><div class=\"tgme_widget_message_text\">Researchers at the fictional Northstar Institute released an open archive describing a new method for repairing damaged river sensors. The team compared readings from four independent stations and published the calibration procedure, sample data, and known limitations so other laboratories can reproduce the result. The report says the method improves consistency during heavy rain, while warning that measurements near industrial discharge still require manual review.</div><video src=\"https://cdn.example.test/clip.mp4\" poster=\"https://cdn.example.test/poster.jpg\" duration=\"01:23\"></video></div></body></html>",
+        "now": "2026-10-15T12:00:00Z"
+      },
+      "expected": {
+        "contains": [
+          "damaged river sensors"
+        ],
+        "not_contains": [],
+        "fields": {
+          "media": [
+            {
+              "url": "https://cdn.example.test/clip.mp4",
+              "type": "video",
+              "thumbnail": "https://cdn.example.test/poster.jpg",
+              "duration": "01:23",
+              "source": "direct_video"
+            }
+          ],
+          "publication_date": "2026-10-15T12:00:00"
+        },
+        "state": "extracted",
+        "trace_contains": []
+      }
+    },
+    {
+      "id": "telegram.media_round_video",
+      "source_type": "telegram",
+      "source_name": "Synthetic Telegram media message",
+      "methods": [
+        "T02",
+        "T05"
+      ],
+      "provenance": {
+        "kind": "synthetic",
+        "derived_from": [
+          "news_aggregator/telegram/message_parser.py",
+          "news_aggregator/telegram/media_extractor.py"
+        ]
+      },
+      "input": {
+        "strategy": "telegram_http",
+        "url": "https://telegram-media_round_video.example.test/story",
+        "telegram_html": "<html><body><div class=\"tgme_widget_message\" data-post=\"fixture/201\"><div class=\"tgme_widget_message_text\">Researchers at the fictional Northstar Institute released an open archive describing a new method for repairing damaged river sensors. The team compared readings from four independent stations and published the calibration procedure, sample data, and known limitations so other laboratories can reproduce the result. The report says the method improves consistency during heavy rain, while warning that measurements near industrial discharge still require manual review.</div><video class=\"round_video\" src=\"https://cdn.example.test/round.mp4\" duration=\"00:15\"></video></div></body></html>",
+        "now": "2026-10-15T12:00:00Z"
+      },
+      "expected": {
+        "contains": [
+          "damaged river sensors"
+        ],
+        "not_contains": [],
+        "fields": {
+          "media": [
+            {
+              "url": "https://cdn.example.test/round.mp4",
+              "type": "video",
+              "thumbnail": null,
+              "duration": "00:15",
+              "source": "direct_video"
+            }
+          ],
+          "publication_date": "2026-10-15T12:00:00"
+        },
+        "state": "extracted",
+        "trace_contains": []
+      }
+    },
+    {
+      "id": "telegram.media_voice_audio",
+      "source_type": "telegram",
+      "source_name": "Synthetic Telegram media message",
+      "methods": [
+        "T02",
+        "T05"
+      ],
+      "provenance": {
+        "kind": "synthetic",
+        "derived_from": [
+          "news_aggregator/telegram/message_parser.py",
+          "news_aggregator/telegram/media_extractor.py"
+        ]
+      },
+      "input": {
+        "strategy": "telegram_http",
+        "url": "https://telegram-media_voice_audio.example.test/story",
+        "telegram_html": "<html><body><div class=\"tgme_widget_message\" data-post=\"fixture/201\"><div class=\"tgme_widget_message_text\">Researchers at the fictional Northstar Institute released an open archive describing a new method for repairing damaged river sensors. The team compared readings from four independent stations and published the calibration procedure, sample data, and known limitations so other laboratories can reproduce the result. The report says the method improves consistency during heavy rain, while warning that measurements near industrial discharge still require manual review.</div><audio src=\"https://cdn.example.test/voice.ogg\" duration=\"00:08\"></audio></div></body></html>",
+        "now": "2026-10-15T12:00:00Z"
+      },
+      "expected": {
+        "contains": [
+          "damaged river sensors"
+        ],
+        "not_contains": [],
+        "fields": {
+          "media": [
+            {
+              "url": "https://cdn.example.test/voice.ogg",
+              "type": "audio",
+              "duration": "00:08",
+              "source": "direct_audio"
+            }
+          ],
+          "publication_date": "2026-10-15T12:00:00"
+        },
+        "state": "extracted",
+        "trace_contains": []
+      }
+    },
+    {
+      "id": "telegram.media_sticker",
+      "source_type": "telegram",
+      "source_name": "Synthetic Telegram media message",
+      "methods": [
+        "T02",
+        "T05"
+      ],
+      "provenance": {
+        "kind": "synthetic",
+        "derived_from": [
+          "news_aggregator/telegram/message_parser.py",
+          "news_aggregator/telegram/media_extractor.py"
+        ]
+      },
+      "input": {
+        "strategy": "telegram_http",
+        "url": "https://telegram-media_sticker.example.test/story",
+        "telegram_html": "<html><body><div class=\"tgme_widget_message\" data-post=\"fixture/201\"><div class=\"tgme_widget_message_text\">Researchers at the fictional Northstar Institute released an open archive describing a new method for repairing damaged river sensors. The team compared readings from four independent stations and published the calibration procedure, sample data, and known limitations so other laboratories can reproduce the result. The report says the method improves consistency during heavy rain, while warning that measurements near industrial discharge still require manual review.</div><div class=\"tgme_widget_message_sticker\"><img src=\"https://cdn.example.test/sticker.webp\"></div></div></body></html>",
+        "now": "2026-10-15T12:00:00Z"
+      },
+      "expected": {
+        "contains": [
+          "damaged river sensors"
+        ],
+        "not_contains": [],
+        "fields": {
+          "media": [
+            {
+              "url": "https://cdn.example.test/sticker.webp",
+              "type": "animated_sticker",
+              "thumbnail": "https://cdn.example.test/sticker.webp",
+              "source": "sticker"
+            }
+          ],
+          "publication_date": "2026-10-15T12:00:00"
+        },
+        "state": "extracted",
+        "trace_contains": []
+      }
+    },
+    {
+      "id": "telegram.media_gif",
+      "source_type": "telegram",
+      "source_name": "Synthetic Telegram media message",
+      "methods": [
+        "T02",
+        "T05"
+      ],
+      "provenance": {
+        "kind": "synthetic",
+        "derived_from": [
+          "news_aggregator/telegram/message_parser.py",
+          "news_aggregator/telegram/media_extractor.py"
+        ]
+      },
+      "input": {
+        "strategy": "telegram_http",
+        "url": "https://telegram-media_gif.example.test/story",
+        "telegram_html": "<html><body><div class=\"tgme_widget_message\" data-post=\"fixture/201\"><div class=\"tgme_widget_message_text\">Researchers at the fictional Northstar Institute released an open archive describing a new method for repairing damaged river sensors. The team compared readings from four independent stations and published the calibration procedure, sample data, and known limitations so other laboratories can reproduce the result. The report says the method improves consistency during heavy rain, while warning that measurements near industrial discharge still require manual review.</div><div class=\"tgme_widget_message_gif\" data-gif=\"https://cdn.example.test/loop.gif\"><img src=\"https://cdn.example.test/loop-thumb.jpg\"></div></div></body></html>",
+        "now": "2026-10-15T12:00:00Z"
+      },
+      "expected": {
+        "contains": [
+          "damaged river sensors"
+        ],
+        "not_contains": [],
+        "fields": {
+          "media": [
+            {
+              "url": "https://cdn.example.test/loop.gif",
+              "type": "gif",
+              "thumbnail": "https://cdn.example.test/loop-thumb.jpg",
+              "source": "gif"
+            }
+          ],
+          "publication_date": "2026-10-15T12:00:00"
+        },
+        "state": "extracted",
+        "trace_contains": []
+      }
+    },
+    {
+      "id": "telegram.media_document",
+      "source_type": "telegram",
+      "source_name": "Synthetic Telegram media message",
+      "methods": [
+        "T02",
+        "T05"
+      ],
+      "provenance": {
+        "kind": "synthetic",
+        "derived_from": [
+          "news_aggregator/telegram/message_parser.py",
+          "news_aggregator/telegram/media_extractor.py"
+        ]
+      },
+      "input": {
+        "strategy": "telegram_http",
+        "url": "https://telegram-media_document.example.test/story",
+        "telegram_html": "<html><body><div class=\"tgme_widget_message\" data-post=\"fixture/201\"><div class=\"tgme_widget_message_text\">Researchers at the fictional Northstar Institute released an open archive describing a new method for repairing damaged river sensors. The team compared readings from four independent stations and published the calibration procedure, sample data, and known limitations so other laboratories can reproduce the result. The report says the method improves consistency during heavy rain, while warning that measurements near industrial discharge still require manual review.</div><div class=\"tgme_widget_message_document\"><img src=\"https://cdn.example.test/report-preview.jpg\"></div></div></body></html>",
+        "now": "2026-10-15T12:00:00Z"
+      },
+      "expected": {
+        "contains": [
+          "damaged river sensors"
+        ],
+        "not_contains": [],
+        "fields": {
+          "media": [
+            {
+              "url": "https://cdn.example.test/report-preview.jpg",
+              "type": "document",
+              "thumbnail": "https://cdn.example.test/report-preview.jpg"
+            }
+          ],
+          "publication_date": "2026-10-15T12:00:00"
+        },
+        "state": "extracted",
+        "trace_contains": []
+      }
+    },
+    {
+      "id": "telegram.media_poll",
+      "source_type": "telegram",
+      "source_name": "Synthetic Telegram media message",
+      "methods": [
+        "T02",
+        "T05"
+      ],
+      "provenance": {
+        "kind": "synthetic",
+        "derived_from": [
+          "news_aggregator/telegram/message_parser.py",
+          "news_aggregator/telegram/media_extractor.py"
+        ]
+      },
+      "input": {
+        "strategy": "telegram_http",
+        "url": "https://telegram-media_poll.example.test/story",
+        "telegram_html": "<html><body><div class=\"tgme_widget_message\" data-post=\"fixture/201\"><div class=\"tgme_widget_message_text\">Researchers at the fictional Northstar Institute released an open archive describing a new method for repairing damaged river sensors. The team compared readings from four independent stations and published the calibration procedure, sample data, and known limitations so other laboratories can reproduce the result. The report says the method improves consistency during heavy rain, while warning that measurements near industrial discharge still require manual review.</div><div class=\"tgme_widget_message_poll\"><div class=\"poll_question\">Which archive should open first?</div><div class=\"poll_option\">Local newspapers</div><div class=\"poll_option\">Oral histories</div></div></div></body></html>",
+        "now": "2026-10-15T12:00:00Z"
+      },
+      "expected": {
+        "contains": [
+          "damaged river sensors"
+        ],
+        "not_contains": [],
+        "fields": {
+          "media": [
+            {
+              "type": "poll",
+              "poll_data": {
+                "question": "Which archive should open first?",
+                "options": [
+                  "Local newspapers",
+                  "Oral histories"
+                ]
+              },
+              "source": "poll"
+            }
+          ],
+          "publication_date": "2026-10-15T12:00:00"
+        },
+        "state": "extracted",
+        "trace_contains": []
+      }
+    },
+    {
+      "id": "telegram.media_location",
+      "source_type": "telegram",
+      "source_name": "Synthetic Telegram media message",
+      "methods": [
+        "T02",
+        "T05"
+      ],
+      "provenance": {
+        "kind": "synthetic",
+        "derived_from": [
+          "news_aggregator/telegram/message_parser.py",
+          "news_aggregator/telegram/media_extractor.py"
+        ]
+      },
+      "input": {
+        "strategy": "telegram_http",
+        "url": "https://telegram-media_location.example.test/story",
+        "telegram_html": "<html><body><div class=\"tgme_widget_message\" data-post=\"fixture/201\"><div class=\"tgme_widget_message_text\">Researchers at the fictional Northstar Institute released an open archive describing a new method for repairing damaged river sensors. The team compared readings from four independent stations and published the calibration procedure, sample data, and known limitations so other laboratories can reproduce the result. The report says the method improves consistency during heavy rain, while warning that measurements near industrial discharge still require manual review.</div><div class=\"tgme_widget_message_location\"><a href=\"https://maps.example.test/place/river\">Northstar field station</a></div></div></body></html>",
+        "now": "2026-10-15T12:00:00Z"
+      },
+      "expected": {
+        "contains": [
+          "damaged river sensors"
+        ],
+        "not_contains": [],
+        "fields": {
+          "media": [
+            {
+              "type": "location",
+              "location_data": {
+                "text": "Northstar field station",
+                "url": "https://maps.example.test/place/river"
+              },
+              "source": "location"
+            }
+          ],
+          "publication_date": "2026-10-15T12:00:00"
+        },
+        "state": "extracted",
+        "trace_contains": []
+      }
+    },
+    {
+      "id": "telegram.media_contact",
+      "source_type": "telegram",
+      "source_name": "Synthetic Telegram media message",
+      "methods": [
+        "T02",
+        "T05"
+      ],
+      "provenance": {
+        "kind": "synthetic",
+        "derived_from": [
+          "news_aggregator/telegram/message_parser.py",
+          "news_aggregator/telegram/media_extractor.py"
+        ]
+      },
+      "input": {
+        "strategy": "telegram_http",
+        "url": "https://telegram-media_contact.example.test/story",
+        "telegram_html": "<html><body><div class=\"tgme_widget_message\" data-post=\"fixture/201\"><div class=\"tgme_widget_message_text\">Researchers at the fictional Northstar Institute released an open archive describing a new method for repairing damaged river sensors. The team compared readings from four independent stations and published the calibration procedure, sample data, and known limitations so other laboratories can reproduce the result. The report says the method improves consistency during heavy rain, while warning that measurements near industrial discharge still require manual review.</div><div class=\"tgme_widget_message_contact\">Archive desk <span class=\"contact_phone\">+1-555-0100</span></div></div></body></html>",
+        "now": "2026-10-15T12:00:00Z"
+      },
+      "expected": {
+        "contains": [
+          "damaged river sensors"
+        ],
+        "not_contains": [],
+        "fields": {
+          "media": [
+            {
+              "type": "contact",
+              "contact_data": {
+                "text": "Archive desk+1-555-0100",
+                "phone": "+1-555-0100"
+              },
+              "source": "contact"
+            }
+          ],
+          "publication_date": "2026-10-15T12:00:00"
+        },
+        "state": "extracted",
+        "trace_contains": []
+      }
+    },
+    {
+      "id": "metadata.title_plain_title",
+      "source_type": "article",
+      "source_name": "Synthetic metadata article",
+      "methods": [
+        "M01"
+      ],
+      "provenance": {
+        "kind": "synthetic",
+        "derived_from": [
+          "news_aggregator/extraction/extraction_strategies.py",
+          "news_aggregator/extraction/metadata_extractor.py"
+        ]
+      },
+      "input": {
+        "strategy": "auto",
+        "url": "https://metadata-title_plain_title.example.test/story",
+        "html": "<html><head><title>Plain document headline</title></head><body><main><article><p>Researchers at the fictional Northstar Institute released an open archive describing a new method for repairing damaged river sensors. The team compared readings from four independent stations and published the calibration procedure, sample data, and known limitations so other laboratories can reproduce the result. The report says the method improves consistency during heavy rain, while warning that measurements near industrial discharge still require manual review.</p></article></main></body></html>"
+      },
+      "expected": {
+        "contains": [
+          "Researchers at the fictional Northstar Institute released "
+        ],
+        "not_contains": [],
+        "fields": {
+          "title": "Plain document headline"
+        },
+        "state": "extracted",
+        "trace_contains": [],
+        "method": "enhanced_selectors"
+      }
+    },
+    {
+      "id": "metadata.title_h1_fallback",
+      "source_type": "article",
+      "source_name": "Synthetic metadata article",
+      "methods": [
+        "M01"
+      ],
+      "provenance": {
+        "kind": "synthetic",
+        "derived_from": [
+          "news_aggregator/extraction/extraction_strategies.py",
+          "news_aggregator/extraction/metadata_extractor.py"
+        ]
+      },
+      "input": {
+        "strategy": "auto",
+        "url": "https://metadata-title_h1_fallback.example.test/story",
+        "html": "<html><head></head><body><main><article><h1>Headline from first heading</h1><p>A cooperative of small libraries has started a shared preservation project for local newspapers and oral histories. Its public update explains how volunteers scan fragile pages, attach dates and contributor names, and keep source files available for future researchers. The organizers say the first collection will cover several decades of neighborhood reporting, with clear notes where an original issue or recording is missing.</p></article></main></body></html>"
+      },
+      "expected": {
+        "contains": [
+          "A cooperative of small libraries has started a shared pres"
+        ],
+        "not_contains": [],
+        "fields": {
+          "title": "Headline from first heading"
+        },
+        "state": "extracted",
+        "trace_contains": [],
+        "method": "enhanced_selectors"
+      }
+    },
+    {
+      "id": "metadata.no_publication_date",
+      "source_type": "article",
+      "source_name": "Synthetic metadata article",
+      "methods": [
+        "M02"
+      ],
+      "provenance": {
+        "kind": "synthetic",
+        "derived_from": [
+          "news_aggregator/extraction/extraction_strategies.py",
+          "news_aggregator/extraction/date_extractor.py"
+        ]
+      },
+      "input": {
+        "strategy": "auto",
+        "url": "https://metadata-no_publication_date.example.test/story",
+        "html": "<html><head><title>Undated archive note</title></head><body><main><article><p>Researchers at the fictional Northstar Institute released an open archive describing a new method for repairing damaged river sensors. The team compared readings from four independent stations and published the calibration procedure, sample data, and known limitations so other laboratories can reproduce the result. The report says the method improves consistency during heavy rain, while warning that measurements near industrial discharge still require manual review.</p></article></main></body></html>"
+      },
+      "expected": {
+        "contains": [
+          "Researchers at the fictional Northstar Institute released "
+        ],
+        "not_contains": [],
+        "fields": {
+          "publication_date": null
+        },
+        "state": "extracted",
+        "trace_contains": [],
+        "method": "enhanced_selectors"
+      }
+    },
+    {
+      "id": "article.article_media_extraction",
+      "source_type": "article",
+      "source_name": "Synthetic embedded-media article",
+      "methods": [
+        "M04"
+      ],
+      "provenance": {
+        "kind": "synthetic",
+        "derived_from": [
+          "news_aggregator/processing/media_extractor.py"
+        ]
+      },
+      "input": {
+        "strategy": "auto",
+        "url": "https://article-article_media_extraction.example.test/story",
+        "html": "<html><body><main><article><p>Researchers at the fictional Northstar Institute released an open archive describing a new method for repairing damaged river sensors. The team compared readings from four independent stations and published the calibration procedure, sample data, and known limitations so other laboratories can reproduce the result. The report says the method improves consistency during heavy rain, while warning that measurements near industrial discharge still require manual review.</p><video src=\"https://cdn.example.test/field.mp4\"></video><a href=\"/files/field-notes.pdf\">Download field notes</a></article></main></body></html>"
+      },
+      "expected": {
+        "contains": [
+          "Researchers at the fictional Northstar Institute released "
+        ],
+        "not_contains": [],
+        "fields": {
+          "media": [
+            {
+              "type": "video",
+              "url": "https://cdn.example.test/field.mp4"
+            },
+            {
+              "type": "document",
+              "url": "https://article-article_media_extraction.example.test/files/field-notes.pdf"
+            }
+          ]
+        },
+        "state": "extracted",
+        "trace_contains": [],
+        "method": "enhanced_selectors"
+      }
+    },
+    {
+      "id": "article.alternate_link_candidates",
+      "source_type": "article",
+      "source_name": "Synthetic alternate-link page",
+      "methods": [
+        "E14"
+      ],
+      "provenance": {
+        "kind": "synthetic",
+        "derived_from": [
+          "news_aggregator/extraction/core_extractor.py",
+          "news_aggregator/extraction/metadata_extractor.py"
+        ]
+      },
+      "input": {
+        "strategy": "fallback_extraction",
+        "url": "https://article-alternate_link_candidates.example.test/story",
+        "html": "<html><head><link rel=\"canonical\" href=\"/canonical\"><link rel=\"amphtml\" href=\"/amp\"></head><body><a href=\"/read-more\">Read more</a></body></html>",
+        "alternative_html": {
+          "https://article-alternate_link_candidates.example.test/canonical": "<html><body><main><article><p>Researchers at the fictional Northstar Institute released an open archive describing a new method for repairing damaged river sensors. The team compared readings from four independent stations and published the calibration procedure, sample data, and known limitations so other laboratories can reproduce the result. The report says the method improves consistency during heavy rain, while warning that measurements near industrial discharge still require manual review.</p></article></main></body></html>",
+          "https://article-alternate_link_candidates.example.test/amp": "<html><body><main><article><p>A cooperative of small libraries has started a shared preservation project for local newspapers and oral histories. Its public update explains how volunteers scan fragile pages, attach dates and contributor names, and keep source files available for future researchers. The organizers say the first collection will cover several decades of neighborhood reporting, with clear notes where an original issue or recording is missing.</p></article></main></body></html>",
+          "https://article-alternate_link_candidates.example.test/read-more": "<html><body><main><article><p>Researchers at the fictional Northstar Institute released an open archive describing a new method for repairing damaged river sensors. The team compared readings from four independent stations and published the calibration procedure, sample data, and known limitations so other laboratories can reproduce the result. The report says the method improves consistency during heavy rain, while warning that measurements near industrial discharge still require manual review.</p></article></main></body></html>"
+        }
+      },
+      "expected": {
+        "contains": [],
+        "not_contains": [],
+        "fields": {},
+        "state": "failed",
+        "trace_contains": []
+      }
+    },
+    {
+      "id": "article.url_rejects_document",
+      "source_type": "article",
+      "source_name": "Synthetic URL admission",
+      "methods": [
+        "E01"
+      ],
+      "provenance": {
+        "kind": "synthetic",
+        "derived_from": [
+          "news_aggregator/extraction/core_extractor.py"
+        ]
+      },
+      "input": {
+        "strategy": "auto",
+        "url": "https://files.example.test/report.pdf",
+        "html": "<html><body><article><p>Researchers at the fictional Northstar Institute released an open archive describing a new method for repairing damaged river sensors. The team compared readings from four independent stations and published the calibration procedure, sample data, and known limitations so other laboratories can reproduce the result. The report says the method improves consistency during heavy rain, while warning that measurements near industrial discharge still require manual review.</p></article></body></html>"
+      },
+      "expected": {
+        "contains": [],
+        "not_contains": [],
+        "fields": {},
+        "state": "failed",
+        "trace_contains": []
+      }
+    },
+    {
+      "id": "article.url_cleans_invisible_character",
+      "source_type": "article",
+      "source_name": "Synthetic URL normalization",
+      "methods": [
+        "E01"
+      ],
+      "provenance": {
+        "kind": "synthetic",
+        "derived_from": [
+          "news_aggregator/extraction/core_extractor.py",
+          "news_aggregator/extraction/extraction_utils.py"
+        ]
+      },
+      "input": {
+        "strategy": "auto",
+        "url": "https://example.test/a​article",
+        "html": "<html><body><main><article><p>Researchers at the fictional Northstar Institute released an open archive describing a new method for repairing damaged river sensors. The team compared readings from four independent stations and published the calibration procedure, sample data, and known limitations so other laboratories can reproduce the result. The report says the method improves consistency during heavy rain, while warning that measurements near industrial discharge still require manual review.</p></article></main></body></html>"
+      },
+      "expected": {
+        "contains": [
+          "Researchers at the fictional Northstar Institute released "
+        ],
+        "not_contains": [],
+        "fields": {
+          "url": "https://example.test/a​article"
+        },
+        "state": "extracted",
+        "trace_contains": [],
+        "method": "enhanced_selectors"
+      }
+    },
+    {
+      "id": "article.quality_strips_navigation",
+      "source_type": "article",
+      "source_name": "Synthetic quality article",
+      "methods": [
+        "E15"
+      ],
+      "provenance": {
+        "kind": "synthetic",
+        "derived_from": [
+          "news_aggregator/extraction/extraction_utils.py",
+          "news_aggregator/extraction/html_processor.py"
+        ]
+      },
+      "input": {
+        "strategy": "enhanced_selectors",
+        "url": "https://article-quality_strips_navigation.example.test/story",
+        "html": "<html><body><nav>Subscribe sections categories menu</nav><main><article><p>A cooperative of small libraries has started a shared preservation project for local newspapers and oral histories. Its public update explains how volunteers scan fragile pages, attach dates and contributor names, and keep source files available for future researchers. The organizers say the first collection will cover several decades of neighborhood reporting, with clear notes where an original issue or recording is missing.</p></article></main></body></html>"
+      },
+      "expected": {
+        "contains": [
+          "local newspapers"
+        ],
+        "not_contains": [
+          "Subscribe sections"
+        ],
+        "fields": {},
+        "state": "extracted",
+        "trace_contains": [],
+        "method": "enhanced_selectors"
+      }
+    },
+    {
+      "id": "custom.absolute_date_selector",
+      "source_type": "custom",
+      "source_name": "Synthetic custom dated listing",
+      "methods": [
+        "C02",
+        "C03"
+      ],
+      "provenance": {
+        "kind": "synthetic",
+        "derived_from": [
+          "news_aggregator/sources/page_monitor_source.py"
+        ]
+      },
+      "input": {
+        "strategy": "custom_selectors",
+        "url": "https://custom-absolute_date_selector.example.test/story",
+        "html": "<html><body><article><h2>Coastal wind update</h2><time datetime=\"2025-10-12\">October 12, 2025</time><p>Researchers at the fictional Northstar Institute released an open archive describing a new method for repairing damaged river sensors. The team compared readings from four independent stations and published the calibration procedure, sample data, and known limitations so other laboratories can reproduce the result. The report says the method improves consistency during heavy rain, while warning that measurements near industrial discharge still require manual review.</p></article></body></html>",
+        "selectors": {
+          "article": [
+            "article"
+          ],
+          "title": [
+            "h2"
+          ],
+          "link": [
+            "a[href]"
+          ],
+          "date": [
+            "time"
+          ],
+          "content": [
+            "p"
+          ]
+        },
+        "now": "2026-10-15T12:00:00Z"
+      },
+      "expected": {
+        "contains": [
+          "Researchers at the fictional Northstar Institute released "
+        ],
+        "not_contains": [],
+        "fields": {
+          "title": "Coastal wind update"
+        },
+        "state": "extracted",
+        "trace_contains": []
+      }
+    },
+    {
+      "id": "article.auto_readability_after_selector_miss",
+      "source_type": "article",
+      "source_name": "Synthetic article fixture",
+      "methods": [
+        "E08",
+        "E09"
+      ],
+      "provenance": {
+        "kind": "synthetic",
+        "derived_from": [
+          "news_aggregator/extraction/extraction_strategies.py",
+          "news_aggregator/extraction/html_processor.py"
+        ]
+      },
+      "input": {
+        "strategy": "auto",
+        "url": "https://article-readability_after_selector_miss.example.test/article",
+        "content": "A cooperative of small libraries has started a shared preservation project for local newspapers and oral histories. Its public update explains how volunteers scan fragile pages, attach dates and contributor names, and keep source files available for future researchers. The organizers say the first collection will cover several decades of neighborhood reporting, with clear notes where an original issue or recording is missing.",
+        "html": "<html><body><header>Site masthead</header><nav>Sections and menus</nav><div><h1>Archive report</h1><div>A cooperative of small libraries has started a shared preservation project for local newspapers and oral histories. Its public update explains how volunteers scan fragile pages, attach dates and contributor names, and keep source files available for future researchers. The organizers say the first collection will cover several decades of neighborhood reporting, with clear notes where an original issue or recording is missing.</div><aside>Related posts</aside><footer>Copyright</footer></div></body></html>"
+      },
+      "expected": {
+        "contains": [
+          "A cooperative of small libraries has started a shared preservation p"
+        ],
+        "not_contains": [],
+        "fields": {},
+        "state": "extracted",
+        "trace_contains": [
+          "enhanced_selectors",
+          "readability"
+        ],
+        "method": "readability"
+      }
+    },
+    {
+      "id": "transition.auto_to_jsonld",
+      "source_type": "article",
+      "source_name": "Synthetic cross-method regression",
+      "methods": [
+        "E06",
+        "E08",
+        "E09",
+        "E10",
+        "E11",
+        "E15"
+      ],
+      "provenance": {
+        "kind": "synthetic",
+        "derived_from": [
+          "docs/go-real-source-readability-review.md"
+        ]
+      },
+      "input": {
+        "strategy": "auto",
+        "url": "https://fixture.test/article",
+        "html": "<html><head><script type=\"application/ld+json\">{\"@type\": \"NewsArticle\", \"articleBody\": \"Researchers at the fictional Northstar Institute released an open archive describing a new method for repairing damaged river sensors. The team compared readings from four independent stations and published the calibration procedure, sample data, and known limitations so other laboratories can reproduce the result. The report says the method improves consistency during heavy rain, while warning that measurements near industrial discharge still require manual review.\"}</script></head><body><p>Short loading shell.</p></body></html>"
+      },
+      "expected": {
+        "state": "extracted",
+        "method": "fallback_extraction",
+        "contains": [
+          "four independent stations"
+        ]
+      }
+    },
+    {
+      "id": "transition.learned_pattern_to_jsonld",
+      "source_type": "article",
+      "source_name": "Synthetic cross-method regression",
+      "methods": [
+        "E06",
+        "E08",
+        "E09",
+        "E10",
+        "E11",
+        "E15"
+      ],
+      "provenance": {
+        "kind": "synthetic",
+        "derived_from": [
+          "docs/go-real-source-readability-review.md"
+        ]
+      },
+      "input": {
+        "strategy": "learned_pattern",
+        "url": "https://fixture.test/article",
+        "html": "<html><head><script type=\"application/ld+json\">{\"@type\": \"NewsArticle\", \"articleBody\": \"Researchers at the fictional Northstar Institute released an open archive describing a new method for repairing damaged river sensors. The team compared readings from four independent stations and published the calibration procedure, sample data, and known limitations so other laboratories can reproduce the result. The report says the method improves consistency during heavy rain, while warning that measurements near industrial discharge still require manual review.\"}</script></head><body><p>Short loading shell.</p></body></html>",
+        "learned_selector": ".missing"
+      },
+      "expected": {
+        "state": "extracted",
+        "method": "fallback_extraction",
+        "contains": [
+          "four independent stations"
+        ]
+      }
+    },
+    {
+      "id": "transition.auto_to_browser",
+      "source_type": "article",
+      "source_name": "Synthetic cross-method regression",
+      "methods": [
+        "E08",
+        "E09",
+        "E10",
+        "E15"
+      ],
+      "provenance": {
+        "kind": "synthetic",
+        "derived_from": [
+          "docs/go-real-source-readability-review.md"
+        ]
+      },
+      "input": {
+        "strategy": "auto",
+        "url": "https://fixture.test/article",
+        "html": "<html><body>Loading...</body></html>",
+        "rendered_html": "<article><p>Researchers at the fictional Northstar Institute released an open archive describing a new method for repairing damaged river sensors. The team compared readings from four independent stations and published the calibration procedure, sample data, and known limitations so other laboratories can reproduce the result. The report says the method improves consistency during heavy rain, while warning that measurements near industrial discharge still require manual review.</p></article>"
+      },
+      "expected": {
+        "state": "extracted",
+        "method": "browser_rendering",
+        "contains": [
+          "four independent stations"
+        ]
+      }
+    },
+    {
+      "id": "transition.auto_to_meta",
+      "source_type": "article",
+      "source_name": "Synthetic cross-method regression",
+      "methods": [
+        "E08",
+        "E09",
+        "E10",
+        "E12",
+        "E15"
+      ],
+      "provenance": {
+        "kind": "synthetic",
+        "derived_from": [
+          "docs/go-real-source-readability-review.md"
+        ]
+      },
+      "input": {
+        "strategy": "auto",
+        "url": "https://fixture.test/article",
+        "html": "<html><head><meta name=\"description\" content=\"Researchers at the fictional Northstar Institute released an open archive describing a new method for repairing damaged river sensors. The team compared readings from four independent stations and published the calibration procedure, sample data, and known limitations so other laboratories can reproduce the result. The report says the method improves consistency during heavy rain, while warning that measurements near industrial discharge still require manual review.\"></head><body>Loading...</body></html>"
+      },
+      "expected": {
+        "state": "extracted",
+        "method": "fallback_extraction",
+        "contains": [
+          "four independent stations"
+        ]
+      }
+    },
+    {
+      "id": "telegram.short_external_expands",
+      "source_type": "telegram",
+      "source_name": "Synthetic cross-method regression",
+      "methods": [
+        "T02",
+        "T03",
+        "T04"
+      ],
+      "provenance": {
+        "kind": "synthetic",
+        "derived_from": [
+          "docs/go-real-source-readability-review.md"
+        ]
+      },
+      "input": {
+        "strategy": "telegram_http",
+        "url": "https://t.me/s/fixture",
+        "now": "2026-10-15T12:00:00Z",
+        "telegram_html": "<div class=\"tgme_widget_message\" data-post=\"fixture/2\"><div class=\"tgme_widget_message_text\">River research update: <a href=\"https://fixture.test/report\">Read the complete report</a></div></div>",
+        "linked_html": "<article><p>Researchers at the fictional Northstar Institute released an open archive describing a new method for repairing damaged river sensors. The team compared readings from four independent stations and published the calibration procedure, sample data, and known limitations so other laboratories can reproduce the result. The report says the method improves consistency during heavy rain, while warning that measurements near industrial discharge still require manual review.</p></article>"
+      },
+      "expected": {
+        "state": "extracted",
+        "contains": [
+          "four independent stations"
+        ],
+        "fields": {
+          "url": "https://fixture.test/report"
+        }
+      }
+    },
+    {
+      "id": "custom.anchor_container",
+      "source_type": "custom",
+      "source_name": "Synthetic cross-method regression",
+      "methods": [
+        "C01",
+        "C02"
+      ],
+      "provenance": {
+        "kind": "synthetic",
+        "derived_from": [
+          "docs/go-real-source-readability-review.md"
+        ]
+      },
+      "input": {
+        "strategy": "custom_selectors",
+        "url": "https://fixture.test/",
+        "html": "<a class=\"project\" href=\"/projects/river\">Independent river observation project</a>",
+        "use_browser": false,
+        "selectors": {
+          "article": [
+            "a.project"
+          ]
+        },
+        "now": "2026-10-15T12:00:00Z"
+      },
+      "expected": {
+        "state": "extracted",
+        "fields": {
+          "title": "Independent river observation project",
+          "url": "https://fixture.test/projects/river"
+        }
+      }
+    },
+    {
+      "id": "metadata.regression_iso_minute",
+      "source_type": "article",
+      "source_name": "Synthetic cross-method regression",
+      "methods": [
+        "M02",
+        "E08"
+      ],
+      "provenance": {
+        "kind": "synthetic",
+        "derived_from": [
+          "docs/go-real-source-readability-review.md",
+          "go/extractor/date_regression_test.go"
+        ]
+      },
+      "input": {
+        "strategy": "enhanced_selectors",
+        "url": "https://fixture.test/article",
+        "html": "<article><time datetime=\"2026-04-30T16:00Z\">Published</time><p>Researchers at the fictional Northstar Institute released an open archive describing a new method for repairing damaged river sensors. The team compared readings from four independent stations and published the calibration procedure, sample data, and known limitations so other laboratories can reproduce the result. The report says the method improves consistency during heavy rain, while warning that measurements near industrial discharge still require manual review.</p></article>"
+      },
+      "expected": {
+        "state": "extracted",
+        "contains": [
+          "four independent stations"
+        ]
+      }
+    },
+    {
+      "id": "metadata.regression_displayed_comma",
+      "source_type": "article",
+      "source_name": "Synthetic cross-method regression",
+      "methods": [
+        "M02",
+        "E08"
+      ],
+      "provenance": {
+        "kind": "synthetic",
+        "derived_from": [
+          "docs/go-real-source-readability-review.md",
+          "go/extractor/date_regression_test.go"
+        ]
+      },
+      "input": {
+        "strategy": "enhanced_selectors",
+        "url": "https://fixture.test/article",
+        "html": "<article><time>30 Apr, 2026</time><p>Researchers at the fictional Northstar Institute released an open archive describing a new method for repairing damaged river sensors. The team compared readings from four independent stations and published the calibration procedure, sample data, and known limitations so other laboratories can reproduce the result. The report says the method improves consistency during heavy rain, while warning that measurements near industrial discharge still require manual review.</p></article>"
+      },
+      "expected": {
+        "state": "extracted",
+        "contains": [
+          "four independent stations"
+        ]
+      }
+    },
+    {
+      "id": "retention.auto",
+      "source_type": "article",
+      "source_name": "Synthetic raw source retention",
+      "methods": [
+        "E15"
+      ],
+      "provenance": {
+        "kind": "synthetic",
+        "derived_from": [
+          "go/extractor/types.go",
+          "scripts/benchmark_python_pipeline.py"
+        ]
+      },
+      "input": {
+        "url": "https://fixture.test/article",
+        "strategy": "auto",
+        "content": "Original stored source text."
+      },
+      "expected": {
+        "state": "extracted",
+        "method": "source_content",
+        "contains": [
+          "Original stored source text."
+        ]
+      }
+    },
+    {
+      "id": "retention.source_content",
+      "source_type": "article",
+      "source_name": "Synthetic raw source retention",
+      "methods": [
+        "E15"
+      ],
+      "provenance": {
+        "kind": "synthetic",
+        "derived_from": [
+          "go/extractor/types.go",
+          "scripts/benchmark_python_pipeline.py"
+        ]
+      },
+      "input": {
+        "url": "https://fixture.test/article",
+        "strategy": "source_content",
+        "content": "Original stored source text."
+      },
+      "expected": {
+        "state": "extracted",
+        "method": "source_content",
+        "contains": [
+          "Original stored source text."
+        ]
+      }
+    },
+    {
+      "id": "limits.alternative_utf8_byte_cap",
+      "source_type": "article",
+      "source_name": "Synthetic alternative byte admission",
+      "methods": [
+        "E14",
+        "X01"
+      ],
+      "provenance": {
+        "kind": "synthetic",
+        "derived_from": [
+          "go/extractor/types.go"
+        ]
+      },
+      "input": {
+        "strategy": "auto",
+        "url": "https://fixture.test/article",
+        "max_bytes": 10,
+        "alternative_html": {
+          "https://fixture.test/amp": "界界界界"
+        }
+      },
+      "expected": {
+        "state": "resource_limit"
+      }
+    }
+  ]
+}
