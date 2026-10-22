@@ -61,6 +61,7 @@ class Settings(BaseSettings):
     telegram_service_chat_id: Optional[str] = Field(default=None, alias="TELEGRAM_SERVICE_CHAT_ID")
     telegram_rich_messages_enabled: bool = Field(default=True, alias="TELEGRAM_RICH_MESSAGES_ENABLED")
     telegram_source_mode: Literal['python', 'go'] = Field(default='python', alias='TELEGRAM_SOURCE_MODE')
+    page_monitor_source_mode: Literal['python', 'go'] = Field(default='python', alias='PAGE_MONITOR_SOURCE_MODE')
     site_base_url: str = Field(default="https://news.dzarlax.dev", alias="SITE_BASE_URL")
     # Deprecated: accepted so older .env files do not break settings loading after Telegraph removal.
     telegraph_access_token: Optional[str] = Field(default=None, alias="TELEGRAPH_ACCESS_TOKEN")
@@ -179,6 +180,23 @@ class Settings(BaseSettings):
             raise ValueError(
                 'TELEGRAM_SOURCE_MODE=go requires EXTRACTION_SERVICE_URL and EXTRACTION_SERVICE_TOKEN'
             )
+        return self
+
+    @model_validator(mode="after")
+    def validate_page_monitor_source_mode(self):
+        if self.page_monitor_source_mode == 'go':
+            from urllib.parse import urlsplit
+            if not self.extraction_service_url or not self.extraction_service_token:
+                raise ValueError(
+                    'PAGE_MONITOR_SOURCE_MODE=go requires EXTRACTION_SERVICE_URL and EXTRACTION_SERVICE_TOKEN'
+                )
+            try:
+                parsed = urlsplit(self.extraction_service_url)
+            except ValueError as exc:
+                raise ValueError('EXTRACTION_SERVICE_URL must be a valid http(s) URL') from exc
+            if (parsed.scheme not in {'http', 'https'} or not parsed.hostname or parsed.username
+                    or parsed.password or parsed.query or parsed.fragment):
+                raise ValueError('EXTRACTION_SERVICE_URL must be a valid http(s) URL')
         return self
 
     @model_validator(mode="after")

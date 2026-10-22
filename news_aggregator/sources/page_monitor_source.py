@@ -6,9 +6,9 @@ import json
 import hashlib
 import asyncio
 import math
-from datetime import datetime, timedelta
+from datetime import datetime, timedelta, timezone
 from typing import List, Dict, Optional, Set, Tuple, Any
-from dataclasses import dataclass
+from dataclasses import dataclass, replace
 from urllib.parse import urljoin, urlparse
 
 try:
@@ -182,6 +182,9 @@ class PageMonitorSource(BaseSource):
     
     async def __aenter__(self):
         """Initialize browser if needed."""
+        from ..config import get_settings
+        if get_settings().page_monitor_source_mode == 'go':
+            return self
         if self.config.use_browser and not self.browser:
             from ..core.browser_pool import get_browser
             self.browser = await get_browser()
@@ -191,8 +194,21 @@ class PageMonitorSource(BaseSource):
         """No-op — browser lifecycle is managed by the shared pool."""
         self.browser = None
     
-    async def fetch_articles(self) -> List[Article]:
+    async def fetch_articles(self, limit: Optional[int] = None) -> List[Article]:
         """Fetch new articles by monitoring page changes."""
+        from ..config import get_settings
+        settings = get_settings()
+        if settings.page_monitor_source_mode == 'go':
+            total_budget = min(float(settings.extraction_service_total_budget_seconds), 120.0)
+            deadline = asyncio.get_running_loop().time() + total_budget
+            try:
+                return await self._fetch_articles_go(limit, deadline)
+            except ResourceLimitError:
+                raise
+            except TimeoutError:
+                logger.warning("Page Monitor request exceeded its source deadline")
+                self.failure_count += 1
+                return []
         try:
             logger.info(f"🔍 Monitoring page: {self.config.url}")
             # Load learned structure before processing
@@ -214,7 +230,8 @@ class PageMonitorSource(BaseSource):
             # Reset failure count on success
             self.failure_count = 0
             
-            # Compare with last snapshot to find new content
+            # Compare with last snapshot to find new content. Keep acknowledgements
+            # bounded by what the caller will actually receive.
             new_articles = []
             if self.last_snapshot:
                 new_articles = await self._detect_new_content(
@@ -225,11 +242,17 @@ class PageMonitorSource(BaseSource):
                 # On first run, return all extracted items as new articles
                 new_articles = await self._convert_extracted_to_articles(current_snapshot.extracted_items)
             
-            # Update last snapshot
-            self.last_snapshot = current_snapshot
+            delivered = new_articles[:self._delivery_limit(limit)]
+            delivered_hashes = {self._hash_article(item) for item in current_snapshot.extracted_items
+                                if any(article.url == item.get('link') and article.title == item.get('title')
+                                       for article in delivered)}
+            current_hashes = {self._hash_article(item) for item in current_snapshot.extracted_items}
+            acknowledged = ((self.last_snapshot.article_hashes & current_hashes)
+                            if self.last_snapshot else set()) | delivered_hashes
+            self.last_snapshot = replace(current_snapshot, article_hashes=acknowledged)
             
-            logger.info(f"📊 Found {len(new_articles)} new articles")
-            return new_articles
+            logger.info(f"📊 Found {len(delivered)} new articles")
+            return delivered
             
         except ResourceLimitError:
             raise
@@ -237,6 +260,149 @@ class PageMonitorSource(BaseSource):
             self.failure_count += 1
             logger.error(f"❌ Error monitoring page: {e}")
             raise SourceError(f"Failed to monitor {self.config.url}: {e}")
+
+    def _delivery_limit(self, limit):
+        if limit is None:
+            return self.config.max_articles_per_check
+        if type(limit) is not int or limit < 0:
+            raise ValueError('invalid_page_monitor_limit')
+        return min(limit, self.config.max_articles_per_check)
+
+    async def _fetch_articles_go(self, limit, deadline):
+        from ..config import get_settings
+        from .page_monitor_service_client import PageMonitorServiceClient, PageMonitorServiceError
+
+        delivery_limit = self._delivery_limit(limit)
+        settings = get_settings()
+        token = settings.extraction_service_token.get_secret_value()
+        client = PageMonitorServiceClient(settings.extraction_service_url, token)
+        loop = asyncio.get_running_loop()
+        total_budget = max(0.0, deadline - loop.time())
+        reserve = min(5.0, total_budget * 0.10)
+        usable_deadline = deadline - reserve
+        scan_limit = max(1, min(self.config.max_articles_per_check, 100))
+
+        def remaining():
+            return max(0.0, usable_deadline - loop.time())
+
+        def snapshot_from(result):
+            timestamp = self._parse_service_timestamp(result['snapshot_at'])
+            items = []
+            for item in result['items']:
+                items.append({
+                    'title': item['title'], 'link': item['link'], 'description': item['description'],
+                    'published': (self._parse_service_timestamp(item['published'])
+                                  if item['published'] is not None else timestamp),
+                    'content_type': item['content_type'], 'id': item['id'],
+                    'source': item['source'], 'source_url': item['source_url'],
+                })
+            hashes = {self._hash_article(item) for item in items}
+            return PageSnapshot(self.config.url, result.get('content_hash') or '', hashes, items,
+                                timestamp, result['selectors_used'])
+
+        try:
+            async with asyncio.timeout_at(usable_deadline):
+                await self._load_learned_structure()
+                fetch_budget = remaining()
+                if fetch_budget <= 0:
+                    raise TimeoutError
+                result = await client.fetch(self._service_config(), limit=scan_limit,
+                                            timeout_seconds=min(30.0, fetch_budget))
+            if (result['outcome'] == 'partial' and not result['items']
+                    and result['error']['code'] == 'resource_limit'):
+                raise ResourceLimitError('resource_limit')
+            if result['outcome'] == 'partial':
+                logger.warning("Page Monitor Go returned a partial prefix: %s",
+                               result['error']['code'])
+                if not result['items']:
+                    self.failure_count += 1
+                    return []
+            current_snapshot = snapshot_from(result)
+            # A single optional study pass operates on the exact captured HTML.
+            if (result['outcome'] == 'success' and result.get('needs_selector_study')
+                    and self.config.enable_ai_analysis
+                    and result.get('study_html')):
+                study_html = result['study_html']
+                try:
+                    if remaining() <= 0:
+                        raise TimeoutError
+                    async with asyncio.timeout_at(usable_deadline):
+                        studied = await self._study_source_structure(study_html)
+                    if studied and remaining() > 0:
+                        async with asyncio.timeout_at(usable_deadline):
+                            reparsed = await client.parse(
+                                self._service_config(), study_html, current_snapshot.timestamp,
+                                limit=scan_limit, timeout_seconds=min(30.0, remaining()))
+                        if reparsed['outcome'] == 'partial':
+                            logger.warning("Page Monitor Go reparse returned a partial prefix: %s",
+                                           reparsed['error']['code'])
+                            if not reparsed['items']:
+                                raise PageMonitorServiceError(reparsed['error']['code'])
+                        current_snapshot = snapshot_from(reparsed)
+                except (PageMonitorServiceError, TimeoutError):
+                    logger.warning("Page Monitor selector study or same-snapshot reparse failed; keeping extracted prefix")
+            elif (result['outcome'] == 'success' and result.get('needs_selector_study')
+                  and self.config.enable_ai_analysis):
+                logger.warning("Page Monitor selector study HTML was omitted or unavailable")
+        except ResourceLimitError:
+            raise
+        except TimeoutError:
+            self.failure_count += 1
+            logger.warning("Page Monitor request exceeded the usable source deadline")
+            return []
+        except PageMonitorServiceError as exc:
+            if exc.code == 'resource_limit':
+                raise ResourceLimitError('resource_limit') from None
+            self.failure_count += 1
+            logger.warning("Page Monitor Go request failed: %s", exc.code)
+            return []
+        except Exception as exc:
+            self.failure_count += 1
+            logger.warning("Page Monitor Go request failed: %s", type(exc).__name__)
+            return []
+
+        self.failure_count = 0
+        if self.last_snapshot:
+            old_acknowledged = self.last_snapshot.article_hashes
+            new_hashes = current_snapshot.article_hashes - old_acknowledged
+            candidates = [item for item in current_snapshot.extracted_items
+                          if self._hash_article(item) in new_hashes]
+            articles = await self._convert_extracted_to_articles(candidates)
+        else:
+            articles = await self._convert_extracted_to_articles(current_snapshot.extracted_items)
+        delivered = articles[:delivery_limit]
+        delivered_keys = {(article.title, article.url) for article in delivered}
+        current_hashes = current_snapshot.article_hashes
+        retained = ((self.last_snapshot.article_hashes & current_hashes) if self.last_snapshot else set())
+        acknowledged = retained | {
+            self._hash_article(item) for item in current_snapshot.extracted_items
+            if (item.get('title'), item.get('link')) in delivered_keys
+        }
+        self.last_snapshot = replace(current_snapshot, article_hashes=acknowledged)
+        logger.info("Page Monitor Go delivered %d new articles", len(delivered))
+        return delivered
+
+    def _service_config(self):
+        return type('PageMonitorServiceConfig', (), {
+            'url': self.config.url, 'name': self.config.name,
+            'article_selectors': self.config.article_selectors,
+            'title_selectors': self.config.title_selectors,
+            'date_selectors': self.config.date_selectors,
+            'link_selectors': self.config.link_selectors,
+            'learned_container_selectors': self.learned_container_selectors,
+            'learned_title_selectors': self.learned_title_selectors,
+            'learned_link_selectors': self.learned_link_selectors,
+            'learned_date_selectors': self.learned_date_selectors,
+            'learned_selectors': list(self.learned_selectors.items()),
+            'min_title_length': self.config.min_title_length,
+            'use_browser': self.config.use_browser,
+            'wait_for_js': self.config.wait_for_js,
+        })()
+
+    @staticmethod
+    def _parse_service_timestamp(value):
+        parsed = datetime.fromisoformat(value.replace('Z', '+00:00'))
+        return parsed.astimezone(timezone.utc).replace(tzinfo=None)
     
     async def _take_page_snapshot(self) -> Optional[PageSnapshot]:
         """Take a snapshot of the current page state."""
@@ -890,6 +1056,20 @@ class PageMonitorSource(BaseSource):
             logger.error(f"  ❌ AI analysis failed: {e}")
     async def test_connection(self) -> bool:
         """Test if the page can be accessed."""
+        from ..config import get_settings
+        settings = get_settings()
+        if settings.page_monitor_source_mode == 'go':
+            from .page_monitor_service_client import PageMonitorServiceClient
+            try:
+                await self._load_learned_structure()
+                token = settings.extraction_service_token.get_secret_value()
+                client = PageMonitorServiceClient(settings.extraction_service_url, token)
+                result = await client.fetch(self._service_config(), limit=1,
+                                            timeout_seconds=min(30.0, settings.extraction_service_timeout_seconds))
+                return result['outcome'] in {'success', 'partial'}
+            except Exception as exc:
+                logger.warning("Page Monitor Go connection test failed: %s", type(exc).__name__)
+                return False
         try:
             logger.info(f"🔗 Testing connection to {self.config.url}")
             if self.config.use_browser:

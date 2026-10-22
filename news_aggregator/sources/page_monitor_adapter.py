@@ -54,11 +54,7 @@ class PageMonitorAdapter(BaseSource):
     async def fetch_articles(self, limit: Optional[int] = None):
         """Fetch articles using the underlying PageMonitorSource."""
         async with self.monitor:
-            articles = await self.monitor.fetch_articles()
-            
-            # Apply limit if specified
-            if limit is not None and len(articles) > limit:
-                articles = articles[:limit]
+            articles = await self.monitor.fetch_articles(limit=limit)
             
             # Yield each article as an async generator
             for article in articles:

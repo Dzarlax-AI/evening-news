@@ -125,12 +125,25 @@ func run() error {
 		return toServiceResponse(out)
 	})
 	telegramSource := pipeline.TelegramSource{Fetch: transport.FetchPublic}
+	pageMonitorSource := pipeline.PageMonitorSource{Fetch: transport.FetchPublic, Admit: transport.AdmitPublicURL}
+	pageMonitorSource.Render = func(ctx context.Context, raw string, opts transport.BrowserOptions, selector string, settle time.Duration) (transport.RenderedDocument, error) {
+		select {
+		case browserSlots <- struct{}{}:
+			defer func() { <-browserSlots }()
+		default:
+			return transport.RenderedDocument{}, errors.New("browser_busy")
+		}
+		if native != nil {
+			return native.Fetch(ctx, raw, transport.NativeBrowserOptions{BrowserOptions: opts, ReadySelector: selector, MinSettle: settle})
+		}
+		return transport.BrowserFetchPublic(ctx, endpoint, raw, opts)
+	}
 	if native != nil {
 		telegramSource.Render = func(ctx context.Context, raw string, opts transport.BrowserOptions, selector string) (transport.RenderedDocument, error) {
 			return native.Fetch(ctx, raw, transport.NativeBrowserOptions{BrowserOptions: opts, ReadySelector: selector})
 		}
 	}
-	runner := runtimeRunner{article: articleRunner, telegram: telegramSource}
+	runner := runtimeRunner{article: articleRunner, telegram: telegramSource, pageMonitor: pageMonitorSource}
 	var ready func() bool
 	if native != nil {
 		ready = nativeReady
@@ -175,8 +188,9 @@ func run() error {
 }
 
 type runtimeRunner struct {
-	article  service.Runner
-	telegram pipeline.TelegramSource
+	article     service.Runner
+	telegram    pipeline.TelegramSource
+	pageMonitor pipeline.PageMonitorSource
 }
 
 func (r runtimeRunner) Run(ctx context.Context, req service.Request) service.Response {
@@ -186,6 +200,34 @@ func (r runtimeRunner) Run(ctx context.Context, req service.Request) service.Res
 func (r runtimeRunner) RunTelegram(ctx context.Context, req service.TelegramRequest) service.TelegramResponse {
 	out := r.telegram.FetchChannel(ctx, req.ChannelURL, req.SourceName, req.Limit)
 	resp := service.TelegramResponse{Outcome: out.Outcome, FinalURL: out.FinalURL, FetchMethod: out.AccessMethod, Articles: out.Articles}
+	if out.Error != "" {
+		resp.Error = &service.Failure{Code: out.Error, Retryable: out.Retryable}
+	}
+	return resp
+}
+
+func (r runtimeRunner) RunPageMonitor(ctx context.Context, req service.PageMonitorRequest) service.PageMonitorResponse {
+	useBrowser := true
+	waitForJS := true
+	if req.UseBrowser != nil {
+		useBrowser = *req.UseBrowser
+	}
+	if req.WaitForJS != nil {
+		waitForJS = *req.WaitForJS
+	}
+	input := pipeline.PageMonitorRequest{Operation: req.Operation, URL: req.URL, SourceName: req.SourceName, Budget: time.Duration(req.BudgetMS) * time.Millisecond, Limit: req.Limit, MinTitleLength: req.MinTitleLength, UseBrowser: useBrowser, WaitForJS: waitForJS, Selectors: extractor.PageMonitorSelectors{Article: req.ArticleSelectors, Title: req.TitleSelectors, Date: req.DateSelectors, Link: req.LinkSelectors}, LearnedContainers: req.LearnedContainerSelectors, LearnedTitles: req.LearnedTitleSelectors, LearnedLinks: req.LearnedLinkSelectors, LearnedDates: req.LearnedDateSelectors, LearnedGeneral: req.LearnedGeneralSelectors}
+	if req.ProvidedHTML != nil {
+		input.HTML = *req.ProvidedHTML
+	}
+	if req.SnapshotAt != nil {
+		input.SnapshotAt = *req.SnapshotAt
+	}
+	out := r.pageMonitor.Extract(ctx, input)
+	resp := service.PageMonitorResponse{Outcome: out.Outcome, OriginalURL: out.OriginalURL, FinalURL: out.FinalURL, FetchMethod: out.FetchMethod, ContentHash: out.ContentHash, SelectorsUsed: out.SelectorsUsed, Items: out.Items, NeedsSelectorStudy: out.NeedsSelectorStudy, StudyHTML: out.StudyHTML}
+	if !out.SnapshotAt.IsZero() {
+		at := out.SnapshotAt
+		resp.SnapshotAt = &at
+	}
 	if out.Error != "" {
 		resp.Error = &service.Failure{Code: out.Error, Retryable: out.Retryable}
 	}

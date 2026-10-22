@@ -1,0 +1,403 @@
+{
+  "cases": [
+    {
+      "url": "https://example.com/updates",
+      "source_name": "Example",
+      "now": "2026-10-22T08:30:00",
+      "article_selectors": [
+        "article.card"
+      ],
+      "title_selectors": [
+        "h2"
+      ],
+      "date_selectors": [
+        "time"
+      ],
+      "link_selectors": [
+        ".configured-link"
+      ],
+      "learned_container_selectors": [
+        ".feed-item",
+        ".post-card"
+      ],
+      "learned_title_selectors": [
+        ".post-card-title"
+      ],
+      "learned_link_selectors": [],
+      "learned_date_selectors": [
+        ".post-date"
+      ],
+      "learned_general_selectors": [],
+      "min_title_length": 10,
+      "limit": 20,
+      "name": "learned_production_selectors",
+      "html": "<main><article class='feed-item'><h2 class='post-card-title'>Older learned item</h2><time class='post-date'>2026-10-20</time><p>ignored</p></article><article class='post-card'><h2 class='post-card-title'>Latest learned item</h2><time class='post-date'>2026-10-21</time><p>detail</p></article></main>",
+      "expected": [
+        {
+          "title": "Older learned item",
+          "link": "https://example.com/updates",
+          "published": "2026-10-20T00:00:00",
+          "description": "Older learned item 2026-10-20 ignored",
+          "source": "Example",
+          "source_url": "https://example.com/updates",
+          "content_type": "general",
+          "id": "aec5734f551cdd5741a44aefc1ae61ce"
+        }
+      ]
+    },
+    {
+      "url": "https://example.com/updates",
+      "source_name": "Example",
+      "now": "2026-10-22T08:30:00",
+      "article_selectors": [
+        ".first-group",
+        ".second-group"
+      ],
+      "title_selectors": [
+        "h2"
+      ],
+      "date_selectors": [
+        "time"
+      ],
+      "link_selectors": [
+        ".configured-link"
+      ],
+      "learned_container_selectors": [],
+      "learned_title_selectors": [],
+      "learned_link_selectors": [],
+      "learned_date_selectors": [],
+      "learned_general_selectors": [],
+      "min_title_length": 10,
+      "limit": 2,
+      "name": "raw_limit_before_dedupe",
+      "html": "<main><div class='first-group'><article><h2>Duplicate title one</h2><a href='/one'>one</a></article><article><h2>duplicate TITLE one</h2><a href='/two'>two</a></article></div><article class='second-group'><h2>Third distinct title</h2><a href='/three'>three</a></article></main>",
+      "expected": [
+        {
+          "title": "Duplicate title one",
+          "link": "https://example.com/one",
+          "published": "2026-10-22T08:30:00",
+          "description": "Duplicate title one one duplicate TITLE one two",
+          "source": "Example",
+          "source_url": "https://example.com/updates",
+          "content_type": "general",
+          "id": "212b63de54f56a5bbe6ca1a2fc53aacf"
+        },
+        {
+          "title": "Third distinct title",
+          "link": "https://example.com/three",
+          "published": "2026-10-22T08:30:00",
+          "description": "Third distinct title three",
+          "source": "Example",
+          "source_url": "https://example.com/updates",
+          "content_type": "general",
+          "id": "1c021415e438e542a47e92a7d2bb6b98"
+        }
+      ]
+    },
+    {
+      "url": "https://example.com/updates",
+      "source_name": "Example",
+      "now": "2026-10-22T08:30:00",
+      "article_selectors": [
+        "article.card"
+      ],
+      "title_selectors": [
+        "h2"
+      ],
+      "date_selectors": [
+        "time"
+      ],
+      "link_selectors": [
+        ".configured-link"
+      ],
+      "learned_container_selectors": [],
+      "learned_title_selectors": [],
+      "learned_link_selectors": [],
+      "learned_date_selectors": [],
+      "learned_general_selectors": [],
+      "min_title_length": 10,
+      "limit": 20,
+      "name": "legacy_date_rejection_and_text_fallback",
+      "html": "<article class='card'><h2>Numeric offset date title</h2><time datetime='2026-10-20T08:00:00+02:00'>bad offset</time><p>2026-10-19T07:00:00Z release notes</p></article><article class='card'><h2>Embedded date in body title</h2><p>Published on October 18, 2026 after review.</p></article>",
+      "expected": [
+        {
+          "title": "Numeric offset date title",
+          "link": "https://example.com/updates",
+          "published": "2026-10-22T08:30:00",
+          "description": "Numeric offset date title bad offset 2026-10-19T07:00:00Z release notes",
+          "source": "Example",
+          "source_url": "https://example.com/updates",
+          "content_type": "general",
+          "id": "e61618d231d92acd950066a96c41b10a"
+        },
+        {
+          "title": "Embedded date in body title",
+          "link": "https://example.com/updates",
+          "published": "2026-10-18T00:00:00",
+          "description": "Embedded date in body title Published on October 18, 2026 after review.",
+          "source": "Example",
+          "source_url": "https://example.com/updates",
+          "content_type": "general",
+          "id": "29031f84239045a9dff75e0f93d0190f"
+        }
+      ]
+    },
+    {
+      "url": "https://example.com/updates",
+      "source_name": "Example",
+      "now": "2026-10-22T08:30:00",
+      "article_selectors": [
+        "article.card"
+      ],
+      "title_selectors": [
+        ".headline"
+      ],
+      "date_selectors": [
+        "time"
+      ],
+      "link_selectors": [
+        ".configured-link"
+      ],
+      "learned_container_selectors": [],
+      "learned_title_selectors": [],
+      "learned_link_selectors": [],
+      "learned_date_selectors": [],
+      "learned_general_selectors": [],
+      "min_title_length": 220,
+      "limit": 20,
+      "name": "long_selected_title_minimum",
+      "html": "<article class='card'><h2>short visible</h2><h3 class='headline'>Selected headline Selected headline Selected headline Selected headline Selected headline Selected headline Selected headline Selected headline Selected headline Selected headline Selected headline Selected headline Selected headline Selected headline Selected headline continues beyond the legacy fallback cap</h3><p>long title content</p></article>",
+      "expected": [
+        {
+          "title": "Selected headline Selected headline Selected headline Selected headline Selected headline Selected headline Selected headline Selected headline Selected headline Selected headline Selected headline Selected headline Selected headline Selected headline Selected headline continues beyond the legacy fallback cap",
+          "link": "https://example.com/updates",
+          "published": "2026-10-22T08:30:00",
+          "description": "short visible Selected headline Selected headline Selected headline Selected headline Selected headline Selected headline Selected headline Selected headline Selected headline Selected headline Selected headline Selected headline Selected headline Selected headline Selected headline continues beyond the legacy fallback cap long title content",
+          "source": "Example",
+          "source_url": "https://example.com/updates",
+          "content_type": "general",
+          "id": "fbbf127e8f6e6ebc9e36b43c257c6157"
+        }
+      ]
+    },
+    {
+      "url": "https://example.com/updates",
+      "source_name": "Example",
+      "now": "2026-10-22T08:30:00",
+      "article_selectors": [
+        "article.card"
+      ],
+      "title_selectors": [
+        "h2"
+      ],
+      "date_selectors": [
+        "time"
+      ],
+      "link_selectors": [
+        ".configured-link"
+      ],
+      "learned_container_selectors": [
+        "article.card"
+      ],
+      "learned_title_selectors": [],
+      "learned_link_selectors": [],
+      "learned_date_selectors": [],
+      "learned_general_selectors": [],
+      "min_title_length": 10,
+      "limit": 20,
+      "name": "text_exclusions_unicode_lower",
+      "html": "<main><article class='card'><h2>İstanbul Σ</h2><script>script words</script><style>.x{color:red}</style><template>hidden template</template><p>Visible first</p><p>Visible second</p></article><article class='card'><h2>istanbul σ</h2><p>duplicate after Python lower</p></article><article class='card'><h2>ΟΣ</h2><p>Greek final sigma</p></article><article class='card'><h2>οσ</h2><p>distinct Greek sigma</p></article></main>",
+      "expected": [
+        {
+          "title": "İstanbul Σ",
+          "link": "https://example.com/updates",
+          "published": "2026-10-22T08:30:00",
+          "description": "İstanbul Σ Visible first Visible second",
+          "source": "Example",
+          "source_url": "https://example.com/updates",
+          "content_type": "general",
+          "id": "a2471b5e26d0fc657702db8898dad68e"
+        },
+        {
+          "title": "istanbul σ",
+          "link": "https://example.com/updates",
+          "published": "2026-10-22T08:30:00",
+          "description": "istanbul σ duplicate after Python lower",
+          "source": "Example",
+          "source_url": "https://example.com/updates",
+          "content_type": "general",
+          "id": "c5ec0c9707b1428454b2411357625920"
+        }
+      ]
+    },
+    {
+      "url": "https://example.com/updates",
+      "source_name": "Example",
+      "now": "2026-10-22T08:30:00",
+      "article_selectors": [
+        "article.card"
+      ],
+      "title_selectors": [
+        "h2"
+      ],
+      "date_selectors": [
+        "time"
+      ],
+      "link_selectors": [
+        ".configured-link"
+      ],
+      "learned_container_selectors": [],
+      "learned_title_selectors": [],
+      "learned_link_selectors": [
+        ".learned-link"
+      ],
+      "learned_date_selectors": [],
+      "learned_general_selectors": [],
+      "min_title_length": 10,
+      "limit": 20,
+      "name": "fragment_and_link_resolution",
+      "html": "<main><article class='card'><h2>Fragment descendant title</h2><a href='#section'>jump</a><a class='configured-link' href='/configured'>ignored config link</a></article><article class='card'><h2>Empty descendant stops link search</h2><a href=''>empty</a><a href='/later'>later</a></article><a href='/ancestor'><article class='card'><h2>Ancestor link title</h2><p>description</p></article></a><article class='card'><h2>Learned link title</h2><a class='learned-link' href='/learned'>learned</a><a href='/ordinary'>ordinary</a></article></main>",
+      "expected": [
+        {
+          "title": "Fragment descendant title",
+          "link": "https://example.com/updates",
+          "published": "2026-10-22T08:30:00",
+          "description": "Fragment descendant title jump ignored config link",
+          "source": "Example",
+          "source_url": "https://example.com/updates",
+          "content_type": "general",
+          "id": "6228c56a540d79fe634fb4a1f863b035"
+        },
+        {
+          "title": "Empty descendant stops link search",
+          "link": "https://example.com/updates",
+          "published": "2026-10-22T08:30:00",
+          "description": "Empty descendant stops link search empty later",
+          "source": "Example",
+          "source_url": "https://example.com/updates",
+          "content_type": "general",
+          "id": "03cc2a765a6a6704f216654408556558"
+        },
+        {
+          "title": "Ancestor link title",
+          "link": "https://example.com/ancestor",
+          "published": "2026-10-22T08:30:00",
+          "description": "Ancestor link title description",
+          "source": "Example",
+          "source_url": "https://example.com/updates",
+          "content_type": "general",
+          "id": "bffa93389f8a39c21237f11a9637ba4b"
+        },
+        {
+          "title": "Learned link title",
+          "link": "https://example.com/learned",
+          "published": "2026-10-22T08:30:00",
+          "description": "Learned link title learned ordinary",
+          "source": "Example",
+          "source_url": "https://example.com/updates",
+          "content_type": "general",
+          "id": "6450bea31157840de3ae3278d51a69ac"
+        }
+      ]
+    },
+    {
+      "url": "https://example.com/updates",
+      "source_name": "Example",
+      "now": "2026-10-22T08:30:00",
+      "article_selectors": [
+        "article.card"
+      ],
+      "title_selectors": [
+        "h2"
+      ],
+      "date_selectors": [
+        "time"
+      ],
+      "link_selectors": [
+        ".configured-link"
+      ],
+      "learned_container_selectors": [],
+      "learned_title_selectors": [],
+      "learned_link_selectors": [],
+      "learned_date_selectors": [],
+      "learned_general_selectors": [
+        [
+          ".high",
+          0.9
+        ],
+        [
+          ".also-high",
+          0.9
+        ],
+        [
+          ".low",
+          0.8
+        ]
+      ],
+      "min_title_length": 10,
+      "limit": 20,
+      "name": "general_selector_confidence_stable_order",
+      "html": "<main><article class='high'><h2>High confidence selector</h2></article><article class='also-high'><h2>Stable tie selector</h2></article></main>",
+      "expected": [
+        {
+          "title": "High confidence selector",
+          "link": "https://example.com/updates",
+          "published": "2026-10-22T08:30:00",
+          "description": "High confidence selector",
+          "source": "Example",
+          "source_url": "https://example.com/updates",
+          "content_type": "general",
+          "id": "40054ce198124c9b0853bfd2634b6144"
+        }
+      ]
+    },
+    {
+      "url": "https://example.com/updates",
+      "source_name": "Example",
+      "now": "2026-10-22T08:30:00",
+      "article_selectors": [
+        "article.card"
+      ],
+      "title_selectors": [
+        "h2"
+      ],
+      "date_selectors": [
+        "time"
+      ],
+      "link_selectors": [
+        ".configured-link"
+      ],
+      "learned_container_selectors": [],
+      "learned_title_selectors": [],
+      "learned_link_selectors": [],
+      "learned_date_selectors": [],
+      "learned_general_selectors": [],
+      "min_title_length": 10,
+      "limit": 20,
+      "name": "fractional_seconds_exact_python_precision",
+      "html": "<main><article class='card'><h2>Six fractional digits accepted</h2><time datetime='2026-10-20T12:34:56.123456Z'>date</time></article><article class='card'><h2>Seven fractional digits rejected</h2><time datetime='2026-10-20T12:34:56.1234567Z'>date</time></article></main>",
+      "expected": [
+        {
+          "title": "Six fractional digits accepted",
+          "link": "https://example.com/updates",
+          "published": "2026-10-20T12:34:56.123456",
+          "description": "Six fractional digits accepted date",
+          "source": "Example",
+          "source_url": "https://example.com/updates",
+          "content_type": "general",
+          "id": "30d264fe8a198aef6b49383e360c7d80"
+        },
+        {
+          "title": "Seven fractional digits rejected",
+          "link": "https://example.com/updates",
+          "published": "2026-10-22T08:30:00",
+          "description": "Seven fractional digits rejected date",
+          "source": "Example",
+          "source_url": "https://example.com/updates",
+          "content_type": "general",
+          "id": "c1312204a0956a7dbd3846b940b53b52"
+        }
+      ]
+    }
+  ]
+}
