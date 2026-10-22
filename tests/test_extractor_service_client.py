@@ -58,6 +58,22 @@ async def test_wire_metadata_media_and_learned_identity():
     assert result['result']['media'][0]['type'] == 'image'
 
 
+@pytest.mark.asyncio
+async def test_explicit_service_client_use_browser_remains_direct_native_request():
+    observed = []
+
+    async def handler(request):
+        data = await request.json()
+        observed.append(data['use_browser'])
+        return web.json_response(response_for(data))
+
+    async with server(handler) as endpoint:
+        await ExtractionServiceClient(endpoint, TOKEN).extract(
+            URL, timeout_seconds=1, use_browser=True)
+
+    assert observed == [True]
+
+
 @pytest.mark.parametrize('status,code,retryable', [
     (401, 'unauthorized', False), (429, 'busy', True), (503, 'unavailable', True),
     (413, 'request_too_large', False), (302, 'http_error', False)])
@@ -171,7 +187,8 @@ async def test_go_success_records_once_and_maps_metadata_media():
 
 
 @pytest.mark.asyncio
-async def test_native_browser_go_route_opts_in_wire_and_preserves_learned_metadata():
+async def test_native_browser_go_route_opts_in_wire_and_preserves_learned_metadata(caplog):
+    caplog.set_level('INFO', logger='extraction.core')
     settings, core, memory = routing(native_browser=True)
     memory.get_successful_pattern.return_value = {
         'selector': '.learned-story', 'method': 'browser_rendering'}
@@ -180,7 +197,11 @@ async def test_native_browser_go_route_opts_in_wire_and_preserves_learned_metada
     async def handler(request):
         data = await request.json()
         captured.append(data)
-        assert data['use_browser'] is True
+        if not data['use_browser']:
+            assert 'learned_selector' not in data and 'learned_method' not in data
+            assert data['max_bytes'] == settings.extraction_http_max_bytes
+            return web.json_response(response_for(data, outcome='failed',
+                error={'code': 'browser_required', 'retryable': False}))
         assert data['learned_selector'] == '.learned-story'
         assert data['learned_method'] == 'browser_rendering'
         assert data['max_bytes'] == 5242880
@@ -199,13 +220,130 @@ async def test_native_browser_go_route_opts_in_wire_and_preserves_learned_metada
                       AsyncMock(return_value=Mock())):
             result = await core.extract_article_content_with_metadata(URL)
 
-    assert len(captured) == 1
+    assert [item['use_browser'] for item in captured] == [False, True]
     assert result['content'] == 'Native browser extracted the article.'
     assert result['title'] == 'Native title'
     assert result['publication_date'] == '2026-10-22'
     assert result['media_files'][0]['url'] == 'https://example.org/native.jpg'
+    memory.get_successful_pattern.assert_awaited_once_with('example.org')
     memory.record_extraction_attempt.assert_awaited_once()
     core._extract_article_content_python.assert_not_called()
+    retry_logs = [record for record in caplog.records
+                  if getattr(record, 'event', None) == 'extractor_native_browser_retry']
+    assert len(retry_logs) == 1
+    assert retry_logs[0].code == 'browser_required'
+    assert retry_logs[0].getMessage() == 'Extractor native browser retry reason=browser_required'
+
+
+@pytest.mark.asyncio
+async def test_native_browser_mode_http_success_uses_one_request_without_cdp_fallback():
+    settings, core, memory = routing(native_browser=True)
+    memory.get_successful_pattern.return_value = {
+        'selector': '.learned-story', 'method': 'browser_rendering'}
+    calls = []
+
+    async def handler(request):
+        data = await request.json()
+        calls.append(data)
+        assert data['use_browser'] is False
+        assert 'learned_selector' not in data and 'learned_method' not in data
+        return web.json_response(response_for(data, result={
+            'content': 'The HTTP extractor returned a validated article.',
+            'method_used': 'readability', 'media': []}))
+
+    async with server(handler) as endpoint:
+        settings.extraction_service_url = endpoint
+        with patch('news_aggregator.config.get_settings', return_value=settings), \
+                patch('news_aggregator.extraction.core_extractor.get_extraction_memory', AsyncMock(return_value=memory)), \
+                patch('news_aggregator.extraction.core_extractor.get_stability_tracker',
+                      AsyncMock(return_value=Mock())):
+            result = await core.extract_article_content_with_metadata(URL)
+
+    assert result['content'].startswith('The HTTP extractor')
+    assert len(calls) == 1
+    memory.get_successful_pattern.assert_awaited_once_with('example.org')
+    core._extract_article_content_python.assert_not_called()
+
+
+@pytest.mark.asyncio
+async def test_native_browser_http_probe_preserves_nonbrowser_learned_pattern():
+    settings, core, memory = routing(native_browser=True)
+    memory.get_successful_pattern.return_value = {
+        'selector': '.learned-story', 'method': 'readability'}
+
+    async def handler(request):
+        data = await request.json()
+        assert data['use_browser'] is False
+        assert data['learned_selector'] == '.learned-story'
+        assert data['learned_method'] == 'readability'
+        return web.json_response(response_for(data))
+
+    async with server(handler) as endpoint:
+        settings.extraction_service_url = endpoint
+        with patch('news_aggregator.config.get_settings', return_value=settings), \
+                patch('news_aggregator.extraction.core_extractor.get_extraction_memory', AsyncMock(return_value=memory)):
+            await core.extract_article_content_with_metadata(URL)
+
+    memory.get_successful_pattern.assert_awaited_once_with('example.org')
+
+
+@pytest.mark.parametrize('method', [
+    'browser_rendering', 'browser_heuristics',
+    'learned_pattern_browser_rendering', 'learned_pattern_browser_heuristics',
+])
+def test_browser_only_learned_methods_are_not_sent_on_http_probe(method):
+    from news_aggregator.extraction.core_extractor import CoreExtractor
+
+    pattern = {'selector': '.learned-story', 'method': method}
+    assert CoreExtractor._request_learned_pattern(pattern, use_browser=False) is None
+    assert CoreExtractor._request_learned_pattern(pattern, use_browser=True) is pattern
+
+
+def test_native_browser_http_probe_preserves_http_learned_methods():
+    from news_aggregator.extraction.core_extractor import CoreExtractor
+
+    pattern = {'selector': '.learned-story', 'method': 'readability'}
+    assert CoreExtractor._request_learned_pattern(pattern, use_browser=False) is pattern
+
+
+@pytest.mark.parametrize('cancel', [False, True])
+@pytest.mark.asyncio
+async def test_native_browser_retry_uses_remaining_budget_and_propagates_cancellation(cancel):
+    settings, core, memory = routing(fallback=True, native_browser=True, budget=.2)
+    settings.extraction_service_timeout_seconds = 1
+    browser_entered, browser_closed, release_browser = asyncio.Event(), asyncio.Event(), asyncio.Event()
+    calls = []
+
+    async def handler(request):
+        data = await request.json()
+        calls.append(data['use_browser'])
+        if not data['use_browser']:
+            await asyncio.sleep(.04)
+            return web.json_response(response_for(data, outcome='failed',
+                error={'code': 'browser_required', 'retryable': False}))
+        browser_entered.set()
+        try:
+            await release_browser.wait()
+        finally:
+            browser_closed.set()
+
+    async with server(handler) as endpoint:
+        settings.extraction_service_url = endpoint
+        with patch('news_aggregator.config.get_settings', return_value=settings), \
+                patch('news_aggregator.extraction.core_extractor.get_extraction_memory', AsyncMock(return_value=memory)):
+            task = asyncio.create_task(core.extract_article_content_with_metadata(URL))
+            await browser_entered.wait()
+            if cancel:
+                task.cancel()
+            with pytest.raises(asyncio.CancelledError if cancel else ExtractionServiceError):
+                await task
+            release_browser.set()
+            await asyncio.wait_for(browser_closed.wait(), timeout=1)
+
+    assert calls == [False, True]
+    assert browser_closed.is_set()
+    core._extract_article_content_python.assert_not_called()
+    memory.record_extraction_attempt.assert_not_called()
 
 
 @pytest.mark.asyncio
@@ -218,6 +356,9 @@ async def test_native_browser_uses_minimum_byte_cap_and_never_falls_back():
     async def handler(request):
         data = await request.json()
         observed.append((data['use_browser'], data['max_bytes']))
+        if not data['use_browser']:
+            return web.json_response(response_for(data, outcome='failed',
+                error={'code': 'browser_required', 'retryable': False}))
         return web.json_response(response_for(data, result={
             'content': 'x' * 3000, 'title': 'large', 'method_used': 'native_browser',
             'media': []}))
@@ -229,7 +370,7 @@ async def test_native_browser_uses_minimum_byte_cap_and_never_falls_back():
             with pytest.raises(ExtractionServiceError, match='response_too_large'):
                 await core.extract_article_content_with_metadata(URL)
 
-    assert observed == [(True, 1024)]
+    assert observed == [(False, 5000), (True, 1024)]
     core._extract_article_content_python.assert_not_called()
 
 
@@ -243,6 +384,9 @@ async def test_native_browser_failure_preserves_retryability_without_python_fall
     async def handler(request):
         data = await request.json()
         observed.append(data)
+        if not data['use_browser']:
+            return web.json_response(response_for(data, outcome='failed',
+                error={'code': 'no_content', 'retryable': False}))
         return web.json_response(response_for(data, outcome='failed',
             error={'code': 'native_browser_timeout', 'retryable': True,
                    'retry_after_seconds': 12}, observations=[
@@ -258,7 +402,7 @@ async def test_native_browser_failure_preserves_retryability_without_python_fall
     assert failure.value.code == 'native_browser_timeout'
     assert failure.value.retryable is True
     assert failure.value.retry_after_seconds == 12
-    assert observed[0]['use_browser'] is True
+    assert [item['use_browser'] for item in observed] == [False, True]
     memory.degrade_pattern.assert_awaited_once_with(
         'example.org', '.learned-story', 'browser_rendering')
     core._extract_article_content_python.assert_not_called()
@@ -274,6 +418,9 @@ async def test_native_browser_strips_fragment_without_changing_article_identity_
     async def handler(request):
         data = await request.json()
         captured.append(data)
+        if not data['use_browser']:
+            return web.json_response(response_for(data, outcome='failed',
+                error={'code': 'browser_required', 'retryable': False}))
         return web.json_response(response_for(data))
 
     async with server(handler) as endpoint:
@@ -285,7 +432,7 @@ async def test_native_browser_strips_fragment_without_changing_article_identity_
             result = await core.extract_article_content_with_metadata(article_url)
 
     assert captured[0]['url'] == 'https://example.org/article'
-    assert captured[0]['use_browser'] is True
+    assert [item['use_browser'] for item in captured] == [False, True]
     assert 'full_article_url' not in result
     assert memory.record_extraction_attempt.await_args.args[0].article_url == article_url
     core._extract_article_content_python.assert_not_called()
@@ -722,11 +869,16 @@ async def test_http_only_native_fallback_positive_allowlist_real_service(code, a
     memory.record_extraction_attempt.assert_not_called()
 
 
-@pytest.mark.parametrize('status,code', [(401, 'unauthorized'), (403, 'unauthorized'), (429, 'busy')])
+@pytest.mark.parametrize('status,code', [(401, 'unauthorized'), (403, 'unauthorized'),
+                                         (429, 'busy'), (503, 'unavailable')])
 @pytest.mark.asyncio
 async def test_service_auth_and_admission429_never_native_fallback(status, code):
-    settings, core, memory = routing(fallback=True)
+    settings, core, memory = routing(fallback=True, native_browser=True)
+    requests = 0
+
     async def handler(request):
+        nonlocal requests
+        requests += 1
         return web.Response(status=status, headers={'Retry-After': '39'})
     async with server(handler) as endpoint:
         settings.extraction_service_url = endpoint
@@ -736,8 +888,38 @@ async def test_service_auth_and_admission429_never_native_fallback(status, code)
                 await core.extract_article_content_with_metadata(URL)
     assert failure.value.code == code
     assert failure.value.retry_after_seconds == 39
+    assert requests == 1
     core._extract_article_content_python.assert_not_called()
     memory.record_extraction_attempt.assert_not_called()
+
+
+@pytest.mark.parametrize('code', [
+    'resource_limit', 'invalid_input', 'invalid_payload', 'public_url_denied',
+    'upstream_auth_required', 'upstream_rate_limited', 'admission_unavailable',
+    'native_browser_policy_denied', 'native_browser_unsupported', 'new_unrecognized_failure',
+])
+@pytest.mark.asyncio
+async def test_native_browser_retry_does_not_expand_terminal_or_unknown_outcomes(code):
+    settings, core, memory = routing(fallback=True, native_browser=True)
+    requests = []
+
+    async def handler(request):
+        data = await request.json()
+        requests.append(data)
+        return web.json_response(response_for(data, outcome='failed',
+            error={'code': code, 'retryable': False}))
+
+    async with server(handler) as endpoint:
+        settings.extraction_service_url = endpoint
+        with patch('news_aggregator.config.get_settings', return_value=settings), \
+                patch('news_aggregator.extraction.core_extractor.get_extraction_memory', AsyncMock(return_value=memory)):
+            with pytest.raises(ExtractionServiceError) as failure:
+                await core.extract_article_content_with_metadata(URL)
+
+    assert failure.value.code == code
+    assert len(requests) == 1
+    assert requests[0]['use_browser'] is False
+    core._extract_article_content_python.assert_not_called()
 
 
 @pytest.mark.parametrize('endpoint,token', [(None, SecretStr(TOKEN)), ('invalid-endpoint', SecretStr(TOKEN)),

@@ -25,14 +25,19 @@ separate work. Native egress and shared-browser lifecycle preparation are covere
 by the approved [isolation plan](ai-plans/2026-10-22-native-production-isolation.html).
 
 The pilot enforces `EXTRACTOR_HTTP_ONLY=true` by default on Go and
-`use_browser=false` in Python requests. Configuring `CHROME_ENDPOINT` in this
-mode fails startup. Native Python/CloakBrowser remains responsible for browser
-fallback within the caller's remaining total budget. Only explicitly recoverable
-failures permit that fallback; authentication/configuration, admission failures,
-resource limits, cancellation and service/upstream rate limits do not. Upstream
-429 preserves its bounded `retry_after_seconds` for Python's durable retry.
-Learning belongs to the authoritative extraction attempt and is not recorded
-twice when native fallback runs.
+`use_browser=false` in its first Python request. In the opt-in native-browser
+mode, eligible HTTPS URLs on the default or port 443 first try Go HTTP and make
+at most one `use_browser=true` retry within the remaining total budget, and only
+for a valid extraction response classified as `browser_required`, `no_content`,
+`needs_selector_study`, `upstream_forbidden`, `challenge`, or `invalid_content`.
+A successful HTTP response returns without a browser request. Service HTTP
+authentication/admission errors, invalid payloads, resource limits,
+cancellation, service/upstream rate limits and transport failures are not
+retried through the browser. Explicit callers of the service API that set
+`use_browser=true` still request the direct native path. Upstream 429 preserves
+its bounded `retry_after_seconds` for Python's durable retry. Learning belongs
+to the final authoritative extraction attempt and is not recorded twice when
+the browser retry runs.
 
 Go checks public DNS before handing browser-required work to Python. Its
 connection-time DNS pinning applies to Go HTTP requests. The existing native
