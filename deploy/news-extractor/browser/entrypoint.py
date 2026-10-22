@@ -20,12 +20,17 @@ from policy import (TABLE, parse_controllers, private_ipv4, readback_comment_mat
 
 STATE_DIR = Path("/run/news-browser")
 STATE_FILE = STATE_DIR / "runtime.json"
+RELAY_HEARTBEAT_DIR = Path("/run/news-browser-relay")
+RELAY_HEARTBEAT_FILE = RELAY_HEARTBEAT_DIR / "heartbeat.json"
 INFO_DIR = Path("/tmp/news-browser-info")
 CONTROL_DIR = Path("/browser-control")
 MARKER_NAME = "restart.request"
 POLICY_POLL_SECONDS = 5
 STARTUP_TIMEOUT_SECONDS = 90
 STOP_GRACE_SECONDS = 10
+RELAY_HEARTBEAT_MAX_AGE_SECONDS = 10
+RELAY_UID = 65534
+RELAY_HEARTBEAT_DIRECTORY_UID = 0
 SET_PRIV = "/usr/bin/setpriv"
 NFT = "/usr/sbin/nft"
 IP = "/usr/sbin/ip"
@@ -36,7 +41,7 @@ class StartupError(RuntimeError):
 
 
 def _run(args: list[str], *, input_text: str | None = None, check: bool = True,
-         timeout: int = 10, env: dict[str, str] | None = None) -> subprocess.CompletedProcess[str]:
+         timeout: float = 10, env: dict[str, str] | None = None) -> subprocess.CompletedProcess[str]:
     try:
         result = subprocess.run(args, input=input_text, text=True, capture_output=True,
                                 timeout=timeout, check=False, env=env)
@@ -60,8 +65,8 @@ def _runtime_env() -> tuple[str, dict[str, str], str, int]:
     return self_ip, controllers, proxy_ip, threshold
 
 
-def _check_single_interface(expected: str) -> None:
-    result = _run([IP, "-j", "-4", "address", "show"])
+def _check_single_interface(expected: str, *, timeout: float = 10) -> None:
+    result = _run([IP, "-j", "-4", "address", "show"], timeout=timeout)
     try:
         interfaces = json.loads(result.stdout)
     except json.JSONDecodeError:
@@ -107,9 +112,9 @@ def _install_policy(policy_text: str) -> tuple[str, dict[str, Any]]:
     return stable_fingerprint(value), value
 
 
-def _read_policy() -> tuple[dict[str, Any], str]:
-    value_result = _run([NFT, "-j", "list", "table", "inet", TABLE])
-    text_result = _run([NFT, "list", "table", "inet", TABLE])
+def _read_policy(*, timeout: float = 10) -> tuple[dict[str, Any], str]:
+    value_result = _run([NFT, "-j", "list", "table", "inet", TABLE], timeout=timeout)
+    text_result = _run([NFT, "list", "table", "inet", TABLE], timeout=timeout)
     try:
         value = json.loads(value_result.stdout)
     except json.JSONDecodeError:
@@ -117,8 +122,8 @@ def _read_policy() -> tuple[dict[str, Any], str]:
     return value, text_result.stdout
 
 
-def _verify_policy(expected_fingerprint: str, policy_text: str) -> None:
-    value, text = _read_policy()
+def _verify_policy(expected_fingerprint: str, policy_text: str, *, command_timeout: float = 10) -> None:
+    value, text = _read_policy(timeout=command_timeout)
     expected = re.search(r'comment "(policy-sha256:[0-9a-f]{64})"', policy_text)
     if (expected is None or not readback_has_drop_hooks(value)
             or not readback_comment_matches(value, text, expected.group(1))
@@ -166,7 +171,8 @@ def _start_children(controllers: dict[str, str]) -> tuple[subprocess.Popen[str],
     chrome_command = _drop_privilege_args(0, 0) + ["--", "/entrypoint.sh", "python",
                         "/opt/news-browser/launch.py", "--info-dir", str(INFO_DIR)]
     relay_command = _drop_privilege_args(65534, 65534) + ["--", sys.executable,
-                       "/opt/news-browser/relay.py", "--persistent"]
+                       "/opt/news-browser/relay.py", "--persistent", "--heartbeat-path",
+                       str(RELAY_HEARTBEAT_FILE)]
     for address in controllers.values():
         relay_command += ["--controller-ip", address]
     try:
@@ -250,6 +256,14 @@ def _process_commandline(pid: int) -> list[str]:
     return [part.decode(errors="replace") for part in raw.split(b"\0") if part]
 
 
+def _process_children(pid: int) -> set[int]:
+    try:
+        raw = Path(f"/proc/{pid}/task/{pid}/children").read_text()
+        return {int(value) for value in raw.split()}
+    except (OSError, ValueError):
+        return set()
+
+
 def _child_commands_match(chrome_pid: int, relay_pid: int) -> bool:
     chrome = _process_commandline(chrome_pid)
     relay = _process_commandline(relay_pid)
@@ -261,7 +275,8 @@ def _child_commands_match(chrome_pid: int, relay_pid: int) -> bool:
 def _children_ready(chrome_pid: int, relay_pid: int) -> bool:
     return (_process_identity(chrome_pid, 0) and _process_identity(relay_pid, 65534)
             and _child_commands_match(chrome_pid, relay_pid)
-            and _listener_ready(relay_pid) and _probe_cdp_as_relay_user())
+            and _listener_ready(relay_pid) and _relay_heartbeat_fresh(relay_pid)
+            and _probe_cdp_as_relay_user())
 
 
 def _fd_count(pid: int) -> int:
@@ -295,8 +310,87 @@ def _probe_cdp_as_relay_user() -> bool:
     return result.returncode == 0
 
 
+def _prepare_relay_heartbeat_dir() -> None:
+    if RELAY_HEARTBEAT_DIR.is_symlink():
+        raise StartupError("relay_heartbeat_directory_invalid")
+    RELAY_HEARTBEAT_DIR.mkdir(mode=0o733, exist_ok=True)
+    try:
+        RELAY_HEARTBEAT_DIR.chmod(0o733)
+    except OSError:
+        raise StartupError("relay_heartbeat_directory_invalid") from None
+    directory = RELAY_HEARTBEAT_DIR.stat(follow_symlinks=False)
+    if (not RELAY_HEARTBEAT_DIR.is_dir() or directory.st_uid != RELAY_HEARTBEAT_DIRECTORY_UID
+            or stat.S_IMODE(directory.st_mode) != 0o733):
+        raise StartupError("relay_heartbeat_directory_invalid")
+    try:
+        descriptor = os.open(RELAY_HEARTBEAT_DIR, os.O_RDONLY | os.O_DIRECTORY | os.O_NOFOLLOW)
+        try:
+            try:
+                fd = os.open(RELAY_HEARTBEAT_FILE.name, os.O_RDONLY | os.O_NOFOLLOW | os.O_NONBLOCK,
+                             dir_fd=descriptor)
+            except FileNotFoundError:
+                return
+            except OSError:
+                raise StartupError("relay_heartbeat_file_invalid") from None
+            try:
+                info = os.fstat(fd)
+                if (not stat.S_ISREG(info.st_mode) or info.st_uid != RELAY_UID
+                        or info.st_mode & 0o022 or info.st_size > 256):
+                    raise StartupError("relay_heartbeat_file_invalid")
+            finally:
+                os.close(fd)
+            os.unlink(RELAY_HEARTBEAT_FILE.name, dir_fd=descriptor)
+        finally:
+            os.close(descriptor)
+    except OSError:
+        raise StartupError("relay_heartbeat_directory_invalid") from None
+
+
+def _relay_heartbeat_fresh(expected_pid: int) -> bool:
+    if RELAY_HEARTBEAT_DIR.is_symlink() or RELAY_HEARTBEAT_FILE.is_symlink():
+        return False
+    try:
+        directory = RELAY_HEARTBEAT_DIR.stat(follow_symlinks=False)
+        if (not stat.S_ISDIR(directory.st_mode) or directory.st_uid != RELAY_HEARTBEAT_DIRECTORY_UID
+                or stat.S_IMODE(directory.st_mode) != 0o733):
+            return False
+        descriptor = os.open(RELAY_HEARTBEAT_DIR, os.O_RDONLY | os.O_DIRECTORY | os.O_NOFOLLOW)
+        try:
+            fd = os.open("heartbeat.json", os.O_RDONLY | os.O_NOFOLLOW | os.O_NONBLOCK,
+                         dir_fd=descriptor)
+            try:
+                info = os.fstat(fd)
+                if (not stat.S_ISREG(info.st_mode) or info.st_nlink != 1
+                        or info.st_uid != RELAY_UID or info.st_mode & 0o022
+                        or info.st_size > 256):
+                    return False
+                payload = json.loads(os.read(fd, 257))
+            finally:
+                os.close(fd)
+        finally:
+            os.close(descriptor)
+    except (OSError, json.JSONDecodeError):
+        return False
+    if (not isinstance(payload, dict) or type(payload.get("pid")) is not int
+            or type(payload.get("monotonic_ns")) is not int or payload["pid"] != expected_pid):
+        return False
+    age = time.monotonic() - payload["monotonic_ns"] / 1_000_000_000
+    return -1 <= age <= RELAY_HEARTBEAT_MAX_AGE_SECONDS
+
+
+def _proc_starttime(pid: int) -> int:
+    try:
+        content = Path(f"/proc/{pid}/stat").read_text()
+        end = content.rfind(")")
+        fields = content[end + 2:].split()
+        return int(fields[19])
+    except (OSError, ValueError, IndexError):
+        raise StartupError("supervisor_identity_unavailable") from None
+
+
 def _state(chrome: subprocess.Popen[str], relay: subprocess.Popen[str], fingerprint: str) -> dict[str, Any]:
     return {"version": 1, "chrome_pid": chrome.pid, "relay_pid": relay.pid,
+            "supervisor_pid": os.getpid(), "supervisor_starttime": _proc_starttime(os.getpid()),
             "policy_fingerprint": fingerprint}
 
 
@@ -307,7 +401,8 @@ def _write_state(value: dict[str, Any]) -> None:
     if STATE_DIR.is_symlink() or final.is_symlink() or temporary.is_symlink():
         raise StartupError("runtime_state_invalid")
     directory_info = STATE_DIR.stat(follow_symlinks=False)
-    if not STATE_DIR.is_dir() or directory_info.st_uid != 0 or directory_info.st_mode & 0o077:
+    if (not STATE_DIR.is_dir() or directory_info.st_uid != 0
+            or directory_info.st_mode & 0o066 or directory_info.st_mode & 0o011 != 0o011):
         raise StartupError("runtime_state_invalid")
     try:
         old_final = final.stat(follow_symlinks=False)
@@ -338,7 +433,9 @@ def _read_state() -> dict[str, Any]:
         raise StartupError("runtime_state_unavailable") from None
     if (not isinstance(value, dict) or value.get("version") != 1
             or any(type(value.get(key)) is not int or value[key] <= 1
-                   for key in ("chrome_pid", "relay_pid"))
+                   for key in ("chrome_pid", "relay_pid", "supervisor_pid"))
+            or value["supervisor_pid"] == 1
+            or type(value.get("supervisor_starttime")) is not int or value["supervisor_starttime"] <= 0
             or not isinstance(value.get("policy_fingerprint"), str)
             or not re.fullmatch(r"[0-9a-f]{64}", value["policy_fingerprint"])):
         raise StartupError("runtime_state_invalid")
@@ -375,8 +472,10 @@ def _marker_present_and_consume() -> bool:
         os.close(directory)
 
 
-def _verify_runtime(policy_text: str, state: dict[str, Any], threshold: int) -> None:
-    _verify_policy(state["policy_fingerprint"], policy_text)
+def _verify_runtime(policy_text: str, state: dict[str, Any], threshold: int,
+                    *, verify_policy: bool = True) -> None:
+    if verify_policy:
+        _verify_policy(state["policy_fingerprint"], policy_text)
     chrome_pid, relay_pid = state["chrome_pid"], state["relay_pid"]
     if not _process_identity(chrome_pid, 0) or not _process_identity(relay_pid, 65534):
         raise StartupError("browser_child_identity_invalid")
@@ -384,19 +483,59 @@ def _verify_runtime(policy_text: str, state: dict[str, Any], threshold: int) -> 
         raise StartupError("browser_child_command_invalid")
     if _fd_count(chrome_pid) >= threshold:
         raise StartupError("chrome_fd_threshold_exceeded")
-    if not _listener_ready(relay_pid) or not _probe_cdp_as_relay_user():
+    if (not _listener_ready(relay_pid) or not _relay_heartbeat_fresh(relay_pid)
+            or not _probe_cdp_as_relay_user()):
         raise StartupError("browser_cdp_unavailable")
+
+
+def _verified_supervisor_pid(state: dict[str, Any]) -> int:
+    pid = state.get("supervisor_pid")
+    if type(pid) is not int or pid <= 1 or pid == os.getpid():
+        raise StartupError("supervisor_identity_invalid")
+    if _proc_starttime(pid) != state.get("supervisor_starttime"):
+        raise StartupError("supervisor_identity_invalid")
+    try:
+        status = Path(f"/proc/{pid}/status").read_text()
+    except OSError:
+        raise StartupError("supervisor_identity_invalid") from None
+    fields = dict(line.split(":", 1) for line in status.splitlines() if ":" in line)
+    command = _process_commandline(pid)
+    try:
+        uid = int(fields["Uid"].split()[0])
+        masks = [int(fields[key].strip(), 16) for key in ("CapEff", "CapPrm", "CapBnd")]
+    except (KeyError, ValueError, IndexError):
+        raise StartupError("supervisor_identity_invalid") from None
+    if (uid != 0 or any(mask & (1 << 12) for mask in masks)
+            or str(Path(__file__).resolve()) not in command or "--runtime" not in command
+            or not {state.get("chrome_pid"), state.get("relay_pid")}.issubset(_process_children(pid))):
+        raise StartupError("supervisor_identity_invalid")
+    return pid
+
+
+def _request_supervisor_restart(state: dict[str, Any]) -> None:
+    pid = _verified_supervisor_pid(state)
+    try:
+        os.kill(pid, signal.SIGTERM)
+    except ProcessLookupError:
+        raise StartupError("supervisor_stop_race") from None
 
 
 def healthcheck() -> int:
     self_ip, controllers, proxy_ip, threshold = _runtime_env()
-    _check_single_interface(self_ip)
+    # Keep the policy-failure path well inside Compose's three-second health timeout,
+    # so it can stop the verified runtime parent before Docker kills this exec.
+    _check_single_interface(self_ip, timeout=0.5)
     policy_text = _policy_text(self_ip, controllers, proxy_ip)
     state = _read_state()
     expected_fingerprint = _expected_fingerprint()
-    if state.get("policy_fingerprint") != expected_fingerprint:
-        raise StartupError("policy_fingerprint_mismatch")
-    _verify_runtime(policy_text, state, threshold)
+    try:
+        if state.get("policy_fingerprint") != expected_fingerprint:
+            raise StartupError("policy_fingerprint_mismatch")
+        _verify_policy(state["policy_fingerprint"], policy_text, command_timeout=0.5)
+    except StartupError:
+        _request_supervisor_restart(state)
+        raise StartupError("nft_policy_readback_failed") from None
+    _verify_runtime(policy_text, state, threshold, verify_policy=False)
     return 0
 
 
@@ -412,6 +551,7 @@ def supervise() -> int:
         raise StartupError("nft_policy_render_invalid")
     fingerprint = _expected_fingerprint()
     _clear_stale_launch_info()
+    _prepare_relay_heartbeat_dir()
     stopping = False
 
     def request_stop(_signum: int, _frame: Any) -> None:
@@ -451,6 +591,8 @@ def supervise() -> int:
                     raise StartupError("chrome_fd_threshold_exceeded")
                 if not _listener_ready(relay.pid) or not _probe_cdp_as_relay_user():
                     raise StartupError("browser_cdp_unavailable")
+                if not _relay_heartbeat_fresh(relay.pid):
+                    raise StartupError("relay_heartbeat_stale")
             time.sleep(POLICY_POLL_SECONDS)
     finally:
         _terminate(relay)

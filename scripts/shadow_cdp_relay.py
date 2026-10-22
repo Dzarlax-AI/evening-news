@@ -30,6 +30,8 @@ MAX_TRACKED_IDS = 64
 MAX_PROTOCOL_ID_BYTES = 256
 ARM_NAME = "overload-once.json"
 MAX_CONTROLLERS = 8
+HEARTBEAT_INTERVAL_SECONDS = 2
+HEARTBEAT_DIRECTORY_UID = 0
 
 
 def private_controller_ip(value: str) -> str:
@@ -483,6 +485,7 @@ class Relay:
     def __init__(self, controller_ip: str | Iterable[str], target_host: str = TARGET_HOST,
                  target_port: int = TARGET_PORT, *, arm_dir: Path | None = None,
                  report: Path | None = None, diagnostics_report: Path | None = None,
+                 heartbeat_path: Path | None = None,
                  allow_loopback_test_peer: bool = False):
         self.controller_ips = private_controller_ips(controller_ip, allow_loopback=allow_loopback_test_peer)
         # Keep the historical attribute for single-controller in-process callers.
@@ -494,6 +497,7 @@ class Relay:
         self.synthetic = arm_dir is not None
         self.state = SyntheticState(arm_dir, report) if self.synthetic else None
         self.diagnostics_report = diagnostics_report if self.synthetic else None
+        self.heartbeat_path = heartbeat_path if heartbeat_path is not None and not self.synthetic else None
         self.diagnostic_counts = {
             name: 0 for name in (
                 'accepted', 'peer_rejected', 'capacity_rejected', 'connect_attempted',
@@ -509,6 +513,12 @@ class Relay:
         self.connection_ms_max = 0
         self.loop_lag_samples = 0
         self.loop_lag_max_ms = 0
+
+    async def heartbeat(self) -> None:
+        """Refresh a private liveness file only while this asyncio loop is responsive."""
+        while True:
+            write_heartbeat(self.heartbeat_path, os.getpid())
+            await asyncio.sleep(HEARTBEAT_INTERVAL_SECONDS)
 
     def _write_diagnostics(self) -> None:
         path = self.diagnostics_report
@@ -744,9 +754,10 @@ class Relay:
 
 
 async def serve(controller_ip: str | Iterable[str], arm_dir: Path | None = None, report: Path | None = None,
-               diagnostics_report: Path | None = None, *, persistent: bool = False) -> None:
+               diagnostics_report: Path | None = None, *, persistent: bool = False,
+               heartbeat_path: Path | None = None) -> None:
     relay = Relay(private_controller_ips(controller_ip), arm_dir=arm_dir, report=report,
-                  diagnostics_report=diagnostics_report)
+                  diagnostics_report=diagnostics_report, heartbeat_path=heartbeat_path)
     server = await asyncio.start_server(relay.handle, LISTEN_HOST, LISTEN_PORT,
                                         limit=MAX_HTTP_HEADER + 1, backlog=MAX_CONNECTIONS)
     loop = asyncio.get_running_loop()
@@ -759,6 +770,7 @@ async def serve(controller_ip: str | Iterable[str], arm_dir: Path | None = None,
     serving = asyncio.create_task(server.serve_forever())
     lag_sampler = (asyncio.create_task(relay.sample_event_loop_lag())
                    if relay.diagnostics_report is not None else None)
+    heartbeat_task = (asyncio.create_task(relay.heartbeat()) if relay.heartbeat_path is not None else None)
     try:
         await wait_for_shutdown(stopped, persistent=persistent)
     finally:
@@ -769,6 +781,9 @@ async def serve(controller_ip: str | Iterable[str], arm_dir: Path | None = None,
         if lag_sampler is not None:
             lag_sampler.cancel()
             await asyncio.gather(lag_sampler, return_exceptions=True)
+        if heartbeat_task is not None:
+            heartbeat_task.cancel()
+            await asyncio.gather(heartbeat_task, return_exceptions=True)
     for task in tuple(relay.tasks):
         task.cancel()
     if relay.tasks:
@@ -787,6 +802,59 @@ async def wait_for_shutdown(stopped: Awaitable[object], *, persistent: bool = Fa
         pass
 
 
+def write_heartbeat(path: Path | None, pid: int, *, monotonic_ns: int | None = None) -> None:
+    """Atomically publish a bounded heartbeat without following links."""
+    if path is None:
+        return
+    parent_fd = open_heartbeat_directory(path.parent)
+    temporary = f".{path.name}.{pid}.{secrets.token_hex(6)}.tmp"
+    try:
+        parent = os.fstat(parent_fd)
+        if (not stat.S_ISDIR(parent.st_mode) or parent.st_uid != HEARTBEAT_DIRECTORY_UID
+                or stat.S_IMODE(parent.st_mode) != 0o733):
+            raise OSError("heartbeat_directory_invalid")
+        try:
+            current = os.stat(path.name, dir_fd=parent_fd, follow_symlinks=False)
+        except FileNotFoundError:
+            current = None
+        if current is not None and (
+                not stat.S_ISREG(current.st_mode) or current.st_nlink != 1
+                or current.st_uid != os.geteuid() or current.st_mode & 0o022):
+            raise OSError("heartbeat_file_invalid")
+        fd = os.open(temporary, os.O_WRONLY | os.O_CREAT | os.O_EXCL | os.O_NOFOLLOW | os.O_NONBLOCK,
+                     0o644, dir_fd=parent_fd)
+        try:
+            info = os.fstat(fd)
+            if (not stat.S_ISREG(info.st_mode) or info.st_nlink != 1
+                    or info.st_uid != os.geteuid() or info.st_mode & 0o022):
+                raise OSError("heartbeat_file_invalid")
+            os.fchmod(fd, 0o644)
+            payload = json.dumps({"pid": pid, "monotonic_ns": time.monotonic_ns()
+                                  if monotonic_ns is None else monotonic_ns},
+                                 separators=(",", ":")).encode("ascii")
+            remaining = memoryview(payload)
+            while remaining:
+                remaining = remaining[os.write(fd, remaining):]
+            os.fsync(fd)
+        finally:
+            os.close(fd)
+        os.replace(temporary, path.name, src_dir_fd=parent_fd, dst_dir_fd=parent_fd)
+    except BaseException:
+        try:
+            os.unlink(temporary, dir_fd=parent_fd)
+        except OSError:
+            pass
+        raise
+    finally:
+        os.close(parent_fd)
+
+
+def open_heartbeat_directory(path: Path) -> int:
+    """Open the 0733 heartbeat directory without requiring directory read access."""
+    flags = getattr(os, "O_PATH", os.O_RDONLY) | os.O_DIRECTORY | os.O_NOFOLLOW
+    return os.open(path, flags)
+
+
 def main(argv: list[str] | None = None) -> None:
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument("--controller-ip", action="append", required=True,
@@ -796,6 +864,8 @@ def main(argv: list[str] | None = None) -> None:
     parser.add_argument("--synthetic-diagnostics-report", type=Path)
     parser.add_argument("--persistent", action="store_true",
                         help="serve until SIGTERM/SIGINT instead of the bounded experiment lifetime")
+    parser.add_argument("--heartbeat-path", type=Path,
+                        help="owner-only event-loop heartbeat path for the persistent container relay")
     args = parser.parse_args(argv)
     if bool(args.synthetic_arm_dir) != bool(args.synthetic_report):
         parser.error("synthetic arm and report paths must be provided together")
@@ -803,12 +873,15 @@ def main(argv: list[str] | None = None) -> None:
         parser.error("synthetic diagnostics require synthetic mode")
     if args.persistent and args.synthetic_arm_dir:
         parser.error("persistent mode cannot be combined with synthetic mode")
+    if args.heartbeat_path and (not args.persistent or args.synthetic_arm_dir):
+        parser.error("heartbeat requires persistent production mode")
     try:
         controllers = private_controller_ips(args.controller_ip)
     except ValueError as exc:
         parser.error(str(exc))
     asyncio.run(serve(controllers, args.synthetic_arm_dir, args.synthetic_report,
-                      args.synthetic_diagnostics_report, persistent=args.persistent))
+                      args.synthetic_diagnostics_report, persistent=args.persistent,
+                      heartbeat_path=args.heartbeat_path))
 
 
 if __name__ == "__main__":

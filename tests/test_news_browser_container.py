@@ -1,7 +1,9 @@
 """Focused validation for the shared Cloak browser container boundary."""
 
+import asyncio
 import importlib.util
 import json
+import os
 from pathlib import Path
 import sys
 
@@ -137,9 +139,12 @@ def test_supervisor_waits_for_delayed_exec_and_child_readiness(monkeypatch):
     monkeypatch.setattr(entrypoint, "_policy_text", lambda *_args: "table comment \"policy-sha256:" + "a" * 64 + "\"")
     monkeypatch.setattr(entrypoint, "_expected_fingerprint", lambda: "b" * 64)
     monkeypatch.setattr(entrypoint, "_clear_stale_launch_info", lambda: None)
+    monkeypatch.setattr(entrypoint, "_prepare_relay_heartbeat_dir", lambda: None)
     monkeypatch.setattr(entrypoint, "_start_children", lambda _controllers: children)
+    monkeypatch.setattr(entrypoint, "_proc_starttime", lambda _pid: 999)
     monkeypatch.setattr(entrypoint, "_write_state", lambda _value: None)
     monkeypatch.setattr(entrypoint, "_marker_present_and_consume", lambda: False)
+    monkeypatch.setattr(entrypoint, "_relay_heartbeat_fresh", lambda _pid: True)
     monkeypatch.setattr(entrypoint, "_terminate", lambda _process: None)
     monkeypatch.setattr(entrypoint.time, "monotonic", lambda: 0)
     ready_checks = iter((False, True))
@@ -157,6 +162,108 @@ def test_supervisor_waits_for_delayed_exec_and_child_readiness(monkeypatch):
     monkeypatch.setattr(entrypoint.time, "sleep", sleep)
     assert entrypoint.supervise() == 0
     assert sleeps == 2
+
+
+def test_policy_readback_failure_stops_only_verified_runtime_supervisor(monkeypatch):
+    state = {"version": 1, "chrome_pid": 101, "relay_pid": 202,
+             "supervisor_pid": 303, "supervisor_starttime": 404,
+             "policy_fingerprint": "a" * 64}
+    monkeypatch.setattr(entrypoint, "_runtime_env", lambda: ("10.55.0.2", CONTROLLERS,
+                                                               "10.55.0.4", 800))
+    monkeypatch.setattr(entrypoint, "_check_single_interface", lambda *_args, **_kwargs: None)
+    monkeypatch.setattr(entrypoint, "_policy_text", lambda *_args: "policy")
+    monkeypatch.setattr(entrypoint, "_read_state", lambda: state)
+    monkeypatch.setattr(entrypoint, "_expected_fingerprint", lambda: "a" * 64)
+    monkeypatch.setattr(entrypoint, "_verify_policy",
+                        lambda *_args, **_kwargs: (_ for _ in ()).throw(
+                            entrypoint.StartupError("nft_policy_changed")))
+    monkeypatch.setattr(entrypoint, "_verified_supervisor_pid", lambda _state: 303)
+    signals = []
+    monkeypatch.setattr(entrypoint.os, "kill", lambda pid, sig: signals.append((pid, sig)))
+
+    with pytest.raises(entrypoint.StartupError, match="nft_policy_readback_failed"):
+        entrypoint.healthcheck()
+    assert signals == [(303, entrypoint.signal.SIGTERM)]
+
+
+def test_healthcheck_never_signals_unverified_or_pid1_supervisor(monkeypatch):
+    state = {"supervisor_pid": 1}
+    monkeypatch.setattr(entrypoint, "_verified_supervisor_pid",
+                        lambda _state: (_ for _ in ()).throw(
+                            entrypoint.StartupError("supervisor_identity_invalid")))
+    monkeypatch.setattr(entrypoint.os, "kill", lambda *_args: pytest.fail("unverified kill"))
+    with pytest.raises(entrypoint.StartupError, match="supervisor_identity_invalid"):
+        entrypoint._request_supervisor_restart(state)
+    with pytest.raises(entrypoint.StartupError, match="supervisor_identity_invalid"):
+        entrypoint._verified_supervisor_pid(state)
+
+
+def test_stale_relay_heartbeat_terminates_children_for_container_restart(monkeypatch, tmp_path):
+    class Child:
+        def __init__(self, pid):
+            self.pid = pid
+
+        def poll(self):
+            return None
+
+    chrome, relay_child = Child(101), Child(202)
+    stopped = []
+    monkeypatch.setattr(entrypoint.os, "geteuid", lambda: 0)
+    monkeypatch.setattr(entrypoint, "_assert_runtime_capabilities", lambda: None)
+    monkeypatch.setattr(entrypoint, "_runtime_env", lambda: ("10.55.0.2", CONTROLLERS,
+                                                               "10.55.0.4", 800))
+    monkeypatch.setattr(entrypoint, "_check_single_interface", lambda _ip: None)
+    monkeypatch.setattr(entrypoint, "_policy_text", lambda *_args: "table comment \"policy-sha256:" + "a" * 64 + "\"")
+    monkeypatch.setattr(entrypoint, "_expected_fingerprint", lambda: "b" * 64)
+    monkeypatch.setattr(entrypoint, "_clear_stale_launch_info", lambda: None)
+    monkeypatch.setattr(entrypoint, "_prepare_relay_heartbeat_dir", lambda: None)
+    monkeypatch.setattr(entrypoint, "_start_children", lambda _controllers: (chrome, relay_child))
+    monkeypatch.setattr(entrypoint, "_proc_starttime", lambda _pid: 999)
+    monkeypatch.setattr(entrypoint, "_write_state", lambda _value: None)
+    monkeypatch.setattr(entrypoint, "_marker_present_and_consume", lambda: False)
+    monkeypatch.setattr(entrypoint, "_terminate", lambda child: stopped.append(child.pid))
+    monkeypatch.setattr(entrypoint, "_children_ready", lambda *_pids: True)
+    monkeypatch.setattr(entrypoint, "_process_identity", lambda *_args: True)
+    monkeypatch.setattr(entrypoint, "_child_commands_match", lambda *_args: True)
+    monkeypatch.setattr(entrypoint, "_fd_count", lambda _pid: 1)
+    monkeypatch.setattr(entrypoint, "_listener_ready", lambda _pid: True)
+    monkeypatch.setattr(entrypoint, "_probe_cdp_as_relay_user", lambda: True)
+    monkeypatch.setattr(entrypoint, "_relay_heartbeat_fresh", lambda _pid: False)
+    monkeypatch.setattr(entrypoint, "STATE_FILE", tmp_path / "runtime.json")
+    monkeypatch.setattr(entrypoint.time, "sleep", lambda _seconds: None)
+
+    with pytest.raises(entrypoint.StartupError, match="relay_heartbeat_stale"):
+        entrypoint.supervise()
+    assert stopped == [202, 101]
+
+
+def test_relay_event_loop_heartbeat_is_fresh_then_stales(tmp_path, monkeypatch):
+    relay_module = load("news_shadow_cdp_relay_heartbeat", ROOT / "scripts" / "shadow_cdp_relay.py")
+    heartbeat_dir = tmp_path / "relay"
+    heartbeat_dir.mkdir(mode=0o700)
+    heartbeat_dir.chmod(0o733)
+    heartbeat_file = heartbeat_dir / "heartbeat.json"
+    monkeypatch.setattr(entrypoint, "RELAY_HEARTBEAT_DIR", heartbeat_dir)
+    monkeypatch.setattr(entrypoint, "RELAY_HEARTBEAT_FILE", heartbeat_file)
+    monkeypatch.setattr(entrypoint, "RELAY_UID", os.geteuid())
+    monkeypatch.setattr(entrypoint, "RELAY_HEARTBEAT_DIRECTORY_UID", os.geteuid())
+    monkeypatch.setattr(relay_module, "HEARTBEAT_DIRECTORY_UID", os.geteuid())
+    monkeypatch.setattr(relay_module, "HEARTBEAT_INTERVAL_SECONDS", 0.01)
+    instance = relay_module.Relay("10.55.0.3", heartbeat_path=heartbeat_file)
+
+    async def scenario():
+        task = asyncio.create_task(instance.heartbeat())
+        try:
+            await asyncio.sleep(0.03)
+            assert entrypoint._relay_heartbeat_fresh(os.getpid())
+        finally:
+            task.cancel()
+            await asyncio.gather(task, return_exceptions=True)
+
+    asyncio.run(scenario())
+    old = relay_module.time.monotonic_ns() - (entrypoint.RELAY_HEARTBEAT_MAX_AGE_SECONDS + 1) * 1_000_000_000
+    relay_module.write_heartbeat(heartbeat_file, os.getpid(), monotonic_ns=old)
+    assert not entrypoint._relay_heartbeat_fresh(os.getpid())
 
 
 def test_terminate_cleans_process_group_when_leader_already_exited(monkeypatch):

@@ -1,6 +1,6 @@
 # Native Go article extraction: release verification, 2026-10-22
 
-Status: Go source verification passed; native activation is deferred. Persistent shared-browser lifecycle assets are an inert review draft. News and Cloak production configuration/images have not changed. Personal Assistant was separately stopped at the user's explicit request, with rollback metadata retained.
+Status: the shared browser now uses the simplified Docker Compose scheme. The initial Linux Compose campaign passed; final policy-loss and stalled-relay recovery corrections are under review. News/Cloak production has not switched. Personal Assistant remains stopped; Readeck is preserved.
 
 ## Current behavior
 
@@ -223,3 +223,29 @@ Final integrated local Python check after startup/Compose corrections: 894
 passed, 8 skipped, 22 subtests. Independent focused browser/Compose/relay review
 passed 27 tests with no remaining code blocker. Linux image acceptance and
 production cutover are still pending.
+
+
+### Simplified Compose Linux acceptance
+
+The CI browser and Go images passed an isolated Linux/amd64 Compose campaign
+with the current profile, including the two bounded 16 MiB Chrome config/cache
+tmpfs mounts. Browser bootstrap/health, five denied raw socket probes, six Python
+shared-browser contexts (including Telegram and Page Monitor parser fixtures),
+and actual CoreExtractor-to-Go article rendering/auth rejection passed. The next
+article also passed after an owned relay failure/browser restart and a worker
+restart. No Python fallback or DB/AI/Telegram fixture side effects occurred.
+All 36 pre-existing containers retained their fingerprints; no new OOM events
+occurred, and all test resources were removed. Sampled fixture-container memory
+peaked at 327,000,064 bytes; this short test is not production memory sizing.
+
+The initial Linux startup exposed missing writable Chrome config/cache paths;
+these now match the previously accepted native stand. Two test discovery helpers
+needed HTTP normalization of the configured WebSocket URL. These were private
+harness corrections, not changes to the production WebSocket client.
+
+Final PR review identified two additional lifecycle gaps: a failed nft readback
+must exit the verified runtime parent so Docker can restart it, and a relay
+listener alone cannot prove that its event loop is progressing. The corrections
+remain container-local: bounded relay heartbeat plus a verified parent stop on
+policy failure. Fresh CI/review and an isolated recovery campaign are required
+before production cutover.
