@@ -685,6 +685,44 @@
         "message_id": "116",
         "telegram_url": "https://t.me/testchannel/116"
       }
+    },
+    {
+      "title": "A malformed encoded ampersand in a query remains a nontracking parameter exactly as in the Python parser.",
+      "url": "https://example.org/story?keep=one&keep=two&amp%3Butm_source=synthetic",
+      "content": "A malformed encoded ampersand in a query remains a nontracking parameter exactly as in the Python parser.",
+      "summary": null,
+      "image_url": null,
+      "media_files": [],
+      "published_at": "2026-10-22T12:34:56Z",
+      "source_type": "telegram",
+      "source_name": "Offline Telegram Fixture",
+      "raw_data": {
+        "channel": "testchannel",
+        "access_method": "https://t.me/s/testchannel",
+        "content_length": 105,
+        "media_info": {
+          "video_url": null,
+          "document_url": null,
+          "audio_url": null,
+          "sticker_url": null,
+          "poll_data": null,
+          "location_data": null,
+          "media_type": null,
+          "duration": null,
+          "file_size": null,
+          "file_name": null
+        },
+        "has_media": false,
+        "media_count": 0,
+        "external_links": [
+          "https://example.org/story?keep=one&keep=two&amp%3Butm_source=synthetic"
+        ],
+        "hashtags": [],
+        "original_link": "https://example.org/story?keep=one&keep=two&amp%3Butm_source=synthetic",
+        "forwarded_from": null,
+        "message_id": "120",
+        "telegram_url": "https://t.me/testchannel/120"
+      }
     }
   ],
   "fallback_message": [

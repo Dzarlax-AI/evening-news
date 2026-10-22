@@ -315,23 +315,27 @@ func telegramExternalLinks(msg *goquery.Selection, pageURL string) []string {
 
 func telegramCleanQuery(raw string) string {
 	tracking := map[string]bool{"utm_source": true, "utm_medium": true, "utm_campaign": true, "utm_content": true, "utm_term": true, "fbclid": true, "gclid": true, "_ga": true, "mc_cid": true, "mc_eid": true}
-	values, err := url.ParseQuery(raw)
+	values, err := url.ParseQuery(strings.ReplaceAll(raw, ";", "%3B"))
 	if err != nil {
 		return ""
 	}
 	var keys []string
 	seen := map[string]bool{}
 	for _, pair := range strings.Split(raw, "&") {
-		key, _, _ := strings.Cut(pair, "=")
-		decoded, decodeErr := url.QueryUnescape(key)
-		if decodeErr == nil && !tracking[decoded] && !seen[decoded] && len(values[decoded]) > 0 {
-			keys = append(keys, decoded)
-			seen[decoded] = true
+		key, pairValue, hasValue := strings.Cut(pair, "=")
+		decoded, decodeErr := url.QueryUnescape(strings.ReplaceAll(key, ";", "%3B"))
+		if decodeErr != nil || decoded == "" || tracking[decoded] || !hasValue || pairValue == "" || seen[decoded] {
+			continue
 		}
+		keys = append(keys, decoded)
+		seen[decoded] = true
 	}
 	var out []string
 	for _, key := range keys {
 		for _, value := range values[key] {
+			if value == "" {
+				continue
+			}
 			out = append(out, url.QueryEscape(key)+"="+url.QueryEscape(value))
 		}
 	}

@@ -175,3 +175,15 @@ func TestParseTelegramChannelReturnsValidPrefixOnOversizedPost(t *testing.T) {
 		t.Fatalf("returned prefix = %#v, want only valid first post", articles)
 	}
 }
+
+func TestTelegramCleanQueryMatchesPythonMalformedSemicolonAndBlanks(t *testing.T) {
+	got := telegramCleanQuery("keep=one&blank=&keep=two&amp;utm_source=synthetic")
+	want := "keep=one&keep=two&amp%3Butm_source=synthetic"
+	if got != want {
+		t.Fatalf("clean query = %q, want %q", got, want)
+	}
+	got = telegramCleanQuery("key=&other=1&key=2")
+	if want := "other=1&key=2"; got != want {
+		t.Fatalf("blank duplicate ordering = %q, want %q", got, want)
+	}
+}
