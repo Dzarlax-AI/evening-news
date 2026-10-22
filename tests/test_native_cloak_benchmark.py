@@ -166,15 +166,120 @@ def test_native_service_capability_must_be_ready_and_native_with_selector():
         "native_profile": {"ready_selector_sha256": bench.hashlib.sha256(bench.READY_SELECTOR.encode()).hexdigest()},
     }
     assert bench._validate_native_capability_payload(good)["native_ready_selector"]
-    with pytest.raises(bench.BenchmarkError, match="native_capability_unavailable"):
+    with pytest.raises(bench.NativeCapabilityUnavailable, match="native_capability_unavailable") as caught:
         bench._validate_native_capability_payload({
             "ready": True,
             "capabilities": {"browser": True, "native_browser": False, "native_ready_selector": True},
             "native_profile": good["native_profile"],
         })
+    assert caught.value.diagnostic_code == "capability_native_browser_false"
     wrong_hash = {**good, "native_profile": {"ready_selector_sha256": "0" * 64}}
-    with pytest.raises(bench.BenchmarkError, match="native_capability_unavailable"):
+    with pytest.raises(bench.NativeCapabilityUnavailable, match="native_capability_unavailable") as caught:
         bench._validate_native_capability_payload(wrong_hash)
+    assert caught.value.diagnostic_code == "selector_hash_mismatch"
+
+
+@pytest.mark.parametrize("status,body,diagnostic", [
+    (503, b"private error payload", "http_status_503"),
+    (200, b"not-json", "invalid_json"),
+])
+def test_native_capability_probe_classifies_failure_without_retaining_body(
+        monkeypatch, status, body, diagnostic):
+    import aiohttp
+
+    class Response:
+        def __init__(self):
+            self.status = status
+            self.content = self
+
+        async def __aenter__(self): return self
+        async def __aexit__(self, *_args): return None
+        async def read(self, _limit): return body
+
+    class Session:
+        async def __aenter__(self): return self
+        async def __aexit__(self, *_args): return None
+        def get(self, *_args, **_kwargs): return Response()
+
+    monkeypatch.setattr(aiohttp, "ClientSession", lambda **_kwargs: Session())
+    with pytest.raises(bench.NativeCapabilityUnavailable, match="native_capability_unavailable") as caught:
+        asyncio.run(bench._probe_native_capabilities("http://127.0.0.1:8080"))
+    assert caught.value.diagnostic_code == diagnostic
+    assert str(caught.value) == "native_capability_unavailable"
+    assert body.decode() not in str(caught.value)
+
+
+def test_non_200_readiness_keeps_only_typed_flags_and_hash_match(monkeypatch):
+    import aiohttp
+
+    secret = "private-token-and-body-text"
+    expected_hash = bench.hashlib.sha256(bench.READY_SELECTOR.encode()).hexdigest()
+    body = json.dumps({
+        "ready": False,
+        "capabilities": {"browser": True, "native_browser": False,
+                         "native_ready_selector": True, "extra": secret},
+        "native_profile": {"ready_selector_sha256": expected_hash, "extra": secret},
+        "message": secret, "url": "https://private.example/secret",
+    }).encode()
+    calls = 0
+
+    class Response:
+        status = 503
+        content = None
+
+        def __init__(self): self.content = self
+        async def __aenter__(self): return self
+        async def __aexit__(self, *_args): return None
+        async def read(self, _limit): return body
+
+    class Session:
+        async def __aenter__(self): return self
+        async def __aexit__(self, *_args): return None
+        def get(self, *_args, **_kwargs):
+            nonlocal calls
+            calls += 1
+            return Response()
+
+    monkeypatch.setattr(aiohttp, "ClientSession", lambda **_kwargs: Session())
+    with pytest.raises(bench.NativeCapabilityUnavailable) as caught:
+        asyncio.run(bench._probe_native_capabilities("http://127.0.0.1:8080"))
+    assert calls == 1
+    assert caught.value.diagnostic_code == "http_status_503"
+    assert caught.value.readiness_diagnostic == {
+        "ready": False, "browser": True, "native_browser": False,
+        "native_ready_selector": True, "selector_hash_matches": True,
+    }
+    assert secret not in repr(caught.value.readiness_diagnostic)
+    assert "https://" not in repr(caught.value.readiness_diagnostic)
+
+
+@pytest.mark.parametrize("body", [
+    b"private malformed body",
+    b'{"ready":"false","capabilities":{"browser":1,"native_browser":null},'
+    b'"native_profile":{"ready_selector_sha256":"private"}}',
+    b'{"ready":false}' + (b" " * 16384),
+])
+def test_non_200_malformed_readiness_diagnostic_is_omitted(monkeypatch, body):
+    import aiohttp
+
+    class Response:
+        status = 503
+        content = None
+        def __init__(self): self.content = self
+        async def __aenter__(self): return self
+        async def __aexit__(self, *_args): return None
+        async def read(self, _limit): return body
+
+    class Session:
+        async def __aenter__(self): return self
+        async def __aexit__(self, *_args): return None
+        def get(self, *_args, **_kwargs): return Response()
+
+    monkeypatch.setattr(aiohttp, "ClientSession", lambda **_kwargs: Session())
+    with pytest.raises(bench.NativeCapabilityUnavailable) as caught:
+        asyncio.run(bench._probe_native_capabilities("http://127.0.0.1:8080"))
+    assert caught.value.diagnostic_code == "http_status_503"
+    assert caught.value.readiness_diagnostic is None
 
 
 def test_missing_cgroup_data_fails_instead_of_reporting_zero(tmp_path):

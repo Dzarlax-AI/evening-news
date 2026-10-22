@@ -37,7 +37,13 @@ func nativeArticleResponse(ctx context.Context, r service.Request, render native
 	doc, err := render(ctx, r.URL, transport.BrowserOptions{MaxDOMBytes: int64(r.MaxBytes), MaxWireBytes: int64(r.MaxBytes)}, "")
 	if err != nil {
 		resp := fail("native_browser_unavailable", true)
+		ownershipLost := errors.Is(err, transport.ErrNativeOwnershipLost)
 		switch {
+		case ownershipLost:
+			resp = fail("native_browser_unavailable", false)
+		case errors.Is(err, transport.ErrNativeTargetCrashed):
+			resp = fail("native_browser_target_crashed", false)
+			resp.Outcome = "failed"
 		case errors.Is(err, transport.ErrNativePolicy):
 			resp = fail("native_browser_policy_denied", false)
 		case errors.Is(err, transport.ErrNativeUnsupported):
@@ -55,7 +61,7 @@ func nativeArticleResponse(ctx context.Context, r service.Request, render native
 			resp.Result.State = "resource_limit"
 		}
 		var status *transport.PublicHTTPStatusError
-		if errors.As(err, &status) {
+		if !ownershipLost && errors.As(err, &status) {
 			code := "native_browser_http_rejected"
 			retry := status.StatusCode >= 500
 			if status.StatusCode == 429 {

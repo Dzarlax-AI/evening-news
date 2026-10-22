@@ -6,6 +6,7 @@ import json
 import logging
 import time
 import unicodedata
+from urllib.parse import urlsplit, urlunsplit
 from ..core.resource_limits import ResourceLimitError, enforce_text_limit
 from typing import Optional, Dict, Any
 
@@ -116,6 +117,8 @@ class CoreExtractor:
 
         settings = get_settings()
         mode = settings.extraction_service_mode
+        native_mode = (mode == 'go'
+                       and bool(getattr(settings, 'extraction_service_native_browser', False)))
         if mode == 'python' or not self._is_valid_url(url):
             return await self._extract_article_content_python(url, retry_count)
 
@@ -126,13 +129,27 @@ class CoreExtractor:
             if not settings.extraction_service_url or not token:
                 raise ExtractionServiceError('not_configured')
             clean_url = self.utils.clean_url(url)
+            try:
+                parsed_url = urlsplit(clean_url)
+                # Accessing port also validates malformed bracket/port syntax.
+                port = parsed_url.port
+                if parsed_url.scheme not in {'http', 'https'} or not parsed_url.hostname:
+                    raise ValueError('invalid URL')
+                use_browser = (native_mode and parsed_url.scheme.lower() == 'https'
+                               and (port is None or port == 443))
+                clean_url = urlunsplit(parsed_url._replace(fragment=''))
+            except (TypeError, ValueError):
+                raise ExtractionServiceError('invalid_input') from None
             memory = await get_extraction_memory()
             pattern = await memory.get_successful_pattern(self.utils.extract_domain(clean_url))
             supplied_pattern = dict(pattern) if pattern else None
+            max_bytes = settings.extraction_http_max_bytes
+            if use_browser:
+                max_bytes = min(max_bytes, settings.extraction_browser_max_bytes)
             client = ExtractionServiceClient(settings.extraction_service_url, token.get_secret_value(),
-                max_bytes=settings.extraction_http_max_bytes, max_chars=settings.extraction_text_max_chars)
-            # Pilot ownership: only Python may navigate native CloakBrowser.
-            return await client.extract(clean_url, timeout_seconds=timeout, learned_pattern=pattern, use_browser=False)
+                max_bytes=max_bytes, max_chars=settings.extraction_text_max_chars)
+            return await client.extract(clean_url, timeout_seconds=timeout, learned_pattern=pattern,
+                                        use_browser=use_browser)
 
         if mode == 'shadow':
             # Authoritative processing runs once. The service has no DB/LLM access;
@@ -178,15 +195,24 @@ class CoreExtractor:
                     else:
                         result['method_used'] = result.get('method_used') or result.get('method') or 'go'
                         result['media_files'] = result.get('media') or []
-                        if response.get('final_url') and response['final_url'] != response.get('original_url'):
-                            result['full_article_url'] = response['final_url']
+                        final_url = response.get('final_url')
+                        original_url = response.get('original_url')
+                        try:
+                            final_document = urlunsplit(urlsplit(final_url)._replace(fragment=''))
+                            original_document = urlunsplit(urlsplit(original_url)._replace(fragment=''))
+                        except (TypeError, ValueError):
+                            final_document = original_document = None
+                        if final_document and original_document and final_document != original_document:
+                            result['full_article_url'] = final_url
                         await self._record_service_success(url, response, time.monotonic() - started, supplied_pattern)
                         return result
                 if failure is None:
                     error = response.get('error') or {}
                     failure = ExtractionServiceError(error.get('code', 'no_content' if response['outcome'] == 'rejected' else response['outcome']),
                         error.get('retryable', False), error.get('retry_after_seconds'))
-                if not settings.extraction_service_python_fallback or not self._native_fallback_allowed(failure):
+                allow_python_fallback = (settings.extraction_service_python_fallback
+                                          and not native_mode)
+                if not allow_python_fallback or not self._native_fallback_allowed(failure):
                     await self._record_service_failures(url, response, supplied_pattern)
                     raise failure
                 # A study request may use the existing Python extraction path.

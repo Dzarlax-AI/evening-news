@@ -347,6 +347,12 @@ async def _run_c(url: str, endpoint: str, token: str) -> dict[str, Any]:
     error = payload.get("error") or {}
     if error.get("code") in {"native_browser_unavailable", "native_browser_busy"}:
         raise ShadowError("native_browser_unavailable")
+    if error.get("code") == "native_browser_target_crashed":
+        if (payload.get("outcome") != "failed" or result.get("state") != "failed"
+                or any(result.get(key) for key in ("content", "title", "publication_date", "author", "description", "image_url", "media"))
+                or error.get("retryable") is not False):
+            raise ShadowError("native_browser_unavailable")
+        await _readiness(endpoint)
     return {"outcome": payload["outcome"], "state": result.get("state"),
             "error": error.get("code"), "retry_after_seconds": error.get("retry_after_seconds"),
             "upstream_status": error.get("upstream_status"),

@@ -1,0 +1,8 @@
+# Application activation draft, last after native standby and accepted shared-browser isolation.
+# Requires separate production activation approval and compatible client/worker images.
+services:
+  app:
+    environment:
+      EXTRACTION_SERVICE_MODE: go
+      EXTRACTION_SERVICE_NATIVE_BROWSER: 'true'
+      EXTRACTION_SERVICE_PYTHON_FALLBACK: 'false'

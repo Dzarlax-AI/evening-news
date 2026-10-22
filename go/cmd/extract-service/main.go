@@ -103,11 +103,10 @@ func run() error {
 		}
 		return transport.BrowserFetchPublic(ctx, endpoint, rawURL, opts)
 	}}
+	nativeReady, nativeAvailable := nativeBrowserReadiness(native)
 	browserAvailable := func() bool {
-		if native != nil {
-			probe, done := context.WithTimeout(context.Background(), 500*time.Millisecond)
-			defer done()
-			return native.CheckReady(probe)
+		if nativeAvailable != nil {
+			return nativeAvailable()
 		}
 		return !httpOnly && chromeReady(endpoint)
 	}
@@ -127,7 +126,7 @@ func run() error {
 	})
 	var ready func() bool
 	if native != nil {
-		ready = browserAvailable
+		ready = nativeReady
 	}
 	selectorHash := ""
 	if native != nil && nativeSelector != "" {
@@ -147,25 +146,39 @@ func run() error {
 	finished := make(chan error, 1)
 	go func() { finished <- httpServer.Serve(listener) }()
 	log.Printf("extraction service listening on %s build=%s", addr, buildVersion)
+	var fatal <-chan error
+	if native != nil {
+		fatal = native.Fatal()
+	}
 	select {
 	case err := <-finished:
 		if errors.Is(err, http.ErrServerClosed) {
 			return nil
 		}
 		return err
+	case <-fatal:
+		_ = shutdownExtractionServer(httpServer, handler.Drain)
+		return transport.ErrNativeWorkerFatal
 	case <-signals.Done():
-		drain, done := context.WithTimeout(context.Background(), 36*time.Second)
-		defer done()
-		_ = handler.Drain(drain)
-		// Owned browser cleanup may outlive cancellation by up to five seconds.
-		cleanup, cancel := context.WithTimeout(context.Background(), 6*time.Second)
-		defer cancel()
-		if err = httpServer.Shutdown(cleanup); err != nil {
-			_ = httpServer.Close()
+		if err = shutdownExtractionServer(httpServer, handler.Drain); err != nil {
 			return err
 		}
 		return nil
 	}
+}
+
+func shutdownExtractionServer(httpServer *http.Server, drain func(context.Context) error) error {
+	ctx, cancel := context.WithTimeout(context.Background(), 36*time.Second)
+	defer cancel()
+	_ = drain(ctx)
+	// Owned browser cleanup may outlive cancellation by up to five seconds.
+	cleanup, stop := context.WithTimeout(context.Background(), 6*time.Second)
+	defer stop()
+	if err := httpServer.Shutdown(cleanup); err != nil {
+		_ = httpServer.Close()
+		return err
+	}
+	return nil
 }
 
 // Browser execution remains an explicit experimental mode. HTTP-only is the

@@ -349,3 +349,41 @@ async def test_c_outer_deadline_records_partial_case_and_stops(tmp_path,monkeypa
     assert report['status']=='incomplete'
     assert report['fatal_error']=='native_job_deadline_cleanup_unconfirmed'
     assert [row['id'] for row in report['rows']]==['case-0001']
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize('ready', [True, False])
+async def test_owned_crash_is_one_failed_job_only_after_readiness(monkeypatch, ready):
+    from news_aggregator.extraction.service_client import ExtractionServiceClient
+    calls = []
+    async def crashed(*args, **kwargs):
+        calls.append('extract')
+        return {'outcome': 'failed', 'result': {'state': 'failed', 'content': ''},
+                'error': {'code': 'native_browser_target_crashed', 'retryable': False}}
+    async def check(_endpoint):
+        calls.append('ready')
+        if not ready:
+            raise shadow.ShadowError('native_readiness_lost')
+    monkeypatch.setattr(ExtractionServiceClient, 'extract', crashed)
+    monkeypatch.setattr(shadow, '_readiness', check)
+    if ready:
+        result = await shadow._run_c('https://news.example.com/story', 'http://127.0.0.1:8080', 'test-token')
+        assert result['error'] == 'native_browser_target_crashed'
+        assert result['outcome'] == 'failed' and not result['content']
+    else:
+        with pytest.raises(shadow.ShadowError, match='native_readiness_lost'):
+            await shadow._run_c('https://news.example.com/story', 'http://127.0.0.1:8080', 'test-token')
+    assert calls == ['extract', 'ready']
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize('bad', [{'outcome': 'success'}, {'content': 'partial'}, {'retryable': True}])
+async def test_crash_response_never_accepts_output_or_replay(monkeypatch, bad):
+    from news_aggregator.extraction.service_client import ExtractionServiceClient
+    async def invalid(*args, **kwargs):
+        return {'outcome': bad.get('outcome', 'failed'),
+                'result': {'state': 'failed', 'content': bad.get('content', '')},
+                'error': {'code': 'native_browser_target_crashed', 'retryable': bad.get('retryable', False)}}
+    monkeypatch.setattr(ExtractionServiceClient, 'extract', invalid)
+    with pytest.raises(shadow.ShadowError, match='native_browser_unavailable'):
+        await shadow._run_c('https://news.example.com/story', 'http://127.0.0.1:8080', 'test-token')

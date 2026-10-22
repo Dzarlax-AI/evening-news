@@ -30,7 +30,7 @@ func TestNativeRunnerDoesNotTurnErrorsIntoPythonFallbackCodes(t *testing.T) {
 		err   error
 		code  string
 		retry bool
-	}{{errors.New("CDP disconnected"), "native_browser_unavailable", true}, {context.DeadlineExceeded, "native_browser_timeout", true}, {context.Canceled, "cancelled", false}, {&transport.PublicHTTPStatusError{StatusCode: 403}, "native_browser_http_rejected", false}, {&transport.PublicHTTPStatusError{StatusCode: 429, RetryAfterSeconds: &retry}, "upstream_rate_limited", true}} {
+	}{{errors.New("CDP disconnected"), "native_browser_unavailable", true}, {context.DeadlineExceeded, "native_browser_timeout", true}, {context.Canceled, "cancelled", false}, {transport.ErrNativeTargetCrashed, "native_browser_target_crashed", false}, {errors.Join(transport.ErrNativeTargetCrashed, transport.ErrNativeOwnershipLost), "native_browser_unavailable", false}, {errors.Join(transport.ErrNativeOwnershipLost, &transport.PublicHTTPStatusError{StatusCode: 503}), "native_browser_unavailable", false}, {&transport.PublicHTTPStatusError{StatusCode: 403}, "native_browser_http_rejected", false}, {&transport.PublicHTTPStatusError{StatusCode: 429, RetryAfterSeconds: &retry}, "upstream_rate_limited", true}} {
 		calls := 0
 		resp := nativeArticleResponse(context.Background(), service.Request{URL: "https://example.org/story"}, func(context.Context, string, transport.BrowserOptions, string) (transport.RenderedDocument, error) {
 			calls++
@@ -38,6 +38,9 @@ func TestNativeRunnerDoesNotTurnErrorsIntoPythonFallbackCodes(t *testing.T) {
 		})
 		if calls != 1 || resp.Error == nil || resp.Error.Code != tc.code || resp.Error.Retryable != tc.retry {
 			t.Fatalf("failure changed: %+v", resp)
+		}
+		if tc.code == "native_browser_target_crashed" && (resp.Outcome != "failed" || resp.Result.Content != "") {
+			t.Fatalf("owned crash must be one empty failed job: %+v", resp)
 		}
 		if tc.code == "upstream_rate_limited" && (resp.Error.RetryAfterSeconds == nil || *resp.Error.RetryAfterSeconds != 47) {
 			t.Fatal("retry timing lost")

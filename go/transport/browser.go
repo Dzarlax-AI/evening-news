@@ -23,6 +23,28 @@ import (
 
 const MobileUserAgent = "Mozilla/5.0 (Linux; Android 13; Pixel 7) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Mobile Safari/537.36"
 
+var ErrBrowserEventOverflow = errors.New("prototype_browser_event_overflow")
+var ErrNativeOwnershipLost = errors.New("native_browser_ownership_lost")
+
+// detachedOwnedSession distinguishes the session being detached in the event
+// params from the envelope session on which Chrome delivered that event.
+func detachedOwnedSession(message *cdproto.Message, owned string) (bool, bool) {
+	if message == nil || string(message.Method) != "Target.detachedFromTarget" {
+		return false, false
+	}
+	envelope := string(message.SessionID)
+	if envelope != "" && envelope != owned {
+		return false, false
+	}
+	var event struct {
+		SessionID string `json:"sessionId"`
+	}
+	if err := json.Unmarshal(message.Params, &event); err != nil || event.SessionID == "" {
+		return false, true
+	}
+	return event.SessionID == owned, false
+}
+
 // Child targets cannot share the single session's interception or byte budget.
 // Apply this additional CSP before parsing rather than replacing page globals.
 const browserIsolationPolicy = "connect-src http: https:; worker-src 'none'; frame-src 'none'; sandbox allow-scripts allow-same-origin"
@@ -86,7 +108,9 @@ func BrowserFetch(ctx context.Context, endpoint, rawURL string, opts BrowserOpti
 		defer done()
 		cleanupErr := disposeOwnedBrowser(cleanup, client, browserContextID, targetID, sessionID)
 		client.close()
+		cleanupErr = errors.Join(cleanupErr, client.eventError())
 		if cleanupErr != nil {
+			doc = RenderedDocument{}
 			err = errors.Join(err, fmt.Errorf("prototype_browser_cleanup: %w", cleanupErr))
 		}
 	}()
@@ -97,21 +121,21 @@ func BrowserFetch(ctx context.Context, endpoint, rawURL string, opts BrowserOpti
 	var createdContext struct {
 		BrowserContextID string `json:"browserContextId"`
 	}
-	if err = client.call(setup, "", "Target.createBrowserContext", map[string]any{"disposeOnDetach": true}, &createdContext); err != nil {
+	if err = client.callAllocation(setup, "", "Target.createBrowserContext", map[string]any{"disposeOnDetach": true}, &createdContext); err != nil {
 		return doc, err
 	}
 	browserContextID = createdContext.BrowserContextID
 	var createdTarget struct {
 		TargetID string `json:"targetId"`
 	}
-	if err = client.call(setup, "", "Target.createTarget", map[string]any{"url": "about:blank", "browserContextId": browserContextID}, &createdTarget); err != nil {
+	if err = client.callAllocation(setup, "", "Target.createTarget", map[string]any{"url": "about:blank", "browserContextId": browserContextID}, &createdTarget); err != nil {
 		return doc, err
 	}
 	targetID = createdTarget.TargetID
 	var attached struct {
 		SessionID string `json:"sessionId"`
 	}
-	if err = client.call(setup, "", "Target.attachToTarget", map[string]any{"targetId": targetID, "flatten": true}, &attached); err != nil {
+	if err = client.callAllocation(setup, "", "Target.attachToTarget", map[string]any{"targetId": targetID, "flatten": true}, &attached); err != nil {
 		return doc, err
 	}
 	sessionID = attached.SessionID
@@ -154,7 +178,17 @@ func BrowserFetch(ctx context.Context, endpoint, rawURL string, opts BrowserOpti
 			select {
 			case <-work.Done():
 				return
+			case <-client.eventFailure:
+				stop(client.eventError())
+				return
 			case message := <-client.events:
+				if detached, malformed := detachedOwnedSession(message, sessionID); malformed {
+					stop(ErrNativePolicy)
+					return
+				} else if detached {
+					stop(ErrNativeOwnershipLost)
+					return
+				}
 				if string(message.SessionID) != sessionID {
 					continue
 				}
@@ -274,7 +308,7 @@ func BrowserFetch(ctx context.Context, endpoint, rawURL string, opts BrowserOpti
 		ErrorText string `json:"errorText"`
 	}
 	if err = client.call(work, sessionID, "Page.navigate", map[string]any{"url": u.String()}, &navigation); err != nil {
-		return doc, browserCause(work, err)
+		return doc, browserClientCause(work, client, err)
 	}
 	if navigation.ErrorText != "" {
 		if cause := context.Cause(work); cause != nil {
@@ -315,13 +349,16 @@ func BrowserFetch(ctx context.Context, endpoint, rawURL string, opts BrowserOpti
 			ExceptionDetails json.RawMessage `json:"exceptionDetails"`
 		}
 		if err = client.call(work, sessionID, "Runtime.evaluate", map[string]any{"expression": expression, "returnByValue": true}, &evaluation); err != nil {
-			return doc, browserCause(work, err)
+			return doc, browserClientCause(work, client, err)
 		}
 		if len(evaluation.ExceptionDetails) > 0 {
 			return doc, errors.New("prototype_browser_evaluation")
 		}
 		value := evaluation.Result.Value
 		if value.Ready {
+			if cause := client.eventError(); cause != nil {
+				return doc, cause
+			}
 			if value.WireTooLarge {
 				return doc, extractor.ErrWireLimit
 			}
@@ -348,6 +385,16 @@ func browserCause(ctx context.Context, err error) error {
 	return err
 }
 
+func browserClientCause(ctx context.Context, client *browserCDP, err error) error {
+	if cause := context.Cause(ctx); cause != nil {
+		return cause
+	}
+	if cause := client.eventError(); cause != nil {
+		return cause
+	}
+	return err
+}
+
 // Read the intercepted document in bounded chunks. getResponseBody would return
 // an unbounded CDP message, before Go could reject an oversized source document.
 func browserResponseBody(ctx context.Context, client *browserCDP, sessionID, requestID string, limit int64) ([]byte, error) {
@@ -360,7 +407,7 @@ func browserResponseBody(ctx context.Context, client *browserCDP, sessionID, req
 	defer func() {
 		cleanup, cancel := context.WithTimeout(context.Background(), time.Second)
 		defer cancel()
-		_ = client.call(cleanup, sessionID, "IO.close", map[string]any{"handle": stream.Stream}, nil)
+		_ = client.callCleanup(cleanup, sessionID, "IO.close", map[string]any{"handle": stream.Stream}, nil)
 	}()
 	var body []byte
 	for {
@@ -445,13 +492,24 @@ func browserEndpoint(ctx context.Context, endpoint string) (string, error) {
 // browserCDP is a small session-aware protocol connection. Keeping the protocol
 // scalar avoids automatic DOM materialization and attaching to foreign targets.
 type browserCDP struct {
-	conn    *remote.Conn
-	mu      sync.Mutex
-	next    int64
-	pending map[int64]chan *cdproto.Message
-	events  chan *cdproto.Message
-	done    chan struct{}
-	readErr error
+	conn         *remote.Conn
+	mu           sync.Mutex
+	next         int64
+	pending      map[int64]chan *cdproto.Message
+	writes       chan browserCDPWrite
+	writerDone   chan struct{}
+	events       chan *cdproto.Message
+	eventFailure chan struct{}
+	done         chan struct{}
+	readErr      error
+	eventErr     error
+}
+
+type browserCDPWrite struct {
+	ctx     context.Context
+	msg     *cdproto.Message
+	result  chan error
+	cleanup bool
 }
 
 // browserEventNeeded is the union consumed by BrowserFetch and NativeBrowser.
@@ -476,7 +534,8 @@ func dialBrowser(ctx context.Context, endpoint string) (*browserCDP, error) {
 	if err != nil {
 		return nil, err
 	}
-	c := &browserCDP{conn: conn, pending: make(map[int64]chan *cdproto.Message), events: make(chan *cdproto.Message, 256), done: make(chan struct{})}
+	c := &browserCDP{conn: conn, pending: make(map[int64]chan *cdproto.Message), writes: make(chan browserCDPWrite, 1), writerDone: make(chan struct{}), events: make(chan *cdproto.Message, 256), eventFailure: make(chan struct{}), done: make(chan struct{})}
+	go c.writeLoop()
 	go func() {
 		defer close(c.done)
 		for {
@@ -492,10 +551,19 @@ func dialBrowser(ctx context.Context, endpoint string) (*browserCDP, error) {
 				reply := c.pending[message.ID]
 				c.mu.Unlock()
 				if reply != nil {
-					reply <- message
+					select {
+					case reply <- message:
+					default: // Duplicate or late reply; never block the shared reader.
+					}
 				}
 			} else {
 				if !browserEventNeeded(message.Method) {
+					continue
+				}
+				c.mu.Lock()
+				overloaded := c.eventErr != nil
+				c.mu.Unlock()
+				if overloaded {
 					continue
 				}
 				// Never block replies behind unsolicited browser events.
@@ -503,9 +571,11 @@ func dialBrowser(ctx context.Context, endpoint string) (*browserCDP, error) {
 				case c.events <- message:
 				default:
 					c.mu.Lock()
-					c.readErr = errors.New("prototype_browser_event_overflow")
+					if c.eventErr == nil {
+						c.eventErr = ErrBrowserEventOverflow
+						close(c.eventFailure)
+					}
 					c.mu.Unlock()
-					return
 				}
 			}
 		}
@@ -514,8 +584,88 @@ func dialBrowser(ctx context.Context, endpoint string) (*browserCDP, error) {
 }
 
 func (c *browserCDP) call(ctx context.Context, session, method string, params, result any) error {
+	return c.callMode(ctx, session, method, params, result, false)
+}
+
+// callAllocation lets an already-started allocation finish decoding its ID
+// after an event overload, while refusing to start later allocation steps.
+func (c *browserCDP) callAllocation(ctx context.Context, session, method string, params, result any) error {
+	if !browserAllocationMethod(method) {
+		return errors.New("prototype_browser_invalid_allocation_command")
+	}
+	return c.callMode(ctx, session, method, params, result, true)
+}
+
+// callCleanup is the only command path available after policy processing has
+// failed. Its allowlist contains resource stop/disposal, receipts, and existing
+// stream/target cleanup operations only.
+func (c *browserCDP) callCleanup(ctx context.Context, session, method string, params, result any) error {
+	if !browserCleanupMethod(method) {
+		return errors.New("prototype_browser_cleanup_command_denied")
+	}
+	stopClose := context.AfterFunc(ctx, func() { _ = c.conn.Close() })
+	defer stopClose()
+	return c.callMode(ctx, session, method, params, result, true)
+}
+
+// writeLoop is the connection's only CDP writer. A one-entry queue bounds
+// admitted writes while allowing callMode to return promptly on cancellation.
+// A cleanup deadline closes the shared connection and releases a stalled Write.
+func (c *browserCDP) writeLoop() {
+	defer close(c.writerDone)
+	for {
+		select {
+		case <-c.done:
+			return
+		case request := <-c.writes:
+			if err := request.ctx.Err(); err != nil {
+				request.result <- err
+				continue
+			}
+			if !request.cleanup {
+				if err := c.eventError(); err != nil {
+					request.result <- err
+					continue
+				}
+			}
+			err := c.conn.Write(request.ctx, request.msg)
+			if request.ctx.Err() != nil {
+				err = request.ctx.Err()
+			}
+			request.result <- err
+		}
+	}
+}
+
+func browserAllocationMethod(method string) bool {
+	switch method {
+	case "Target.createBrowserContext", "Target.createTarget", "Target.attachToTarget":
+		return true
+	default:
+		return false
+	}
+}
+
+func browserCleanupMethod(method string) bool {
+	switch method {
+	case "Browser.getVersion", "Page.stopLoading", "Target.disposeBrowserContext", "Target.closeTarget",
+		"Target.getBrowserContexts", "Target.getTargets", "Target.detachFromTarget", "IO.close":
+		return true
+	default:
+		return false
+	}
+}
+
+func (c *browserCDP) callMode(ctx context.Context, session, method string, params, result any, preserveReply bool) error {
 	if err := ctx.Err(); err != nil {
 		return err
+	}
+	if !preserveReply {
+		select {
+		case <-c.eventFailure:
+			return c.eventError()
+		default:
+		}
 	}
 	encoded, err := json.Marshal(params)
 	if err != nil {
@@ -523,18 +673,102 @@ func (c *browserCDP) call(ctx context.Context, session, method string, params, r
 	}
 	reply := make(chan *cdproto.Message, 1)
 	c.mu.Lock()
+	if !preserveReply && c.eventErr != nil || browserAllocationMethod(method) && c.eventErr != nil {
+		c.mu.Unlock()
+		return c.eventErr
+	}
 	c.next++
 	id := c.next
 	c.pending[id] = reply
 	c.mu.Unlock()
 	defer func() { c.mu.Lock(); delete(c.pending, id); c.mu.Unlock() }()
-	if err := c.conn.Write(ctx, &cdproto.Message{ID: id, SessionID: target.SessionID(session), Method: cdproto.MethodType(method), Params: encoded}); err != nil {
+	if err := ctx.Err(); err != nil {
 		return err
+	}
+	cleanup := preserveReply && browserCleanupMethod(method)
+	request := browserCDPWrite{ctx: ctx, msg: &cdproto.Message{ID: id, SessionID: target.SessionID(session), Method: cdproto.MethodType(method), Params: encoded}, result: make(chan error, 1), cleanup: cleanup}
+	var eventFailure <-chan struct{}
+	if !cleanup {
+		eventFailure = c.eventFailure
+	}
+	select {
+	case c.writes <- request:
+	case <-ctx.Done():
+		return ctx.Err()
+	case <-eventFailure:
+		return c.eventError()
+	case <-c.done:
+		if err := ctx.Err(); err != nil {
+			return err
+		}
+		return c.readError()
+	}
+	select {
+	case writeErr := <-request.result:
+		if writeErr != nil {
+			return writeErr
+		}
+	case <-ctx.Done():
+		return ctx.Err()
+	case <-c.eventFailure:
+		if !preserveReply {
+			return c.eventError()
+		}
+		// Allocation receipts matter if the command was sent before overload.
+		// Wait for the bounded writer to say whether it was sent or rejected.
+		select {
+		case writeErr := <-request.result:
+			if writeErr != nil {
+				return writeErr
+			}
+		case <-ctx.Done():
+			return ctx.Err()
+		case <-c.done:
+			if err := ctx.Err(); err != nil {
+				return err
+			}
+			return c.readError()
+		}
+	case <-c.done:
+		if err := ctx.Err(); err != nil {
+			return err
+		}
+		return c.readError()
 	}
 	select {
 	case <-ctx.Done():
 		return ctx.Err()
+	case <-c.eventFailure:
+		if preserveReply {
+			select {
+			case <-ctx.Done():
+				return ctx.Err()
+			case <-c.done:
+				if ctx.Err() != nil {
+					return ctx.Err()
+				}
+				c.mu.Lock()
+				readErr := c.readErr
+				c.mu.Unlock()
+				if readErr == nil {
+					readErr = io.EOF
+				}
+				return readErr
+			case message := <-reply:
+				if message.Error != nil {
+					return message.Error
+				}
+				if result != nil {
+					return json.Unmarshal(message.Result, result)
+				}
+				return nil
+			}
+		}
+		return c.eventError()
 	case <-c.done:
+		if ctx.Err() != nil {
+			return ctx.Err()
+		}
 		c.mu.Lock()
 		err := c.readErr
 		c.mu.Unlock()
@@ -543,14 +777,57 @@ func (c *browserCDP) call(ctx context.Context, session, method string, params, r
 		}
 		return err
 	case message := <-reply:
+		if !preserveReply {
+			if eventErr := c.eventError(); eventErr != nil {
+				return eventErr
+			}
+		}
 		if message.Error != nil {
 			return message.Error
 		}
 		if result != nil {
-			return json.Unmarshal(message.Result, result)
+			if err := json.Unmarshal(message.Result, result); err != nil {
+				return err
+			}
+		}
+		if !preserveReply {
+			if eventErr := c.eventError(); eventErr != nil {
+				return eventErr
+			}
 		}
 		return nil
 	}
 }
 
-func (c *browserCDP) close() { _ = c.conn.Close(); <-c.done }
+func (c *browserCDP) readError() error {
+	c.mu.Lock()
+	err := c.readErr
+	c.mu.Unlock()
+	if err == nil {
+		return io.EOF
+	}
+	return err
+}
+
+func (c *browserCDP) close() { _ = c.conn.Close(); <-c.done; <-c.writerDone }
+
+func (c *browserCDP) connected() bool {
+	c.mu.Lock()
+	readErr := c.readErr
+	c.mu.Unlock()
+	if readErr != nil {
+		return false
+	}
+	select {
+	case <-c.done:
+		return false
+	default:
+		return true
+	}
+}
+
+func (c *browserCDP) eventError() error {
+	c.mu.Lock()
+	defer c.mu.Unlock()
+	return c.eventErr
+}

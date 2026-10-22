@@ -8,6 +8,23 @@ from urllib.parse import urlparse
 from ..services.extraction_constants import MAX_CONTENT_LENGTH, MIN_CONTENT_LENGTH, MIN_QUALITY_SCORE
 
 
+_SUBSCRIPTION_PRICE_PATTERN = re.compile(r"\$\s*\d+(?:\.\d+)?\s*/\s*(?:year|month|week)", re.IGNORECASE)
+
+
+def _is_membership_plan_chooser(content: str) -> bool:
+    """Reject a complete subscription chooser while allowing editorial mentions."""
+    lowered = content.lower()
+    prefix = lowered[:100]
+    ending = lowered.rstrip(" .→\n\t")
+    return (
+        "membership" in prefix
+        and len(_SUBSCRIPTION_PRICE_PATTERN.findall(lowered)) >= 2
+        and lowered.count("billed annually") >= 2
+        and "cancel anytime" in lowered
+        and ending.endswith("continue with free")
+    )
+
+
 class ExtractionUtils:
     """Utility functions for content extraction and processing."""
     
@@ -68,6 +85,8 @@ class ExtractionUtils:
             enforce_text_limit(content)
         except ResourceLimitError:
             # A broad container may exceed the text cap while its article fits.
+            return False
+        if _is_membership_plan_chooser(content):
             return False
 
         # Relax min length if it's a known full article extraction

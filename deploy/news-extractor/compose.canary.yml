@@ -3,3 +3,4 @@ services:
   app:
     environment:
       EXTRACTION_SERVICE_MODE: go
+      EXTRACTION_SERVICE_NATIVE_BROWSER: 'false'

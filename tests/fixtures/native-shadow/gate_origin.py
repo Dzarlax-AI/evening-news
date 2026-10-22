@@ -17,6 +17,7 @@ import os
 from pathlib import Path
 import ssl
 import threading
+import time
 
 MAX_PROOF_BYTES = 1024 * 1024
 ORIGIN_HOST = "native-fixture.test"
@@ -75,6 +76,26 @@ def route_response(path: str, trap_ip: str, cookie: str = "") -> Response:
                 f"document.querySelector('#article').innerHTML='<article data-ready=\"true\"><h1>Gate article</h1><p>'+{story}+'</p><p>'+t+'</p></article>';"
                 "});</script>")
         return Response("js-article", 200, html.encode("utf-8"))
+    if path == "/wire-limit":
+        # Keep large bytes out of DOM layout so this tests the wire budget.
+        return Response("wire-limit", 200,
+                        b"<!doctype html><title>Wire budget</title><p>Loading</p>"
+                        b"<script>fetch('/wire-limit-body').then(r=>r.arrayBuffer())"
+                        b".then(()=>document.body.dataset.ready='true');</script>")
+    if path == "/wire-limit-body":
+        return Response("wire-limit-body", 200, b"x" * (6 * 1024 * 1024),
+                        "application/octet-stream")
+    if path == "/renderer-stress":
+        # This fixed unbroken text reproduced Inspector.targetCrashed on the
+        # pinned Linux browser. It is separate from the wire-budget fixture.
+        body = (b"<!doctype html><meta charset=utf-8><title>Wire limit fixture</title><p>"
+                + b"x" * (6 * 1024 * 1024) + b"</p>")
+        return Response("renderer-stress", 200, body)
+    if path == "/controlled-crash":
+        # The native gate's observer attaches to this exact owned target and
+        # sends Page.crash; deliberately omit the worker's readiness marker.
+        return Response("controlled-crash", 200,
+                        b"<!doctype html><meta charset=utf-8><title>Controlled crash</title><p>Waiting for the test-only crash command.</p>")
     if path == "/private-subrequest":
         return Response("private-subrequest", 200,
                         (article + f"<img src='{trap}' alt='trap'>").encode())
@@ -173,7 +194,16 @@ def handler_for(trap_ip: str, proof: ProofLog, expected_proxy_token: str | None 
             for name, value in response.headers:
                 self.send_header(name, value)
             self.end_headers()
-            self.wfile.write(response.body)
+            if response.route_id in ("wire-limit-body", "renderer-stress"):
+                for offset in range(0, len(response.body), 8 * 1024):
+                    try:
+                        self.wfile.write(response.body[offset:offset + 8 * 1024])
+                        self.wfile.flush()
+                    except (BrokenPipeError, ConnectionResetError):
+                        break
+                    time.sleep(0.005)
+            else:
+                self.wfile.write(response.body)
 
     return Handler
 

@@ -164,6 +164,19 @@ def test_batch_exception_is_persisted_as_sanitized_failure(tmp_path, monkeypatch
     assert "secret-token" not in json.dumps(batch) and "https://" not in json.dumps(batch)
 
 
+def test_native_capability_diagnostic_is_kept_as_finite_code_in_batch_receipt(tmp_path, monkeypatch):
+    monkeypatch.setenv("SOAK_TEST_TOKEN", "secret-token-that-is-not-reported")
+    clock = FakeClock()
+    error = soak.benchmark.NativeCapabilityUnavailable("selector_hash_mismatch")
+    runner, health, sample, _calls = _patch_runtime(monkeypatch, clock, batch_error=error)
+    result = _run(_args(tmp_path), clock, runner, health, sample)
+    batch = json.loads((tmp_path / "soak-report" / "batch-000001.json").read_text())
+    assert result["failure_code"] == "batch_contract_mismatch"
+    assert batch["error"] == "native_capability_unavailable"
+    assert batch["error_diagnostic"] == "selector_hash_mismatch"
+    assert "secret-token" not in json.dumps(batch) and "https://" not in json.dumps(batch)
+
+
 def test_unhealthy_service_fails_before_starting_a_batch(tmp_path, monkeypatch):
     monkeypatch.setenv("SOAK_TEST_TOKEN", "secret-token-that-is-not-reported")
     clock = FakeClock()
@@ -171,12 +184,44 @@ def test_unhealthy_service_fails_before_starting_a_batch(tmp_path, monkeypatch):
 
     async def unhealthy(_endpoint):
         calls["health"] += 1
-        raise soak.benchmark.BenchmarkError("native_capability_unavailable")
+        raise soak.benchmark.NativeCapabilityUnavailable("http_status_503")
 
     result = _run(_args(tmp_path), clock, runner, unhealthy, sample)
     assert result["state"] == "failed"
     assert result["failure_code"] == "native_capability_unavailable"
+    summary = json.loads((tmp_path / "soak-report" / "summary.json").read_text())
+    assert summary["failure_diagnostic"] == "http_status_503"
     assert calls["batch"] == 0
+    assert not list((tmp_path / "soak-report").glob("batch-*.json"))
+
+
+def test_non_200_readiness_flags_are_sanitized_in_summary_without_retry(tmp_path, monkeypatch):
+    monkeypatch.setenv("SOAK_TEST_TOKEN", "secret-token-that-is-not-reported")
+    clock = FakeClock()
+    runner, _health, sample, calls = _patch_runtime(monkeypatch, clock)
+    safe = {"ready": False, "browser": True, "native_browser": False,
+            "native_ready_selector": True, "selector_hash_matches": True}
+
+    async def unhealthy(_endpoint):
+        calls["health"] += 1
+        raise soak.benchmark.NativeCapabilityUnavailable("http_status_503", {
+            "ready": safe["ready"],
+            "capabilities": {key: safe[key] for key in
+                              ("browser", "native_browser", "native_ready_selector")},
+            "native_profile": {"ready_selector_sha256": (
+                soak.benchmark.hashlib.sha256(soak.benchmark.READY_SELECTOR.encode()).hexdigest())},
+            "message": "secret-token", "response": "private body",
+        })
+
+    result = _run(_args(tmp_path), clock, runner, unhealthy, sample)
+    summary = json.loads((tmp_path / "soak-report" / "summary.json").read_text())
+    encoded = json.dumps(summary)
+    assert result["state"] == "failed"
+    assert summary["failure_diagnostic"] == "http_status_503"
+    assert summary["readiness_diagnostic"] == safe
+    assert calls["health"] == 1 and calls["batch"] == 0
+    assert "secret-token" not in encoded and "private body" not in encoded
+    assert "https://" not in encoded and "selector_sha256" not in encoded
     assert not list((tmp_path / "soak-report").glob("batch-*.json"))
 
 

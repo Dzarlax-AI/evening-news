@@ -4,6 +4,7 @@ package main
 import (
 	"context"
 	"encoding/json"
+	"errors"
 	"flag"
 	"fmt"
 	"io"
@@ -13,6 +14,7 @@ import (
 	"time"
 
 	"github.com/Dzarlax-AI/evening-news/go/extractor"
+	"github.com/Dzarlax-AI/evening-news/go/internal/jsonsingle"
 )
 
 type expectation struct {
@@ -159,26 +161,22 @@ func run(args []string, stdout, stderr io.Writer) int {
 		return 2
 	}
 	defer f.Close()
-	// Reserve one sentinel byte so the decoder's synthetic EOF cannot hide overflow.
-	bounded := &io.LimitedReader{R: f, N: 64*1024*1024 + 1}
-	dec := json.NewDecoder(bounded)
-	dec.DisallowUnknownFields()
 	var m manifest
-	if err = dec.Decode(&m); err != nil {
-		fmt.Fprintln(stderr, err)
+	tooLarge, decodeErr := jsonsingle.Decode(f, 64*1024*1024, &m)
+	if tooLarge {
+		fmt.Fprintln(stderr, "manifest exceeds 64 MiB byte limit")
+		return 2
+	}
+	if decodeErr != nil {
+		if errors.Is(decodeErr, jsonsingle.ErrTrailingData) {
+			fmt.Fprintln(stderr, "unexpected trailing manifest data")
+		} else {
+			fmt.Fprintln(stderr, decodeErr)
+		}
 		return 2
 	}
 	if m.Version != 1 || len(m.Cases) == 0 {
 		fmt.Fprintln(stderr, "manifest must have version 1 and nonempty cases")
-		return 2
-	}
-	trailingErr := dec.Decode(new(any))
-	if bounded.N == 0 {
-		fmt.Fprintln(stderr, "manifest exceeds 64 MiB byte limit")
-		return 2
-	}
-	if trailingErr != io.EOF {
-		fmt.Fprintln(stderr, "unexpected trailing manifest data")
 		return 2
 	}
 	seen := map[string]bool{}

@@ -3,6 +3,8 @@ package service
 import (
 	"context"
 	"encoding/json"
+	"errors"
+	"io"
 	"net/http"
 	"net/http/httptest"
 	"strings"
@@ -29,6 +31,14 @@ func post(s *Server, body string) *httptest.ResponseRecorder {
 	return w
 }
 
+func postBody(s *Server, body io.Reader) *httptest.ResponseRecorder {
+	r := httptest.NewRequest("POST", "/v1/extract", body)
+	r.Header.Set("Authorization", "Bearer "+testToken)
+	w := httptest.NewRecorder()
+	s.ServeHTTP(w, r)
+	return w
+}
+
 const valid = `{"request_id":"one","url":"https://example.org/article","content":"hello"}`
 
 func TestNativeOuterDeadlineCannotEnablePythonFallback(t *testing.T) {
@@ -43,6 +53,26 @@ func TestNativeOuterDeadlineCannotEnablePythonFallback(t *testing.T) {
 	}
 	if w.Code != 200 || resp.Error == nil || resp.Error.Code != "native_browser_timeout" || !resp.Error.Retryable {
 		t.Fatalf("native timeout lost policy: %s", w.Body.String())
+	}
+}
+
+func TestReadinessFailureRejectsBrowserRequestBeforeCapabilityOrRunner(t *testing.T) {
+	var readyChecks, browserChecks, runnerCalls atomic.Int32
+	s, err := New(Config{
+		Token: testToken, MaxConcurrent: 1,
+		Ready:            func() bool { readyChecks.Add(1); return false },
+		BrowserAvailable: func() bool { browserChecks.Add(1); return true },
+	}, RunnerFunc(func(context.Context, Request) Response {
+		runnerCalls.Add(1)
+		return Response{Outcome: "success"}
+	}))
+	if err != nil {
+		t.Fatal(err)
+	}
+	w := post(s, `{"request_id":"browser","url":"https://example.org/","use_browser":true}`)
+	if w.Code != 503 || readyChecks.Load() != 1 || browserChecks.Load() != 0 || runnerCalls.Load() != 0 {
+		t.Fatalf("unready browser request was admitted: status=%d ready=%d browser=%d runner=%d body=%s",
+			w.Code, readyChecks.Load(), browserChecks.Load(), runnerCalls.Load(), w.Body.String())
 	}
 }
 
@@ -79,6 +109,189 @@ func TestWireValidation(t *testing.T) {
 	if w.Code != 401 {
 		t.Fatal(w.Code)
 	}
+}
+
+func TestRequestBodyBoundariesAndStrictJSON(t *testing.T) {
+	s := testServer(t, func(context.Context, Request) Response { return Response{Outcome: "success"} })
+	validBody := valid + strings.Repeat(" ", MaxJSONBytes-len(valid))
+	if w := post(s, validBody); w.Code != 200 {
+		t.Fatalf("exact 8 MiB request: status=%d body=%s", w.Code, w.Body.String())
+	}
+	if w := postBody(s, &leadingWhitespaceBody{value: []byte(valid), remaining: MaxJSONBytes - len(valid), size: MaxJSONBytes}); w.Code != 200 {
+		t.Fatalf("near-limit leading whitespace request: status=%d body=%s", w.Code, w.Body.String())
+	}
+	for _, tc := range []struct {
+		name   string
+		body   io.Reader
+		status int
+	}{
+		{"oversized_whitespace", strings.NewReader(valid + strings.Repeat(" ", MaxJSONBytes+1-len(valid))), 413},
+		{"malformed_prefix_then_oversized", &repeatedBodyReader{prefix: []byte("{bad"), size: MaxJSONBytes + 1}, 413},
+		{"unknown_field_then_oversized", &repeatedBodyReader{prefix: []byte(`{"unknown":true}`), size: MaxJSONBytes + 1}, 413},
+		{"multiple_values", strings.NewReader(valid + ` {}`), 400},
+		{"leading_nbsp", strings.NewReader("\u00a0" + valid), 400},
+		{"leading_bom", strings.NewReader("\ufeff" + valid), 400},
+		{"whitespace_only", strings.NewReader(" \t\r\n"), 400},
+		{"invalid_nested_field_type", strings.NewReader(`{"request_id":"one","url":"https://example.org/","selectors":{"title":[1]}}`), 400},
+		{"reader_error_after_valid_json", &bodyThenErrorReader{body: []byte(valid), err: errors.New("synthetic body read error")}, 400},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			if w := postBody(s, tc.body); w.Code != tc.status {
+				t.Fatalf("status=%d want=%d body=%s", w.Code, tc.status, w.Body.String())
+			}
+		})
+	}
+}
+
+type leadingWhitespaceBody struct {
+	value       []byte
+	remaining   int
+	valueRead   int
+	size        int
+	leadingDone bool
+}
+
+func (r *leadingWhitespaceBody) Read(p []byte) (int, error) {
+	if r.leadingDone && r.valueRead == len(r.value) {
+		return 0, io.EOF
+	}
+	if !r.leadingDone {
+		if r.remaining > 0 {
+			n := min(len(p), r.remaining)
+			for i := 0; i < n; i++ {
+				p[i] = ' '
+			}
+			r.remaining -= n
+			return n, nil
+		}
+		r.leadingDone = true
+	}
+	n := copy(p, r.value[r.valueRead:])
+	r.valueRead += n
+	return n, nil
+}
+
+type repeatedBodyReader struct {
+	prefix []byte
+	size   int
+	read   int
+}
+
+func (r *repeatedBodyReader) Read(p []byte) (int, error) {
+	if r.read < len(r.prefix) {
+		n := copy(p, r.prefix[r.read:])
+		r.read += n
+		return n, nil
+	}
+	if r.read >= r.size {
+		return 0, io.EOF
+	}
+	n := min(len(p), r.size-r.read)
+	for i := 0; i < n; i++ {
+		p[i] = ' '
+	}
+	r.read += n
+	return n, nil
+}
+
+type bodyThenErrorReader struct {
+	body []byte
+	err  error
+}
+
+func (r *bodyThenErrorReader) Read(p []byte) (int, error) {
+	if r.body == nil {
+		return 0, io.EOF
+	}
+	n := copy(p, r.body)
+	r.body = nil
+	return n, r.err
+}
+
+func TestConcurrentNearLimitWhitespaceRequestsKeepAdmissionCapacity(t *testing.T) {
+	const maxConcurrent = 5
+	var calls atomic.Int32
+	s, err := New(Config{Token: testToken, MaxConcurrent: maxConcurrent}, RunnerFunc(func(context.Context, Request) Response {
+		calls.Add(1)
+		return Response{Outcome: "success"}
+	}))
+	if err != nil {
+		t.Fatal(err)
+	}
+	started := make(chan struct{}, maxConcurrent)
+	release := make(chan struct{})
+	responses := make(chan int, maxConcurrent)
+	for i := 0; i < maxConcurrent; i++ {
+		body := &gatedWhitespaceBody{prefix: []byte(valid), size: MaxJSONBytes, started: started, release: release}
+		go func() { responses <- postBody(s, body).Code }()
+	}
+	for i := 0; i < maxConcurrent; i++ {
+		select {
+		case <-started:
+		case <-time.After(3 * time.Second):
+			close(release)
+			t.Fatal("not all request bodies reached the admission-held read")
+		}
+	}
+	blockedBody := &countingReader{r: strings.NewReader(valid)}
+	if w := postBody(s, blockedBody); w.Code != 429 || blockedBody.reads.Load() != 0 {
+		close(release)
+		t.Fatalf("sixth request status=%d body_reads=%d", w.Code, blockedBody.reads.Load())
+	}
+	close(release)
+	for i := 0; i < maxConcurrent; i++ {
+		select {
+		case status := <-responses:
+			if status != 200 {
+				t.Fatalf("admitted request status=%d", status)
+			}
+		case <-time.After(10 * time.Second):
+			t.Fatal("admitted request did not finish")
+		}
+	}
+	if calls.Load() != maxConcurrent {
+		t.Fatalf("runner calls=%d want=%d", calls.Load(), maxConcurrent)
+	}
+}
+
+type gatedWhitespaceBody struct {
+	prefix  []byte
+	read    int
+	size    int
+	started chan struct{}
+	release chan struct{}
+	once    atomic.Bool
+}
+
+func (r *gatedWhitespaceBody) Read(p []byte) (int, error) {
+	if r.once.CompareAndSwap(false, true) {
+		r.started <- struct{}{}
+		<-r.release
+	}
+	if r.read < len(r.prefix) {
+		n := copy(p, r.prefix[r.read:])
+		r.read += n
+		return n, nil
+	}
+	if r.read >= r.size {
+		return 0, io.EOF
+	}
+	n := min(len(p), r.size-r.read)
+	for i := 0; i < n; i++ {
+		p[i] = ' '
+	}
+	r.read += n
+	return n, nil
+}
+
+type countingReader struct {
+	r     io.Reader
+	reads atomic.Int32
+}
+
+func (r *countingReader) Read(p []byte) (int, error) {
+	r.reads.Add(1)
+	return r.r.Read(p)
 }
 func TestAdmissionAndDrain(t *testing.T) {
 	started := make(chan struct{})

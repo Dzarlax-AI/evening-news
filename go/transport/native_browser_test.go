@@ -14,28 +14,44 @@ import (
 	"time"
 
 	"github.com/Dzarlax-AI/evening-news/go/extractor"
+	"github.com/chromedp/cdproto"
 	"github.com/gobwas/ws"
 	"github.com/gobwas/ws/wsutil"
 )
 
 type nativeFixture struct {
-	mu                                        sync.Mutex
-	contexts, targets                         map[string]bool
-	methods                                   []string
-	proxyAuth                                 map[string]any
-	status                                    int
-	childStatus                               int
-	downloadFrame                             string
-	navigateDownload                          bool
-	requestBurst                              int
-	authSource, authOrigin                    string
-	empty, dropReply, failCleanup, failStopLoading, failContextReceipt, disconnect bool
-	discoveryUnavailable                      bool
-	discoveryID                               string
-	discoveryDelay                            time.Duration
-	contextsDelay                             time.Duration
-	navigated                                 chan struct{}
-	server                                    *httptest.Server
+	mu                                                                                                                 sync.Mutex
+	contexts, targets                                                                                                  map[string]bool
+	methods                                                                                                            []string
+	proxyAuth                                                                                                          map[string]any
+	status                                                                                                             int
+	childStatus                                                                                                        int
+	downloadFrame                                                                                                      string
+	navigateDownload                                                                                                   bool
+	requestBurst                                                                                                       int
+	pausedBurst                                                                                                        int
+	pauseEventFlood                                                                                                    int
+	pauseEventInterval                                                                                                 time.Duration
+	continueDelay                                                                                                      time.Duration
+	failContinueRequest                                                                                                bool
+	requestURL                                                                                                         string
+	detachAfterPaused                                                                                                  bool
+	detachOverride                                                                                                     bool
+	detachMalformed                                                                                                    bool
+	detachEnvelope, detachSession                                                                                      string
+	overflowAfterRequestBudget                                                                                         bool
+	eventFlood                                                                                                         int
+	cleanupEventFlood                                                                                                  int
+	authSource, authOrigin                                                                                             string
+	empty, dropReply, failCleanup, failStopLoading, failContextReceipt, failTargetReceipt, disconnect                  bool
+	discoveryUnavailable                                                                                               bool
+	discoveryID                                                                                                        string
+	discoveryDelay                                                                                                     time.Duration
+	contextsDelay                                                                                                      time.Duration
+	targetCrashed                                                                                                      bool
+	changeGenerationOnCrash, disconnectOnCrash, unavailableOnCrash, foreignTargetCrash, hangStopLoading, detachOnCrash bool
+	navigated                                                                                                          chan struct{}
+	server                                                                                                             *httptest.Server
 }
 
 func newNativeFixture(t *testing.T) *nativeFixture {
@@ -71,6 +87,23 @@ func newNativeFixture(t *testing.T) *nativeFixture {
 			return e == nil && wsutil.WriteServerMessage(conn, ws.OpText, data) == nil
 		}
 		contextID, targetID, sessionID := "owned-context", "owned-target", "owned-session"
+		emittedRequests := 0
+		emitPaused := func(id string) bool {
+			requestURL := f.requestURL
+			if requestURL == "" {
+				requestURL = "https://origin.example/fixture"
+			}
+			return write(map[string]any{"method": "Network.requestWillBeSent", "sessionId": sessionID, "params": map[string]string{"requestId": id, "type": "XHR", "frameId": "main-frame"}}) &&
+				write(map[string]any{"method": "Fetch.requestPaused", "sessionId": sessionID, "params": map[string]any{"requestId": id, "request": map[string]string{"url": requestURL}}})
+		}
+		nextRequest := func() bool {
+			if emittedRequests >= f.requestBurst {
+				return true
+			}
+			id := fmt.Sprint(emittedRequests)
+			emittedRequests++
+			return emitPaused(id)
+		}
 		for {
 			data, _, e := wsutil.ReadClientData(conn)
 			if e != nil {
@@ -109,6 +142,13 @@ func newNativeFixture(t *testing.T) *nativeFixture {
 			case "Page.getFrameTree":
 				result["frameTree"] = map[string]any{"frame": map[string]string{"id": "main-frame"}}
 			case "Target.disposeBrowserContext":
+				for i := 0; i < f.cleanupEventFlood; i++ {
+					if !write(map[string]any{"method": "Network.dataReceived", "sessionId": sessionID, "params": map[string]any{"requestId": fmt.Sprint(i), "encodedDataLength": 0}}) {
+						f.mu.Unlock()
+						return
+					}
+				}
+				f.cleanupEventFlood = 0
 				if f.failCleanup {
 					protocolErr = true
 				} else {
@@ -117,6 +157,9 @@ func newNativeFixture(t *testing.T) *nativeFixture {
 				}
 			case "Page.stopLoading":
 				protocolErr = f.failStopLoading
+				if f.hangStopLoading {
+					reply = false
+				}
 			case "Target.closeTarget":
 				if msg.Params["targetId"] == "foreign-sentinel" {
 					t.Error("foreign target closed")
@@ -130,7 +173,10 @@ func newNativeFixture(t *testing.T) *nativeFixture {
 					ids = append(ids, id)
 				}
 				result["browserContextIds"] = ids
+			case "Browser.getVersion":
+				result["product"] = "Chrome/123.0.0.0"
 			case "Target.getTargets":
+				protocolErr = f.failTargetReceipt
 				infos := []any{}
 				for id := range f.targets {
 					infos = append(infos, map[string]string{"targetId": id})
@@ -148,10 +194,40 @@ func newNativeFixture(t *testing.T) *nativeFixture {
 					close(f.navigated)
 				}
 				event := map[string]any{"method": "Network.responseReceived", "sessionId": sessionID, "params": map[string]any{"requestId": "main-request", "frameId": "main-frame", "type": "Document", "response": map[string]any{"status": f.status, "headers": map[string]string{"Retry-After": "30"}}}}
+				if f.targetCrashed {
+					f.targetCrashed = false
+					if f.changeGenerationOnCrash {
+						f.discoveryID = "replacement"
+					}
+					if f.unavailableOnCrash {
+						f.discoveryUnavailable = true
+					}
+					eventSession := sessionID
+					if f.foreignTargetCrash {
+						eventSession = "foreign-session"
+					}
+					event = map[string]any{"method": "Inspector.targetCrashed", "sessionId": eventSession, "params": map[string]any{}}
+				}
 				if f.authSource != "" {
 					event = map[string]any{"method": "Fetch.authRequired", "sessionId": sessionID, "params": map[string]any{"requestId": "auth", "authChallenge": map[string]string{"source": f.authSource, "origin": f.authOrigin}}}
 				}
 				if !write(event) {
+					f.mu.Unlock()
+					return
+				}
+				if event["method"] == "Inspector.targetCrashed" && f.foreignTargetCrash {
+					if !write(map[string]any{"method": "Network.responseReceived", "sessionId": sessionID, "params": map[string]any{"requestId": "main-request", "frameId": "main-frame", "type": "Document", "response": map[string]any{"status": f.status, "headers": map[string]string{}}}}) {
+						f.mu.Unlock()
+						return
+					}
+				}
+				if event["method"] == "Inspector.targetCrashed" && f.detachOnCrash {
+					if !write(map[string]any{"method": "Target.detachedFromTarget", "sessionId": sessionID, "params": map[string]string{"sessionId": sessionID}}) {
+						f.mu.Unlock()
+						return
+					}
+				}
+				if f.disconnectOnCrash && event["method"] == "Inspector.targetCrashed" {
 					f.mu.Unlock()
 					return
 				}
@@ -164,12 +240,67 @@ func newNativeFixture(t *testing.T) *nativeFixture {
 				if f.downloadFrame != "" {
 					write(map[string]any{"method": "Browser.downloadWillBegin", "params": map[string]string{"frameId": f.downloadFrame}})
 				}
-				for i := 0; i < f.requestBurst; i++ {
-					id := fmt.Sprint(i)
-					if !write(map[string]any{"method": "Network.requestWillBeSent", "sessionId": sessionID, "params": map[string]string{"requestId": id, "type": "XHR", "frameId": "main-frame"}}) {
-						break
+				if !nextRequest() {
+					f.mu.Unlock()
+					return
+				}
+				if f.overflowAfterRequestBudget {
+					for i := 0; i < 129; i++ {
+						if !write(map[string]any{"method": "Network.requestWillBeSent", "sessionId": sessionID, "params": map[string]string{"requestId": fmt.Sprintf("budget-%d", i), "type": "XHR", "frameId": "main-frame"}}) {
+							f.mu.Unlock()
+							return
+						}
 					}
-					write(map[string]any{"method": "Network.loadingFinished", "sessionId": sessionID, "params": map[string]any{"requestId": id, "encodedDataLength": 0}})
+					for i := 0; i < 1024; i++ {
+						if !write(map[string]any{"method": "Network.dataReceived", "sessionId": sessionID, "params": map[string]any{"requestId": fmt.Sprint(i), "encodedDataLength": 0}}) {
+							f.mu.Unlock()
+							return
+						}
+					}
+					f.overflowAfterRequestBudget = false
+				}
+				for i := 0; i < f.pausedBurst; i++ {
+					if !emitPaused(fmt.Sprintf("burst-%d", i)) {
+						f.mu.Unlock()
+						return
+					}
+				}
+				f.pausedBurst = 0
+				if f.detachAfterPaused {
+					envelope, detached := sessionID, sessionID
+					if f.detachOverride {
+						envelope, detached = f.detachEnvelope, f.detachSession
+					}
+					params := map[string]string{"sessionId": detached}
+					if f.detachMalformed {
+						params = map[string]string{}
+					}
+					write(map[string]any{"method": "Target.detachedFromTarget", "sessionId": envelope, "params": params})
+					f.detachAfterPaused = false
+				}
+			case "Fetch.continueRequest":
+				responseDelay = f.continueDelay
+				protocolErr = f.failContinueRequest
+				f.failContinueRequest = false
+				// Emit a burst while the request decision RPC is outstanding.
+				for i := 0; i < f.pauseEventFlood; i++ {
+					if !write(map[string]any{"method": "Network.dataReceived", "sessionId": sessionID, "params": map[string]any{"requestId": msg.Params["requestId"], "encodedDataLength": 0}}) {
+						f.mu.Unlock()
+						return
+					}
+					if f.pauseEventInterval > 0 {
+						time.Sleep(f.pauseEventInterval)
+					}
+				}
+				f.pauseEventFlood = 0
+				// Pace completed zero-byte requests through protocol acknowledgements.
+				// A burst before the navigate reply tests queue overload instead of
+				// the cumulative request budget, depending on reader scheduling.
+				if f.requestBurst > 0 {
+					if !write(map[string]any{"method": "Network.loadingFinished", "sessionId": sessionID, "params": map[string]any{"requestId": msg.Params["requestId"], "encodedDataLength": 0}}) || !nextRequest() {
+						f.mu.Unlock()
+						return
+					}
 				}
 			case "Fetch.continueWithAuth":
 				f.proxyAuth = msg.Params["authChallengeResponse"].(map[string]any)
@@ -181,6 +312,17 @@ func newNativeFixture(t *testing.T) *nativeFixture {
 					f.mu.Unlock()
 					return
 				}
+				if f.eventFlood > 0 && !write(map[string]any{"method": "Fetch.authRequired", "sessionId": sessionID, "params": map[string]any{"requestId": "flood-auth", "authChallenge": map[string]string{"source": "Proxy", "origin": "http://gateway.test:3128"}}}) {
+					f.mu.Unlock()
+					return
+				}
+				for i := 0; i < f.eventFlood; i++ {
+					if !write(map[string]any{"method": "Network.dataReceived", "sessionId": sessionID, "params": map[string]any{"requestId": fmt.Sprint(i), "encodedDataLength": 0}}) {
+						f.mu.Unlock()
+						return
+					}
+				}
+				f.eventFlood = 0
 				value := map[string]any{"ready": false}
 				if !f.empty {
 					value = map[string]any{"ready": true, "html": `<html><body><article>Native browser fixture.</article></body></html>`, "bytes": 78, "url": "https://origin.example/final"}
@@ -319,6 +461,251 @@ func TestNativeContextReceiptFailureTaintsWorker(t *testing.T) {
 	}
 }
 
+func TestNativeTargetReceiptFailureTaintsWorker(t *testing.T) {
+	f := newNativeFixture(t)
+	w := f.worker(t)
+	if err := w.Probe(context.Background()); err != nil {
+		t.Fatal(err)
+	}
+	f.mu.Lock()
+	f.failTargetReceipt = true
+	f.mu.Unlock()
+	_, err := w.Fetch(context.Background(), "https://origin.example/", NativeBrowserOptions{})
+	if !errors.Is(err, ErrNativeOwnershipLost) || w.Ready() {
+		t.Fatalf("unconfirmed target receipt remained ready: %v", err)
+	}
+}
+
+func TestNativeEventOverflowTaintsEvenAfterOwnedCleanup(t *testing.T) {
+	f := newNativeFixture(t)
+	w := f.worker(t)
+	if err := w.Probe(context.Background()); err != nil {
+		t.Fatal(err)
+	}
+	f.mu.Lock()
+	f.overflowAfterRequestBudget = true
+	f.mu.Unlock()
+	_, err := w.Fetch(context.Background(), "https://origin.example/", NativeBrowserOptions{})
+	if !errors.Is(err, ErrBrowserEventOverflow) || !errors.Is(err, ErrNativeOwnershipLost) || w.Ready() {
+		t.Fatalf("native overload did not fail and taint generation: %v ready=%v", err, w.Ready())
+	}
+	if fatal, ok := <-w.Fatal(); !ok || !errors.Is(fatal, ErrNativeWorkerFatal) {
+		t.Fatalf("event overflow did not trigger fatal lifecycle: %v open=%v", fatal, ok)
+	}
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	if len(f.contexts) != 0 || len(f.targets) != 1 || !f.targets["foreign-sentinel"] {
+		t.Fatalf("owned cleanup leaked or changed a foreign target: %v %v", f.contexts, f.targets)
+	}
+}
+
+func TestNativePausedRequestDrainsEventsWhileRPCIsPending(t *testing.T) {
+	f := newNativeFixture(t)
+	w := f.worker(t)
+	if err := w.Probe(context.Background()); err != nil {
+		t.Fatal(err)
+	}
+	f.mu.Lock()
+	f.requestBurst = 1
+	f.pauseEventFlood = 300
+	f.pauseEventInterval = time.Millisecond
+	f.continueDelay = 100 * time.Millisecond
+	f.mu.Unlock()
+	_, err := w.Fetch(context.Background(), "https://origin.example/", NativeBrowserOptions{})
+	if err != nil || !w.Ready() {
+		t.Fatalf("asynchronous request decision filled the event queue: %v ready=%v", err, w.Ready())
+	}
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	if len(f.contexts) != 0 || len(f.targets) != 1 || !f.targets["foreign-sentinel"] {
+		t.Fatalf("async request processing leaked owned resources or changed foreign target: %v %v", f.contexts, f.targets)
+	}
+}
+
+func TestNativeEventRPCAdmissionIsBoundedAndResourceLimitIsRecoverable(t *testing.T) {
+	f := newNativeFixture(t)
+	w := f.worker(t)
+	if err := w.Probe(context.Background()); err != nil {
+		t.Fatal(err)
+	}
+	f.mu.Lock()
+	f.pausedBurst = nativeEventRPCMaxInFlight + 1
+	f.continueDelay = 100 * time.Millisecond
+	f.mu.Unlock()
+	_, err := w.Fetch(context.Background(), "https://origin.example/", NativeBrowserOptions{})
+	if !errors.Is(err, extractor.ErrWireLimit) || errors.Is(err, context.Canceled) || !w.Ready() {
+		t.Fatalf("RPC cap did not fail as a recoverable resource limit: %v ready=%v", err, w.Ready())
+	}
+	f.mu.Lock()
+	f.continueDelay = 0
+	f.mu.Unlock()
+	if _, err := w.Fetch(context.Background(), "https://origin.example/", NativeBrowserOptions{}); err != nil || !w.Ready() {
+		t.Fatalf("ordinary request failed after RPC admission limit: %v ready=%v", err, w.Ready())
+	}
+}
+
+func TestNativeAsyncRequestRPCErrorStopsFetch(t *testing.T) {
+	f := newNativeFixture(t)
+	w := f.worker(t)
+	if err := w.Probe(context.Background()); err != nil {
+		t.Fatal(err)
+	}
+	f.mu.Lock()
+	f.requestBurst = 1
+	f.failContinueRequest = true
+	f.mu.Unlock()
+	_, err := w.Fetch(context.Background(), "https://origin.example/", NativeBrowserOptions{})
+	var protocolErr *cdproto.Error
+	if !errors.As(err, &protocolErr) || protocolErr.Code != -32000 || !w.Ready() {
+		t.Fatalf("asynchronous CDP failure was lost or tainted worker: %v ready=%v", err, w.Ready())
+	}
+}
+
+func TestNativeDeniedPausedRequestIsNeverContinued(t *testing.T) {
+	f := newNativeFixture(t)
+	f.requestURL = "http://127.0.0.1/denied"
+	w := f.worker(t)
+	if err := w.Probe(context.Background()); err != nil {
+		t.Fatal(err)
+	}
+	f.mu.Lock()
+	f.requestBurst = 1
+	f.mu.Unlock()
+	_, err := w.Fetch(context.Background(), "https://origin.example/", NativeBrowserOptions{})
+	if !errors.Is(err, ErrUnsafePublicURL) || !w.Ready() {
+		t.Fatalf("denied request did not fail with policy error: %v ready=%v", err, w.Ready())
+	}
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	failed, continued := false, false
+	for _, method := range f.methods {
+		failed = failed || method == "Fetch.failRequest"
+		continued = continued || method == "Fetch.continueRequest"
+	}
+	if !failed || continued {
+		t.Fatalf("denied request decision failed=%v continued=%v methods=%v", failed, continued, f.methods)
+	}
+}
+
+func TestNativeTerminalRequestDecisionStillProcessesOwnershipEvents(t *testing.T) {
+	f := newNativeFixture(t)
+	f.requestURL = "http://127.0.0.1/denied"
+	f.detachAfterPaused = true
+	w := f.worker(t)
+	if err := w.Probe(context.Background()); err != nil {
+		t.Fatal(err)
+	}
+	f.mu.Lock()
+	f.requestBurst = 1
+	f.mu.Unlock()
+	_, err := w.Fetch(context.Background(), "https://origin.example/", NativeBrowserOptions{})
+	if !errors.Is(err, ErrNativeOwnershipLost) || w.Ready() {
+		t.Fatalf("ownership loss was ignored while denied request was settling: %v ready=%v", err, w.Ready())
+	}
+}
+
+func TestNativeDetachedTargetUsesDetachedSessionNotEnvelope(t *testing.T) {
+	tests := []struct {
+		name, envelope, detached string
+		malformed                bool
+		wantErr                  error
+		wantReady                bool
+		wantOwnershipError       bool
+	}{
+		{name: "child detach delivered on owned envelope", envelope: "owned-session", detached: "child-session", wantReady: true},
+		{name: "root scoped owned detach", envelope: "", detached: "owned-session", wantErr: ErrNativeOwnershipLost, wantOwnershipError: true},
+		{name: "owned envelope owned detach", envelope: "owned-session", detached: "owned-session", wantErr: ErrNativeOwnershipLost, wantOwnershipError: true},
+		{name: "foreign envelope cannot claim owned detach", envelope: "foreign-session", detached: "owned-session", wantReady: true},
+		{name: "malformed root detach fails closed", envelope: "", malformed: true,
+			wantErr: ErrNativePolicy, wantOwnershipError: true},
+		{name: "malformed owned-envelope detach fails closed", envelope: "owned-session", malformed: true,
+			wantErr: ErrNativePolicy, wantOwnershipError: true},
+		{name: "malformed foreign-envelope detach ignored", envelope: "foreign-session", malformed: true, wantReady: true},
+	}
+	for _, test := range tests {
+		t.Run(test.name, func(t *testing.T) {
+			f := newNativeFixture(t)
+			f.mu.Lock()
+			f.requestBurst = 1
+			f.detachAfterPaused = true
+			f.detachOverride = true
+			f.detachEnvelope = test.envelope
+			f.detachSession = test.detached
+			f.detachMalformed = test.malformed
+			f.mu.Unlock()
+			w := f.worker(t)
+			var diagnostics [][2]string
+			w.cfg.Diagnostic = func(stage, reason string) {
+				diagnostics = append(diagnostics, [2]string{stage, reason})
+			}
+			if err := w.Probe(context.Background()); err != nil {
+				t.Fatal(err)
+			}
+			doc, err := w.Fetch(context.Background(), "https://origin.example/", NativeBrowserOptions{})
+			if test.wantErr != nil && !errors.Is(err, test.wantErr) {
+				t.Fatalf("Fetch error = %v, want %v", err, test.wantErr)
+			}
+			if test.wantErr == nil && err != nil {
+				t.Fatalf("Fetch failed for unrelated detach: %v", err)
+			}
+			if w.Ready() != test.wantReady {
+				t.Fatalf("Ready() = %v, want %v", w.Ready(), test.wantReady)
+			}
+			if test.wantOwnershipError && !errors.Is(err, ErrNativeOwnershipLost) {
+				t.Fatalf("ambiguous/owned detach did not taint the generation: %v", err)
+			}
+			if test.wantErr == nil && len(doc.HTML) == 0 {
+				t.Fatal("successful child/foreign detach should preserve the document")
+			}
+			if test.wantErr != nil && len(doc.HTML) != 0 {
+				t.Fatalf("document escaped after detach failure: %d bytes", len(doc.HTML))
+			}
+			if test.wantOwnershipError {
+				if fatal, ok := <-w.Fatal(); !ok || !errors.Is(fatal, ErrNativeWorkerFatal) {
+					t.Fatalf("permanent detach did not trigger fatal lifecycle: %v open=%v", fatal, ok)
+				}
+				wantReason := "owned_detach"
+				if test.malformed {
+					wantReason = "malformed_detach"
+				}
+				if len(diagnostics) != 1 || diagnostics[0] != [2]string{"events", wantReason} {
+					t.Fatalf("unexpected finite detach diagnostic: %v", diagnostics)
+				}
+				f.mu.Lock()
+				methodsAfterFailure := len(f.methods)
+				f.mu.Unlock()
+				if _, nextErr := w.Fetch(context.Background(), "https://origin.example/next", NativeBrowserOptions{}); !errors.Is(nextErr, ErrNativeOwnershipLost) {
+					t.Fatalf("tainted browser accepted a later fetch: %v", nextErr)
+				}
+				f.mu.Lock()
+				defer f.mu.Unlock()
+				if len(f.methods) != methodsAfterFailure {
+					t.Fatalf("tainted browser allocated resources on a later fetch: before=%d after=%d methods=%v",
+						methodsAfterFailure, len(f.methods), f.methods)
+				}
+			}
+		})
+	}
+}
+
+func TestNativeCleanupOverflowClearsCompletedHTML(t *testing.T) {
+	f := newNativeFixture(t)
+	w := f.worker(t)
+	if err := w.Probe(context.Background()); err != nil {
+		t.Fatal(err)
+	}
+	f.mu.Lock()
+	f.cleanupEventFlood = 1024
+	f.mu.Unlock()
+	doc, err := w.Fetch(context.Background(), "https://origin.example/", NativeBrowserOptions{})
+	if !errors.Is(err, ErrBrowserEventOverflow) || !errors.Is(err, ErrNativeOwnershipLost) || w.Ready() {
+		t.Fatalf("cleanup overload was not surfaced and tainted: %v ready=%v", err, w.Ready())
+	}
+	if len(doc.HTML) != 0 {
+		t.Fatalf("HTML escaped after cleanup overload: %d bytes", len(doc.HTML))
+	}
+}
+
 func TestNativeNeverSendsProxySecretToOriginOrOtherProxy(t *testing.T) {
 	for _, tc := range []struct{ source, origin string }{{"Server", "https://origin.example"}, {"Proxy", "http://other-gateway.test:3128"}} {
 		f := newNativeFixture(t)
@@ -365,7 +752,12 @@ func TestNativeRateLimitAndCancellationCleanup(t *testing.T) {
 	defer cancel()
 	_, err = w.Fetch(ctx, "https://origin.example/", NativeBrowserOptions{})
 	if !errors.Is(err, context.DeadlineExceeded) || !w.Ready() {
-		t.Fatalf("cancel cleanup failed: %v ready=%v", err, w.Ready())
+		f.mu.Lock()
+		methods := append([]string(nil), f.methods...)
+		contexts := len(f.contexts)
+		targets := len(f.targets)
+		f.mu.Unlock()
+		t.Fatalf("cancel cleanup failed: %v ready=%v methods=%v contexts=%d targets=%d", err, w.Ready(), methods, contexts, targets)
 	}
 	f.mu.Lock()
 	defer f.mu.Unlock()
@@ -426,6 +818,9 @@ func TestNativeBrowserPinnedCloakProbe(t *testing.T) {
 	if w.Ready() {
 		t.Fatal("closed native worker ready")
 	}
+	if w.CheckReady(context.Background()) {
+		t.Fatal("closed native worker recovered readiness")
+	}
 }
 
 func TestNativeBrowserControlledOrigin(t *testing.T) {
@@ -472,15 +867,273 @@ func TestNativeDOMByteLimitRechecksScalarReply(t *testing.T) {
 func TestNativeDisconnectLosesReadinessWithoutReplay(t *testing.T) {
 	f := newNativeFixture(t)
 	w := f.worker(t)
+	var diagnostics [][2]string
+	w.cfg.Diagnostic = func(stage, reason string) {
+		diagnostics = append(diagnostics, [2]string{stage, reason})
+	}
 	if err := w.Probe(context.Background()); err != nil {
 		t.Fatal(err)
 	}
 	f.mu.Lock()
 	f.disconnect = true
 	f.mu.Unlock()
-	_, err := w.Fetch(context.Background(), "https://origin.example/", NativeBrowserOptions{})
-	if !errors.Is(err, ErrNativeOwnershipLost) || w.Ready() {
+	doc, err := w.Fetch(context.Background(), "https://origin.example/", NativeBrowserOptions{})
+	if !errors.Is(err, ErrNativeOwnershipLost) || w.Ready() || len(doc.HTML) != 0 {
 		t.Fatalf("lost connection remained ready: %v", err)
+	}
+	disconnected, transportFailure, cleanupFailure := false, false, false
+	for _, diagnostic := range diagnostics {
+		disconnected = disconnected || diagnostic == [2]string{"events", "client_disconnected"}
+		transportFailure = transportFailure || diagnostic == [2]string{"dom", "transport_error"} || diagnostic == [2]string{"navigate", "transport_error"}
+		cleanupFailure = cleanupFailure || diagnostic == [2]string{"cleanup", "ownership_loss"}
+	}
+	// The pending RPC and event consumer can observe the socket closing first.
+	if !disconnected && !(transportFailure && cleanupFailure) {
+		t.Fatalf("unexpected finite disconnect diagnostic: %v", diagnostics)
+	}
+	f.mu.Lock()
+	methods := len(f.methods)
+	f.mu.Unlock()
+	if _, err := w.Fetch(context.Background(), "https://origin.example/next", NativeBrowserOptions{}); !errors.Is(err, ErrNativeOwnershipLost) {
+		t.Fatalf("disconnected generation accepted another job: %v", err)
+	}
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	if len(f.methods) != methods {
+		t.Fatal("disconnected generation allocated resources on the next job")
+	}
+}
+
+func TestNativeTargetCrashRecoversOnlyAfterOwnedCleanupAndBrowserHealthCheck(t *testing.T) {
+	f := newNativeFixture(t)
+	f.mu.Lock()
+	f.targetCrashed = true
+	f.mu.Unlock()
+	w := f.worker(t)
+	var diagnostics [][2]string
+	w.cfg.Diagnostic = func(stage, reason string) {
+		diagnostics = append(diagnostics, [2]string{stage, reason})
+	}
+	if err := w.Probe(context.Background()); err != nil {
+		t.Fatal(err)
+	}
+	doc, err := w.Fetch(context.Background(), "https://origin.example/", NativeBrowserOptions{})
+	if !errors.Is(err, ErrNativeTargetCrashed) || errors.Is(err, ErrNativeOwnershipLost) || len(doc.HTML) != 0 || !w.Ready() {
+		t.Fatalf("owned target crash did not recover for the next job: err=%v ready=%v", err, w.Ready())
+	}
+	if len(diagnostics) != 1 || diagnostics[0] != [2]string{"events", "target_crashed"} {
+		t.Fatalf("unexpected finite crash diagnostic: %v", diagnostics)
+	}
+	if _, err := w.Fetch(context.Background(), "https://origin.example/next", NativeBrowserOptions{}); err != nil || !w.Ready() {
+		t.Fatalf("next independent job failed after recovered crash: %v ready=%v", err, w.Ready())
+	}
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	if len(f.contexts) != 0 || len(f.targets) != 1 || !f.targets["foreign-sentinel"] {
+		t.Fatalf("crash recovery leaked owned resources or changed a foreign target: %v %v", f.contexts, f.targets)
+	}
+}
+
+func TestNativeTargetCrashSkipsUnresponsivePageStopButDisposesContext(t *testing.T) {
+	f := newNativeFixture(t)
+	f.mu.Lock()
+	f.targetCrashed = true
+	f.mu.Unlock()
+	w := f.worker(t)
+	if err := w.Probe(context.Background()); err != nil {
+		t.Fatal(err)
+	}
+	f.mu.Lock()
+	f.hangStopLoading = true
+	stopsBefore := 0
+	for _, method := range f.methods {
+		if method == "Page.stopLoading" {
+			stopsBefore++
+		}
+	}
+	f.mu.Unlock()
+	started := time.Now()
+	doc, err := w.Fetch(context.Background(), "https://origin.example/", NativeBrowserOptions{})
+	if !errors.Is(err, ErrNativeTargetCrashed) || errors.Is(err, ErrNativeOwnershipLost) || len(doc.HTML) != 0 || !w.Ready() {
+		t.Fatalf("crashed page stop prevented safe context cleanup: err=%v ready=%v", err, w.Ready())
+	}
+	if time.Since(started) > time.Second {
+		t.Fatal("crashed renderer consumed the cleanup deadline before disposal")
+	}
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	stopsAfter, disposals := 0, 0
+	for _, method := range f.methods {
+		if method == "Page.stopLoading" {
+			stopsAfter++
+		}
+		if method == "Target.disposeBrowserContext" {
+			disposals++
+		}
+	}
+	if stopsAfter != stopsBefore || disposals != 2 || len(f.contexts) != 0 || len(f.targets) != 1 {
+		t.Fatalf("crash cleanup did not dispose only owned context: stops=%d/%d disposals=%d contexts=%v targets=%v", stopsBefore, stopsAfter, disposals, f.contexts, f.targets)
+	}
+}
+
+func TestNativeTargetCrashRequiresCleanReceiptsAndSameGeneration(t *testing.T) {
+	for _, mode := range []string{"cleanup", "context_receipt", "target_receipt", "generation", "discovery", "disconnected", "owned_detach"} {
+		t.Run(mode, func(t *testing.T) {
+			f := newNativeFixture(t)
+			f.mu.Lock()
+			f.targetCrashed = true
+			f.mu.Unlock()
+			w := f.worker(t)
+			if err := w.Probe(context.Background()); err != nil {
+				t.Fatal(err)
+			}
+			f.mu.Lock()
+			switch mode {
+			case "cleanup":
+				f.failCleanup = true
+			case "context_receipt":
+				f.failContextReceipt = true
+			case "target_receipt":
+				f.failTargetReceipt = true
+			case "generation":
+				f.changeGenerationOnCrash = true
+			case "disconnected":
+				f.disconnectOnCrash = true
+			case "discovery":
+				f.unavailableOnCrash = true
+			case "owned_detach":
+				f.detachOnCrash = true
+			}
+			f.mu.Unlock()
+			doc, err := w.Fetch(context.Background(), "https://origin.example/", NativeBrowserOptions{})
+			if !errors.Is(err, ErrNativeTargetCrashed) || !errors.Is(err, ErrNativeOwnershipLost) || len(doc.HTML) != 0 || w.Ready() {
+				t.Fatalf("unsafe crash recovery for %s: err=%v ready=%v", mode, err, w.Ready())
+			}
+			if _, err := w.Fetch(context.Background(), "https://origin.example/next", NativeBrowserOptions{}); !errors.Is(err, ErrNativeOwnershipLost) {
+				t.Fatalf("terminal crash state allowed another job: %v", err)
+			}
+		})
+	}
+}
+
+func TestNativeForeignTargetCrashDoesNotTaintOwnedWorker(t *testing.T) {
+	f := newNativeFixture(t)
+	f.mu.Lock()
+	f.targetCrashed = true
+	f.foreignTargetCrash = true
+	f.mu.Unlock()
+	w := f.worker(t)
+	if err := w.Probe(context.Background()); err != nil {
+		t.Fatal(err)
+	}
+	doc, err := w.Fetch(context.Background(), "https://origin.example/", NativeBrowserOptions{})
+	if err != nil || len(doc.HTML) == 0 || !w.Ready() {
+		t.Fatalf("foreign crash affected owned page: err=%v ready=%v", err, w.Ready())
+	}
+}
+
+func TestNativeTargetCrashCannotRestoreReadinessAfterClose(t *testing.T) {
+	f := newNativeFixture(t)
+	f.mu.Lock()
+	f.targetCrashed = true
+	f.mu.Unlock()
+	w := f.worker(t)
+	if err := w.Probe(context.Background()); err != nil {
+		t.Fatal(err)
+	}
+	crashSeen := make(chan struct{}, 1)
+	w.cfg.Diagnostic = func(stage, reason string) {
+		if stage == "events" && reason == "target_crashed" {
+			select {
+			case crashSeen <- struct{}{}:
+			default:
+			}
+		}
+	}
+	f.mu.Lock()
+	f.contextsDelay = 100 * time.Millisecond
+	f.mu.Unlock()
+	type fetchResult struct {
+		doc RenderedDocument
+		err error
+	}
+	fetched := make(chan fetchResult, 1)
+	go func() {
+		doc, err := w.Fetch(context.Background(), "https://origin.example/", NativeBrowserOptions{})
+		fetched <- fetchResult{doc: doc, err: err}
+	}()
+	select {
+	case <-crashSeen:
+	case <-time.After(time.Second):
+		t.Fatal("owned target crash was not observed")
+	}
+	closed := make(chan error, 1)
+	go func() { closed <- w.Close(context.Background()) }()
+	select {
+	case result := <-fetched:
+		if result.err == nil || len(result.doc.HTML) != 0 || w.Ready() {
+			t.Fatalf("close race restored readiness or returned content: err=%v ready=%v", result.err, w.Ready())
+		}
+	case <-time.After(2 * time.Second):
+		t.Fatal("fetch did not finish during close")
+	}
+	select {
+	case err := <-closed:
+		if err != nil {
+			t.Fatalf("close failed: %v", err)
+		}
+	case <-time.After(time.Second):
+		t.Fatal("close did not join the active fetch")
+	}
+}
+
+func TestNativeTargetCrashCombinedWithEventOverflowStaysTerminal(t *testing.T) {
+	f := newNativeFixture(t)
+	f.mu.Lock()
+	f.targetCrashed = true
+	f.mu.Unlock()
+	w := f.worker(t)
+	if err := w.Probe(context.Background()); err != nil {
+		t.Fatal(err)
+	}
+	f.mu.Lock()
+	f.cleanupEventFlood = 1024
+	f.mu.Unlock()
+	doc, err := w.Fetch(context.Background(), "https://origin.example/", NativeBrowserOptions{})
+	if !errors.Is(err, ErrNativeTargetCrashed) || !errors.Is(err, ErrBrowserEventOverflow) || !errors.Is(err, ErrNativeOwnershipLost) || len(doc.HTML) != 0 || w.Ready() {
+		t.Fatalf("crash plus overflow did not remain terminal: err=%v ready=%v", err, w.Ready())
+	}
+}
+
+func TestNativeCrashRecoveryRejectsMixedLateRPCFailures(t *testing.T) {
+	lateRPC := errors.New("late protocol failure")
+	for _, tc := range []struct {
+		name       string
+		err        error
+		connected  bool
+		cleanupErr error
+		want       bool
+	}{
+		{name: "pure crash", err: ErrNativeTargetCrashed, connected: true, want: true},
+		{name: "late rpc error", err: errors.Join(ErrNativeTargetCrashed, lateRPC), connected: true},
+		{name: "ownership failure", err: errors.Join(ErrNativeTargetCrashed, ErrNativeOwnershipLost), connected: true},
+		{name: "event overflow", err: errors.Join(ErrNativeTargetCrashed, ErrBrowserEventOverflow), connected: true},
+		{name: "disconnected cdp", err: ErrNativeTargetCrashed},
+		{name: "cleanup failure", err: ErrNativeTargetCrashed, connected: true, cleanupErr: ErrNativeOwnershipLost},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			if got := nativeCrashRecoveryAllowed(true, tc.err, tc.connected, tc.cleanupErr); got != tc.want {
+				t.Fatalf("recovery eligibility = %v, want %v", got, tc.want)
+			}
+		})
+	}
+	if !nativeCrashCancellation(context.Canceled, ErrNativeTargetCrashed, true) {
+		t.Fatal("expected cancellation caused by the owned crash was treated as a late RPC failure")
+	}
+	if nativeCrashCancellation(lateRPC, ErrNativeTargetCrashed, true) ||
+		nativeCrashCancellation(errors.Join(context.Canceled, lateRPC), ErrNativeTargetCrashed, true) ||
+		nativeCrashCancellation(context.Canceled, context.Canceled, true) {
+		t.Fatal("substantive or unrelated RPC failure was hidden")
 	}
 }
 
@@ -492,6 +1145,9 @@ func TestNativeLostCreateReceiptRequiresSupervisorRecovery(t *testing.T) {
 	w := f.worker(t)
 	if err := w.Probe(context.Background()); !errors.Is(err, ErrNativeOwnershipLost) || w.Ready() {
 		t.Fatalf("unknown created context was treated as clean: %v", err)
+	}
+	if w.CheckReady(context.Background()) {
+		t.Fatal("worker with an unconfirmed cleanup receipt recovered readiness")
 	}
 	if err := w.Probe(context.Background()); !errors.Is(err, ErrNativeOwnershipLost) {
 		t.Fatalf("lost ownership retried: %v", err)
@@ -552,6 +1208,31 @@ func TestNativeDiscoveryLossClearsReadiness(t *testing.T) {
 	}
 }
 
+func TestNativeDiagnosticReportsOnlyFiniteDiscoveryFailure(t *testing.T) {
+	f := newNativeFixture(t)
+	w := f.worker(t)
+	var diagnostics [][2]string
+	w.cfg.Diagnostic = func(stage, reason string) {
+		diagnostics = append(diagnostics, [2]string{stage, reason})
+	}
+	f.mu.Lock()
+	f.discoveryUnavailable = true
+	f.mu.Unlock()
+	if err := w.Probe(context.Background()); !errors.Is(err, ErrNativeNotReady) {
+		t.Fatalf("expected discovery failure, got %v", err)
+	}
+	if len(diagnostics) != 1 || diagnostics[0] != [2]string{"discovery", "operation_failed"} {
+		t.Fatalf("unexpected safe diagnostics: %v", diagnostics)
+	}
+	for _, err := range []error{context.DeadlineExceeded, context.Canceled,
+		ErrBrowserEventOverflow, ErrNativeOwnershipLost} {
+		reason := nativeDiagnosticReason(err)
+		if strings.Contains(reason, " ") || strings.Contains(reason, "https") || reason == "" {
+			t.Fatalf("unsafe diagnostic reason %q", reason)
+		}
+	}
+}
+
 func TestNativeIdleReadinessRejectsUnavailableOrReplacedBrowser(t *testing.T) {
 	for _, mode := range []string{"unavailable", "replacement", "timeout"} {
 		f := newNativeFixture(t)
@@ -587,9 +1268,173 @@ func TestNativeIdleReadinessRejectsUnavailableOrReplacedBrowser(t *testing.T) {
 		f.discoveryID = "native"
 		f.discoveryDelay = 0
 		f.mu.Unlock()
-		if w.CheckReady(context.Background()) {
-			t.Fatal("discovery alone silently recovered worker")
+		if mode == "replacement" {
+			if w.CheckReady(context.Background()) || w.Ready() {
+				t.Fatal("replacement generation recovered the worker")
+			}
+			if fatal, ok := <-w.Fatal(); !ok || !errors.Is(fatal, ErrNativeWorkerFatal) {
+				t.Fatalf("generation replacement did not trigger fatal lifecycle: %v open=%v", fatal, ok)
+			}
+		} else if !w.CheckReady(context.Background()) || !w.Ready() {
+			t.Fatalf("same verified generation did not recover after %s", mode)
 		}
+	}
+}
+
+func TestNativeTransientDiscoveryTimeoutRecoversOnlySameVerifiedGeneration(t *testing.T) {
+	f := newNativeFixture(t)
+	w := f.worker(t)
+	if w.CheckReady(context.Background()) {
+		t.Fatal("CheckReady bootstrapped readiness before an active probe")
+	}
+	if err := w.Probe(context.Background()); err != nil {
+		t.Fatal(err)
+	}
+	if !w.CheckReady(context.Background()) {
+		t.Fatal("healthy verified generation not ready")
+	}
+
+	f.mu.Lock()
+	f.discoveryDelay = time.Second
+	f.mu.Unlock()
+	ctx, cancel := context.WithTimeout(context.Background(), 30*time.Millisecond)
+	if w.CheckReady(ctx) {
+		cancel()
+		t.Fatal("readiness check accepted a discovery timeout")
+	}
+	cancel()
+
+	f.mu.Lock()
+	f.discoveryDelay = 0
+	f.mu.Unlock()
+	current, err := configuredBrowserEndpoint(context.Background(), f.server.URL)
+	if err != nil {
+		t.Fatalf("fixture discovery did not recover: %v", err)
+	}
+	w.mu.Lock()
+	original := w.generation
+	ready, tainted := w.ready, w.tainted
+	w.mu.Unlock()
+	if current != original || ready || tainted {
+		t.Fatalf("expected unchanged generation with cleared readiness: same=%v ready=%v tainted=%v", current == original, ready, tainted)
+	}
+	if !w.CheckReady(context.Background()) || !w.Ready() {
+		t.Fatal("CheckReady did not recover after successful discovery of the unchanged generation")
+	}
+}
+
+func TestNativeFatalSignalIsOneShotAndConcurrentTaintIsIdempotent(t *testing.T) {
+	f := newNativeFixture(t)
+	w := f.worker(t)
+	fatal := w.Fatal()
+	var wg sync.WaitGroup
+	for range 32 {
+		wg.Add(1)
+		go func() {
+			defer wg.Done()
+			w.taint()
+		}()
+	}
+	wg.Wait()
+	select {
+	case err, ok := <-fatal:
+		if !ok || !errors.Is(err, ErrNativeWorkerFatal) {
+			t.Fatalf("fatal notification = %v, open=%v", err, ok)
+		}
+	case <-time.After(time.Second):
+		t.Fatal("permanent taint did not notify")
+	}
+	if _, ok := <-fatal; ok {
+		t.Fatal("fatal channel emitted more than one notification")
+	}
+}
+
+func TestNativeNonFatalLifecycleCasesDoNotSignalFatal(t *testing.T) {
+	t.Run("normal close", func(t *testing.T) {
+		f := newNativeFixture(t)
+		w := f.worker(t)
+		if err := w.Close(context.Background()); err != nil {
+			t.Fatal(err)
+		}
+		select {
+		case err, ok := <-w.Fatal():
+			t.Fatalf("normal close signaled fatal: %v open=%v", err, ok)
+		default:
+		}
+	})
+	t.Run("transient discovery", func(t *testing.T) {
+		f := newNativeFixture(t)
+		w := f.worker(t)
+		if err := w.Probe(context.Background()); err != nil {
+			t.Fatal(err)
+		}
+		f.mu.Lock()
+		f.discoveryUnavailable = true
+		f.mu.Unlock()
+		if w.CheckReady(context.Background()) {
+			t.Fatal("unavailable discovery remained ready")
+		}
+		select {
+		case err, ok := <-w.Fatal():
+			t.Fatalf("transient discovery signaled fatal: %v open=%v", err, ok)
+		default:
+		}
+	})
+	t.Run("owned crash recovery", func(t *testing.T) {
+		f := newNativeFixture(t)
+		f.mu.Lock()
+		f.targetCrashed = true
+		f.mu.Unlock()
+		w := f.worker(t)
+		if err := w.Probe(context.Background()); err != nil {
+			t.Fatal(err)
+		}
+		if _, err := w.Fetch(context.Background(), "https://origin.example/", NativeBrowserOptions{}); !errors.Is(err, ErrNativeTargetCrashed) || !w.Ready() {
+			t.Fatalf("owned crash did not recover: err=%v ready=%v", err, w.Ready())
+		}
+		select {
+		case err, ok := <-w.Fatal():
+			t.Fatalf("owned crash signaled fatal: %v open=%v", err, ok)
+		default:
+		}
+	})
+}
+
+func TestNativeCheckReadyPreservesHealthyActiveWorkerButDoesNotRecoverDuringJob(t *testing.T) {
+	f := newNativeFixture(t)
+	w := f.worker(t)
+	if err := w.Probe(context.Background()); err != nil {
+		t.Fatal(err)
+	}
+	f.mu.Lock()
+	f.discoveryDelay = time.Second
+	f.mu.Unlock()
+
+	w.mu.Lock()
+	w.active = true
+	w.mu.Unlock()
+	started := time.Now()
+	if !w.CheckReady(context.Background()) || !w.Ready() {
+		t.Fatal("healthy active worker became unavailable")
+	}
+	if time.Since(started) > 100*time.Millisecond {
+		t.Fatal("active readiness unnecessarily waited on discovery")
+	}
+
+	w.mu.Lock()
+	w.ready = false // Simulate a transient failure observed by the active job.
+	w.mu.Unlock()
+	if w.CheckReady(context.Background()) || w.Ready() {
+		t.Fatal("active worker recovered after readiness had been cleared")
+	}
+	w.mu.Lock()
+	w.active = false
+	w.mu.Unlock()
+	f.mu.Lock()
+	f.discoveryDelay = 0
+	f.mu.Unlock()
+	if !w.CheckReady(context.Background()) || !w.Ready() {
+		t.Fatal("same generation did not recover after the active job ended")
 	}
 }
 
@@ -681,5 +1526,19 @@ func TestNativeCumulativeRequestBudgetIncludesFinishedZeroByteRequests(t *testin
 	_, err := w.Fetch(context.Background(), "https://origin.example/", NativeBrowserOptions{})
 	if !errors.Is(err, extractor.ErrWireLimit) {
 		t.Fatalf("sequential zero-byte requests bypassed job budget: %v", err)
+	}
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	continued := 0
+	for _, method := range f.methods {
+		if method == "Fetch.continueRequest" {
+			continued++
+		}
+	}
+	if continued != 128 {
+		t.Fatalf("continued %d requests before cumulative rejection, want 128", continued)
+	}
+	if !w.Ready() || len(f.contexts) != 0 || len(f.targets) != 1 || !f.targets["foreign-sentinel"] {
+		t.Fatal("request-budget rejection lost readiness or owned cleanup")
 	}
 }

@@ -5,6 +5,7 @@ services:
     image: ${NEWS_APP_IMAGE:?Set the verified Python client image by digest}
     environment:
       EXTRACTION_SERVICE_MODE: python
+      EXTRACTION_SERVICE_NATIVE_BROWSER: 'false'
       EXTRACTION_SERVICE_URL: http://extractor:8080
       EXTRACTION_SERVICE_TOKEN: ${NEWS_EXTRACTOR_TOKEN:?Set the dedicated service token}
       EXTRACTION_SERVICE_PYTHON_FALLBACK: 'true'

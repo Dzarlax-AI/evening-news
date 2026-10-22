@@ -67,7 +67,9 @@ func browserFetchPublic(ctx context.Context, endpoint, rawURL string, opts Brows
 		defer done()
 		cleanupErr := disposeOwnedBrowser(cleanup, client, browserContextID, targetID, sessionID)
 		client.close()
+		cleanupErr = errors.Join(cleanupErr, client.eventError())
 		if cleanupErr != nil {
+			doc = RenderedDocument{}
 			err = errors.Join(err, fmt.Errorf("prototype_browser_cleanup: %w", cleanupErr))
 		}
 	}()
@@ -78,21 +80,21 @@ func browserFetchPublic(ctx context.Context, endpoint, rawURL string, opts Brows
 	var createdContext struct {
 		BrowserContextID string `json:"browserContextId"`
 	}
-	if err = client.call(setup, "", "Target.createBrowserContext", map[string]any{"disposeOnDetach": true, "proxyServer": "http://127.0.0.1:9", "proxyBypassList": "<-loopback>"}, &createdContext); err != nil {
+	if err = client.callAllocation(setup, "", "Target.createBrowserContext", map[string]any{"disposeOnDetach": true, "proxyServer": "http://127.0.0.1:9", "proxyBypassList": "<-loopback>"}, &createdContext); err != nil {
 		return doc, err
 	}
 	browserContextID = createdContext.BrowserContextID
 	var createdTarget struct {
 		TargetID string `json:"targetId"`
 	}
-	if err = client.call(setup, "", "Target.createTarget", map[string]any{"url": "about:blank", "browserContextId": browserContextID}, &createdTarget); err != nil {
+	if err = client.callAllocation(setup, "", "Target.createTarget", map[string]any{"url": "about:blank", "browserContextId": browserContextID}, &createdTarget); err != nil {
 		return doc, err
 	}
 	targetID = createdTarget.TargetID
 	var attached struct {
 		SessionID string `json:"sessionId"`
 	}
-	if err = client.call(setup, "", "Target.attachToTarget", map[string]any{"targetId": targetID, "flatten": true}, &attached); err != nil {
+	if err = client.callAllocation(setup, "", "Target.attachToTarget", map[string]any{"targetId": targetID, "flatten": true}, &attached); err != nil {
 		return doc, err
 	}
 	sessionID = attached.SessionID
@@ -136,7 +138,17 @@ func browserFetchPublic(ctx context.Context, endpoint, rawURL string, opts Brows
 			select {
 			case <-work.Done():
 				return
+			case <-client.eventFailure:
+				stop(client.eventError())
+				return
 			case message := <-client.events:
+				if detached, malformed := detachedOwnedSession(message, sessionID); malformed {
+					stop(ErrNativePolicy)
+					return
+				} else if detached {
+					stop(ErrNativeOwnershipLost)
+					return
+				}
 				if string(message.SessionID) != sessionID || string(message.Method) != "Fetch.requestPaused" {
 					continue
 				}
@@ -212,7 +224,7 @@ func browserFetchPublic(ctx context.Context, endpoint, rawURL string, opts Brows
 		ErrorText string `json:"errorText"`
 	}
 	if err = client.call(work, sessionID, "Page.navigate", map[string]any{"url": u.String()}, &navigation); err != nil {
-		return doc, browserCause(work, err)
+		return doc, browserClientCause(work, client, err)
 	}
 	if navigation.ErrorText != "" {
 		if cause := context.Cause(work); cause != nil {
@@ -256,13 +268,16 @@ func browserFetchPublic(ctx context.Context, endpoint, rawURL string, opts Brows
 			ExceptionDetails json.RawMessage `json:"exceptionDetails"`
 		}
 		if err = client.call(work, sessionID, "Runtime.evaluate", map[string]any{"expression": expression, "returnByValue": true}, &evaluation); err != nil {
-			return doc, browserCause(work, err)
+			return doc, browserClientCause(work, client, err)
 		}
 		if len(evaluation.ExceptionDetails) > 0 {
 			return doc, errors.New("prototype_browser_evaluation")
 		}
 		value := evaluation.Result.Value
 		if value.Ready {
+			if cause := client.eventError(); cause != nil {
+				return doc, cause
+			}
 			if value.WireTooLarge {
 				return doc, extractor.ErrWireLimit
 			}

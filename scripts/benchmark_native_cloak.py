@@ -48,6 +48,58 @@ class FatalBenchmarkError(BenchmarkError):
     """Ownership/capability loss makes further measurements invalid."""
 
 
+def _safe_readiness_snapshot(value: Any) -> dict[str, bool] | None:
+    if not isinstance(value, dict):
+        return None
+    allowed = {"ready", "browser", "native_browser", "native_ready_selector", "selector_hash_matches"}
+    snapshot = {key: value[key] for key in allowed if type(value.get(key)) is bool}
+    return snapshot or None
+
+
+def _safe_readiness_diagnostic(data: Any) -> dict[str, bool] | None:
+    """Extract only bounded health flags; never retain the response or selector hash."""
+    if not isinstance(data, dict):
+        return None
+    # A canonical snapshot may be passed through the exception boundary by the soak runner.
+    if set(data).issubset({"ready", "browser", "native_browser", "native_ready_selector",
+                          "selector_hash_matches"}):
+        return _safe_readiness_snapshot(data)
+    snapshot: dict[str, bool] = {}
+    if type(data.get("ready")) is bool:
+        snapshot["ready"] = data["ready"]
+    capabilities = data.get("capabilities")
+    if isinstance(capabilities, dict):
+        for key in ("browser", "native_browser", "native_ready_selector"):
+            if type(capabilities.get(key)) is bool:
+                snapshot[key] = capabilities[key]
+    native_profile = data.get("native_profile")
+    selector_hash = native_profile.get("ready_selector_sha256") if isinstance(native_profile, dict) else None
+    if isinstance(selector_hash, str) and re.fullmatch(r"[a-f0-9]{64}", selector_hash):
+        expected = hashlib.sha256(READY_SELECTOR.encode("utf-8")).hexdigest()
+        snapshot["selector_hash_matches"] = selector_hash == expected
+    return _safe_readiness_snapshot(snapshot)
+
+
+class NativeCapabilityUnavailable(BenchmarkError):
+    """Stable public failure code with a finite, payload-free diagnostic reason."""
+
+    def __init__(self, diagnostic_code: str, readiness_diagnostic: Any = None):
+        allowed = {
+            "response_invalid", "service_not_ready", "capabilities_missing",
+            "native_profile_missing", "capability_browser_missing", "capability_browser_false",
+            "capability_native_browser_missing", "capability_native_browser_false",
+            "capability_native_ready_selector_missing", "capability_native_ready_selector_false",
+            "selector_hash_mismatch", "http_status", "response_too_large", "invalid_json",
+            "timeout", "transport_error", "probe_error",
+        }
+        super().__init__("native_capability_unavailable")
+        safe_http_status = (isinstance(diagnostic_code, str)
+                            and re.fullmatch(r"http_status_(?:[1-5][0-9]{2}|other)", diagnostic_code))
+        self.diagnostic_code = (diagnostic_code if diagnostic_code in allowed or safe_http_status
+                                else "probe_error")
+        self.readiness_diagnostic = _safe_readiness_diagnostic(readiness_diagnostic)
+
+
 def load_corpus(path: Path) -> tuple[dict[str, Any], str]:
     try:
         raw = path.read_bytes()
@@ -704,11 +756,21 @@ def _validate_native_capability_payload(data: Any) -> dict[str, Any]:
     caps = data.get("capabilities") if isinstance(data, dict) else None
     native_profile = data.get("native_profile") if isinstance(data, dict) else None
     selector_hash = hashlib.sha256(READY_SELECTOR.encode("utf-8")).hexdigest()
-    if (not isinstance(data, dict) or data.get("ready") is not True or not isinstance(caps, dict)
-            or any(caps.get(key) is not True for key in ("browser", "native_browser", "native_ready_selector"))
-            or not isinstance(native_profile, dict)
-            or native_profile.get("ready_selector_sha256") != selector_hash):
-        raise BenchmarkError("native_capability_unavailable")
+    if not isinstance(data, dict):
+        raise NativeCapabilityUnavailable("response_invalid")
+    if data.get("ready") is not True:
+        raise NativeCapabilityUnavailable("service_not_ready")
+    if not isinstance(caps, dict):
+        raise NativeCapabilityUnavailable("capabilities_missing")
+    for key in ("browser", "native_browser", "native_ready_selector"):
+        if key not in caps:
+            raise NativeCapabilityUnavailable("capability_" + key + "_missing")
+        if caps[key] is not True:
+            raise NativeCapabilityUnavailable("capability_" + key + "_false")
+    if not isinstance(native_profile, dict):
+        raise NativeCapabilityUnavailable("native_profile_missing")
+    if native_profile.get("ready_selector_sha256") != selector_hash:
+        raise NativeCapabilityUnavailable("selector_hash_mismatch")
     return {"ready": True, "browser": True, "native_browser": True,
             "native_ready_selector": True, "ready_selector_sha256": selector_hash,
             "expected_selector_matches_fixture": True}
@@ -723,13 +785,36 @@ async def _probe_native_capabilities(endpoint: str) -> dict[str, bool]:
         async with aiohttp.ClientSession(timeout=timeout, trust_env=False) as session:
             async with session.get(endpoint.rstrip("/") + "/health/ready", allow_redirects=False) as response:
                 raw = await response.content.read(16385)
-                if response.status != 200 or len(raw) > 16384:
-                    raise BenchmarkError("native_capability_unavailable")
-        return _validate_native_capability_payload(json.loads(raw))
-    except BenchmarkError:
+                if response.status != 200:
+                    status = response.status if type(response.status) is int and 100 <= response.status <= 599 else "other"
+                    readiness = None
+                    if len(raw) <= 16384:
+                        try:
+                            readiness = json.loads(raw)
+                        except (ValueError, UnicodeError):
+                            pass
+                    raise NativeCapabilityUnavailable("http_status_" + str(status), readiness)
+                if len(raw) > 16384:
+                    raise NativeCapabilityUnavailable("response_too_large")
+        try:
+            data = json.loads(raw)
+        except (ValueError, UnicodeError):
+            raise NativeCapabilityUnavailable("invalid_json") from None
+        return _validate_native_capability_payload(data)
+    except NativeCapabilityUnavailable:
         raise
-    except Exception:
-        raise BenchmarkError("native_capability_unavailable") from None
+    except asyncio.TimeoutError:
+        raise NativeCapabilityUnavailable("timeout") from None
+    except Exception as exc:
+        try:
+            import aiohttp
+            if isinstance(exc, aiohttp.ClientError):
+                diagnostic = "transport_error"
+            else:
+                diagnostic = "probe_error"
+        except Exception:
+            diagnostic = "probe_error"
+        raise NativeCapabilityUnavailable(diagnostic) from None
 
 
 def compare_case(case: dict[str, Any], result: dict[str, Any]) -> dict[str, Any]:
@@ -945,7 +1030,12 @@ def main(argv: list[str] | None = None) -> int:
         output.parent.mkdir(parents=True, exist_ok=True)
         output.write_text(json.dumps(report, indent=2, sort_keys=True) + "\n", encoding="utf-8")
     except BenchmarkError as exc:
-        print(f"benchmark failed: {exc}", file=sys.stderr)
+        diagnostic = getattr(exc, "diagnostic_code", None)
+        readiness = getattr(exc, "readiness_diagnostic", None)
+        suffix = f" diagnostic={diagnostic}" if isinstance(diagnostic, str) else ""
+        if isinstance(readiness, dict):
+            suffix += " readiness=" + json.dumps(readiness, sort_keys=True, separators=(",", ":"))
+        print(f"benchmark failed: {exc}{suffix}", file=sys.stderr)
         return 2
     return 0 if report["status"] == "passed" else 1
 

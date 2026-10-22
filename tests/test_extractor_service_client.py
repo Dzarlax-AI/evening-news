@@ -125,11 +125,13 @@ async def test_deadline_and_cancellation_close_owned_session(cancel):
         release.set()
 
 
-def routing(mode='go', fallback=False, budget=1):
+def routing(mode='go', fallback=False, budget=1, native_browser=False):
     settings = SimpleNamespace(extraction_service_mode=mode, extraction_service_url='http://extractor:8080',
         extraction_service_token=SecretStr(TOKEN), extraction_service_timeout_seconds=.1,
         extraction_service_total_budget_seconds=budget, extraction_service_python_fallback=fallback,
-        extraction_http_max_bytes=5242880, extraction_text_max_chars=100000)
+        extraction_service_native_browser=native_browser,
+        extraction_http_max_bytes=5242880, extraction_browser_max_bytes=5242880,
+        extraction_text_max_chars=100000)
     utils = Mock()
     utils.clean_url.side_effect = lambda value: value
     utils.extract_domain.return_value = 'example.org'
@@ -165,6 +167,183 @@ async def test_go_success_records_once_and_maps_metadata_media():
     assert result['full_article_url'] == 'https://example.org/full'
     assert result['publication_date'] == '2026-10-15'
     memory.record_extraction_attempt.assert_awaited_once()
+    core._extract_article_content_python.assert_not_called()
+
+
+@pytest.mark.asyncio
+async def test_native_browser_go_route_opts_in_wire_and_preserves_learned_metadata():
+    settings, core, memory = routing(native_browser=True)
+    memory.get_successful_pattern.return_value = {
+        'selector': '.learned-story', 'method': 'browser_rendering'}
+    captured = []
+
+    async def handler(request):
+        data = await request.json()
+        captured.append(data)
+        assert data['use_browser'] is True
+        assert data['learned_selector'] == '.learned-story'
+        assert data['learned_method'] == 'browser_rendering'
+        assert data['max_bytes'] == 5242880
+        return web.json_response(response_for(data, result={
+            'content': 'Native browser extracted the article.', 'title': 'Native title',
+            'publication_date': '2026-10-22', 'author': 'Author', 'description': 'Summary',
+            'image_url': 'https://example.org/native.jpg', 'method_used': 'browser_rendering',
+            'selector_used': '.learned-story',
+            'media': [{'type': 'image', 'url': 'https://example.org/native.jpg'}]}))
+
+    async with server(handler) as endpoint:
+        settings.extraction_service_url = endpoint
+        with patch('news_aggregator.config.get_settings', return_value=settings), \
+                patch('news_aggregator.extraction.core_extractor.get_extraction_memory', AsyncMock(return_value=memory)), \
+                patch('news_aggregator.extraction.core_extractor.get_stability_tracker',
+                      AsyncMock(return_value=Mock())):
+            result = await core.extract_article_content_with_metadata(URL)
+
+    assert len(captured) == 1
+    assert result['content'] == 'Native browser extracted the article.'
+    assert result['title'] == 'Native title'
+    assert result['publication_date'] == '2026-10-22'
+    assert result['media_files'][0]['url'] == 'https://example.org/native.jpg'
+    memory.record_extraction_attempt.assert_awaited_once()
+    core._extract_article_content_python.assert_not_called()
+
+
+@pytest.mark.asyncio
+async def test_native_browser_uses_minimum_byte_cap_and_never_falls_back():
+    settings, core, memory = routing(fallback=True, native_browser=True)
+    settings.extraction_http_max_bytes = 5000
+    settings.extraction_browser_max_bytes = 1024
+    observed = []
+
+    async def handler(request):
+        data = await request.json()
+        observed.append((data['use_browser'], data['max_bytes']))
+        return web.json_response(response_for(data, result={
+            'content': 'x' * 3000, 'title': 'large', 'method_used': 'native_browser',
+            'media': []}))
+
+    async with server(handler) as endpoint:
+        settings.extraction_service_url = endpoint
+        with patch('news_aggregator.config.get_settings', return_value=settings), \
+                patch('news_aggregator.extraction.core_extractor.get_extraction_memory', AsyncMock(return_value=memory)):
+            with pytest.raises(ExtractionServiceError, match='response_too_large'):
+                await core.extract_article_content_with_metadata(URL)
+
+    assert observed == [(True, 1024)]
+    core._extract_article_content_python.assert_not_called()
+
+
+@pytest.mark.asyncio
+async def test_native_browser_failure_preserves_retryability_without_python_fallback():
+    settings, core, memory = routing(fallback=True, native_browser=True)
+    memory.get_successful_pattern.return_value = {
+        'selector': '.learned-story', 'method': 'browser_rendering'}
+    observed = []
+
+    async def handler(request):
+        data = await request.json()
+        observed.append(data)
+        return web.json_response(response_for(data, outcome='failed',
+            error={'code': 'native_browser_timeout', 'retryable': True,
+                   'retry_after_seconds': 12}, observations=[
+                {'selector': '.learned-story', 'method': 'browser_rendering', 'success': False}]))
+
+    async with server(handler) as endpoint:
+        settings.extraction_service_url = endpoint
+        with patch('news_aggregator.config.get_settings', return_value=settings), \
+                patch('news_aggregator.extraction.core_extractor.get_extraction_memory', AsyncMock(return_value=memory)):
+            with pytest.raises(ExtractionServiceError) as failure:
+                await core.extract_article_content_with_metadata(URL)
+
+    assert failure.value.code == 'native_browser_timeout'
+    assert failure.value.retryable is True
+    assert failure.value.retry_after_seconds == 12
+    assert observed[0]['use_browser'] is True
+    memory.degrade_pattern.assert_awaited_once_with(
+        'example.org', '.learned-story', 'browser_rendering')
+    core._extract_article_content_python.assert_not_called()
+
+
+@pytest.mark.asyncio
+async def test_native_browser_strips_fragment_without_changing_article_identity_or_redirect():
+    settings, core, memory = routing(native_browser=True)
+    article_url = 'https://example.org/article#comments'
+    settings.extraction_service_python_fallback = True
+    captured = []
+
+    async def handler(request):
+        data = await request.json()
+        captured.append(data)
+        return web.json_response(response_for(data))
+
+    async with server(handler) as endpoint:
+        settings.extraction_service_url = endpoint
+        with patch('news_aggregator.config.get_settings', return_value=settings), \
+                patch('news_aggregator.extraction.core_extractor.get_extraction_memory', AsyncMock(return_value=memory)), \
+                patch('news_aggregator.extraction.core_extractor.get_stability_tracker',
+                      AsyncMock(return_value=Mock())):
+            result = await core.extract_article_content_with_metadata(article_url)
+
+    assert captured[0]['url'] == 'https://example.org/article'
+    assert captured[0]['use_browser'] is True
+    assert 'full_article_url' not in result
+    assert memory.record_extraction_attempt.await_args.args[0].article_url == article_url
+    core._extract_article_content_python.assert_not_called()
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize('article_url', [
+    'http://example.org/article#comments',
+    'https://example.org:8443/article#comments',
+])
+async def test_native_mode_keeps_non_native_urls_on_go_http_path_without_python_fallback(article_url):
+    settings, core, memory = routing(native_browser=True, fallback=True)
+    settings.extraction_http_max_bytes = 4096
+    settings.extraction_browser_max_bytes = 1024
+    captured = []
+
+    async def handler(request):
+        data = await request.json()
+        captured.append(data)
+        return web.json_response(response_for(data, outcome='failed', error={
+            'code': 'upstream_unavailable', 'retryable': True, 'retry_after_seconds': 12}))
+
+    async with server(handler) as endpoint:
+        settings.extraction_service_url = endpoint
+        with patch('news_aggregator.config.get_settings', return_value=settings), \
+                patch('news_aggregator.extraction.core_extractor.get_extraction_memory', AsyncMock(return_value=memory)):
+            with pytest.raises(ExtractionServiceError) as failure:
+                await core.extract_article_content_with_metadata(article_url)
+
+    assert len(captured) == 1
+    assert captured[0]['url'] == article_url.split('#', 1)[0]
+    assert captured[0]['use_browser'] is False
+    assert captured[0]['max_bytes'] == 4096
+    assert failure.value.code == 'upstream_unavailable'
+    assert failure.value.retryable is True
+    assert failure.value.retry_after_seconds == 12
+    core._extract_article_content_python.assert_not_called()
+
+
+@pytest.mark.asyncio
+async def test_native_redirect_sets_full_article_url_only_for_a_different_document():
+    settings, core, memory = routing(native_browser=True)
+    original = 'https://example.org/article#comments'
+
+    async def handler(request):
+        data = await request.json()
+        return web.json_response(response_for(data, final_url='https://example.org/story#top'))
+
+    async with server(handler) as endpoint:
+        settings.extraction_service_url = endpoint
+        with patch('news_aggregator.config.get_settings', return_value=settings), \
+                patch('news_aggregator.extraction.core_extractor.get_extraction_memory', AsyncMock(return_value=memory)), \
+                patch('news_aggregator.extraction.core_extractor.get_stability_tracker',
+                      AsyncMock(return_value=Mock())):
+            result = await core.extract_article_content_with_metadata(original)
+
+    assert result['full_article_url'] == 'https://example.org/story#top'
+    assert memory.record_extraction_attempt.await_args.args[0].article_url == original
     core._extract_article_content_python.assert_not_called()
 
 
@@ -226,7 +405,7 @@ async def test_fallback_consumes_remaining_total_budget_and_is_cancelled():
 @pytest.mark.parametrize('force', [False, True])
 @pytest.mark.parametrize('code,retryable,state', [('busy', True, 'retry_wait'),
     ('resource_limit', False, 'rejected'), ('invalid_input', False, 'rejected'),
-    ('unauthorized', False, 'retry_wait')])
+    ('unauthorized', False, 'retry_wait'), ('native_browser_target_crashed', False, 'retry_wait')])
 @pytest.mark.asyncio
 async def test_typed_processing_outage_retries_without_stale_ai_or_terminal_outcome(force, code, retryable, state):
     from news_aggregator.processing.ai_processor import AIProcessor
@@ -672,3 +851,35 @@ async def test_native_fallback_owns_learning_once_and_force_metadata_media_once(
     memory.degrade_pattern.assert_not_called()
     core._extract_article_content_python.assert_awaited_once()
     value.ai_client.analyze_article_complete.assert_awaited_once()
+
+
+def test_owned_page_crash_is_durably_retryable_without_immediate_python_fallback():
+    from news_aggregator.extraction.core_extractor import CoreExtractor
+    crash = ExtractionServiceError('native_browser_target_crashed', False)
+    assert not crash.terminal
+    assert not CoreExtractor._native_fallback_allowed(crash)
+    assert not ExtractionServiceError('native_browser_unavailable', True).terminal
+
+
+@pytest.mark.asyncio
+async def test_owned_page_crash_does_not_use_configured_python_fallback():
+    settings, core, memory = routing(fallback=True)
+    requests = 0
+
+    async def handler(request):
+        nonlocal requests
+        requests += 1
+        return web.json_response(response_for(await request.json(), outcome='failed',
+            error={'code': 'native_browser_target_crashed', 'retryable': False}))
+
+    async with server(handler) as endpoint:
+        settings.extraction_service_url = endpoint
+        with patch('news_aggregator.config.get_settings', return_value=settings), \
+                patch('news_aggregator.extraction.core_extractor.get_extraction_memory', AsyncMock(return_value=memory)):
+            with pytest.raises(ExtractionServiceError) as error:
+                await core.extract_article_content_with_metadata(URL)
+    assert error.value.code == 'native_browser_target_crashed'
+    assert not error.value.retryable
+    assert not error.value.terminal
+    assert requests == 1
+    core._extract_article_content_python.assert_not_called()

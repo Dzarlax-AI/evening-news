@@ -19,7 +19,7 @@ class ExtractionServiceError(Exception):
 
     @property
     def terminal(self):
-        """Only deterministic article/input failures exhaust processing immediately."""
+        """Whether article processing is durably terminal; this differs from wire retryability."""
         return not self.retryable and self.code in {
             'resource_limit', 'invalid_input', 'unsupported_input', 'request_too_large', 'invalid_request',
             'public_url_denied', 'upstream_auth_required', 'native_browser_policy_denied',

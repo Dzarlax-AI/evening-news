@@ -1,20 +1,20 @@
 package service
 
 import (
-	"bytes"
 	"context"
 	"crypto/sha256"
 	"crypto/subtle"
 	"encoding/json"
 	"errors"
 	"fmt"
-	"io"
 	"net/http"
 	"net/url"
 	"runtime"
 	"strings"
 	"sync"
 	"time"
+
+	"github.com/Dzarlax-AI/evening-news/go/internal/jsonsingle"
 )
 
 type Config struct {
@@ -151,7 +151,12 @@ func (s *Server) extract(w http.ResponseWriter, r *http.Request) {
 		s.fail(w, 429, "busy")
 		return
 	}
-	body, err := io.ReadAll(http.MaxBytesReader(w, r.Body, MaxJSONBytes))
+	var req Request
+	tooLarge, err := jsonsingle.Decode(http.MaxBytesReader(w, r.Body, MaxJSONBytes), MaxJSONBytes, &req)
+	if tooLarge {
+		s.fail(w, 413, "request_too_large")
+		return
+	}
 	if err != nil {
 		var large *http.MaxBytesError
 		if errors.As(err, &large) {
@@ -159,17 +164,6 @@ func (s *Server) extract(w http.ResponseWriter, r *http.Request) {
 		} else {
 			s.fail(w, 400, "invalid_request")
 		}
-		return
-	}
-	var req Request
-	d := json.NewDecoder(bytes.NewReader(body))
-	d.DisallowUnknownFields()
-	if err = d.Decode(&req); err != nil {
-		s.fail(w, 400, "invalid_request")
-		return
-	}
-	if err = d.Decode(new(any)); err != io.EOF {
-		s.fail(w, 400, "invalid_request")
 		return
 	}
 	if err = validate(&req); err != nil {

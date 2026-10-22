@@ -54,6 +54,55 @@ def test_popup_attempts_automatically_without_user_click():
     assert b"<script>window.open('https://10.55.0.2:9443/trap'" in body
 
 
+def test_wire_limit_route_is_fixed_and_exceeds_service_wire_cap():
+    response = gate.route_response("/wire-limit", "10.55.0.2")
+    assert response.route_id == "wire-limit"
+    assert response.status == 200
+    assert b"fetch('/wire-limit-body')" in response.body
+    assert len(response.body) < 1024
+    body = gate.route_response("/wire-limit-body", "10.55.0.2")
+    assert len(body.body) > 5 * 1024 * 1024
+    assert body.content_type == "application/octet-stream"
+    response = gate.route_response("/renderer-stress", "10.55.0.2")
+    assert response.route_id == "renderer-stress"
+    assert len(response.body) > 5 * 1024 * 1024
+    assert response.body.startswith(b"<!doctype html>")
+    assert response.body.endswith(b"</p>")
+    controlled = gate.route_response("/controlled-crash", "10.55.0.2")
+    assert controlled.route_id == "controlled-crash"
+    assert len(controlled.body) < 1024
+    assert b"Waiting for the test-only crash command" in controlled.body
+    assert b"data-ready" not in controlled.body
+
+
+@pytest.mark.parametrize('route', ['/wire-limit-body', '/renderer-stress'])
+def test_wire_limit_handler_streams_fixed_chunks(monkeypatch, route):
+    response_sizes = []
+    sleeps = []
+
+    class Writer:
+        def write(self, data):
+            response_sizes.append(len(data))
+        def flush(self):
+            pass
+
+    class Proof:
+        def append(self, _row):
+            pass
+
+    handler = gate.handler_for("10.55.0.2", Proof())
+    fake = SimpleNamespace(path=route, headers={},
+        connection=SimpleNamespace(version=lambda: "TLSv1.3"), wfile=Writer(),
+        send_response=lambda _status: None, send_header=lambda *_args: None,
+        end_headers=lambda: None)
+    monkeypatch.setattr(gate.time, "sleep", lambda delay: sleeps.append(delay))
+    handler.do_GET(fake)
+    assert response_sizes and max(response_sizes) <= 8 * 1024
+    assert sum(response_sizes) > 5 * 1024 * 1024
+    assert len(sleeps) == len(response_sizes)
+    assert set(sleeps) == {0.005}
+
+
 def test_redirect_download_auth_and_unknown_routes():
     redirect = gate.route_response("/redirect-private", "10.55.0.2")
     assert redirect.status == 302

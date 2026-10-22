@@ -29,6 +29,14 @@ MAX_BATCH_BUDGET_SECONDS = 1800
 MAX_BATCH_REPORT_BYTES = 1024 * 1024
 SAFE_ID = re.compile(r"^[a-z0-9][a-z0-9_-]{0,47}$")
 REPORT_NAME = re.compile(r"^batch-(\d{6})\.json$")
+NATIVE_CAPABILITY_DIAGNOSTICS = frozenset({
+    "response_invalid", "service_not_ready", "capabilities_missing",
+    "native_profile_missing", "capability_browser_missing", "capability_browser_false",
+    "capability_native_browser_missing", "capability_native_browser_false",
+    "capability_native_ready_selector_missing", "capability_native_ready_selector_false",
+    "selector_hash_mismatch", "http_status", "response_too_large", "invalid_json",
+    "timeout", "transport_error", "probe_error",
+})
 
 
 def _load_benchmark():
@@ -59,6 +67,20 @@ def _safe_error(exc: BaseException) -> str:
     return type(exc).__name__[:48]
 
 
+def _safe_capability_diagnostic(exc: BaseException) -> str | None:
+    value = getattr(exc, "diagnostic_code", None)
+    if isinstance(value, str) and value in NATIVE_CAPABILITY_DIAGNOSTICS:
+        return value
+    if isinstance(value, str) and re.fullmatch(r"http_status_(?:[1-5][0-9]{2}|other)", value):
+        return value
+    return None
+
+
+def _safe_readiness_diagnostic(exc: BaseException) -> dict[str, bool] | None:
+    value = getattr(exc, "readiness_diagnostic", None)
+    return benchmark._safe_readiness_diagnostic(value)
+
+
 def _safe_case_ids(values: Any) -> list[str]:
     if not isinstance(values, list) or any(not isinstance(value, str) or not SAFE_ID.fullmatch(value)
                                            for value in values):
@@ -74,7 +96,7 @@ def _redact_batch_report(report: dict[str, Any]) -> dict[str, Any]:
         "schema_version", "variant", "measurement_scope", "corpus_sha256", "case_ids", "cycles",
         "repeat_scope", "ready_selector", "native_capabilities", "baseline_cgroups", "warmup",
         "measure_interval_seconds", "idle_samples", "outcomes", "latency_ms", "resource_metrics",
-        "mismatch_count", "status",
+        "mismatch_count", "status", "readiness_diagnostic",
     )
     safe = {key: report[key] for key in allowed_top if key in report}
     safe["case_ids"] = _safe_case_ids(safe.get("case_ids"))
@@ -98,6 +120,8 @@ def _redact_batch_report(report: dict[str, Any]) -> dict[str, Any]:
                             for row in report.get("idle_samples", []) if isinstance(row, dict)]
     safe["resource_metrics"] = _safe_resource_metrics(report.get("resource_metrics", {}))
     safe["native_capabilities"] = _safe_capabilities(report.get("native_capabilities"))
+    safe["readiness_diagnostic"] = benchmark._safe_readiness_diagnostic(
+        report.get("readiness_diagnostic"))
     safe["latency_ms"] = _safe_latency(report.get("latency_ms", {}))
     safe["mismatch_count"] = _safe_int(report.get("mismatch_count"))
     return safe
@@ -467,6 +491,12 @@ async def run(args: argparse.Namespace, *, batch_runner=None, health_probe=None,
                 safe_report = {"schema_version": 1, "variant": "C", "batch_index": batch_index,
                                "status": "failed", "error": _safe_error(exc),
                                "batch_elapsed_seconds": round(monotonic() - batch_started, 2)}
+                diagnostic = _safe_capability_diagnostic(exc)
+                if diagnostic:
+                    safe_report["error_diagnostic"] = diagnostic
+                readiness = _safe_readiness_diagnostic(exc)
+                if readiness:
+                    safe_report["readiness_diagnostic"] = readiness
             encoded_size = len((json.dumps(safe_report, sort_keys=True, indent=2) + "\n").encode())
             current_bytes = _storage_bytes(args.output_dir)
             if current_bytes + encoded_size + SUMMARY_RESERVE_BYTES > MAX_STORAGE_BYTES:
@@ -525,6 +555,12 @@ async def run(args: argparse.Namespace, *, batch_runner=None, health_probe=None,
         summary["signal"] = "SIGTERM"
     except Exception as exc:
         failure_code = _safe_error(exc) if isinstance(exc, (benchmark.BenchmarkError, SoakError)) else "benchmark_failed"
+        diagnostic = _safe_capability_diagnostic(exc)
+        if diagnostic:
+            summary["failure_diagnostic"] = diagnostic
+        readiness = _safe_readiness_diagnostic(exc)
+        if readiness:
+            summary["readiness_diagnostic"] = readiness
         state = "failed"
     finally:
         restore_signal()

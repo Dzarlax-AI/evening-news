@@ -15,6 +15,7 @@ import (
 	"time"
 
 	"github.com/Dzarlax-AI/evening-news/go/extractor"
+	"github.com/chromedp/cdproto"
 	"github.com/gobwas/ws"
 	"github.com/gobwas/ws/wsutil"
 )
@@ -109,6 +110,400 @@ func TestBrowserCDPEventFiltering(t *testing.T) {
 	}
 }
 
+func TestDetachedOwnedSessionClassification(t *testing.T) {
+	tests := []struct {
+		name, envelope, detached string
+		malformed                bool
+		wantOwned, wantMalformed bool
+	}{
+		{name: "child on owned envelope", envelope: "owned", detached: "child"},
+		{name: "root scoped owned", detached: "owned", wantOwned: true},
+		{name: "owned envelope owned", envelope: "owned", detached: "owned", wantOwned: true},
+		{name: "foreign envelope", envelope: "foreign", detached: "owned"},
+		{name: "malformed root", malformed: true, wantMalformed: true},
+	}
+	for _, test := range tests {
+		t.Run(test.name, func(t *testing.T) {
+			params := `{"sessionId":"` + test.detached + `"}`
+			if test.malformed {
+				params = `{}`
+			}
+			payload, err := json.Marshal(map[string]any{
+				"method": "Target.detachedFromTarget", "sessionId": test.envelope,
+				"params": json.RawMessage(params),
+			})
+			if err != nil {
+				t.Fatal(err)
+			}
+			var message cdproto.Message
+			if err := json.Unmarshal(payload, &message); err != nil {
+				t.Fatal(err)
+			}
+			owned, malformed := detachedOwnedSession(&message, "owned")
+			if owned != test.wantOwned || malformed != test.wantMalformed {
+				t.Fatalf("classification = (%v, %v), want (%v, %v)", owned, malformed, test.wantOwned, test.wantMalformed)
+			}
+		})
+	}
+}
+
+func TestBrowserCDPOverflowKeepsCleanupRepliesReadable(t *testing.T) {
+	commandReceived := make(chan struct{})
+	cleanupReceived := make(chan struct{})
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		conn, _, _, err := ws.UpgradeHTTP(r, w)
+		if err != nil {
+			return
+		}
+		defer conn.Close()
+		_ = conn.SetDeadline(time.Now().Add(3 * time.Second))
+		readCommand := func() (int64, string, bool) {
+			data, _, err := wsutil.ReadClientData(conn)
+			if err != nil {
+				return 0, "", false
+			}
+			var command struct {
+				ID     int64  `json:"id"`
+				Method string `json:"method"`
+			}
+			if json.Unmarshal(data, &command) != nil {
+				return 0, "", false
+			}
+			return command.ID, command.Method, true
+		}
+		write := func(value any) bool {
+			payload, err := json.Marshal(value)
+			return err == nil && wsutil.WriteServerMessage(conn, ws.OpText, payload) == nil
+		}
+		id, _, ok := readCommand()
+		if !ok {
+			return
+		}
+		close(commandReceived)
+		for i := 0; i < 257; i++ {
+			if !write(map[string]any{"method": "Fetch.requestPaused", "sessionId": "owned-session", "params": map[string]any{"requestId": fmt.Sprint(i)}}) {
+				return
+			}
+		}
+		if !write(map[string]any{"id": id, "result": map[string]bool{"received": true}}) {
+			return
+		}
+		id, method, ok := readCommand()
+		if !ok || method != "Target.disposeBrowserContext" {
+			return
+		}
+		close(cleanupReceived)
+		for i := 0; i < 4096; i++ {
+			if !write(map[string]any{"method": "Network.dataReceived", "sessionId": "owned-session", "params": map[string]any{"requestId": fmt.Sprint(i)}}) {
+				return
+			}
+		}
+		_ = write(map[string]any{"id": id, "result": map[string]bool{}})
+		_, _, _ = wsutil.ReadClientData(conn)
+	}))
+	defer server.Close()
+	ctx, cancel := context.WithTimeout(context.Background(), 2*time.Second)
+	defer cancel()
+	client, err := dialBrowser(ctx, "ws"+strings.TrimPrefix(server.URL, "http"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer client.close()
+
+	var result struct {
+		Received bool `json:"received"`
+	}
+	err = client.call(ctx, "", "Browser.getVersion", map[string]any{}, &result)
+	if err == nil || !strings.Contains(err.Error(), "event_overflow") {
+		t.Fatalf("overloaded command should fail with terminal event error, got result=%+v err=%v", result, err)
+	}
+	select {
+	case <-commandReceived:
+	default:
+		t.Fatal("fixture did not receive the ordinary command")
+	}
+	if err := client.callCleanup(ctx, "", "Target.disposeBrowserContext", map[string]any{"browserContextId": "owned"}, nil); err != nil {
+		t.Fatalf("cleanup reply was lost after event overload: %v", err)
+	}
+	select {
+	case <-cleanupReceived:
+	default:
+		t.Fatal("fixture did not receive the cleanup command")
+	}
+}
+
+func TestBrowserCDPAllocationReplySurvivesOverflow(t *testing.T) {
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		conn, _, _, err := ws.UpgradeHTTP(r, w)
+		if err != nil {
+			return
+		}
+		defer conn.Close()
+		_ = conn.SetDeadline(time.Now().Add(2 * time.Second))
+		data, _, err := wsutil.ReadClientData(conn)
+		if err != nil {
+			return
+		}
+		var command struct {
+			ID int64 `json:"id"`
+		}
+		if json.Unmarshal(data, &command) != nil {
+			return
+		}
+		write := func(value any) bool {
+			payload, err := json.Marshal(value)
+			return err == nil && wsutil.WriteServerMessage(conn, ws.OpText, payload) == nil
+		}
+		for i := 0; i < 257; i++ {
+			if !write(map[string]any{"method": "Fetch.requestPaused", "sessionId": "owned", "params": map[string]any{}}) {
+				return
+			}
+		}
+		_ = write(map[string]any{"id": command.ID, "result": map[string]string{"browserContextId": "owned-context"}})
+		data, _, err = wsutil.ReadClientData(conn)
+		if err != nil {
+			return
+		}
+		if !write(map[string]any{"id": json.RawMessage(extractCommandID(data)), "result": map[string]bool{}}) {
+			return
+		}
+		_, _, _ = wsutil.ReadClientData(conn)
+	}))
+	defer server.Close()
+	ctx, cancel := context.WithTimeout(context.Background(), 2*time.Second)
+	defer cancel()
+	client, err := dialBrowser(ctx, "ws"+strings.TrimPrefix(server.URL, "http"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer client.close()
+	var contextReply struct {
+		ID string `json:"browserContextId"`
+	}
+	if err := client.callAllocation(ctx, "", "Target.createBrowserContext", map[string]any{}, &contextReply); err != nil {
+		t.Fatalf("in-flight allocation reply was discarded: %v", err)
+	}
+	if contextReply.ID != "owned-context" {
+		t.Fatalf("allocation ID not captured: %+v", contextReply)
+	}
+	if err := client.callAllocation(ctx, "", "Target.createTarget", map[string]any{}, nil); !errors.Is(err, ErrBrowserEventOverflow) {
+		t.Fatalf("next allocation was not rejected after overload: %v", err)
+	}
+	if err := client.callCleanup(ctx, "", "Target.disposeBrowserContext", map[string]any{"browserContextId": contextReply.ID}, nil); err != nil {
+		t.Fatalf("owned context could not be disposed after overload: %v", err)
+	}
+}
+
+func TestBrowserCDPLateAndDuplicateRepliesDoNotBlockReader(t *testing.T) {
+	firstReceived := make(chan struct{})
+	releaseFirst := make(chan struct{})
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		conn, _, _, err := ws.UpgradeHTTP(r, w)
+		if err != nil {
+			return
+		}
+		defer conn.Close()
+		_ = conn.SetDeadline(time.Now().Add(2 * time.Second))
+		read := func() (int64, bool) {
+			data, _, err := wsutil.ReadClientData(conn)
+			if err != nil {
+				return 0, false
+			}
+			return int64(commandID(data)), true
+		}
+		write := func(id int64) bool {
+			payload, err := json.Marshal(map[string]any{"id": id, "result": map[string]bool{"ok": true}})
+			return err == nil && wsutil.WriteServerMessage(conn, ws.OpText, payload) == nil
+		}
+		first, ok := read()
+		if !ok {
+			return
+		}
+		close(firstReceived)
+		<-releaseFirst
+		if !write(first) || !write(first) {
+			return
+		}
+		second, ok := read()
+		if !ok {
+			return
+		}
+		_ = write(second)
+		_, _, _ = wsutil.ReadClientData(conn)
+	}))
+	defer server.Close()
+	ctx, cancel := context.WithTimeout(context.Background(), 2*time.Second)
+	defer cancel()
+	client, err := dialBrowser(ctx, "ws"+strings.TrimPrefix(server.URL, "http"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer client.close()
+	firstCtx, cancelFirst := context.WithCancel(ctx)
+	firstResult := make(chan error, 1)
+	go func() { firstResult <- client.call(firstCtx, "", "Browser.getVersion", map[string]any{}, nil) }()
+	<-firstReceived
+	cancelFirst()
+	if err := <-firstResult; !errors.Is(err, context.Canceled) {
+		t.Fatalf("canceled first call returned %v", err)
+	}
+	close(releaseFirst)
+	var result struct {
+		OK bool `json:"ok"`
+	}
+	if err := client.call(ctx, "", "Browser.getVersion", map[string]any{}, &result); err != nil || !result.OK {
+		t.Fatalf("late/duplicate reply blocked following command: result=%+v err=%v", result, err)
+	}
+}
+
+func commandID(data []byte) int {
+	var command struct {
+		ID int `json:"id"`
+	}
+	_ = json.Unmarshal(data, &command)
+	return command.ID
+}
+
+func TestBrowserCDPCleanupAllowlistAndDeadline(t *testing.T) {
+	commandReceived := make(chan struct{})
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		conn, _, _, err := ws.UpgradeHTTP(r, w)
+		if err != nil {
+			return
+		}
+		defer conn.Close()
+		_ = conn.SetDeadline(time.Now().Add(time.Second))
+		if _, _, err := wsutil.ReadClientData(conn); err == nil {
+			close(commandReceived)
+		}
+		_, _, _ = wsutil.ReadClientData(conn)
+	}))
+	defer server.Close()
+	ctx, cancel := context.WithTimeout(context.Background(), time.Second)
+	defer cancel()
+	client, err := dialBrowser(ctx, "ws"+strings.TrimPrefix(server.URL, "http"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer client.close()
+	if err := client.callCleanup(ctx, "", "Runtime.evaluate", map[string]any{}, nil); err == nil || !strings.Contains(err.Error(), "cleanup_command_denied") {
+		t.Fatalf("cleanup path accepted a page command: %v", err)
+	}
+	cleanupCtx, cleanupCancel := context.WithTimeout(ctx, 50*time.Millisecond)
+	defer cleanupCancel()
+	err = client.callCleanup(cleanupCtx, "owned-session", "Page.stopLoading", map[string]any{}, nil)
+	if !errors.Is(err, context.DeadlineExceeded) {
+		t.Fatalf("unanswered cleanup did not honor its deadline: %v", err)
+	}
+	select {
+	case <-commandReceived:
+	default:
+		t.Fatal("fixture did not receive allowlisted cleanup command")
+	}
+	select {
+	case <-client.done:
+	case <-time.After(time.Second):
+		t.Fatal("deadline did not close a stalled cleanup connection")
+	}
+}
+
+func TestBrowserCDPBlockedWriteHonorsContext(t *testing.T) {
+	releaseHandler := make(chan struct{})
+	handlerDone := make(chan struct{})
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		defer close(handlerDone)
+		conn, _, _, err := ws.UpgradeHTTP(r, w)
+		if err != nil {
+			return
+		}
+		defer conn.Close()
+		<-releaseHandler // Deliberately never read the client's command frame.
+	}))
+	defer func() {
+		close(releaseHandler)
+		server.Close()
+		select {
+		case <-handlerDone:
+		case <-time.After(time.Second):
+			t.Error("blocked-write fixture handler did not exit")
+		}
+	}()
+	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
+	defer cancel()
+	client, err := dialBrowser(ctx, "ws"+strings.TrimPrefix(server.URL, "http"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer client.close()
+	writeCtx, cancelWrite := context.WithTimeout(ctx, 100*time.Millisecond)
+	defer cancelWrite()
+	started := time.Now()
+	err = client.call(writeCtx, "", "Browser.getVersion", map[string]any{"padding": strings.Repeat("x", 8<<20)}, nil)
+	if !errors.Is(err, context.DeadlineExceeded) {
+		t.Fatalf("blocked protocol write lost deadline classification: %v", err)
+	}
+	if elapsed := time.Since(started); elapsed > 3*time.Second {
+		t.Fatalf("blocked protocol write prevented prompt cancellation: %v", elapsed)
+	}
+	cleanupCtx, cleanupCancel := context.WithTimeout(context.Background(), 250*time.Millisecond)
+	defer cleanupCancel()
+	_ = client.callCleanup(cleanupCtx, "", "Page.stopLoading", map[string]any{}, nil)
+	select {
+	case <-client.done:
+	case <-time.After(3 * time.Second):
+		t.Fatal("bounded cleanup did not release the shared reader")
+	}
+	select {
+	case <-client.writerDone:
+	case <-time.After(3 * time.Second):
+		t.Fatal("bounded cleanup did not release the writer")
+	}
+	client.mu.Lock()
+	pending := len(client.pending)
+	client.mu.Unlock()
+	if pending != 0 {
+		t.Fatalf("canceled callers leaked %d pending entries", pending)
+	}
+}
+
+func TestBrowserCDPPhysicalEOFIsSeparateFromEventFailure(t *testing.T) {
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		conn, _, _, err := ws.UpgradeHTTP(r, w)
+		if err != nil {
+			return
+		}
+		defer conn.Close()
+		_, _, _ = wsutil.ReadClientData(conn)
+	}))
+	defer server.Close()
+	ctx, cancel := context.WithTimeout(context.Background(), time.Second)
+	defer cancel()
+	client, err := dialBrowser(ctx, "ws"+strings.TrimPrefix(server.URL, "http"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer client.close()
+	if err := client.call(ctx, "", "Browser.getVersion", map[string]any{}, nil); err == nil {
+		t.Fatal("physical EOF was reported as command success")
+	}
+	select {
+	case <-client.done:
+	case <-ctx.Done():
+		t.Fatal("physical reader completion was not observable")
+	}
+	if client.eventError() != nil {
+		t.Fatalf("physical EOF was confused with event overload: %v", client.eventError())
+	}
+}
+
+func extractCommandID(data []byte) json.RawMessage {
+	var command struct {
+		ID json.RawMessage `json:"id"`
+	}
+	_ = json.Unmarshal(data, &command)
+	return command.ID
+}
+
 func browserTestEndpoint(t *testing.T) string {
 	t.Helper()
 	endpoint := os.Getenv("GO_BROWSER_TEST_ENDPOINT")
@@ -119,6 +514,171 @@ func browserTestEndpoint(t *testing.T) string {
 		t.Skip("set GO_BROWSER_TEST_ENDPOINT to a dedicated loopback Chrome debugger; tests never launch Chrome")
 	}
 	return endpoint
+}
+
+type cloakDiagnosticCommand struct {
+	method  string
+	params  map[string]any
+	browser bool
+}
+
+type cloakDiagnosticProfile struct {
+	name       string
+	context    map[string]any
+	background bool
+	commands   []cloakDiagnosticCommand
+}
+
+// TestBrowserCloakCommandDiagnostic is opt-in and sends only about:blank CDP setup commands.
+func TestBrowserCloakCommandDiagnostic(t *testing.T) {
+	if os.Getenv("GO_CLOAK_COMMAND_DIAGNOSTIC") != "1" {
+		t.Skip("set GO_CLOAK_COMMAND_DIAGNOSTIC=1 with a dedicated Cloak endpoint")
+	}
+	endpoint := browserTestEndpoint(t)
+	profiles := []cloakDiagnosticProfile{
+		{name: "browser-fetch", commands: []cloakDiagnosticCommand{
+			{"Network.enable", map[string]any{}, false},
+			{"Network.setBlockedURLs", map[string]any{"urls": []string{"ws://*", "wss://*"}, "urlPatterns": []any{
+				map[string]any{"urlPattern": "ws://*:*/*", "block": true}, map[string]any{"urlPattern": "wss://*:*/*", "block": true}}}, false},
+			{"Network.setCacheDisabled", map[string]any{"cacheDisabled": true}, false},
+			{"Network.setBypassServiceWorker", map[string]any{"bypass": true}, false},
+			{"Network.setUserAgentOverride", map[string]any{"userAgent": MobileUserAgent}, false},
+			{"Page.enable", map[string]any{}, false},
+			{"Fetch.enable", map[string]any{"patterns": []any{
+				map[string]any{"urlPattern": "*", "requestStage": "Request"},
+				map[string]any{"urlPattern": "*", "requestStage": "Response"}}}, false},
+		}},
+		{name: "native-browser", context: map[string]any{"proxyServer": "http://127.0.0.1:9", "proxyBypassList": "<-loopback>"}, background: true, commands: []cloakDiagnosticCommand{
+			{"Page.enable", map[string]any{}, false},
+			{"Network.enable", map[string]any{"maxPostDataSize": 1}, false},
+			{"Network.setBlockedURLs", map[string]any{"urls": []string{"http://*", "ws://*", "wss://*", "file://*", "ftp://*"}}, false},
+			{"Browser.setDownloadBehavior", map[string]any{"behavior": "deny", "eventsEnabled": true}, true},
+			{"Target.setAutoAttach", map[string]any{"autoAttach": true, "waitForDebuggerOnStart": true, "flatten": true}, false},
+			{"Fetch.enable", map[string]any{"handleAuthRequests": true, "patterns": []any{map[string]any{"urlPattern": "*", "requestStage": "Request"}}}, false},
+			{"Page.getFrameTree", map[string]any{}, false},
+		}},
+	}
+	for _, p := range profiles {
+		if !runCloakCommandDiagnostic(t, endpoint, p.name, p.context, p.background, p.commands) {
+			return
+		}
+	}
+}
+
+func runCloakCommandDiagnostic(t *testing.T, endpoint, profile string, contextParams map[string]any,
+	background bool, commands []cloakDiagnosticCommand) bool {
+	t.Helper()
+	ctx, cancel := context.WithTimeout(context.Background(), 40*time.Second)
+	defer cancel()
+	wsURL, err := browserEndpoint(ctx, endpoint)
+	if err != nil {
+		t.Errorf("cloak-cdp profile=%s stage=discovery outcome=failed", profile)
+		return false
+	}
+	client, err := dialBrowser(ctx, wsURL)
+	if err != nil {
+		t.Errorf("cloak-cdp profile=%s stage=dial outcome=failed", profile)
+		return false
+	}
+	contextID := ""
+	defer func() {
+		if contextID != "" {
+			cleanup, done := context.WithTimeout(context.Background(), 5*time.Second)
+			started := time.Now()
+			err := client.callCleanup(cleanup, "", "Target.disposeBrowserContext", map[string]any{"browserContextId": contextID}, nil)
+			done()
+			logCloakDiagnostic(t, profile, "cleanup", "Target.disposeBrowserContext", started, err)
+			if err != nil {
+				t.Errorf("cloak-cdp profile=%s cleanup=unconfirmed", profile)
+			}
+		}
+		client.close()
+	}()
+	call := func(stage, session, method string, params, result any, allocation bool) bool {
+		callCtx, done := context.WithTimeout(ctx, 5*time.Second)
+		started := time.Now()
+		if allocation {
+			err = client.callAllocation(callCtx, session, method, params, result)
+		} else {
+			err = client.call(callCtx, session, method, params, result)
+		}
+		done()
+		logCloakDiagnostic(t, profile, stage, method, started, err)
+		if err != nil {
+			t.Fail()
+		}
+		return err == nil
+	}
+	params := map[string]any{"disposeOnDetach": true}
+	for k, v := range contextParams {
+		params[k] = v
+	}
+	var createdContext struct {
+		ID string `json:"browserContextId"`
+	}
+	if !call("allocation", "", "Target.createBrowserContext", params, &createdContext, true) {
+		return false
+	}
+	contextID = createdContext.ID
+	if contextID == "" {
+		t.Errorf("cloak-cdp profile=%s stage=allocation method=Target.createBrowserContext outcome=missing_receipt", profile)
+		return false
+	}
+	var contexts struct {
+		IDs []string `json:"browserContextIds"`
+	}
+	if !call("receipt", "", "Target.getBrowserContexts", map[string]any{}, &contexts, false) {
+		return false
+	}
+	targetParams := map[string]any{"url": "about:blank", "browserContextId": contextID}
+	if background {
+		targetParams["background"] = true
+	}
+	var target struct {
+		ID string `json:"targetId"`
+	}
+	if !call("allocation", "", "Target.createTarget", targetParams, &target, true) {
+		return false
+	}
+	if target.ID == "" {
+		t.Errorf("cloak-cdp profile=%s stage=allocation method=Target.createTarget outcome=missing_receipt", profile)
+		return false
+	}
+	var attached struct {
+		ID string `json:"sessionId"`
+	}
+	if !call("allocation", "", "Target.attachToTarget", map[string]any{"targetId": target.ID, "flatten": true}, &attached, true) {
+		return false
+	}
+	if attached.ID == "" {
+		t.Errorf("cloak-cdp profile=%s stage=allocation method=Target.attachToTarget outcome=missing_receipt", profile)
+		return false
+	}
+	for _, c := range commands {
+		session := attached.ID
+		if c.browser {
+			session = ""
+			c.params["browserContextId"] = contextID
+		}
+		if !call("configure", session, c.method, c.params, nil, false) {
+			return false
+		}
+	}
+	return true
+}
+
+func logCloakDiagnostic(t *testing.T, profile, stage, method string, started time.Time, err error) {
+	t.Helper()
+	outcome := "ok"
+	if err != nil {
+		outcome = "protocol_or_transport"
+		if errors.Is(err, context.DeadlineExceeded) {
+			outcome = "deadline"
+		} else if errors.Is(err, ErrBrowserEventOverflow) {
+			outcome = "event_overflow"
+		}
+	}
+	t.Logf("cloak-cdp profile=%s stage=%s method=%s elapsed_ms=%d outcome=%s", profile, stage, method, time.Since(started).Milliseconds(), outcome)
 }
 
 func TestBrowserInputBounds(t *testing.T) {

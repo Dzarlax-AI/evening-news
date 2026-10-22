@@ -13,7 +13,7 @@ type cleanupRecorder struct {
 	params   []map[string]any
 }
 
-func (r *cleanupRecorder) call(ctx context.Context, session, method string, params, result any) error {
+func (r *cleanupRecorder) callCleanup(ctx context.Context, session, method string, params, result any) error {
 	r.methods = append(r.methods, method)
 	r.params = append(r.params, params.(map[string]any))
 	return r.failures[method]
