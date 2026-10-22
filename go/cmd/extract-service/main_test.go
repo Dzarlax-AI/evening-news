@@ -6,6 +6,7 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"io"
 	"net"
 	"net/http"
 	"net/http/httptest"
@@ -20,6 +21,7 @@ import (
 
 	"github.com/Dzarlax-AI/evening-news/go/extractor"
 	"github.com/Dzarlax-AI/evening-news/go/pipeline"
+	"github.com/Dzarlax-AI/evening-news/go/service"
 	"github.com/gobwas/ws"
 	"github.com/gobwas/ws/wsutil"
 )
@@ -122,6 +124,56 @@ func TestAdmissionUnavailableWireIsRetryableWithoutBrowserDelegation(t *testing.
 	resp := toServiceResponse(pipeline.Outcome{Result: extractor.Result{State: "failed", Error: "admission_unavailable"}})
 	if resp.Outcome != "failed" || resp.Error == nil || resp.Error.Code != "admission_unavailable" || !resp.Error.Retryable || resp.NeedsSelectorStudy {
 		t.Fatalf("invalid admission outage contract: %+v", resp)
+	}
+}
+
+func TestSelectorStudyHTTPResponseOmitsExpandedCapturedHTML(t *testing.T) {
+	const token = "isolated-test-service-token"
+	// The source HTML is at the request cap and contains enough JSON-escaped
+	// quotes that returning it would exceed the Python client's same-sized cap.
+	studyHTML := strings.Repeat(`"a`, service.MaxBytes/2)
+	outcome := pipeline.Outcome{
+		Result:             extractor.Result{URL: "https://example.org/article", State: "failed", Error: "no_content", Trace: []string{}, Media: []extractor.Media{}},
+		NeedsSelectorStudy: true,
+		StudyHTML:          studyHTML,
+	}
+	server, err := service.New(service.Config{Token: token, BuildVersion: "test"}, service.RunnerFunc(func(context.Context, service.Request) service.Response {
+		return toServiceResponse(outcome)
+	}))
+	if err != nil {
+		t.Fatal(err)
+	}
+	httpServer := httptest.NewServer(server)
+	defer httpServer.Close()
+
+	requestBody, err := json.Marshal(service.Request{RequestID: "study-large-escaped", URL: outcome.Result.URL, BudgetMS: 1000, MaxBytes: service.MaxBytes, MaxChars: 100000})
+	if err != nil {
+		t.Fatal(err)
+	}
+	req, err := http.NewRequest(http.MethodPost, httpServer.URL+"/v1/extract", bytes.NewReader(requestBody))
+	if err != nil {
+		t.Fatal(err)
+	}
+	req.Header.Set("Authorization", "Bearer "+token)
+	req.Header.Set("Content-Type", "application/json")
+	resp, err := http.DefaultClient.Do(req)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer resp.Body.Close()
+	body, err := io.ReadAll(io.LimitReader(resp.Body, service.MaxJSONBytes+1))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if resp.StatusCode != http.StatusOK || len(body) > service.MaxBytes {
+		t.Fatalf("large selector study response exceeded client cap: status=%d bytes=%d", resp.StatusCode, len(body))
+	}
+	var wire service.Response
+	if err := json.Unmarshal(body, &wire); err != nil {
+		t.Fatal(err)
+	}
+	if wire.Outcome != "needs_selector_study" || !wire.NeedsSelectorStudy || wire.RequestID != "study-large-escaped" || len(wire.StudyHTML) != 0 {
+		t.Fatalf("selector-study response lost fallback metadata or included capture: %+v", wire)
 	}
 }
 

@@ -57,3 +57,17 @@ Fresh local verification after all corrections: 871 Python tests passed,
 passed. The disconnect test independently passed 20 race repetitions, and
 an independent browser review passed 76 tests. New PR CI and final automated
 review are still required; this does not close the production-isolation gate.
+
+
+### Final response-size review correction
+
+The second Codex pass found that unused captured `study_html` could expand a
+near-limit page beyond the client's JSON response cap and hide the intended
+selector-study outcome. The production response converter now omits that
+optional capture; internal pipeline recovery, study status and observations
+remain unchanged. A near-5-MiB escaped-capture actual HTTP regression and three
+Python loopback fallback-policy cases passed independently. No limits increased.
+Fresh full local Python suite: 874 passed, 8 skipped, 22 subtests. Affected Go
+service/pipeline/lifecycle packages passed race tests and vet. Prior revision
+`34b7b06` completed all Linux CI checks; the updated revision requires new CI
+and automated review. Production remains unchanged pending isolation approval.

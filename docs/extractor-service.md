@@ -169,3 +169,14 @@ server's `EXTRACTOR_SERVICE_TOKEN` (minimum 16 bytes). Go also accepts `LISTEN_A
 `EXTRACTOR_MAX_CONCURRENT` and `EXTRACTOR_BROWSER_CONCURRENT`.
 
 Production rollout remains separate from local implementation approval.
+
+
+### Captured study input and response size
+
+The production article runner omits the optional `study_html` response field.
+It preserves `outcome=needs_selector_study`, the study flag and selector
+observations. Captured HTML remains available internally to the Go pipeline for
+alternative-URL processing, but the current Python client does not consume it.
+The configured Python fallback obtains its own input; returning a near-limit
+page would only inflate the JSON envelope and could hide the intended outcome
+behind `response_too_large`. No byte or memory limits are increased.

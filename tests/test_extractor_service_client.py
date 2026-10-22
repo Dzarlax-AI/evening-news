@@ -490,6 +490,39 @@ async def test_study_outcome_without_opted_in_fallback_never_calls_llm_or_python
     memory.record_extraction_attempt.assert_not_called()
 
 
+@pytest.mark.parametrize('fallback,native_browser,uses_python', [
+    (False, False, False), (True, False, True), (True, True, False)])
+@pytest.mark.asyncio
+async def test_needs_study_without_wire_html_preserves_fallback_policy(fallback, native_browser, uses_python):
+    settings, core, memory = routing(fallback=fallback, native_browser=native_browser)
+
+    async def handler(request):
+        data = await request.json()
+        response = response_for(data, outcome='needs_selector_study',
+            needs_selector_study=True,
+            error={'code': 'needs_selector_study', 'retryable': False})
+        response.pop('study_html', None)
+        return web.json_response(response)
+
+    async with server(handler) as endpoint:
+        settings.extraction_service_url = endpoint
+        with patch('news_aggregator.config.get_settings', return_value=settings), \
+                patch('news_aggregator.extraction.core_extractor.get_extraction_memory', AsyncMock(return_value=memory)), \
+                patch('news_aggregator.extraction.core_extractor.get_stability_tracker', AsyncMock(return_value=Mock())):
+            if uses_python:
+                result = await core.extract_article_content_with_metadata(URL)
+                assert result['content'] == 'Python authoritative'
+            else:
+                with pytest.raises(ExtractionServiceError, match='needs_selector_study'):
+                    await core.extract_article_content_with_metadata(URL)
+
+    if uses_python:
+        core._extract_article_content_python.assert_awaited_once()
+    else:
+        core._extract_article_content_python.assert_not_called()
+    memory.record_extraction_attempt.assert_not_called()
+
+
 @pytest.mark.parametrize('outcome,fallback,terminal', [
     ('failed', False, False), ('rejected', False, False), ('needs_selector_study', False, False),
     ('failed', True, False), ('needs_selector_study', True, False), ('failed', True, True)])

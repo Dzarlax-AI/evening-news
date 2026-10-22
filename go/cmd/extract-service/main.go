@@ -198,7 +198,10 @@ func httpOnlyConfig(raw, endpoint string) (bool, error) {
 }
 
 func toServiceResponse(out pipeline.Outcome) service.Response {
-	resp := service.Response{Result: out.Result, NeedsSelectorStudy: out.NeedsSelectorStudy, StudyHTML: out.StudyHTML, Outcome: "failed"}
+	// StudyHTML is retained inside the Go pipeline for bounded alternative-page
+	// recovery, but it is unused by the Python caller. Omitting it keeps a
+	// near-limit captured page from expanding beyond the private response cap.
+	resp := service.Response{Result: out.Result, NeedsSelectorStudy: out.NeedsSelectorStudy, Outcome: "failed"}
 	for _, v := range out.Observations {
 		resp.Observations = append(resp.Observations, service.Observation{Selector: v.Selector, Method: v.Method, Success: v.Success, Reason: v.Reason})
 	}
