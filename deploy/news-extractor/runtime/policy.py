@@ -117,4 +117,3 @@ def policy(role: str, addresses: dict[str, str], resolver: str,
         chains.append(f"chain {name} {{\n    type filter hook {name} priority -150; policy drop;\n{body}\n    counter drop\n}}")
     chains.append("chain forward {\n    type filter hook forward priority -150; policy drop;\n    counter drop\n}")
     return f'table inet {TABLE} {{\n  comment "policy-sha256:{digest}"\n' + "\n".join(chains) + "\n}\n"
-
