@@ -39,7 +39,7 @@ connection-time DNS pinning applies to Go HTTP requests. The existing native
 Python browser transport retains its own redirect/subrequest policy; the handoff
 check does not extend Go's connection-time guarantees to that second runtime.
 The opt-in native path uses its own explicit isolation assertion; the new
-persistent supervisor still requires separate Linux lifecycle acceptance.
+Compose-managed browser bootstrap still requires separate Linux lifecycle acceptance.
 
 Reviewable standby/canary/rollback overlays and release instructions are in
 [`deploy/news-extractor/`](../deploy/news-extractor/README.md). They have not been

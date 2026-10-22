@@ -1,0 +1,52 @@
+# Merge after the canonical infra Compose. This replaces only the existing
+# chrome service, clears any rollback profile, and keeps the existing marker
+# volume as an explicit external volume.
+services:
+  chrome:
+    image: ${NEWS_BROWSER_IMAGE:?Set the browser image by immutable digest}
+    entrypoint: !override ["python", "/opt/news-browser/entrypoint.py"]
+    command: !override []
+    ports: !override []
+    profiles: !override []
+    environment:
+      CLOAK_SELF_IP: ${NEWS_BROWSER_IP:?Set the reserved browser control IP}
+      CLOAK_PROXY_IP: ${NEWS_PROXY_IP:?Set the reserved proxy control IP}
+      CLOAK_CONTROLLER_IPS: ${NEWS_BROWSER_CONTROLLER_IPS:?Set the exact controller IP JSON}
+    networks: !override
+      private-control:
+        ipv4_address: ${NEWS_BROWSER_IP:?Set the reserved browser control IP}
+    restart: unless-stopped
+    init: true
+    read_only: true
+    tmpfs:
+      - /tmp:rw,noexec,nosuid,size=256m
+      - /run:rw,noexec,nosuid,size=32m
+    shm_size: 1gb
+    cap_drop: [ALL]
+    cap_add: [NET_ADMIN, SETPCAP, SETUID, SETGID, KILL]
+    security_opt: [no-new-privileges:true]
+    mem_limit: 768m
+    cpus: 0.5
+    pids_limit: 256
+    stop_grace_period: 40s
+    healthcheck: !override
+      test: ["CMD", "python", "/opt/news-browser/entrypoint.py", "--healthcheck"]
+      interval: 15s
+      timeout: 3s
+      start_period: 30s
+      retries: 3
+    volumes:
+      - browser-control:/browser-control
+
+volumes:
+  browser-control:
+    external: true
+    name: ${NEWS_BROWSER_CONTROL_VOLUME:?Set the existing shared browser-control volume name}
+
+networks:
+  private-control:
+    name: ${NEWS_CONTROL_NETWORK:?Set the shared private control network name}
+    internal: true
+    ipam:
+      config:
+        - subnet: ${NEWS_CONTROL_SUBNET:?Set the shared private control subnet}

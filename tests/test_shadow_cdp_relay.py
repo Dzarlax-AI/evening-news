@@ -5,6 +5,7 @@ import base64
 import importlib.util
 import json
 from pathlib import Path
+import sys
 from types import SimpleNamespace
 
 import pytest
@@ -22,6 +23,45 @@ def load(name, relative):
 
 launcher = load("launch_shadow_cloak", "scripts/launch_shadow_cloak.py")
 relay = load("shadow_cdp_relay", "scripts/shadow_cdp_relay.py")
+
+
+def test_relay_persistent_waits_for_signal_but_default_lifetime_stays_bounded(monkeypatch):
+    async def scenario():
+        monkeypatch.setattr(relay, "LIFETIME_SECONDS", 0)
+        stopped = asyncio.Event()
+        await relay.wait_for_shutdown(stopped.wait())
+        assert not stopped.is_set()
+
+        persistent_stop = asyncio.Event()
+        asyncio.get_running_loop().call_soon(persistent_stop.set)
+        await relay.wait_for_shutdown(persistent_stop.wait(), persistent=True)
+        assert persistent_stop.is_set()
+
+    asyncio.run(scenario())
+
+
+@pytest.mark.parametrize(("extra", "expected"), [([], False), (["--persistent"], True)])
+def test_relay_cli_forwards_persistent_mode(monkeypatch, extra, expected):
+    captured = []
+
+    def capture(coroutine):
+        captured.append(coroutine)
+
+    monkeypatch.setattr(relay.asyncio, "run", capture)
+    monkeypatch.setattr(sys, "argv", ["shadow_cdp_relay.py", "--controller-ip", "10.55.0.3", *extra])
+    relay.main()
+    assert len(captured) == 1
+    assert captured[0].cr_frame.f_locals["persistent"] is expected
+    captured[0].close()
+
+
+def test_relay_cli_rejects_persistent_synthetic_mode(monkeypatch, tmp_path):
+    monkeypatch.setattr(sys, "argv", ["shadow_cdp_relay.py", "--controller-ip", "10.55.0.3",
+                                       "--persistent", "--synthetic-arm-dir", str(tmp_path),
+                                       "--synthetic-report", str(tmp_path / "report.json")])
+    with pytest.raises(SystemExit) as error:
+        relay.main()
+    assert error.value.code == 2
 
 
 def test_launcher_uses_only_pinned_args_and_fixed_debug_binding(tmp_path):

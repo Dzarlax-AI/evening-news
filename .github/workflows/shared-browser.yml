@@ -1,0 +1,107 @@
+name: Shared Cloak browser image
+
+on:
+  pull_request:
+    paths:
+      - 'deploy/news-extractor/browser/**'
+      - 'deploy/news-extractor/compose.shared-browser.yml'
+      - 'deploy/news-extractor/compose.native.yml'
+      - 'docker/Dockerfile.browser'
+      - 'scripts/launch_shadow_cloak.py'
+      - 'scripts/shadow_cdp_relay.py'
+      - 'scripts/shadow_x11_client.sh'
+      - 'tests/test_news_browser_container.py'
+      - 'tests/test_news_compose_native.py'
+      - '.github/workflows/shared-browser.yml'
+  push:
+    paths:
+      - 'deploy/news-extractor/browser/**'
+      - 'deploy/news-extractor/compose.shared-browser.yml'
+      - 'deploy/news-extractor/compose.native.yml'
+      - 'docker/Dockerfile.browser'
+      - 'scripts/launch_shadow_cloak.py'
+      - 'scripts/shadow_cdp_relay.py'
+      - 'scripts/shadow_x11_client.sh'
+      - 'tests/test_news_browser_container.py'
+      - 'tests/test_news_compose_native.py'
+      - '.github/workflows/shared-browser.yml'
+
+permissions:
+  contents: read
+
+jobs:
+  verify:
+    runs-on: ubuntu-latest
+    timeout-minutes: 20
+    steps:
+      - uses: actions/checkout@v4
+      - uses: docker/setup-buildx-action@v3
+      - uses: actions/setup-python@v5
+        with:
+          python-version: '3.12'
+      - name: Install focused test runner
+        run: python -m pip install pytest
+      - name: Validate Compose merges and browser runtime
+        run: python -m pytest tests/test_news_compose_native.py tests/test_news_browser_container.py -q
+      - name: Check browser runtime syntax
+        run: python -m py_compile deploy/news-extractor/browser/entrypoint.py deploy/news-extractor/browser/policy.py
+      - name: Build browser image for inspection on pull requests and branch pushes
+        uses: docker/build-push-action@v5
+        with:
+          context: .
+          file: docker/Dockerfile.browser
+          platforms: linux/amd64
+          push: false
+          load: true
+          tags: evening-news-browser:test-${{ github.sha }}
+          labels: |
+            org.opencontainers.image.source=${{ github.server_url }}/${{ github.repository }}
+            org.opencontainers.image.revision=${{ github.sha }}
+      - name: Inspect and import the built browser runtime
+        run: |
+          set -euo pipefail
+          docker image inspect evening-news-browser:test-${GITHUB_SHA} \
+            --format '{{json .Config.Entrypoint}} {{json .Config.Healthcheck.Test}}' \
+            | grep -F '"/opt/news-browser/entrypoint.py"'
+          docker run --rm --entrypoint python evening-news-browser:test-${GITHUB_SHA} \
+            -m py_compile /opt/news-browser/entrypoint.py /opt/news-browser/policy.py
+          docker run --rm --entrypoint python evening-news-browser:test-${GITHUB_SHA} \
+            -c 'import sys; sys.path.insert(0, "/opt/news-browser"); import entrypoint, policy; print("browser imports ok")'
+
+  publish-candidate:
+    needs: verify
+    if: github.event_name == 'push'
+    runs-on: ubuntu-latest
+    timeout-minutes: 20
+    permissions:
+      contents: read
+      packages: write
+    steps:
+      - uses: actions/checkout@v4
+      - uses: docker/setup-buildx-action@v3
+      - uses: docker/login-action@v3
+        with:
+          registry: ghcr.io
+          username: ${{ github.actor }}
+          password: ${{ secrets.GITHUB_TOKEN }}
+      - name: Publish immutable SHA candidate for isolated Linux acceptance
+        id: image
+        uses: docker/build-push-action@v5
+        with:
+          context: .
+          file: docker/Dockerfile.browser
+          platforms: linux/amd64
+          push: true
+          tags: ghcr.io/dzarlax-ai/rss-browser:sha-${{ github.sha }}
+          labels: |
+            org.opencontainers.image.source=${{ github.server_url }}/${{ github.repository }}
+            org.opencontainers.image.revision=${{ github.sha }}
+      - name: Record exact browser candidate reference
+        env:
+          IMAGE_DIGEST: ${{ steps.image.outputs.digest }}
+        run: printf 'ghcr.io/dzarlax-ai/rss-browser@%s\n' "$IMAGE_DIGEST" > browser-image.txt
+      - uses: actions/upload-artifact@v4
+        with:
+          name: browser-image-reference
+          path: browser-image.txt
+          retention-days: 14

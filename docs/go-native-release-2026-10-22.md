@@ -175,3 +175,51 @@ now give the worker 55 seconds, with a 70-second Docker CLI deadline. Other role
 stop limits remain unchanged. The calculated cleanup CLI wait budget is 137
 seconds within the unit's 150-second stop timeout. Independent runtime/relay
 regressions passed 46 tests. This correction was not installed on production.
+
+
+### Release resumed after explicit authorization
+
+The user resumed the approved News/Cloak release with “Погнали”. Personal
+Assistant remains stopped with restart policy `no`; its code is not migrated.
+The current `458150a` checks all succeeded. The persistent supervisor still
+requires isolated Linux kernel/lifecycle acceptance before production cutover.
+A fresh read-only snapshot covers all 36 existing containers. Current enabled
+sources are three HTTPS Page Monitors, four HTTPS RSS feeds, and one HTTPS
+Telegram source; there are no enabled HTTP-only browser sources. Source checks
+used aggregate-only read-only database queries. No production cutover has
+occurred at this checkpoint.
+
+The production application's current database schema already contains all four
+article-processing columns and all five scheduler-outcome columns required by
+this branch. This was checked read-only in `current_schema()`; no schema or
+article state was changed. The first persistent acceptance attempt stopped
+before creating resources because the harness incorrectly expected a
+`memory.events` file at the cgroup-v2 mount root. The host uses per-scope memory
+event files; guard discovery is being corrected before the next attempt. This
+is a harness preflight failure, not a browser or production runtime failure.
+
+
+### User-directed Compose simplification
+
+The user rejected the host-supervisor complexity and explicitly requested
+completion of the existing Compose scheme, preserving Readeck and PR review.
+The old host runtime/anchors/systemd files and new acceptance runners were
+archived privately and removed from the source tree. The replacement consists
+of a container-local browser policy/bootstrap, Cloak plus the existing relay
+inside one browser container, and normal Compose worker/proxy services. Docker
+handles restart; no host Docker API reconciler remains. Worker/proxy retain Go
+URL/DNS/dial guards on dedicated networks, without a kernel-isolation claim.
+
+Fresh inventory covers 36 existing containers. Readeck/bot/MCP have no observed
+CDP env, mounted-config reference or established 9222 connection; toolkit source
+has no matching browser client code. A real read-only Readeck baseline returned
+HTTP 200 for a bookmark list and successfully read an existing article; no
+bookmarks, messages or delivery state were changed. Full Python baseline after
+simplification: 892 passed, 8 skipped, 22 subtests. Subsequent cold-start race
+and portable nft transaction fixes have focused regressions; final CI and
+isolated Compose/capability acceptance remain required before deployment.
+
+Final integrated local Python check after startup/Compose corrections: 894
+passed, 8 skipped, 22 subtests. Independent focused browser/Compose/relay review
+passed 27 tests with no remaining code blocker. Linux image acceptance and
+production cutover are still pending.

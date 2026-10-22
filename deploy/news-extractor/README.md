@@ -1,4 +1,12 @@
-# Extractor deployment profiles (draft)
+# Extractor deployment profiles
+
+The current approved native deployment uses `compose.shared-browser.yml` for
+infra and `compose.native.yml` for News. See `HANDOFF.md` for acceptance,
+canonical configuration persistence, Readeck checks and rollback. It replaces
+the removed host supervisor/anchor approach; production acceptance is pending.
+
+The older HTTP-only pilot profiles below remain documented for their original
+scope and rollback reference; they are not the current native release plan.
 
 The HTTP-only overlays described in the following sections are review artifacts.
 They have not been copied to the canonical

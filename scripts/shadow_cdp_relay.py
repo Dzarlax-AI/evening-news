@@ -12,7 +12,7 @@ import secrets
 import stat
 import signal
 import time
-from collections.abc import Iterable
+from collections.abc import Awaitable, Iterable
 
 LISTEN_HOST = "0.0.0.0"
 LISTEN_PORT = 9222
@@ -744,7 +744,7 @@ class Relay:
 
 
 async def serve(controller_ip: str | Iterable[str], arm_dir: Path | None = None, report: Path | None = None,
-               diagnostics_report: Path | None = None) -> None:
+               diagnostics_report: Path | None = None, *, persistent: bool = False) -> None:
     relay = Relay(private_controller_ips(controller_ip), arm_dir=arm_dir, report=report,
                   diagnostics_report=diagnostics_report)
     server = await asyncio.start_server(relay.handle, LISTEN_HOST, LISTEN_PORT,
@@ -760,9 +760,7 @@ async def serve(controller_ip: str | Iterable[str], arm_dir: Path | None = None,
     lag_sampler = (asyncio.create_task(relay.sample_event_loop_lag())
                    if relay.diagnostics_report is not None else None)
     try:
-        await asyncio.wait_for(stopped, timeout=LIFETIME_SECONDS)
-    except asyncio.TimeoutError:
-        pass
+        await wait_for_shutdown(stopped, persistent=persistent)
     finally:
         server.close()
         await server.wait_closed()
@@ -778,6 +776,17 @@ async def serve(controller_ip: str | Iterable[str], arm_dir: Path | None = None,
     relay._write_report()
 
 
+async def wait_for_shutdown(stopped: Awaitable[object], *, persistent: bool = False) -> None:
+    """Keep production relays alive; preserve the bounded experiment default."""
+    if persistent:
+        await stopped
+        return
+    try:
+        await asyncio.wait_for(stopped, timeout=LIFETIME_SECONDS)
+    except asyncio.TimeoutError:
+        pass
+
+
 def main(argv: list[str] | None = None) -> None:
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument("--controller-ip", action="append", required=True,
@@ -785,17 +794,21 @@ def main(argv: list[str] | None = None) -> None:
     parser.add_argument("--synthetic-arm-dir", type=Path)
     parser.add_argument("--synthetic-report", type=Path)
     parser.add_argument("--synthetic-diagnostics-report", type=Path)
+    parser.add_argument("--persistent", action="store_true",
+                        help="serve until SIGTERM/SIGINT instead of the bounded experiment lifetime")
     args = parser.parse_args(argv)
     if bool(args.synthetic_arm_dir) != bool(args.synthetic_report):
         parser.error("synthetic arm and report paths must be provided together")
     if args.synthetic_diagnostics_report and not args.synthetic_arm_dir:
         parser.error("synthetic diagnostics require synthetic mode")
+    if args.persistent and args.synthetic_arm_dir:
+        parser.error("persistent mode cannot be combined with synthetic mode")
     try:
         controllers = private_controller_ips(args.controller_ip)
     except ValueError as exc:
         parser.error(str(exc))
     asyncio.run(serve(controllers, args.synthetic_arm_dir, args.synthetic_report,
-                      args.synthetic_diagnostics_report))
+                      args.synthetic_diagnostics_report, persistent=args.persistent))
 
 
 if __name__ == "__main__":

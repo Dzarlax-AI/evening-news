@@ -1,0 +1,104 @@
+# Native article extraction profile. Merge after the canonical news Compose
+# and its immutable app-image overlay. The infrastructure project owns the
+# internal control network and the shared chrome service.
+services:
+  app:
+    image: ${NEWS_APP_IMAGE:?Set the application image by immutable digest}
+    environment:
+      BROWSER_WS_ENDPOINT: ws://${NEWS_BROWSER_IP:?Set the browser control IP}:9222
+      BROWSER_RESTART_MARKER_PATH: /browser-control/restart.request
+      BROWSER_PROXY_ENABLED: 'true'
+      BROWSER_PROXY_URL: http://${NEWS_PROXY_IP:?Set the private proxy IP}:8081
+      BROWSER_PROXY_TOKEN: ${NEWS_PROXY_TOKEN:?Set the dedicated browser proxy token}
+      EXTRACTION_SERVICE_MODE: go
+      EXTRACTION_SERVICE_URL: http://${NEWS_WORKER_IP:?Set the extractor control IP}:8080
+      EXTRACTION_SERVICE_TOKEN: ${NEWS_EXTRACTOR_TOKEN:?Set the extractor service token}
+      EXTRACTION_SERVICE_NATIVE_BROWSER: 'true'
+      EXTRACTION_SERVICE_PYTHON_FALLBACK: 'false'
+    labels:
+      com.dzarlax.news-extractor-runtime.client: news_app
+    volumes:
+      - browser-control:/browser-control
+    depends_on:
+      extractor:
+        condition: service_healthy
+    networks: !override
+      infra: {}
+      traefik: {}
+      private-control:
+        ipv4_address: ${NEWS_APP_IP:?Set the reserved application control IP}
+
+  extractor:
+    image: ${NEWS_EXTRACTOR_IMAGE:?Set the extractor image by immutable digest}
+    environment:
+      LISTEN_ADDR: ':8080'
+      EXTRACTOR_SERVICE_TOKEN: ${NEWS_EXTRACTOR_TOKEN:?Set the extractor service token}
+      EXTRACTOR_MAX_CONCURRENT: '1'
+      EXTRACTOR_BROWSER_CONCURRENT: '1'
+      EXTRACTOR_HTTP_ONLY: 'false'
+      EXTRACTOR_BROWSER_BACKEND: native
+      CHROME_ENDPOINT: http://${NEWS_BROWSER_IP:?Set the browser control IP}:9222
+      EXTRACTOR_NATIVE_PROXY_URL: http://${NEWS_PROXY_IP:?Set the private proxy IP}:8081
+      EXTRACTOR_NATIVE_PROXY_TOKEN: ${NEWS_PROXY_TOKEN:?Set the dedicated browser proxy token}
+      EXTRACTOR_NATIVE_NETWORK_ISOLATED: 'true'
+    networks:
+      private-control:
+        ipv4_address: ${NEWS_WORKER_IP:?Set the reserved extractor control IP}
+      outbound: {}
+    restart: unless-stopped
+    init: true
+    read_only: true
+    cap_drop: [ALL]
+    security_opt: [no-new-privileges:true]
+    pids_limit: 128
+    mem_limit: 256m
+    cpus: 1
+    stop_grace_period: 55s
+    healthcheck:
+      test: ["CMD", "/extract-service", "-healthcheck"]
+      interval: 15s
+      timeout: 3s
+      start_period: 10s
+      retries: 3
+
+  egress:
+    image: ${NEWS_EXTRACTOR_IMAGE:?Set the extractor image by immutable digest}
+    entrypoint: ["/extract-egress"]
+    environment:
+      EGRESS_LISTEN_ADDR: ${NEWS_PROXY_IP:?Set the private proxy IP}:8081
+      EGRESS_TOKEN: ${NEWS_PROXY_TOKEN:?Set the dedicated browser proxy token}
+      EGRESS_MAX_CONCURRENT: '4'
+    networks:
+      private-control:
+        ipv4_address: ${NEWS_PROXY_IP:?Set the reserved proxy control IP}
+      outbound: {}
+    restart: unless-stopped
+    init: true
+    read_only: true
+    cap_drop: [ALL]
+    security_opt: [no-new-privileges:true]
+    pids_limit: 64
+    mem_limit: 128m
+    cpus: 0.25
+    stop_grace_period: 10s
+    healthcheck:
+      test: ["CMD", "/extract-egress", "-healthcheck"]
+      interval: 15s
+      timeout: 3s
+      start_period: 5s
+      retries: 3
+
+volumes:
+  browser-control:
+    external: true
+    name: ${NEWS_BROWSER_CONTROL_VOLUME:?Set the existing shared browser-control volume name}
+
+networks:
+  private-control:
+    external: true
+    name: ${NEWS_CONTROL_NETWORK:?Set the shared private control network name}
+  outbound:
+    name: ${NEWS_OUTBOUND_NETWORK:?Set the dedicated extractor outbound network name}
+    ipam:
+      config:
+        - subnet: ${NEWS_OUTBOUND_SUBNET:?Set the dedicated extractor outbound subnet}
