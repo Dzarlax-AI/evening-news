@@ -145,6 +145,39 @@ func TestParsePageMonitorListRejectsBadSelectorsAndBoundsDescription(t *testing.
 	}
 }
 
+func TestParsePageMonitorListBoundsRetainedOutputAndReturnsPrefix(t *testing.T) {
+	var html strings.Builder
+	for i := 0; i < 100; i++ {
+		html.WriteString(`<article class="item"><div class="title">`)
+		html.WriteString(strings.Repeat("x", i+1))
+		html.WriteString(strings.Repeat("q", 1800))
+	}
+	for i := 0; i < 100; i++ {
+		html.WriteString(`</div></article>`)
+	}
+	if html.Len() >= 5*1024*1024 {
+		t.Fatalf("synthetic HTML unexpectedly large: %d bytes", html.Len())
+	}
+
+	items, _, err := ParsePageMonitorList(PageMonitorOptions{
+		URL: "https://example.com/updates", HTML: html.String(), Limit: 100, MinTitleLength: 10,
+		Selectors: PageMonitorSelectors{Article: []string{"article.item"}, Title: []string{"div.title"}},
+	})
+	if !errors.Is(err, ErrOutputLimit) {
+		t.Fatalf("expected retained-output limit, got %v", err)
+	}
+	if len(items) == 0 || len(items) >= 100 {
+		t.Fatalf("expected a bounded successful prefix, got %d items", len(items))
+	}
+	retained := 0
+	for _, item := range items {
+		retained += pageMonitorRetainedItemBytes(item)
+	}
+	if retained > pageMonitorRetainedOutputLimit {
+		t.Fatalf("retained prefix exceeds budget: %d bytes", retained)
+	}
+}
+
 func TestPageMonitorDateFormatsWindowsAndRelative(t *testing.T) {
 	now := time.Date(2026, 10, 22, 8, 30, 0, 0, time.UTC)
 	for _, tc := range []struct {

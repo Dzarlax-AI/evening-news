@@ -398,6 +398,51 @@
           "id": "c1312204a0956a7dbd3846b940b53b52"
         }
       ]
+    },
+    {
+      "url": "https://example.com/updates",
+      "source_name": "Example",
+      "now": "2026-10-22T08:30:00",
+      "article_selectors": [
+        "article.primary",
+        "article.later"
+      ],
+      "title_selectors": [
+        "h2"
+      ],
+      "date_selectors": [],
+      "link_selectors": [],
+      "learned_container_selectors": [],
+      "learned_title_selectors": [],
+      "learned_link_selectors": [],
+      "learned_date_selectors": [],
+      "learned_general_selectors": [],
+      "min_title_length": 10,
+      "limit": 3,
+      "name": "raw_limit_finishes_current_selector",
+      "html": "<main><article class='primary'><h2>Repeated headline Alpha</h2><a href='/one'>one</a></article><article class='primary'><h2>repeated HEADLINE alpha</h2><a href='/two'>two</a></article><article class='primary'><h2>REPEATED headline ALPHA</h2><a href='/three'>three</a></article><article class='primary'><h2>Unique headline Bravo</h2><a href='/four'>four</a></article><article class='later'><h2>Outside later selector Charlie</h2><a href='/later'>later</a></article></main>",
+      "expected": [
+        {
+          "title": "Repeated headline Alpha",
+          "link": "https://example.com/one",
+          "published": "2026-10-22T08:30:00",
+          "description": "Repeated headline Alpha one",
+          "source": "Example",
+          "source_url": "https://example.com/updates",
+          "content_type": "general",
+          "id": "574da5354636a5b17ce0894a4c2da61e"
+        },
+        {
+          "title": "Unique headline Bravo",
+          "link": "https://example.com/four",
+          "published": "2026-10-22T08:30:00",
+          "description": "Unique headline Bravo four",
+          "source": "Example",
+          "source_url": "https://example.com/updates",
+          "content_type": "general",
+          "id": "6e235fa3755c4407142af37245026890"
+        }
+      ]
     }
   ]
 }

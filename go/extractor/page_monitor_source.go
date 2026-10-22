@@ -23,6 +23,8 @@ import (
 
 var ErrPageMonitorSelector = errors.New("unsupported_selector")
 
+const pageMonitorRetainedOutputLimit = 8 * 1024 * 1024
+
 type PageMonitorSelectors struct {
 	Article []string `json:"article,omitempty"`
 	Title   []string `json:"title,omitempty"`
@@ -106,39 +108,61 @@ func ParsePageMonitorList(in PageMonitorOptions) ([]PageMonitorItem, []string, e
 		return nil, nil, err
 	}
 	rawItems := []PageMonitorItem{}
+	seenTitles := map[string]bool{}
+	rawCount := 0
+	retainedBytes := 0
+	outputLimitReached := false
 	used := []string{}
-	collect := func(selectors []string, stopAtFirst bool, rawLimit int) []PageMonitorItem {
-		collected := []PageMonitorItem{}
+	collect := func(selectors []string, stopAtFirst bool, rawLimit int) {
 		for _, selector := range selectors {
-			if in.Context.Err() != nil {
-				return collected
+			if in.Context.Err() != nil || outputLimitReached {
+				return
 			}
 			matcher, _ := cascadia.Compile(selector)
-			before := len(collected)
+			before := rawCount
 			doc.FindMatcher(matcher).EachWithBreak(func(_ int, element *goquery.Selection) bool {
 				if in.Context.Err() != nil {
 					return false
 				}
 				item, ok := pageMonitorItem(in, element, in.Now)
 				if ok {
-					collected = append(collected, item)
+					rawCount++
+					key := cases.Lower(language.Und).String(strings.TrimSpace(item.Title))
+					if !seenTitles[key] && len(rawItems) < in.Limit {
+						itemBytes := pageMonitorRetainedItemBytes(item)
+						if itemBytes > pageMonitorRetainedOutputLimit-retainedBytes {
+							outputLimitReached = true
+							return false
+						}
+						seenTitles[key] = true
+						rawItems = append(rawItems, item)
+						retainedBytes += itemBytes
+					}
+					// The Python source finishes the current selector before checking
+					// its raw article count against the configured limit. Keeping only
+					// unique output items bounds memory while preserving that behavior.
+					if len(rawItems) >= in.Limit {
+						return false
+					}
 				}
-				return rawLimit == 0 || len(collected) < rawLimit
+				return true
 			})
-			if len(collected) > before {
+			if outputLimitReached {
+				return
+			}
+			if rawCount > before {
 				used = append(used, selector)
 				if stopAtFirst {
 					break
 				}
 			}
-			if rawLimit > 0 && len(collected) >= rawLimit {
+			if rawLimit > 0 && rawCount >= rawLimit {
 				break
 			}
 		}
-		return collected
 	}
 	if len(in.LearnedContainerSelectors) > 0 {
-		rawItems = collect(in.LearnedContainerSelectors, true, 0)
+		collect(in.LearnedContainerSelectors, true, 0)
 	}
 	general := append([]PageMonitorGeneralSelector(nil), in.LearnedGeneral...)
 	sort.SliceStable(general, func(i, j int) bool { return general[i].Confidence > general[j].Confidence })
@@ -146,7 +170,7 @@ func ParsePageMonitorList(in PageMonitorOptions) ([]PageMonitorItem, []string, e
 	if len(rawItems) == 0 {
 		for _, g := range general {
 			if g.Confidence > .7 {
-				rawItems = collect([]string{g.Selector}, true, 0)
+				collect([]string{g.Selector}, true, 0)
 				generalCount++
 				if len(rawItems) > 0 || generalCount >= 3 {
 					break
@@ -155,28 +179,21 @@ func ParsePageMonitorList(in PageMonitorOptions) ([]PageMonitorItem, []string, e
 		}
 	}
 	if len(rawItems) == 0 {
-		rawItems = collect(in.Selectors.Article, false, in.Limit)
+		collect(in.Selectors.Article, false, in.Limit)
 	}
-	items := make([]PageMonitorItem, 0, min(len(rawItems), in.Limit))
-	seenTitles := map[string]bool{}
-	for _, item := range rawItems {
-		if in.Context.Err() != nil {
-			break
-		}
-		key := cases.Lower(language.Und).String(strings.TrimSpace(item.Title))
-		if seenTitles[key] {
-			continue
-		}
-		seenTitles[key] = true
-		items = append(items, item)
-		if len(items) >= in.Limit {
-			break
-		}
-	}
+	items := rawItems
 	if err := in.Context.Err(); err != nil {
 		return items, used, err
 	}
+	if outputLimitReached {
+		return items, used, ErrOutputLimit
+	}
 	return items, used, nil
+}
+
+func pageMonitorRetainedItemBytes(item PageMonitorItem) int {
+	return len(item.Title) + len(item.Link) + len(item.Description) + len(item.ContentType) +
+		len(item.ID) + len(item.Source) + len(item.SourceURL) + 256
 }
 
 func finitePageMonitorConfidence(v float64) bool { return !math.IsNaN(v) && !math.IsInf(v, 0) }
