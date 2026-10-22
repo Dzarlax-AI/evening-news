@@ -22,6 +22,8 @@ Everything runs on a schedule you control, or you can trigger any step manually 
 
 ## Architecture
 
+Project roadmap: [Go backend migration plan](docs/ai-plans/2026-10-16-go-backend-migration-roadmap.html). This is a proposed long-term direction; implementation of the full migration requires separate approval. The [native Go/Cloak worker plan](docs/ai-plans/2026-10-16-go-cloak-native-worker.html) tracks the already approved extractor work.
+
 ```mermaid
 flowchart TD
     subgraph sources["Sources"]

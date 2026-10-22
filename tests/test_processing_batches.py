@@ -120,6 +120,55 @@ async def test_failed_outcome_write_has_durable_budget_and_restart_deadline(isol
 
 
 @pytest.mark.asyncio
+async def test_crashed_extraction_uses_durable_retry_and_preserves_sibling_progress(isolated):
+    orchestrator, engine = isolated
+    from news_aggregator.extraction.service_client import ExtractionServiceError
+    from news_aggregator.processing.ai_processor import AIProcessor
+    add_articles(engine, 3, category_processed=True, ad_processed=True)
+    orchestrator._processing_limits = lambda: {
+        'max_attempts': 2, 'initial_seconds': 1, 'later_seconds': 1,
+    }
+    calls = {1: 0, 2: 0, 3: 0}
+
+    async def analyze(article, *_args, **_kwargs):
+        article_id = article.id
+        calls[article_id] += 1
+        if article_id == 2 or (article_id == 1 and calls[article_id] == 2):
+            return {'summary': 'Done'}
+        raise ExtractionServiceError('native_browser_target_crashed', False)
+
+    processor = AIProcessor.__new__(AIProcessor)
+    processor.get_summary_by_source_type = AsyncMock(side_effect=analyze)
+    orchestrator.ai_processor = processor
+    await orchestrator._process_unprocessed_articles({'errors': []})
+    with Session(engine) as db:
+        first = db.get(Article, 1)
+        sibling = db.get(Article, 2)
+        exhausted = db.get(Article, 3)
+        assert first.processing_state == 'retry_wait'
+        assert first.last_processing_error == 'native_browser_target_crashed'
+        assert first.next_attempt_at > datetime.utcnow()
+        assert sibling.processing_state == 'completed'
+        assert exhausted.processing_state == 'retry_wait'
+
+    await orchestrator._process_unprocessed_articles({'errors': []})
+    assert calls == {1: 1, 2: 1, 3: 1}
+    with Session(engine) as db:
+        db.execute(update(Article).where(Article.id.in_([1, 3])).values(
+            next_attempt_at=datetime.utcnow() - timedelta(seconds=1)))
+        db.commit()
+
+    await orchestrator._process_unprocessed_articles({'errors': []})
+    with Session(engine) as db:
+        assert db.get(Article, 1).processing_state == 'completed'
+        exhausted = db.get(Article, 3)
+        assert exhausted.processing_state == 'exhausted'
+        assert exhausted.last_processing_error == 'native_browser_target_crashed'
+        assert exhausted.next_attempt_at is None
+    assert calls == {1: 2, 2: 1, 3: 2}
+
+
+@pytest.mark.asyncio
 async def test_only_explicit_retry_selection_resets_budget(isolated):
     orchestrator, engine = isolated
     add_articles(engine, 2, processing_state="exhausted", processing_attempts=3)

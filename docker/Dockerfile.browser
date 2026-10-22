@@ -1,0 +1,27 @@
+ARG CLOAK_IMAGE=cloakhq/cloakbrowser:0.5.2@sha256:2c0d257802f54c4f86c9ccae336864baf63e118612732127cb96df35756a57a4
+FROM ${CLOAK_IMAGE}
+
+USER root
+
+# The pinned upstream image supplies Cloak, Chrome, Xvfb, and the display
+# helpers. The wrapper needs only the networking tools used to install the
+# container-local default-deny policy.
+RUN apt-get update \
+    && apt-get install -y --no-install-recommends nftables iproute2 util-linux \
+    && rm -rf /var/lib/apt/lists/*
+
+COPY deploy/news-extractor/browser/ /opt/news-browser/
+COPY scripts/launch_shadow_cloak.py /opt/news-browser/launch.py
+COPY scripts/shadow_cdp_relay.py /opt/news-browser/relay.py
+COPY scripts/shadow_x11_client.sh /shadow-bin/xdotool
+COPY scripts/shadow_x11_client.sh /shadow-bin/openbox
+
+RUN chmod 0555 /opt/news-browser/entrypoint.py /opt/news-browser/launch.py \
+        /opt/news-browser/relay.py /shadow-bin/xdotool /shadow-bin/openbox \
+    && chown -R root:root /opt/news-browser /shadow-bin
+
+ENTRYPOINT ["python", "/opt/news-browser/entrypoint.py"]
+CMD []
+
+HEALTHCHECK --interval=15s --timeout=3s --start-period=30s --retries=3 \
+    CMD ["python", "/opt/news-browser/entrypoint.py", "--healthcheck"]

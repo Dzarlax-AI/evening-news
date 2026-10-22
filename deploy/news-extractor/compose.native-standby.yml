@@ -1,0 +1,14 @@
+# Worker-only native standby profile. Merge after the canonical news base and
+# compose.standby.yml. This does not configure or isolate the shared browser.
+services:
+  extractor:
+    environment:
+      EXTRACTOR_HTTP_ONLY: 'false'
+      EXTRACTOR_BROWSER_BACKEND: native
+      EXTRACTOR_MAX_CONCURRENT: '1'
+      EXTRACTOR_BROWSER_CONCURRENT: '1'
+      CHROME_ENDPOINT: ${NEWS_NATIVE_CHROME_ENDPOINT:?Set the explicit Chrome endpoint}
+      EXTRACTOR_NATIVE_PROXY_URL: ${NEWS_NATIVE_PROXY_URL:?Set the explicit proxy URL}
+      EXTRACTOR_NATIVE_PROXY_TOKEN: ${NEWS_NATIVE_PROXY_TOKEN:?Set the dedicated proxy token}
+      EXTRACTOR_NATIVE_NETWORK_ISOLATED: ${NEWS_NATIVE_NETWORK_ISOLATION_ASSERTION:?Explicit isolation assertion required; see README}
+    stop_grace_period: 55s

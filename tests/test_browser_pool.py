@@ -56,6 +56,7 @@ def remote_settings():
     settings.browser_operation_timeout_seconds = 90.0
     settings.browser_failure_threshold = 3
     settings.browser_restart_marker_path = None
+    settings.browser_proxy_enabled = False
     return settings
 
 

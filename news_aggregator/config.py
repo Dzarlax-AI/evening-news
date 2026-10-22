@@ -1,10 +1,10 @@
 """Configuration management."""
 
 import os
-from typing import Optional, List, Dict, Any
+from typing import Optional, List, Dict, Any, Literal
 from datetime import datetime, timedelta
 
-from pydantic import Field, SecretStr, field_validator
+from pydantic import Field, SecretStr, field_validator, model_validator
 from pydantic_settings import BaseSettings
 
 
@@ -33,6 +33,9 @@ class Settings(BaseSettings):
     
     # Browser (Chrome CDP endpoint, e.g. ws://chrome:9222)
     browser_ws_endpoint: Optional[str] = Field(default=None, alias="BROWSER_WS_ENDPOINT")
+    browser_proxy_enabled: bool = Field(default=False, alias="BROWSER_PROXY_ENABLED")
+    browser_proxy_url: Optional[str] = Field(default=None, repr=False, alias="BROWSER_PROXY_URL")
+    browser_proxy_token: Optional[SecretStr] = Field(default=None, repr=False, alias="BROWSER_PROXY_TOKEN")
     browser_tab_acquire_timeout_seconds: float = Field(
         default=120.0, gt=0, allow_inf_nan=False, alias="BROWSER_TAB_ACQUIRE_TIMEOUT_SECONDS"
     )
@@ -87,6 +90,13 @@ class Settings(BaseSettings):
     extraction_http_max_bytes: int = Field(default=5 * 1024 * 1024, gt=0, alias="EXTRACTION_HTTP_MAX_BYTES")
     extraction_browser_max_bytes: int = Field(default=5 * 1024 * 1024, gt=0, alias="EXTRACTION_BROWSER_MAX_BYTES")
     extraction_text_max_chars: int = Field(default=100000, gt=0, alias="EXTRACTION_TEXT_MAX_CHARS")
+    extraction_service_mode: Literal['python', 'shadow', 'go'] = Field(default='python', alias='EXTRACTION_SERVICE_MODE')
+    extraction_service_url: Optional[str] = Field(default=None, alias='EXTRACTION_SERVICE_URL')
+    extraction_service_token: Optional[SecretStr] = Field(default=None, alias='EXTRACTION_SERVICE_TOKEN')
+    extraction_service_native_browser: bool = Field(default=False, alias='EXTRACTION_SERVICE_NATIVE_BROWSER')
+    extraction_service_timeout_seconds: float = Field(default=30, gt=0, le=30, allow_inf_nan=False, alias='EXTRACTION_SERVICE_TIMEOUT_SECONDS')
+    extraction_service_total_budget_seconds: float = Field(default=120, gt=0, le=600, allow_inf_nan=False, alias='EXTRACTION_SERVICE_TOTAL_BUDGET_SECONDS')
+    extraction_service_python_fallback: bool = Field(default=False, alias='EXTRACTION_SERVICE_PYTHON_FALLBACK')
     cache_ttl: int = Field(default=86400, alias="CACHE_TTL")
     cache_dir: str = Field(default="/tmp/rss_cache", alias="CACHE_DIR")
     cache_max_size_mb: float = Field(default=500.0, alias="CACHE_MAX_SIZE_MB")  # Maximum cache size in MB
@@ -150,6 +160,44 @@ class Settings(BaseSettings):
         if not os.path.isabs(normalized):
             raise ValueError("BROWSER_RESTART_MARKER_PATH must be an absolute path")
         return normalized
+
+    @model_validator(mode="after")
+    def validate_extraction_native_browser(self):
+        if self.extraction_service_native_browser and (
+                self.extraction_service_mode != 'go' or self.extraction_service_python_fallback):
+            raise ValueError(
+                'EXTRACTION_SERVICE_NATIVE_BROWSER requires EXTRACTION_SERVICE_MODE=go '
+                'and EXTRACTION_SERVICE_PYTHON_FALLBACK=false'
+            )
+        return self
+
+    @model_validator(mode="after")
+    def validate_browser_proxy(self):
+        from urllib.parse import urlsplit
+
+        url = self.browser_proxy_url
+        token = self.browser_proxy_token.get_secret_value() if self.browser_proxy_token else None
+        if not self.browser_proxy_enabled:
+            if url is not None or token is not None:
+                raise ValueError("BROWSER_PROXY_URL and BROWSER_PROXY_TOKEN require BROWSER_PROXY_ENABLED")
+            return self
+        if not url or not token:
+            raise ValueError("BROWSER_PROXY_ENABLED requires BROWSER_PROXY_URL and BROWSER_PROXY_TOKEN")
+        try:
+            parsed = urlsplit(url)
+            port = parsed.port
+        except ValueError as exc:
+            raise ValueError("BROWSER_PROXY_URL must be an http URL with an explicit port") from exc
+        if (
+            parsed.scheme != "http" or not parsed.hostname or port is None or not 1 <= port <= 65535
+            or parsed.username is not None or parsed.password is not None
+            or parsed.path != "" or parsed.query or parsed.fragment
+            or "?" in url or "#" in url or any(char.isspace() for char in url)
+        ):
+            raise ValueError("BROWSER_PROXY_URL must be an http URL with explicit port and no credentials or path")
+        if not 16 <= len(token) <= 4096:
+            raise ValueError("BROWSER_PROXY_TOKEN must contain 16 to 4096 characters")
+        return self
     
     def get_allowed_origins_list(self) -> List[str]:
         """Return allowed origins as list."""

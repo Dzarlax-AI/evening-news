@@ -1,0 +1,512 @@
+{
+  "version": 1,
+  "ledger": "docs/extraction-methods.md",
+  "evidence_kind": "synthetic_fixtures_plus_separate_local_public_capture_artifacts",
+  "coverage": {
+    "E01": {
+      "case_ids": [
+        "article.url_rejects_document",
+        "article.url_cleans_invisible_character"
+      ],
+      "status": "synthetic_only",
+      "unverified_branch": "Media/document exclusions and NFKC/control edge cases beyond represented PDF and invisible-character inputs."
+    },
+    "E02": {
+      "case_ids": [],
+      "status": "controlled_transport_tested",
+      "unverified_branch": "HTTP adapter covered locally; integration with full production retry/source orchestration remains open.",
+      "transport_evidence": "See top-level transport_evidence; existing unverified branches remain to be integrated and reviewed."
+    },
+    "E03": {
+      "case_ids": [],
+      "status": "partial_transport_tested",
+      "unverified_branch": "Safari header profile tested directly; automatic retry-on-failure and status-dependent switching remain open.",
+      "transport_evidence": "See top-level transport_evidence; existing unverified branches remain to be integrated and reviewed."
+    },
+    "E04": {
+      "case_ids": [
+        "article.reddit_self_post_filters_comments",
+        "article.reddit_image_preview_unescaped",
+        "article.reddit_linked_article",
+        "article.reddit_malformed_json_fallback"
+      ],
+      "status": "synthetic_only",
+      "unverified_branch": "Deleted/removed/moderator filtering and exact non-self comment rules need more assertions."
+    },
+    "E05": {
+      "case_ids": [
+        "article.reddit_linked_article"
+      ],
+      "status": "synthetic_only",
+      "unverified_branch": "Failed linked fetch retaining Reddit fields and linked-page selector misses need harness cases."
+    },
+    "E06": {
+      "case_ids": [
+        "article.learned_css_success",
+        "article.learned_selector_miss_falls_back",
+        "transition.auto_to_jsonld",
+        "transition.learned_pattern_to_jsonld"
+      ],
+      "status": "synthetic_only",
+      "unverified_branch": "Method-prefix normalization, persistence, quality rejection and failure degradation are not proven by markup fixtures."
+    },
+    "E07": {
+      "case_ids": [
+        "article.learned_browser_pattern"
+      ],
+      "status": "synthetic_only",
+      "unverified_branch": "Rendered learned-selector replacement needs a longer candidate and real browser replay."
+    },
+    "E08": {
+      "case_ids": [
+        "article.learned_css_success",
+        "article.learned_selector_miss_falls_back",
+        "article.enhanced_selectors_semantic_article",
+        "article.enhanced_selectors_itemprop",
+        "article.readability_after_selector_miss",
+        "article.heuristics_main_text",
+        "article.reddit_linked_article",
+        "article.auto_readability_after_selector_miss",
+        "transition.auto_to_jsonld",
+        "transition.learned_pattern_to_jsonld",
+        "transition.auto_to_browser",
+        "transition.auto_to_meta",
+        "metadata.regression_iso_minute",
+        "metadata.regression_displayed_comma"
+      ],
+      "status": "synthetic_only",
+      "unverified_branch": "Every selector ordering and copied-element cleanup remain partially covered."
+    },
+    "E09": {
+      "case_ids": [
+        "article.readability_after_selector_miss",
+        "article.auto_readability_after_selector_miss",
+        "transition.auto_to_jsonld",
+        "transition.learned_pattern_to_jsonld",
+        "transition.auto_to_browser",
+        "transition.auto_to_meta"
+      ],
+      "status": "synthetic_and_captured",
+      "unverified_branch": "Automatic transitions and real captured article parsing tested; source-specific introductions and quality differences remain open."
+    },
+    "E10": {
+      "case_ids": [
+        "article.learned_browser_pattern",
+        "article.browser_rendered_dom",
+        "cancel.browser_cancellation_cleanup",
+        "transition.auto_to_jsonld",
+        "transition.learned_pattern_to_jsonld",
+        "transition.auto_to_browser",
+        "transition.auto_to_meta"
+      ],
+      "status": "controlled_transport_tested",
+      "unverified_branch": "Dedicated Chrome lifecycle tested; production source readiness/scroll/reconnect orchestration remains open.",
+      "transport_evidence": "See top-level transport_evidence; existing unverified branches remain to be integrated and reviewed."
+    },
+    "E11": {
+      "case_ids": [
+        "article.jsonld_graph_body",
+        "article.jsonld_text_field",
+        "transition.auto_to_jsonld",
+        "transition.learned_pattern_to_jsonld"
+      ],
+      "status": "synthetic_only",
+      "unverified_branch": "Object/list/graph/type/body-field combinations and malformed-script ordering need remaining cases."
+    },
+    "E12": {
+      "case_ids": [
+        "article.open_graph_description",
+        "article.meta_description_fallback",
+        "transition.auto_to_meta"
+      ],
+      "status": "synthetic_only",
+      "unverified_branch": "OG versus standard description precedence and short-content rejection need explicit assertions."
+    },
+    "E13": {
+      "case_ids": [
+        "article.heuristics_main_text"
+      ],
+      "status": "synthetic_only",
+      "unverified_branch": "Top-five retention and top-three combination are not proven by current cases."
+    },
+    "E14": {
+      "case_ids": [
+        "article.alternate_link_candidates",
+        "limits.alternative_utf8_byte_cap"
+      ],
+      "status": "synthetic_only",
+      "unverified_branch": "Alternative HTML is present, but retry exhaustion, canonical/AMP/read-more order and first-two limit need core retry replay."
+    },
+    "E15": {
+      "case_ids": [
+        "article.heuristics_main_text",
+        "article.quality_strips_navigation",
+        "article.auto_readability_after_selector_miss",
+        "transition.auto_to_jsonld",
+        "transition.learned_pattern_to_jsonld",
+        "transition.auto_to_browser",
+        "transition.auto_to_meta",
+        "retention.auto",
+        "retention.source_content"
+      ],
+      "status": "synthetic_only",
+      "unverified_branch": "Quality thresholds, Smart Filter and final 8000-character truncation are not exhaustive here."
+    },
+    "M01": {
+      "case_ids": [
+        "metadata.og_title_author_image",
+        "metadata.twitter_title_fallback",
+        "metadata.date_time_datetime",
+        "metadata.date_article_published_time",
+        "metadata.jsonld_date_author_image",
+        "metadata.author_byline_and_og_image",
+        "metadata.title_plain_title",
+        "metadata.title_h1_fallback"
+      ],
+      "status": "synthetic_only",
+      "unverified_branch": "Description precedence and author microdata/rel/class/meta variants need explicit assertions."
+    },
+    "M02": {
+      "case_ids": [
+        "article.jsonld_graph_body",
+        "article.jsonld_text_field",
+        "metadata.og_title_author_image",
+        "metadata.twitter_title_fallback",
+        "metadata.date_time_datetime",
+        "metadata.date_article_published_time",
+        "metadata.jsonld_date_author_image",
+        "metadata.author_byline_and_og_image",
+        "metadata.no_publication_date",
+        "metadata.regression_iso_minute",
+        "metadata.regression_displayed_comma"
+      ],
+      "status": "synthetic_only",
+      "unverified_branch": "All JSON-LD date fields, CSS metadata, text patterns and invalid dates need assertions."
+    },
+    "M03": {
+      "case_ids": [
+        "article.jsonld_graph_body",
+        "article.jsonld_text_field",
+        "metadata.og_title_author_image",
+        "metadata.twitter_title_fallback",
+        "metadata.date_time_datetime",
+        "metadata.date_article_published_time",
+        "metadata.jsonld_date_author_image",
+        "metadata.author_byline_and_og_image"
+      ],
+      "status": "synthetic_only",
+      "unverified_branch": "Twitter/image_src/JSON-LD/main image fallback and exclusion patterns need remaining assertions."
+    },
+    "M04": {
+      "case_ids": [
+        "article.article_media_extraction"
+      ],
+      "status": "synthetic_only",
+      "unverified_branch": "Source elements, relative media links and URL dedup need focused processing-media replay."
+    },
+    "R01": {
+      "case_ids": [
+        "rss.content_preferred",
+        "rss.media_content_image",
+        "rss.enclosure_priority",
+        "atom.updated_and_author",
+        "rss.entry_without_link_skipped"
+      ],
+      "status": "synthetic_only",
+      "unverified_branch": "Malformed feeds, GUID/tags, summary precedence and parsed-time fallback need cases."
+    },
+    "R02": {
+      "case_ids": [
+        "rss.media_content_image",
+        "rss.enclosure_priority"
+      ],
+      "status": "synthetic_only",
+      "unverified_branch": "Thumbnail/inline image and all date fallback branches need cases."
+    },
+    "T01": {
+      "case_ids": [
+        "telegram.rendered_browser_history"
+      ],
+      "status": "synthetic_only",
+      "unverified_branch": "HTTP/browser ordering, alternate URLs, readiness, scrolling and headers need transport tests."
+    },
+    "T02": {
+      "case_ids": [
+        "telegram.message_with_permalink_and_date",
+        "telegram.message_with_external_link",
+        "telegram.short_message_skipped",
+        "telegram.empty_history",
+        "telegram.rendered_browser_history",
+        "telegram.media_photo",
+        "telegram.media_video",
+        "telegram.media_round_video",
+        "telegram.media_voice_audio",
+        "telegram.media_sticker",
+        "telegram.media_gif",
+        "telegram.media_document",
+        "telegram.media_poll",
+        "telegram.media_location",
+        "telegram.media_contact",
+        "telegram.short_external_expands"
+      ],
+      "status": "synthetic_only",
+      "unverified_branch": "Message container/text/meta fallback and media-only acceptance need explicit cases."
+    },
+    "T03": {
+      "case_ids": [
+        "telegram.message_with_permalink_and_date",
+        "telegram.message_with_external_link",
+        "telegram.short_message_skipped",
+        "telegram.empty_history",
+        "telegram.rendered_browser_history",
+        "telegram.short_external_expands"
+      ],
+      "status": "synthetic_only",
+      "unverified_branch": "Forwarding/reply cleanup, external URL normalization/dedup, hashtags and title truncation need cases."
+    },
+    "T04": {
+      "case_ids": [
+        "telegram.short_external_expands"
+      ],
+      "status": "synthetic_only",
+      "unverified_branch": "Successful captured short-link Readability expansion and cancellation tested; actual source fetch and retry integration remain open."
+    },
+    "T05": {
+      "case_ids": [
+        "telegram.media_photo",
+        "telegram.media_video",
+        "telegram.media_round_video",
+        "telegram.media_voice_audio",
+        "telegram.media_sticker",
+        "telegram.media_gif",
+        "telegram.media_document",
+        "telegram.media_poll",
+        "telegram.media_location",
+        "telegram.media_contact"
+      ],
+      "status": "synthetic_only",
+      "unverified_branch": "Synthetic cases cover media kinds; background/avatar exclusion and dedup need assertions. Poll/location/contact IDs are randomized; compare semantic payload."
+    },
+    "C01": {
+      "case_ids": [
+        "custom.browser_rendered_cards",
+        "custom.anchor_container"
+      ],
+      "status": "synthetic_only",
+      "unverified_branch": "Rendered markup cannot prove browser defaults, HTTP mode, JS wait, cap or fallback policy."
+    },
+    "C02": {
+      "case_ids": [
+        "custom.configured_selectors_relative_url",
+        "custom.blog_classes",
+        "custom.browser_rendered_cards",
+        "custom.no_article_cards",
+        "custom.absolute_date_selector",
+        "custom.anchor_container"
+      ],
+      "status": "synthetic_only",
+      "unverified_branch": "Learned selector confidence/top-three and learned title/link/date behavior need stateful cases."
+    },
+    "C03": {
+      "case_ids": [
+        "custom.absolute_date_selector"
+      ],
+      "status": "synthetic_only",
+      "unverified_branch": "Only absolute dates are represented; relative/future/old/missing behavior needs a clocked source test."
+    },
+    "C04": {
+      "case_ids": [],
+      "status": "gap",
+      "unverified_branch": "AI structure study, rerun, persistence and failure heuristics need recorded-AI integration tests."
+    },
+    "C05": {
+      "case_ids": [],
+      "status": "partial_unit_tested",
+      "unverified_branch": "Description cap tested in custom_parity_test.go; persistent snapshot/hash/dedup behavior remains open."
+    },
+    "X01": {
+      "case_ids": [
+        "limits.http_body_at_cap",
+        "limits.http_body_one_byte_over",
+        "limits.browser_multibyte_over_cap",
+        "limits.text_char_cap",
+        "limits.alternative_utf8_byte_cap"
+      ],
+      "status": "controlled_transport_tested",
+      "unverified_branch": "Bounded compressed/framed transport tested locally; full source integration and sustained resource trials remain open.",
+      "transport_evidence": "See top-level transport_evidence; existing unverified branches remain to be integrated and reviewed."
+    }
+  },
+  "unverified_branches": [
+    {
+      "method_id": "E01",
+      "branch": "Media/document exclusions and NFKC/control edge cases beyond represented PDF and invisible-character inputs."
+    },
+    {
+      "method_id": "E02",
+      "branch": "HTTP adapter covered locally; integration with full production retry/source orchestration remains open."
+    },
+    {
+      "method_id": "E03",
+      "branch": "Safari header profile tested directly; automatic retry-on-failure and status-dependent switching remain open."
+    },
+    {
+      "method_id": "E04",
+      "branch": "Deleted/removed/moderator filtering and exact non-self comment rules need more assertions."
+    },
+    {
+      "method_id": "E05",
+      "branch": "Failed linked fetch retaining Reddit fields and linked-page selector misses need harness cases."
+    },
+    {
+      "method_id": "E06",
+      "branch": "Method-prefix normalization, persistence, quality rejection and failure degradation are not proven by markup fixtures."
+    },
+    {
+      "method_id": "E07",
+      "branch": "Rendered learned-selector replacement needs a longer candidate and real browser replay."
+    },
+    {
+      "method_id": "E08",
+      "branch": "Every selector ordering and copied-element cleanup remain partially covered."
+    },
+    {
+      "method_id": "E09",
+      "branch": "Automatic transitions and real captured article parsing tested; source-specific introductions and quality differences remain open."
+    },
+    {
+      "method_id": "E10",
+      "branch": "Dedicated Chrome lifecycle tested; production source readiness/scroll/reconnect orchestration remains open."
+    },
+    {
+      "method_id": "E11",
+      "branch": "Object/list/graph/type/body-field combinations and malformed-script ordering need remaining cases."
+    },
+    {
+      "method_id": "E12",
+      "branch": "OG versus standard description precedence and short-content rejection need explicit assertions."
+    },
+    {
+      "method_id": "E13",
+      "branch": "Top-five retention and top-three combination are not proven by current cases."
+    },
+    {
+      "method_id": "E14",
+      "branch": "Alternative HTML is present, but retry exhaustion, canonical/AMP/read-more order and first-two limit need core retry replay."
+    },
+    {
+      "method_id": "E15",
+      "branch": "Quality thresholds, Smart Filter and final 8000-character truncation are not exhaustive here."
+    },
+    {
+      "method_id": "M01",
+      "branch": "Description precedence and author microdata/rel/class/meta variants need explicit assertions."
+    },
+    {
+      "method_id": "M02",
+      "branch": "All JSON-LD date fields, CSS metadata, text patterns and invalid dates need assertions."
+    },
+    {
+      "method_id": "M03",
+      "branch": "Twitter/image_src/JSON-LD/main image fallback and exclusion patterns need remaining assertions."
+    },
+    {
+      "method_id": "M04",
+      "branch": "Source elements, relative media links and URL dedup need focused processing-media replay."
+    },
+    {
+      "method_id": "R01",
+      "branch": "Malformed feeds, GUID/tags, summary precedence and parsed-time fallback need cases."
+    },
+    {
+      "method_id": "R02",
+      "branch": "Thumbnail/inline image and all date fallback branches need cases."
+    },
+    {
+      "method_id": "T01",
+      "branch": "HTTP/browser ordering, alternate URLs, readiness, scrolling and headers need transport tests."
+    },
+    {
+      "method_id": "T02",
+      "branch": "Message container/text/meta fallback and media-only acceptance need explicit cases."
+    },
+    {
+      "method_id": "T03",
+      "branch": "Forwarding/reply cleanup, external URL normalization/dedup, hashtags and title truncation need cases."
+    },
+    {
+      "method_id": "T04",
+      "branch": "Successful captured short-link Readability expansion and cancellation tested; actual source fetch and retry integration remain open."
+    },
+    {
+      "method_id": "T05",
+      "branch": "Synthetic cases cover media kinds; background/avatar exclusion and dedup need assertions. Poll/location/contact IDs are randomized; compare semantic payload."
+    },
+    {
+      "method_id": "C01",
+      "branch": "Rendered markup cannot prove browser defaults, HTTP mode, JS wait, cap or fallback policy."
+    },
+    {
+      "method_id": "C02",
+      "branch": "Learned selector confidence/top-three and learned title/link/date behavior need stateful cases."
+    },
+    {
+      "method_id": "C03",
+      "branch": "Only absolute dates are represented; relative/future/old/missing behavior needs a clocked source test."
+    },
+    {
+      "method_id": "C04",
+      "branch": "AI structure study, rerun, persistence and failure heuristics need recorded-AI integration tests."
+    },
+    {
+      "method_id": "C05",
+      "branch": "Description cap tested in custom_parity_test.go; persistent snapshot/hash/dedup behavior remains open."
+    },
+    {
+      "method_id": "X01",
+      "branch": "Bounded compressed/framed transport tested locally; full source integration and sustained resource trials remain open."
+    }
+  ],
+  "transport_tests_needed": [
+    {
+      "method_ids": [
+        "E02",
+        "E03",
+        "X01"
+      ],
+      "needed": "Full automatic retry/source integration; low-level controlled-loopback HTTP cases are implemented and tested."
+    },
+    {
+      "method_ids": [
+        "T01",
+        "T04"
+      ],
+      "needed": "Mocked/local browser and HTTP tests for access ordering, readiness, scroll, retries, short-link expansion and cancellation."
+    },
+    {
+      "method_ids": [
+        "C01",
+        "C04",
+        "C05"
+      ],
+      "needed": "Source/browser state tests for rendered snapshots, AI selector reruns and changed/unchanged hashes."
+    }
+  ],
+  "source_capture_gate": {
+    "status": "open",
+    "note": "All eight public indexes captured; fourteen linked pages from seven sources. N+1 linked articles return403. Passing parser assertions do not establish full source orchestration or editorial quality."
+  },
+  "transport_evidence": {
+    "http": "go/transport/http_test.go: controlled loopback transport suite passed",
+    "browser": "go/transport/browser_test.go: required Chrome 154 suite passed serially; controlled CSP-restricted fixture scope only",
+    "remaining": "Production retry/source orchestration, stateful contracts and actual source captures remain open"
+  },
+  "source_parser_evidence": {
+    "artifact": "artifacts/live-source-methods",
+    "cases": 16,
+    "source_indexes": 8,
+    "scope": "Two captured entries per configured source; RSS/Atom, Telegram and configured custom CSS. Both assertion sets pass; field differences remain open.",
+    "remaining_field_differences": 6,
+    "remaining_scope": "Rich RSS HTML serialization/sanitization policy; Telegram text/date/media fields match the reviewed two-entry capture."
+  }
+}

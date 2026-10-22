@@ -1,0 +1,6 @@
+# Last overlay only after standby health and explicit activation approval.
+services:
+  app:
+    environment:
+      EXTRACTION_SERVICE_MODE: go
+      EXTRACTION_SERVICE_NATIVE_BROWSER: 'false'

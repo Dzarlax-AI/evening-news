@@ -28,9 +28,13 @@ wheels/
 .venv/
 .uv-cache/
 .pytest_cache/
+.pytest-native-*/
 .test-postgres/
 .test-chrome/
 .patch-validation/
+artifacts/
+go/*.jsonl
+go/news-bench*
 .env
 .env.local
 .env.*.local
@@ -51,6 +55,7 @@ cache/
 
 # Docker
 .dockerignore
+!go/.dockerignore
 
 # Database
 *.db

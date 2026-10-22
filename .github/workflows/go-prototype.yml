@@ -1,0 +1,71 @@
+name: Go extraction prototype
+
+on:
+  push:
+    paths:
+      - 'go/**'
+      - 'scripts/benchmark_python_pipeline.py'
+      - 'scripts/compare_extraction_replays.py'
+      - 'docs/extraction-review-decisions.json'
+      - 'docs/extraction-golden-cases.json'
+      - 'tests/fixtures/go-parity/**'
+      - 'tests/test_extraction_replay.py'
+      - '.github/workflows/go-prototype.yml'
+  pull_request:
+    paths:
+      - 'go/**'
+      - 'scripts/benchmark_python_pipeline.py'
+      - 'scripts/compare_extraction_replays.py'
+      - 'docs/extraction-review-decisions.json'
+      - 'docs/extraction-golden-cases.json'
+      - 'tests/fixtures/go-parity/**'
+      - 'tests/test_extraction_replay.py'
+      - '.github/workflows/go-prototype.yml'
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  replay:
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    env:
+      SCHEDULER_ENABLED: 'false'
+      NO_BROWSER: '1'
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-go@v5
+        with:
+          go-version-file: go/go.mod
+          cache-dependency-path: go/go.sum
+      - uses: actions/setup-python@v5
+        with:
+          python-version: '3.12'
+          cache: pip
+      - name: Install Python replay dependencies
+        run: python -m pip install -r requirements.txt
+      - name: Go unit tests, race detector, and static checks
+        working-directory: go
+        run: |
+          go test -race ./...
+          go vet ./...
+      - name: Python harness regression tests
+        run: python -m pytest tests/test_extraction_replay.py -q
+      - name: Replay the same offline corpus in both implementations
+        run: |
+          python scripts/benchmark_python_pipeline.py --corpus tests/fixtures/go-parity/manifest.json --cycles 6 --output artifacts/python-replay.jsonl
+          cd go
+          go run ./cmd/extract-replay -corpus ../tests/fixtures/go-parity/manifest.json -cycles 6 -workers 2 -output ../artifacts/go-replay.jsonl
+      - name: Check source goldens and reviewed differences
+        run: |
+          python scripts/compare_extraction_replays.py --python artifacts/python-replay.jsonl --go artifacts/go-replay.jsonl --corpus tests/fixtures/go-parity/manifest.json --cycles 6 --decisions docs/extraction-review-decisions.json --golden docs/extraction-golden-cases.json --output artifacts/replay-comparison.json
+      - name: Save replay evidence
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: extraction-component-replay
+          path: |
+            artifacts/*replay.jsonl
+            artifacts/replay-comparison.json
+          if-no-files-found: warn

@@ -71,7 +71,8 @@ async def reprocess_article(
             'image_url': article.image_url  # Include image_url for media caching
         }
         
-        # Re-extract media if requested
+        # Telegram media refresh requires message markup and source authentication.
+        # Keep this Python path explicit; the article service returns article text.
         logger.info(f"🔍 Debug: reextract_media={request.reextract_media}, source={article.source}, source_type={article.source.source_type if article.source else 'None'}")
         if request.reextract_media and article.source and article.source.source_type == 'telegram':
             logger.info(f"🔧 Starting media re-extraction for article {article.id}")

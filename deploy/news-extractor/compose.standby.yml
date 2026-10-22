@@ -1,0 +1,33 @@
+# Reviewed draft: merge with the canonical personal_ai_stack deploy/news base.
+# Render and inspect with dedicated env; never deploy this file by itself.
+services:
+  app:
+    image: ${NEWS_APP_IMAGE:?Set the verified Python client image by digest}
+    environment:
+      EXTRACTION_SERVICE_MODE: python
+      EXTRACTION_SERVICE_NATIVE_BROWSER: 'false'
+      EXTRACTION_SERVICE_URL: http://extractor:8080
+      EXTRACTION_SERVICE_TOKEN: ${NEWS_EXTRACTOR_TOKEN:?Set the dedicated service token}
+      EXTRACTION_SERVICE_PYTHON_FALLBACK: 'true'
+      EXTRACTION_SERVICE_TIMEOUT_SECONDS: '30'
+      EXTRACTION_SERVICE_TOTAL_BUDGET_SECONDS: '120'
+  extractor:
+    image: ${NEWS_EXTRACTOR_IMAGE:?Set the verified extractor image by digest}
+    restart: unless-stopped
+    environment:
+      LISTEN_ADDR: ':8080'
+      EXTRACTOR_SERVICE_TOKEN: ${NEWS_EXTRACTOR_TOKEN:?Set the dedicated service token}
+      EXTRACTOR_HTTP_ONLY: 'true'
+      EXTRACTOR_MAX_CONCURRENT: '2'
+      EXTRACTOR_BROWSER_CONCURRENT: '1'
+      CHROME_ENDPOINT: ''
+    networks: [infra]
+    read_only: true
+    cap_drop: [ALL]
+    security_opt: ['no-new-privileges:true']
+    pids_limit: 128
+    mem_limit: 256m
+    cpus: 1
+    stop_grace_period: 40s
+    labels:
+      traefik.enable: 'false'

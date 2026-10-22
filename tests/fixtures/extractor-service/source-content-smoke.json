@@ -1,0 +1,32 @@
+{
+  "version": 1,
+  "cases": [
+    {
+      "id": "retention.source_content",
+      "source_type": "article",
+      "source_name": "Synthetic raw source retention",
+      "methods": [
+        "E15"
+      ],
+      "provenance": {
+        "kind": "synthetic",
+        "derived_from": [
+          "go/extractor/types.go",
+          "scripts/benchmark_python_pipeline.py"
+        ]
+      },
+      "input": {
+        "url": "https://fixture.test/article",
+        "strategy": "source_content",
+        "content": "Original stored source text."
+      },
+      "expected": {
+        "state": "extracted",
+        "method": "source_content",
+        "contains": [
+          "Original stored source text."
+        ]
+      }
+    }
+  ]
+}

@@ -1,0 +1,6 @@
+.test-chrome
+*.exe
+*.jsonl
+*.test
+coverage*
+news-bench*

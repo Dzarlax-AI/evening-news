@@ -1,0 +1,9 @@
+# Future shared-browser compatibility overlay; configuration preparation only.
+# Enable only after the Python proxy-context path and Linux boundary are accepted.
+# Does not create a browser, gateway, firewall, or change extractor routing mode.
+services:
+  app:
+    environment:
+      BROWSER_PROXY_ENABLED: 'true'
+      BROWSER_PROXY_URL: ${NEWS_NATIVE_PROXY_URL:?Set the accepted private gateway URL}
+      BROWSER_PROXY_TOKEN: ${NEWS_NATIVE_PROXY_TOKEN:?Set the dedicated gateway token}

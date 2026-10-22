@@ -56,6 +56,25 @@ _managed_connections: weakref.WeakValueDictionary = weakref.WeakValueDictionary(
 _CONNECT_TIMEOUT_SECONDS = 15.0
 _CLOSE_TIMEOUT_SECONDS = 5.0
 _RECONNECT_COOLDOWN_SECONDS = 60.0
+_NAVIGATION_ERROR_CODES = frozenset({
+    "net::ERR_BLOCKED_BY_CLIENT",
+    "net::ERR_CERT_AUTHORITY_INVALID",
+    "net::ERR_CERT_COMMON_NAME_INVALID",
+    "net::ERR_CONNECTION_CLOSED",
+    "net::ERR_CONNECTION_REFUSED",
+    "net::ERR_CONNECTION_RESET",
+    "net::ERR_INTERNET_DISCONNECTED",
+    "net::ERR_NAME_NOT_RESOLVED",
+    "net::ERR_PROXY_CONNECTION_FAILED",
+    "net::ERR_SSL_PROTOCOL_ERROR",
+    "net::ERR_TIMED_OUT",
+    "net::ERR_TUNNEL_CONNECTION_FAILED",
+})
+
+
+def _safe_navigation_error_code(error_text) -> str:
+    """Keep only known Chromium navigation codes; never retain CDP error text."""
+    return error_text if isinstance(error_text, str) and error_text in _NAVIGATION_ERROR_CODES else "other"
 
 # Serializes ALL browser tab usage across the entire app.
 # Remote Chrome has limited RAM and each attached tab owns a WebSocket.
@@ -102,7 +121,58 @@ class _OwnedConnection:
 
 
 class _OwnedTab(_OwnedConnection, Tab):
-    pass
+    async def get(self, url, new_tab=False, new_window=False):
+        if self.__dict__.get("_browser_pool_context_id") is not None:
+            if new_tab or new_window:
+                raise BrowserUnavailableError("Proxy context cannot create an unguarded tab")
+            from .browser_proxy import _safe_destination, check_proxy_error
+            if not _safe_destination(url):
+                raise BrowserUnavailableError("Browser destination blocked by proxy policy")
+            load_event = asyncio.Event()
+            expected_loader_ids = set()
+            seen_loaders = []
+
+            def lifecycle(event):
+                if getattr(event, "name", None) != "DOMContentLoaded":
+                    return
+                loader_id = getattr(event, "loader_id", None)
+                if loader_id:
+                    if loader_id in expected_loader_ids:
+                        load_event.set()
+                    elif len(seen_loaders) < 32 and loader_id not in seen_loaders:
+                        seen_loaders.append(loader_id)
+
+            self.add_handler(cdp.page.LifecycleEvent, lifecycle)
+            try:
+                await self.send(cdp.page.enable())
+                await self.send(cdp.page.set_lifecycle_events_enabled(True))
+                result = await self.send(cdp.page.navigate(url))
+                error_text = result[2] if isinstance(result, (tuple, list)) and len(result) > 2 else None
+                if error_text:
+                    await check_proxy_error(self)
+                    error = BrowserUnavailableError("Browser navigation was blocked")
+                    error.navigation_error_code = _safe_navigation_error_code(error_text)
+                    from .browser_proxy import _proxy_diagnostic_snapshot
+                    error.proxy_diagnostics = _proxy_diagnostic_snapshot(self)
+                    raise error
+                # The tab was attached before Fetch.enable. Reattaching here
+                # replaces nodriver's session_id while Fetch remains enabled
+                # only on the original session, so late intercepted requests
+                # would be continued on the wrong CDP session.
+                await check_proxy_error(self)
+                loader_id = result[1] if isinstance(result, (tuple, list)) and len(result) > 1 else None
+                if loader_id is not None:
+                    expected_loader_ids.add(loader_id)
+                    if loader_id in seen_loaders:
+                        load_event.set()
+                    # browser_tab() and run_browser_operation() own the configured
+                    # creation/operation deadline and cancel this wait when it expires.
+                    await load_event.wait()
+                    await check_proxy_error(self)
+                return self
+            finally:
+                self.remove_handler(cdp.page.LifecycleEvent, lifecycle)
+        return await super().get(url, new_tab=new_tab, new_window=new_window)
 
 
 class Browser(_OwnedConnection, NodriverBrowser):
@@ -419,6 +489,18 @@ async def _bounded_cleanup(operation, timeout):
     return task.result()
 
 
+async def _send_existing_connection(browser, generation, command, timeout):
+    """Send cleanup only on the exact live browser generation; never reconnect."""
+    if (
+        _browser_generation != generation or not _is_browser_connected(browser)
+        or browser.__dict__.get("_browser_pool_closing")
+    ):
+        raise ConnectionError("Owned browser connection is unavailable")
+    return await _bounded_cleanup(
+        Connection.send(browser, command, _attach=True), timeout
+    )
+
+
 def _clear_connection_state(connection) -> None:
     """Release response graphs only after their writers have stopped."""
     for name in (
@@ -512,8 +594,37 @@ async def _close_tab_impl(tab):
     error = None
     try:
         from ..config import settings
-        await _bounded_cleanup(_close_remote_target(tab), settings.browser_tab_close_timeout_seconds)
+        context_id = tab.__dict__.get("_browser_pool_context_id")
+        if context_id is not None:
+            from .browser_proxy import remove_handlers
+            remove_handlers(tab)
+            tasks = tuple(tab.__dict__.get("_browser_pool_proxy_tasks", ()))
+            for task in tasks:
+                task.cancel()
+            pending_handlers = set()
+            if tasks:
+                _, pending_handlers = await asyncio.wait(
+                    tasks, timeout=settings.browser_tab_close_timeout_seconds
+                )
+            browser = tab.__dict__.get("_browser_pool_browser")
+            if browser is None or not _is_browser_connected(browser):
+                raise ConnectionError("Owned proxy context connection is unavailable")
+            await _send_existing_connection(
+                browser, tab.__dict__.get("_browser_pool_generation", _browser_generation),
+                cdp.target.dispose_browser_context(context_id),
+                settings.browser_tab_close_timeout_seconds,
+            )
+            if pending_handlers:
+                from . import browser_proxy
+                browser_proxy._ownership_unknown = True
+                raise TimeoutError("Proxy event handlers did not stop")
+            tab.__dict__.pop("_browser_pool_context_id", None)
+        else:
+            await _bounded_cleanup(_close_remote_target(tab), settings.browser_tab_close_timeout_seconds)
     except (Exception, asyncio.CancelledError) as exc:
+        if tab.__dict__.get("_browser_pool_context_id") is not None:
+            from . import browser_proxy
+            browser_proxy._ownership_unknown = True
         error = exc.with_traceback(None)
         error.__context__ = None
         error.__cause__ = None
@@ -638,6 +749,7 @@ async def run_browser_operation(
     confirm_success: bool = True,
     browser_session: Optional[object] = None,
     invalidate_on_timeout: bool = False,
+    invalidate_session: bool = True,
 ) -> T:
     """Run one CDP operation with a finite deadline and session invalidation."""
     timeout_seconds, uses_pool_deadline = _bounded_timeout_seconds(
@@ -653,13 +765,15 @@ async def run_browser_operation(
         expected_generation = session_state.get(
             "_browser_pool_generation", _browser_generation
         )
+        if session_state.get("_browser_pool_context_id") is not None:
+            invalidate_session = False
     operation_task = asyncio.ensure_future(operation)
     try:
         done, _ = await asyncio.wait({operation_task}, timeout=timeout_seconds)
         if operation_task not in done:
             operation_task.cancel()
             _track_detached_task(operation_task)
-            if invalidate_on_timeout or uses_pool_deadline:
+            if invalidate_session and (invalidate_on_timeout or uses_pool_deadline):
                 failure = BrowserUnavailableError(
                     f"Browser {operation_name} timed out after {timeout_seconds:.1f}s"
                 )
@@ -685,6 +799,10 @@ async def run_browser_operation(
         raise
     except Exception as exc:
         if _is_transport_failure(exc):
+            if not invalidate_session:
+                raise BrowserUnavailableError(
+                    f"Browser {operation_name} failed: {type(exc).__name__}"
+                ) from None
             await invalidate_browser(
                 exc,
                 expected_browser=expected_browser,
@@ -696,6 +814,9 @@ async def run_browser_operation(
         raise
 
     if confirm_success:
+        if browser_session is not None:
+            from .browser_proxy import check_proxy_error
+            await check_proxy_error(browser_session)
         record_browser_success(
             expected_browser=expected_browser,
             expected_generation=expected_generation,
@@ -941,13 +1062,20 @@ async def browser_tab(url: str):
             raise failure from exc
 
         browser = await get_browser()
-        creation_task = asyncio.create_task(browser.get(url, new_tab=True))
+        from ..config import settings
+        proxy_enabled = settings.browser_proxy_enabled
+        if proxy_enabled:
+            from .browser_proxy import create_proxy_tab
+            creation_task = asyncio.create_task(create_proxy_tab(browser, url))
+        else:
+            creation_task = asyncio.create_task(browser.get(url, new_tab=True))
         tab = await run_browser_operation(
             creation_task,
             "create tab",
             timeout_seconds=settings.browser_tab_create_timeout_seconds,
             browser_session=browser,
-            invalidate_on_timeout=True,
+            invalidate_on_timeout=not proxy_enabled,
+            invalidate_session=not proxy_enabled,
         )
         _register_tab(browser, tab)
         yield tab
@@ -958,8 +1086,15 @@ async def browser_tab(url: str):
                 if creation_task is not None and tab is None:
                     # Cancellation may arrive after get() returned but before assignment.
                     if not creation_task.done():
-                        creation_task.cancel()
+                        # run_browser_operation may already have cancelled this task.
+                        # A second cancel can interrupt create_proxy_tab's shielded
+                        # owned-context cleanup after its first CancelledError.
+                        if not creation_task.cancelling():
+                            creation_task.cancel()
                         await asyncio.wait({creation_task}, timeout=_CLOSE_TIMEOUT_SECONDS)
+                        if not creation_task.done() and settings.browser_proxy_enabled:
+                            from . import browser_proxy
+                            browser_proxy._ownership_unknown = True
                     if creation_task.done() and not creation_task.cancelled():
                         try:
                             tab = creation_task.result()
@@ -971,6 +1106,11 @@ async def browser_tab(url: str):
                     return
                 error = await _close_tab(tab)
                 if error is not None:
+                    proxy_context = tab.__dict__.get("_browser_pool_context_id") is not None
+                    if proxy_context:
+                        from . import browser_proxy
+                        browser_proxy._ownership_unknown = True
+                        raise BrowserUnavailableError("Browser tab cleanup failed") from None
                     logger.warning("Browser tab cleanup failed for %s (%s): %s", url[:60], type(error).__name__, error)
                     if isinstance(error, TimeoutError) or _is_transport_failure(error):
                         await invalidate_browser(

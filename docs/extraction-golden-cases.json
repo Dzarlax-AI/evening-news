@@ -1,0 +1,1830 @@
+{
+  "version": 1,
+  "cases": [
+    {
+      "id": "rss.content_preferred",
+      "case_sha256": "e4070312d9f45aae61607484d154fd123ca045cb951671b19bd4f42ea244dddd",
+      "evidence": "Synthetic source contract in tests/fixtures/go-parity/manifest.json",
+      "expected": {
+        "contains": [
+          "four independent stations"
+        ],
+        "not_contains": [
+          "Short summary"
+        ],
+        "fields": {
+          "title": "Sensor report",
+          "publication_date": "2026-10-15T12:00:00"
+        },
+        "state": "extracted"
+      }
+    },
+    {
+      "id": "rss.media_content_image",
+      "case_sha256": "b3c62b86c78bfec8d5df2c9ca7b79f604e15e977b4a371f622be6d382a2c7924",
+      "evidence": "Synthetic source contract in tests/fixtures/go-parity/manifest.json",
+      "expected": {
+        "contains": [
+          "fragile pages"
+        ],
+        "not_contains": [],
+        "fields": {
+          "title": "Library preservation project",
+          "image_url": "https://cdn.example.test/archive-cover.png",
+          "url": "https://rss.example.test/library",
+          "publication_date": "2026-10-15T12:00:00"
+        },
+        "state": "extracted"
+      }
+    },
+    {
+      "id": "rss.enclosure_priority",
+      "case_sha256": "0ae7cf5c128f28a09bdc6e5d74db4e2c4c9a9befd6a125d6ca6c249d632f073e",
+      "evidence": "Synthetic source contract in tests/fixtures/go-parity/manifest.json",
+      "expected": {
+        "contains": [
+          "calibration procedure"
+        ],
+        "not_contains": [],
+        "fields": {
+          "title": "River archive",
+          "image_url": "https://cdn.example.test/lead.png",
+          "publication_date": "2026-10-15T12:00:00"
+        },
+        "state": "extracted"
+      }
+    },
+    {
+      "id": "atom.updated_and_author",
+      "case_sha256": "eb44cfbfbdbe145582a7d82142fdc87e303ab1a732d5bf6cfa10a74c26ae4cba",
+      "evidence": "Synthetic source contract in tests/fixtures/go-parity/manifest.json",
+      "expected": {
+        "contains": [
+          "fragile pages"
+        ],
+        "not_contains": [],
+        "fields": {
+          "title": "Rural transit field report",
+          "url": "https://atom.example.test/transit",
+          "author": "Sample Desk"
+        },
+        "state": "extracted"
+      }
+    },
+    {
+      "id": "rss.entry_without_link_skipped",
+      "case_sha256": "09f7a74ab150f9c8dc4c4bf62ffaca369b0bb46a0e8acbbe335b822c384fe44e",
+      "evidence": "Synthetic source contract in tests/fixtures/go-parity/manifest.json",
+      "expected": {
+        "contains": [],
+        "not_contains": [],
+        "fields": {},
+        "state": "failed"
+      }
+    },
+    {
+      "id": "telegram.message_with_permalink_and_date",
+      "case_sha256": "9253ebc980a494242f4c4a569e1d6981f56a9cffa8c0f00bad6a7029ce939fdf",
+      "evidence": "Synthetic source contract in tests/fixtures/go-parity/manifest.json",
+      "expected": {
+        "contains": [
+          "four independent stations"
+        ],
+        "not_contains": [],
+        "fields": {
+          "url": "https://t.me/samplechannel/101"
+        },
+        "state": "extracted"
+      }
+    },
+    {
+      "id": "telegram.message_with_external_link",
+      "case_sha256": "df8fe789a9c3a60cca9b69fca60e8e8208ada481e405f91b035fd06c8784ad42",
+      "evidence": "Synthetic source contract in tests/fixtures/go-parity/manifest.json",
+      "expected": {
+        "contains": [
+          "source archive",
+          "fragile pages"
+        ],
+        "not_contains": [],
+        "fields": {
+          "publication_date": "2026-10-15T12:00:00"
+        },
+        "state": "extracted"
+      }
+    },
+    {
+      "id": "telegram.short_message_skipped",
+      "case_sha256": "801e25bab2f4cbfda1ed28e6129466b200133d56ab89b38fc3d4979d64b82222",
+      "evidence": "Synthetic source contract in tests/fixtures/go-parity/manifest.json",
+      "expected": {
+        "contains": [],
+        "not_contains": [],
+        "fields": {},
+        "state": "failed"
+      }
+    },
+    {
+      "id": "telegram.empty_history",
+      "case_sha256": "e0101b2775b2c8952d8010077358d63001c5464c5454d7a57feb40fe736c2fe9",
+      "evidence": "Synthetic source contract in tests/fixtures/go-parity/manifest.json",
+      "expected": {
+        "contains": [],
+        "not_contains": [],
+        "fields": {},
+        "state": "failed"
+      }
+    },
+    {
+      "id": "telegram.rendered_browser_history",
+      "case_sha256": "0052de10be2de235dd9631cc2662057e6399f508bf676859f909d274775c95ef",
+      "evidence": "Synthetic source contract in tests/fixtures/go-parity/manifest.json",
+      "expected": {
+        "contains": [
+          "river sensors"
+        ],
+        "not_contains": [],
+        "fields": {
+          "publication_date": "2026-10-15T12:00:00"
+        },
+        "state": "extracted"
+      }
+    },
+    {
+      "id": "custom.configured_selectors_relative_url",
+      "case_sha256": "73e10ec0075e58dfe50b7c848ce4bcea0dd60477aa8f9628a808cef086d7b7c5",
+      "evidence": "Synthetic source contract in tests/fixtures/go-parity/manifest.json",
+      "expected": {
+        "contains": [
+          "fragile pages"
+        ],
+        "not_contains": [],
+        "fields": {
+          "title": "Rural transit displays",
+          "url": "https://custom-configured_selectors_relative_url.example.test/reports/rural-transit"
+        },
+        "state": "extracted"
+      }
+    },
+    {
+      "id": "custom.blog_classes",
+      "case_sha256": "e81d7aa5701f8b1e6344745153f24e94c957cddf30e11a2e0c8aaf1e448b7283",
+      "evidence": "Synthetic source contract in tests/fixtures/go-parity/manifest.json",
+      "expected": {
+        "contains": [
+          "reproduce the result"
+        ],
+        "not_contains": [],
+        "fields": {
+          "title": "Archive preservation guide"
+        },
+        "state": "extracted"
+      }
+    },
+    {
+      "id": "custom.browser_rendered_cards",
+      "case_sha256": "326bfb529bd974b2a700a48a40ef0739a86c15897026e4c2f82cd1c1de249c7e",
+      "evidence": "Synthetic source contract in tests/fixtures/go-parity/manifest.json",
+      "expected": {
+        "contains": [
+          "oral histories"
+        ],
+        "not_contains": [],
+        "fields": {
+          "title": "Library update",
+          "publication_date": "2026-10-15T12:00:00"
+        },
+        "state": "extracted"
+      }
+    },
+    {
+      "id": "custom.no_article_cards",
+      "case_sha256": "3ebd5b9a3d43a84fdfb4a8e584088ac8a353419eeaa6fa2cc32607caa8332e30",
+      "evidence": "Synthetic source contract in tests/fixtures/go-parity/manifest.json",
+      "expected": {
+        "contains": [],
+        "not_contains": [],
+        "fields": {},
+        "state": "failed"
+      }
+    },
+    {
+      "id": "article.learned_css_success",
+      "case_sha256": "9c62bdaf31983f868aaa954c44e91cc7afbf6d03a342cfaf411f0d6b74e7aab7",
+      "evidence": "Synthetic source contract in tests/fixtures/go-parity/manifest.json",
+      "expected": {
+        "contains": [
+          "Researchers at the fictional Northstar Institute released an open ar"
+        ],
+        "not_contains": [],
+        "fields": {
+          "selector_used": ".story-copy"
+        },
+        "state": "extracted"
+      }
+    },
+    {
+      "id": "article.learned_selector_miss_falls_back",
+      "case_sha256": "2edb64b5b0d96dd57531fad0820a2dafc142258ea6ad3178c40fbe56ccb7e3f5",
+      "evidence": "Synthetic source contract in tests/fixtures/go-parity/manifest.json",
+      "expected": {
+        "contains": [
+          "A cooperative of small libraries has started a shared preservation p"
+        ],
+        "not_contains": [],
+        "fields": {},
+        "state": "extracted"
+      }
+    },
+    {
+      "id": "article.learned_browser_pattern",
+      "case_sha256": "79371bcb2e6c5375af36893c95014258621c629b52c34283aa7c4472c780f27b",
+      "evidence": "Synthetic source contract in tests/fixtures/go-parity/manifest.json",
+      "expected": {
+        "contains": [
+          "Engineers at the fictional Meridian Observatory described a low-powe"
+        ],
+        "not_contains": [],
+        "fields": {
+          "selector_used": "article"
+        },
+        "state": "extracted"
+      }
+    },
+    {
+      "id": "article.enhanced_selectors_semantic_article",
+      "case_sha256": "e1b24030d73fc417833849767327896a950ef3b79d3ebbc7133cbc6ef0b77ce3",
+      "evidence": "Synthetic source contract in tests/fixtures/go-parity/manifest.json",
+      "expected": {
+        "contains": [
+          "Researchers at the fictional Northstar Institute released an open ar"
+        ],
+        "not_contains": [],
+        "fields": {},
+        "state": "extracted"
+      }
+    },
+    {
+      "id": "article.enhanced_selectors_itemprop",
+      "case_sha256": "1b121a0a817d926385a9d01719edf3cc1ca9075d2029620d7b4a27bfba2c4714",
+      "evidence": "Synthetic source contract in tests/fixtures/go-parity/manifest.json",
+      "expected": {
+        "contains": [
+          "The fictional Open Transit Lab published a field report on bus arriv"
+        ],
+        "not_contains": [],
+        "fields": {},
+        "state": "extracted"
+      }
+    },
+    {
+      "id": "article.readability_after_selector_miss",
+      "case_sha256": "5125c6107360f0fe6a5bcbafebd7a6018b38a157f52899aabfce6a9095cf2314",
+      "evidence": "Synthetic source contract in tests/fixtures/go-parity/manifest.json",
+      "expected": {
+        "contains": [
+          "A cooperative of small libraries has started a shared preservation p"
+        ],
+        "not_contains": [],
+        "fields": {},
+        "state": "extracted"
+      }
+    },
+    {
+      "id": "article.browser_rendered_dom",
+      "case_sha256": "d1ebdc85ccb251d915a58acaf8fafd8dfff16f8d6d3203958805adf770d9b5b4",
+      "evidence": "Synthetic source contract in tests/fixtures/go-parity/manifest.json",
+      "expected": {
+        "contains": [
+          "Engineers at the fictional Meridian Observatory described a low-powe"
+        ],
+        "not_contains": [],
+        "fields": {
+          "title": "Dynamic observatory report"
+        },
+        "state": "extracted"
+      }
+    },
+    {
+      "id": "article.jsonld_graph_body",
+      "case_sha256": "34750b2b6f87f2360f134a1f131971be1eeeea6fe57e6a6061123c8eab08553a",
+      "evidence": "Synthetic source contract in tests/fixtures/go-parity/manifest.json",
+      "expected": {
+        "contains": [
+          "Researchers at the fictional Northstar Institute released an open ar"
+        ],
+        "not_contains": [],
+        "fields": {
+          "publication_date": "2025-10-14",
+          "image_url": "https://cdn.example.test/river.png"
+        },
+        "state": "extracted"
+      }
+    },
+    {
+      "id": "article.jsonld_text_field",
+      "case_sha256": "e1bbb8649233d67bebc4d8d12cbb7267a1ba064e8fbe15ed0dc209e2762c5e36",
+      "evidence": "Synthetic source contract in tests/fixtures/go-parity/manifest.json",
+      "expected": {
+        "contains": [
+          "Engineers at the fictional Meridian Observatory described a low-powe"
+        ],
+        "not_contains": [],
+        "fields": {},
+        "state": "extracted"
+      }
+    },
+    {
+      "id": "article.open_graph_description",
+      "case_sha256": "4847c1711b63fc8f52d169378d99bf7f705f7afc1704208fbb38aa635f1c8a1d",
+      "evidence": "Synthetic source contract in tests/fixtures/go-parity/manifest.json",
+      "expected": {
+        "contains": [
+          "A cooperative of small libraries has started a shared preservation p"
+        ],
+        "not_contains": [],
+        "fields": {},
+        "state": "extracted"
+      }
+    },
+    {
+      "id": "article.meta_description_fallback",
+      "case_sha256": "303a578e5fd8a212acc5d88b01624aec3c2ae03a281426d1b46e54163953e55a",
+      "evidence": "Synthetic source contract in tests/fixtures/go-parity/manifest.json",
+      "expected": {
+        "contains": [
+          "Researchers at the fictional Northstar Institute released an open ar"
+        ],
+        "not_contains": [],
+        "fields": {},
+        "state": "extracted"
+      }
+    },
+    {
+      "id": "article.heuristics_main_text",
+      "case_sha256": "dbe9f50cb2ac0d12cb7f47d01f680489d934c6b78a69aeb3f6528613649522a4",
+      "evidence": "Synthetic source contract in tests/fixtures/go-parity/manifest.json",
+      "expected": {
+        "contains": [
+          "The fictional Open Transit Lab published a field report on bus arriv"
+        ],
+        "not_contains": [],
+        "fields": {},
+        "state": "extracted"
+      }
+    },
+    {
+      "id": "article.reddit_self_post_filters_comments",
+      "case_sha256": "1f5ee3ce9ff0b815148ff249550a67d66af4ac92dda82fedf69c8b93fde2fef1",
+      "evidence": "Synthetic source contract in tests/fixtures/go-parity/manifest.json",
+      "expected": {
+        "contains": [
+          "missed rural connections"
+        ],
+        "not_contains": [
+          "Automated disclaimer"
+        ],
+        "fields": {
+          "title": "Field notes from public meetings",
+          "author": "sample_writer"
+        },
+        "state": "extracted"
+      }
+    },
+    {
+      "id": "article.reddit_image_preview_unescaped",
+      "case_sha256": "b39654840805b1018d210f70a06eccaa921710ced76ab4215e7d8963692c4e6a",
+      "evidence": "Synthetic source contract in tests/fixtures/go-parity/manifest.json",
+      "expected": {
+        "contains": [
+          "Coastal instrument photograph"
+        ],
+        "not_contains": [],
+        "fields": {
+          "title": "Coastal instrument photograph",
+          "author": "field_observer",
+          "image_url": "https://preview.example.test/coast&wide.jpg"
+        },
+        "state": "extracted"
+      }
+    },
+    {
+      "id": "article.reddit_linked_article",
+      "case_sha256": "354ca049bf1de2093a572a50392fa5d802a47f7fce7f4d40b540cac6b93d8bd7",
+      "evidence": "Synthetic source contract in tests/fixtures/go-parity/manifest.json",
+      "expected": {
+        "contains": [
+          "checksum verification"
+        ],
+        "not_contains": [],
+        "fields": {
+          "title": "Preservation guide discussion"
+        },
+        "state": "extracted"
+      }
+    },
+    {
+      "id": "article.reddit_malformed_json_fallback",
+      "case_sha256": "4bff96a7a10c34e9cfe5a8c631ce0004460afe507017bb59a6db241858060de8",
+      "evidence": "Synthetic source contract in tests/fixtures/go-parity/manifest.json",
+      "expected": {
+        "contains": [
+          "checksum verification"
+        ],
+        "not_contains": [],
+        "fields": {
+          "title": "Transit report"
+        },
+        "state": "extracted"
+      }
+    },
+    {
+      "id": "metadata.og_title_author_image",
+      "case_sha256": "c4e61ec27f337cdca8a441f43859028d073abf8440e5f61547a1752e11815fe7",
+      "evidence": "Synthetic source contract in tests/fixtures/go-parity/manifest.json",
+      "expected": {
+        "contains": [
+          "Researchers at the fictional Northstar Institute released "
+        ],
+        "not_contains": [],
+        "fields": {
+          "title": "Preferred Open Graph title",
+          "author": "Mira Example",
+          "image_url": "https://cdn.example.test/lead.jpg"
+        },
+        "state": "extracted"
+      }
+    },
+    {
+      "id": "metadata.twitter_title_fallback",
+      "case_sha256": "7e567c6246d6b7345a4973ab5bba4a1004e2e5764771ab6f694442483374ec71",
+      "evidence": "Synthetic source contract in tests/fixtures/go-parity/manifest.json",
+      "expected": {
+        "contains": [
+          "A cooperative of small libraries has started a shared pres"
+        ],
+        "not_contains": [],
+        "fields": {
+          "title": "Social card headline"
+        },
+        "state": "extracted"
+      }
+    },
+    {
+      "id": "metadata.date_time_datetime",
+      "case_sha256": "c2706bf620663e3718be2eee48ec18d92b6e8f2a51b02deecbeaa5bab438be4b",
+      "evidence": "Synthetic source contract in tests/fixtures/go-parity/manifest.json",
+      "expected": {
+        "contains": [
+          "Engineers at the fictional Meridian Observatory described "
+        ],
+        "not_contains": [],
+        "fields": {
+          "publication_date": "2025-10-12T00:00:00"
+        },
+        "state": "extracted"
+      }
+    },
+    {
+      "id": "metadata.date_article_published_time",
+      "case_sha256": "2606ac351e7216acc6ec1de3296302c340e0c2d0f006b17d69b87bc197a68a0e",
+      "evidence": "Synthetic source contract in tests/fixtures/go-parity/manifest.json",
+      "expected": {
+        "contains": [
+          "A cooperative of small libraries has started a shared pres"
+        ],
+        "not_contains": [],
+        "fields": {
+          "publication_date": "2025-10-11T00:00:00"
+        },
+        "state": "extracted"
+      }
+    },
+    {
+      "id": "metadata.jsonld_date_author_image",
+      "case_sha256": "cc41cc7584fea11f2fa66463da75620c0b8a9bf7a7a66f3868813042a79a99a5",
+      "evidence": "Synthetic source contract in tests/fixtures/go-parity/manifest.json",
+      "expected": {
+        "contains": [
+          "Researchers at the fictional Northstar Institute released "
+        ],
+        "not_contains": [],
+        "fields": {
+          "publication_date": "2025-10-10",
+          "image_url": "https://cdn.example.test/jsonld.jpg"
+        },
+        "state": "extracted"
+      }
+    },
+    {
+      "id": "metadata.author_byline_and_og_image",
+      "case_sha256": "edc21d30e995a3c905465d0bc622787750733b729bff5c9ddeaef87dd4b147df",
+      "evidence": "Synthetic source contract in tests/fixtures/go-parity/manifest.json",
+      "expected": {
+        "contains": [
+          "Engineers at the fictional Meridian Observatory described "
+        ],
+        "not_contains": [],
+        "fields": {
+          "author": "Mira Analyst",
+          "image_url": "https://cdn.example.test/observatory.jpg"
+        },
+        "state": "extracted"
+      }
+    },
+    {
+      "id": "limits.http_body_at_cap",
+      "case_sha256": "c432c493647a534243e2ade128456820ecb36758e009b05ffc73944d9f3c3505",
+      "evidence": "Synthetic source contract in tests/fixtures/go-parity/manifest.json",
+      "expected": {
+        "contains": [],
+        "not_contains": [],
+        "fields": {
+          "url": "https://limits-http_body_at_cap.example.test/limit"
+        },
+        "state": "extracted"
+      }
+    },
+    {
+      "id": "limits.http_body_one_byte_over",
+      "case_sha256": "9b49cfb748b5be5057b441b8e6b8f705f44db59f237917aa698e088a1ea564ef",
+      "evidence": "Synthetic source contract in tests/fixtures/go-parity/manifest.json",
+      "expected": {
+        "contains": [],
+        "not_contains": [],
+        "fields": {},
+        "state": "resource_limit"
+      }
+    },
+    {
+      "id": "limits.browser_multibyte_over_cap",
+      "case_sha256": "abeab038e22fc15070f724d7a315d9a0730c29edfe9fa5cce16208459a3f303a",
+      "evidence": "Synthetic source contract in tests/fixtures/go-parity/manifest.json",
+      "expected": {
+        "contains": [],
+        "not_contains": [],
+        "fields": {},
+        "state": "resource_limit"
+      }
+    },
+    {
+      "id": "limits.text_char_cap",
+      "case_sha256": "176801e5dc3888ee77bfa44926baedf5edb2f8f0fe16e5746a68030698dabbb2",
+      "evidence": "Synthetic source contract in tests/fixtures/go-parity/manifest.json",
+      "expected": {
+        "contains": [],
+        "not_contains": [],
+        "fields": {},
+        "state": "failed"
+      }
+    },
+    {
+      "id": "cancel.browser_cancellation_cleanup",
+      "case_sha256": "135c4a2971f4ba3578c196fbcf6d5388b0a08f70b0344a85f453922667d023df",
+      "evidence": "Synthetic source contract in tests/fixtures/go-parity/manifest.json",
+      "expected": {
+        "contains": [],
+        "not_contains": [],
+        "fields": {},
+        "state": "failed"
+      }
+    },
+    {
+      "id": "telegram.media_photo",
+      "case_sha256": "5c12e273401a94b66cc666cfd7dbf8502e7cea0a5ec3fd95cc587cc9cbb345ba",
+      "evidence": "Synthetic source contract in tests/fixtures/go-parity/manifest.json",
+      "expected": {
+        "contains": [
+          "damaged river sensors"
+        ],
+        "not_contains": [],
+        "fields": {
+          "media": [
+            {
+              "url": "https://cdn.example.test/photo.jpg",
+              "type": "image",
+              "thumbnail": "https://cdn.example.test/photo.jpg"
+            }
+          ],
+          "image_url": "https://cdn.example.test/photo.jpg",
+          "publication_date": "2026-10-15T12:00:00"
+        },
+        "state": "extracted"
+      }
+    },
+    {
+      "id": "telegram.media_video",
+      "case_sha256": "e31ba6967cdcb8c78e6d695236dedda5edae777bb16ec14aa0e00bd760d5933b",
+      "evidence": "Synthetic source contract in tests/fixtures/go-parity/manifest.json",
+      "expected": {
+        "contains": [
+          "damaged river sensors"
+        ],
+        "not_contains": [],
+        "fields": {
+          "media": [
+            {
+              "url": "https://cdn.example.test/clip.mp4",
+              "type": "video",
+              "thumbnail": "https://cdn.example.test/poster.jpg",
+              "duration": "01:23",
+              "source": "direct_video"
+            }
+          ],
+          "publication_date": "2026-10-15T12:00:00"
+        },
+        "state": "extracted"
+      }
+    },
+    {
+      "id": "telegram.media_round_video",
+      "case_sha256": "ed70b230af3075298498e3962977b3961f9648b038523283f4a1d42f0f9c6a38",
+      "evidence": "Synthetic source contract in tests/fixtures/go-parity/manifest.json",
+      "expected": {
+        "contains": [
+          "damaged river sensors"
+        ],
+        "not_contains": [],
+        "fields": {
+          "media": [
+            {
+              "url": "https://cdn.example.test/round.mp4",
+              "type": "video",
+              "thumbnail": null,
+              "duration": "00:15",
+              "source": "direct_video"
+            }
+          ],
+          "publication_date": "2026-10-15T12:00:00"
+        },
+        "state": "extracted"
+      }
+    },
+    {
+      "id": "telegram.media_voice_audio",
+      "case_sha256": "d883b0f57fb7681afc6f5aacf3d7ad756d4cab344d8af0f87d8aa5e916f8654e",
+      "evidence": "Synthetic source contract in tests/fixtures/go-parity/manifest.json",
+      "expected": {
+        "contains": [
+          "damaged river sensors"
+        ],
+        "not_contains": [],
+        "fields": {
+          "media": [
+            {
+              "url": "https://cdn.example.test/voice.ogg",
+              "type": "audio",
+              "duration": "00:08",
+              "source": "direct_audio"
+            }
+          ],
+          "publication_date": "2026-10-15T12:00:00"
+        },
+        "state": "extracted"
+      }
+    },
+    {
+      "id": "telegram.media_sticker",
+      "case_sha256": "bc7d1ceb045ed22a0deb8b87c3a5432c8d27068ea2ae413d2d49b35639ec6b41",
+      "evidence": "Synthetic source contract in tests/fixtures/go-parity/manifest.json",
+      "expected": {
+        "contains": [
+          "damaged river sensors"
+        ],
+        "not_contains": [],
+        "fields": {
+          "media": [
+            {
+              "url": "https://cdn.example.test/sticker.webp",
+              "type": "animated_sticker",
+              "thumbnail": "https://cdn.example.test/sticker.webp",
+              "source": "sticker"
+            }
+          ],
+          "publication_date": "2026-10-15T12:00:00"
+        },
+        "state": "extracted"
+      }
+    },
+    {
+      "id": "telegram.media_gif",
+      "case_sha256": "ef5c188973f837b9c41073ce84bf93357a0dc41a0f02363209116e7a8e00cec0",
+      "evidence": "Synthetic source contract in tests/fixtures/go-parity/manifest.json",
+      "expected": {
+        "contains": [
+          "damaged river sensors"
+        ],
+        "not_contains": [],
+        "fields": {
+          "media": [
+            {
+              "url": "https://cdn.example.test/loop.gif",
+              "type": "gif",
+              "thumbnail": "https://cdn.example.test/loop-thumb.jpg",
+              "source": "gif"
+            }
+          ],
+          "publication_date": "2026-10-15T12:00:00"
+        },
+        "state": "extracted"
+      }
+    },
+    {
+      "id": "telegram.media_document",
+      "case_sha256": "ed5abd9b180d4f2a21f07e5e318f4bc6ac6ad858605952dd01009c6127333df2",
+      "evidence": "Synthetic source contract in tests/fixtures/go-parity/manifest.json",
+      "expected": {
+        "contains": [
+          "damaged river sensors"
+        ],
+        "not_contains": [],
+        "fields": {
+          "media": [
+            {
+              "url": "https://cdn.example.test/report-preview.jpg",
+              "type": "document",
+              "thumbnail": "https://cdn.example.test/report-preview.jpg"
+            }
+          ],
+          "publication_date": "2026-10-15T12:00:00"
+        },
+        "state": "extracted"
+      }
+    },
+    {
+      "id": "telegram.media_poll",
+      "case_sha256": "5d239e99ab269680ffa4d80eea1ad13c4c0d02d01f64cd49b10c7adb3640e577",
+      "evidence": "Synthetic source contract in tests/fixtures/go-parity/manifest.json",
+      "expected": {
+        "contains": [
+          "damaged river sensors"
+        ],
+        "not_contains": [],
+        "fields": {
+          "media": [
+            {
+              "type": "poll",
+              "poll_data": {
+                "question": "Which archive should open first?",
+                "options": [
+                  "Local newspapers",
+                  "Oral histories"
+                ]
+              },
+              "source": "poll"
+            }
+          ],
+          "publication_date": "2026-10-15T12:00:00"
+        },
+        "state": "extracted"
+      }
+    },
+    {
+      "id": "telegram.media_location",
+      "case_sha256": "52a49c1f593a05690b12d51c9826f2c12e56774a6b168206d900a4216f952f99",
+      "evidence": "Synthetic source contract in tests/fixtures/go-parity/manifest.json",
+      "expected": {
+        "contains": [
+          "damaged river sensors"
+        ],
+        "not_contains": [],
+        "fields": {
+          "media": [
+            {
+              "type": "location",
+              "location_data": {
+                "text": "Northstar field station",
+                "url": "https://maps.example.test/place/river"
+              },
+              "source": "location"
+            }
+          ],
+          "publication_date": "2026-10-15T12:00:00"
+        },
+        "state": "extracted"
+      }
+    },
+    {
+      "id": "telegram.media_contact",
+      "case_sha256": "4779709b0ee40ae651bb2f263ee5ec2dd165c3ffc3a769ce8e5f796486cbb9b7",
+      "evidence": "Synthetic source contract in tests/fixtures/go-parity/manifest.json",
+      "expected": {
+        "contains": [
+          "damaged river sensors"
+        ],
+        "not_contains": [],
+        "fields": {
+          "media": [
+            {
+              "type": "contact",
+              "contact_data": {
+                "text": "Archive desk+1-555-0100",
+                "phone": "+1-555-0100"
+              },
+              "source": "contact"
+            }
+          ],
+          "publication_date": "2026-10-15T12:00:00"
+        },
+        "state": "extracted"
+      }
+    },
+    {
+      "id": "metadata.title_plain_title",
+      "case_sha256": "c39613ae0613f8c424b4dc1139cc61a4ea2dbdcc6a673068940c5f03075ae341",
+      "evidence": "Synthetic source contract in tests/fixtures/go-parity/manifest.json",
+      "expected": {
+        "contains": [
+          "Researchers at the fictional Northstar Institute released "
+        ],
+        "not_contains": [],
+        "fields": {
+          "title": "Plain document headline"
+        },
+        "state": "extracted"
+      }
+    },
+    {
+      "id": "metadata.title_h1_fallback",
+      "case_sha256": "aaf0592a57a30c52a3ea68e8c60f8010fa1f4b4872ed6e7eeb4cdd3af22e4fd4",
+      "evidence": "Synthetic source contract in tests/fixtures/go-parity/manifest.json",
+      "expected": {
+        "contains": [
+          "A cooperative of small libraries has started a shared pres"
+        ],
+        "not_contains": [],
+        "fields": {
+          "title": "Headline from first heading"
+        },
+        "state": "extracted"
+      }
+    },
+    {
+      "id": "metadata.no_publication_date",
+      "case_sha256": "05c6377fe89ece02a209d8181206691701ed743f306fc89e01dfca2b9414d7bc",
+      "evidence": "Synthetic source contract in tests/fixtures/go-parity/manifest.json",
+      "expected": {
+        "contains": [
+          "Researchers at the fictional Northstar Institute released "
+        ],
+        "not_contains": [],
+        "fields": {
+          "publication_date": null
+        },
+        "state": "extracted"
+      }
+    },
+    {
+      "id": "article.article_media_extraction",
+      "case_sha256": "55ee30911a48a5b6329525048df0767df1f07d382ba74223ee69e8a05f59a95d",
+      "evidence": "Synthetic source contract in tests/fixtures/go-parity/manifest.json",
+      "expected": {
+        "contains": [
+          "Researchers at the fictional Northstar Institute released "
+        ],
+        "not_contains": [],
+        "fields": {
+          "media": [
+            {
+              "type": "video",
+              "url": "https://cdn.example.test/field.mp4"
+            },
+            {
+              "type": "document",
+              "url": "https://article-article_media_extraction.example.test/files/field-notes.pdf"
+            }
+          ]
+        },
+        "state": "extracted"
+      }
+    },
+    {
+      "id": "article.alternate_link_candidates",
+      "case_sha256": "bc3066a3e21c69a4ba7c50fdbca3d0d4f213856ac87d7b41a67767d10f535464",
+      "evidence": "Synthetic source contract in tests/fixtures/go-parity/manifest.json",
+      "expected": {
+        "contains": [],
+        "not_contains": [],
+        "fields": {},
+        "state": "failed"
+      }
+    },
+    {
+      "id": "article.url_rejects_document",
+      "case_sha256": "1535566f738459514909327a48405c1327cdb729f501c990c63acb600c44986e",
+      "evidence": "Synthetic source contract in tests/fixtures/go-parity/manifest.json",
+      "expected": {
+        "contains": [],
+        "not_contains": [],
+        "fields": {},
+        "state": "failed"
+      }
+    },
+    {
+      "id": "article.url_cleans_invisible_character",
+      "case_sha256": "84aeb9d891dc81638235dce6f3bf0a5ef243ebcd2f147af018ee39b09bbb3499",
+      "evidence": "Synthetic source contract in tests/fixtures/go-parity/manifest.json",
+      "expected": {
+        "contains": [
+          "Researchers at the fictional Northstar Institute released "
+        ],
+        "not_contains": [],
+        "fields": {
+          "url": "https://example.test/a​article"
+        },
+        "state": "extracted"
+      }
+    },
+    {
+      "id": "article.quality_strips_navigation",
+      "case_sha256": "6956814ea6ca60b4cdf59d396cade3727bd5378fc148d9811c6704f120f44e36",
+      "evidence": "Synthetic source contract in tests/fixtures/go-parity/manifest.json",
+      "expected": {
+        "contains": [
+          "local newspapers"
+        ],
+        "not_contains": [
+          "Subscribe sections"
+        ],
+        "fields": {},
+        "state": "extracted"
+      }
+    },
+    {
+      "id": "custom.absolute_date_selector",
+      "case_sha256": "71d322854a2216f0a9e9d13a0bd4ed6652038d3503f1a0063d06fb6429f83dbe",
+      "evidence": "Synthetic source contract in tests/fixtures/go-parity/manifest.json",
+      "expected": {
+        "contains": [
+          "Researchers at the fictional Northstar Institute released "
+        ],
+        "not_contains": [],
+        "fields": {
+          "title": "Coastal wind update"
+        },
+        "state": "extracted"
+      }
+    },
+    {
+      "id": "article.auto_readability_after_selector_miss",
+      "case_sha256": "1c8bb2ae8c95bc190d3691a07effe5cd25dab32199f579914e4cf428f1113a13",
+      "evidence": "Synthetic source contract in tests/fixtures/go-parity/manifest.json",
+      "expected": {
+        "contains": [
+          "A cooperative of small libraries has started a shared preservation p"
+        ],
+        "not_contains": [],
+        "fields": {},
+        "state": "extracted"
+      }
+    },
+    {
+      "id": "transition.auto_to_jsonld",
+      "case_sha256": "0b656b2317189cba5f303fce2ab803b23da0a6d476079d36dc9320dc7a152b23",
+      "evidence": "Synthetic source contract in tests/fixtures/go-parity/manifest.json",
+      "expected": {
+        "state": "extracted",
+        "contains": [
+          "four independent stations"
+        ]
+      }
+    },
+    {
+      "id": "transition.learned_pattern_to_jsonld",
+      "case_sha256": "b7fa1c082897ed64a53fcd07e2794ee223f7fe76db03bed2ee38bb03eb0a7896",
+      "evidence": "Synthetic source contract in tests/fixtures/go-parity/manifest.json",
+      "expected": {
+        "state": "extracted",
+        "contains": [
+          "four independent stations"
+        ]
+      }
+    },
+    {
+      "id": "transition.auto_to_browser",
+      "case_sha256": "7afd61e1b9879f0a801544170f9d00abcdf8ef8c7ad930e471110c6b01af3be9",
+      "evidence": "Synthetic source contract in tests/fixtures/go-parity/manifest.json",
+      "expected": {
+        "state": "extracted",
+        "contains": [
+          "four independent stations"
+        ]
+      }
+    },
+    {
+      "id": "transition.auto_to_meta",
+      "case_sha256": "633e7b9455a0f4baa270b52b5c73a10f784de3f7bf58435cdc98e4d0a23a3a5b",
+      "evidence": "Synthetic source contract in tests/fixtures/go-parity/manifest.json",
+      "expected": {
+        "state": "extracted",
+        "contains": [
+          "four independent stations"
+        ]
+      }
+    },
+    {
+      "id": "telegram.short_external_expands",
+      "case_sha256": "3c7b644cd1a08dbcd6559e4137d8c10d975b25b75d9ef7f0b96826c4ebee78af",
+      "evidence": "Synthetic source contract in tests/fixtures/go-parity/manifest.json",
+      "expected": {
+        "state": "extracted",
+        "contains": [
+          "four independent stations"
+        ],
+        "fields": {
+          "url": "https://fixture.test/report"
+        }
+      }
+    },
+    {
+      "id": "custom.anchor_container",
+      "case_sha256": "e5f5bc068759895f3a9e0a1126ec0bf71a034b0fae0ce54a5cf593b0bd2b952e",
+      "evidence": "Synthetic source contract in tests/fixtures/go-parity/manifest.json",
+      "expected": {
+        "state": "extracted",
+        "fields": {
+          "title": "Independent river observation project",
+          "url": "https://fixture.test/projects/river"
+        }
+      }
+    },
+    {
+      "id": "metadata.regression_iso_minute",
+      "case_sha256": "8f0c22fb5a91826969a262bc510f7dc8e9fa1096ed0cde2d2a075c92348f071d",
+      "evidence": "Synthetic source contract in tests/fixtures/go-parity/manifest.json",
+      "expected": {
+        "state": "extracted",
+        "contains": [
+          "four independent stations"
+        ]
+      }
+    },
+    {
+      "id": "metadata.regression_displayed_comma",
+      "case_sha256": "79872625c2b7e8180990d4f17334c119b2ad2acf0910151e9b24320e10ffa2d0",
+      "evidence": "Synthetic source contract in tests/fixtures/go-parity/manifest.json",
+      "expected": {
+        "state": "extracted",
+        "contains": [
+          "four independent stations"
+        ],
+        "fields": {
+          "publication_date": "2026-04-30T00:00:00"
+        }
+      }
+    },
+    {
+      "id": "retention.auto",
+      "case_sha256": "3c71940c2ca7da5c62e9c0968fa40bee4079bd04ab9a8de5bd1644d01391ef69",
+      "evidence": "Synthetic source contract in tests/fixtures/go-parity/manifest.json",
+      "expected": {
+        "state": "extracted",
+        "contains": [
+          "Original stored source text."
+        ]
+      }
+    },
+    {
+      "id": "retention.source_content",
+      "case_sha256": "7e31c9c4b96a68971f8cfb76d203621a0c4108eef816ce5cad42283ad4820545",
+      "evidence": "Synthetic source contract in tests/fixtures/go-parity/manifest.json",
+      "expected": {
+        "state": "extracted",
+        "contains": [
+          "Original stored source text."
+        ]
+      }
+    },
+    {
+      "id": "limits.alternative_utf8_byte_cap",
+      "case_sha256": "19d12cd6d546d4527bd29cc2f88c7c96d870a020659e4e5de472a32cc65fb44b",
+      "evidence": "Synthetic source contract in tests/fixtures/go-parity/manifest.json",
+      "expected": {
+        "state": "resource_limit"
+      }
+    },
+    {
+      "id": "live.source.s1.entry1",
+      "case_sha256": "cbe4927559b80aface2f2959a82e0197cb9a22bcbd4e1beae1a1a4ac24860a70",
+      "evidence": "Captured source: https://t.me/s/Serbia",
+      "expected": {
+        "state": "extracted",
+        "fields": {
+          "url": "https://t.me/Serbia/106596"
+        },
+        "contains": []
+      }
+    },
+    {
+      "id": "live.source.s1.entry2",
+      "case_sha256": "2412b10d0e4d0cb3fbd67397b9f70156ead2688cdd911f2c4e586a961fe25f18",
+      "evidence": "Captured source: https://t.me/s/Serbia",
+      "expected": {
+        "state": "extracted",
+        "fields": {
+          "url": "https://t.me/Serbia/106597"
+        },
+        "contains": []
+      }
+    },
+    {
+      "id": "live.source.s2.entry1",
+      "case_sha256": "ad2fdd21d7a6a1c8fdbcea8f7935e411c514537b83a19d10728f7b766a811a2d",
+      "evidence": "Captured source: https://aisecret.us/",
+      "expected": {
+        "state": "extracted",
+        "fields": {
+          "title": "🛎️ CoreWeave's Lenders Want Out"
+        },
+        "contains": [
+          "🛎️ CoreWeave's Lenders Want Out"
+        ]
+      }
+    },
+    {
+      "id": "live.source.s2.entry2",
+      "case_sha256": "dc9da1f43670298c1e1203038a0dc8a1d9561c55f1a7ad9f9e64872974bfade6",
+      "evidence": "Captured source: https://aisecret.us/",
+      "expected": {
+        "state": "extracted",
+        "fields": {
+          "title": "🛎️ A Tool Claims to End All Software"
+        },
+        "contains": [
+          "🛎️ A Tool Claims to End All Software"
+        ]
+      }
+    },
+    {
+      "id": "live.source.s3.entry1",
+      "case_sha256": "555a80301ac9a65263a0c5cd20ceec44517b4bbe7538a23b68d128170ab389ae",
+      "evidence": "Captured source: https://www.theverge.com/rss/index.xml",
+      "expected": {
+        "state": "extracted",
+        "fields": {
+          "title": "Meta and Apple team up to make Muse AI models run better on Macs",
+          "url": "https://www.theverge.com/news/1012293/meta-apple-muse-spark-open-ai-model-mlx"
+        },
+        "contains": []
+      }
+    },
+    {
+      "id": "live.source.s3.entry2",
+      "case_sha256": "2f4920316c3f1207500025097595a915a600426e21b6051b95a6660f8eb640b3",
+      "evidence": "Captured source: https://www.theverge.com/rss/index.xml",
+      "expected": {
+        "state": "extracted",
+        "fields": {
+          "title": "Sony made a $5,900 gold-plated Walkman MP3 player",
+          "url": "https://www.theverge.com/tech/1012200/sony-made-a-5900-gold-plated-walkman-mp3-player"
+        },
+        "contains": []
+      }
+    },
+    {
+      "id": "live.source.s4.entry1",
+      "case_sha256": "ca3dfc72aa5d950b9be82c4d2d5432462e7c1cae51f5250314a5e32982f513d5",
+      "evidence": "Captured source: https://nplus1.ru/rss",
+      "expected": {
+        "state": "extracted",
+        "fields": {
+          "title": "Холера птиц убила тысячи пингвинов Адели на островах Дейнджер в Антарктиде",
+          "url": "https://nplus1.ru/news/2026/10/15/pasteurella-multocida"
+        },
+        "contains": []
+      }
+    },
+    {
+      "id": "live.source.s4.entry2",
+      "case_sha256": "a8a4cdfcd57affbf03f0ec432351ed10256aa5ca46dd46d888d4b47baead3ea6",
+      "evidence": "Captured source: https://nplus1.ru/rss",
+      "expected": {
+        "state": "extracted",
+        "fields": {
+          "title": "Неандертальца пронзили копьем",
+          "url": "https://nplus1.ru/news/2026/10/15/neanderthal-was-killed"
+        },
+        "contains": []
+      }
+    },
+    {
+      "id": "live.source.s7.entry1",
+      "case_sha256": "a8391768d23b07c649d692d28237d40b2f0ec6d38959e41b034bdefe23681b0e",
+      "evidence": "Captured source: https://www.lennysnewsletter.com/feed",
+      "expected": {
+        "state": "extracted",
+        "fields": {
+          "title": "Meta’s new ‘Muse Wonder’ model: good for AI agents, bad for design",
+          "url": "https://www.lennysnewsletter.com/p/metas-new-muse-wonder-model-good"
+        },
+        "contains": []
+      }
+    },
+    {
+      "id": "live.source.s7.entry2",
+      "case_sha256": "01e35859cb93d4f3047b48bde7707b11a9e6032f2c83d7368accdb87e685deb2",
+      "evidence": "Captured source: https://www.lennysnewsletter.com/feed",
+      "expected": {
+        "state": "extracted",
+        "fields": {
+          "title": "How to tell if a startup has a moat",
+          "url": "https://www.lennysnewsletter.com/p/how-to-tell-if-a-startup-has-a-moat"
+        },
+        "contains": []
+      }
+    },
+    {
+      "id": "live.source.s8.entry1",
+      "case_sha256": "ef082f593598e9abc3932e6ed405f93bfba022d18663191bfb39a3d00cec7d4d",
+      "evidence": "Captured source: https://karpathy.bearblog.dev/feed/?type=rss",
+      "expected": {
+        "state": "extracted",
+        "fields": {
+          "title": "Sequoia Ascent 2026 summary",
+          "url": "https://karpathy.bearblog.dev/sequoia-ascent-2026/"
+        },
+        "contains": []
+      }
+    },
+    {
+      "id": "live.source.s8.entry2",
+      "case_sha256": "5583f995405c8be368262bc75270fb34cfba16e07bf4575da523574b1564e9ca",
+      "evidence": "Captured source: https://karpathy.bearblog.dev/feed/?type=rss",
+      "expected": {
+        "state": "extracted",
+        "fields": {
+          "title": "2025 LLM Year in Review",
+          "url": "https://karpathy.bearblog.dev/year-in-review-2025/"
+        },
+        "contains": []
+      }
+    },
+    {
+      "id": "live.source.s10.entry1",
+      "case_sha256": "06451390461e68c5e4f100a6ff31f1e996c17566d8caaee88f09a576ad91beea",
+      "evidence": "Captured source: https://hype.replicate.dev/",
+      "expected": {
+        "state": "extracted",
+        "fields": {
+          "title": "What is this?"
+        },
+        "contains": [
+          "What is this?"
+        ]
+      }
+    },
+    {
+      "id": "live.source.s10.entry2",
+      "case_sha256": "1bf280659ba4df4411e5cc67aa68493b829d400b6ad22e55fa5f749c650d3dc2",
+      "evidence": "Captured source: https://hype.replicate.dev/",
+      "expected": {
+        "state": "extracted",
+        "fields": {
+          "title": "onehumanbeing/esp32-iphone-agent"
+        },
+        "contains": [
+          "onehumanbeing/esp32-iphone-agent"
+        ]
+      }
+    },
+    {
+      "id": "live.source.s11.entry1",
+      "case_sha256": "8cd3466428011213ece050fbec0215dd7a4ddc08b97d749f872663b09c37bdfd",
+      "evidence": "Captured source: https://snscratchpad.com/",
+      "expected": {
+        "state": "extracted",
+        "fields": {
+          "title": "Models as Insider Risks in the Super Intelligence Era"
+        },
+        "contains": [
+          "Models as Insider Risks in the Super Intelligence Era"
+        ]
+      }
+    },
+    {
+      "id": "live.source.s11.entry2",
+      "case_sha256": "5e7464134cbc0e54360b80606861aa431829ecfee3956b3d3cc7074c699e6159",
+      "evidence": "Captured source: https://snscratchpad.com/",
+      "expected": {
+        "state": "extracted",
+        "fields": {
+          "title": "The Reverse Information Paradox"
+        },
+        "contains": [
+          "The Reverse Information Paradox"
+        ]
+      }
+    },
+    {
+      "id": "live.s1.article1.readability",
+      "case_sha256": "c0a98dc18875a1d6396138e0182dafac8d3de3d3b0d25d582aabf2bd345ed816",
+      "evidence": "Captured source: https://radar.nova.rs/drustvo/oskarovo-skupo-obecanje-saricu/; independent source review artifacts/adjudication/astra-approved-review.json",
+      "expected": {
+        "state": "extracted",
+        "fields": {
+          "url": "https://radar.nova.rs/drustvo/oskarovo-skupo-obecanje-saricu/",
+          "title": "Oskarovo skupo obećanje Šariću"
+        },
+        "contains": [
+          "Ako mi promakne nešto oko sudija i kazne"
+        ],
+        "media_contains": [
+          {
+            "type": "image",
+            "url": "https://radar.nova.rs/wp-content/uploads/2024/03/darko-saric-foto-filip-kraincanic-nova-rs-1024x683.jpeg"
+          }
+        ]
+      }
+    },
+    {
+      "id": "live.s1.article1.auto",
+      "case_sha256": "6b78cb8a8d99dd3f702b4101235a07761e5f631778ba8e363f6a2ac0b171308a",
+      "evidence": "Captured source: https://radar.nova.rs/drustvo/oskarovo-skupo-obecanje-saricu/; independent source review artifacts/adjudication/astra-approved-review.json",
+      "expected": {
+        "state": "extracted",
+        "fields": {
+          "url": "https://radar.nova.rs/drustvo/oskarovo-skupo-obecanje-saricu/",
+          "title": "Oskarovo skupo obećanje Šariću"
+        },
+        "contains": [
+          "Ako mi promakne nešto oko sudija i kazne"
+        ],
+        "media_contains": [
+          {
+            "type": "image",
+            "url": "https://radar.nova.rs/wp-content/uploads/2024/03/darko-saric-foto-filip-kraincanic-nova-rs-1024x683.jpeg"
+          }
+        ]
+      }
+    },
+    {
+      "id": "live.s1.article2.readability",
+      "case_sha256": "b39d95fa821a93715933cb7210d3941d3bc3f9a8b31dc1bc9da9132786d12e53",
+      "evidence": "Captured source: https://vroomservice.rs/ru/tire-fitting?utm_source=telegram&amp;utm_medium=cpc&amp;utm_campaign=srbnews; independent source review artifacts/adjudication/astra-approved-review.json",
+      "expected": {
+        "state": "extracted",
+        "fields": {
+          "url": "https://vroomservice.rs/ru/tire-fitting?utm_source=telegram&amp;utm_medium=cpc&amp;utm_campaign=srbnews",
+          "title": "Vroom Service Шиномонтаж"
+        },
+        "contains": [
+          "Шиномонтаж Vroom"
+        ]
+      }
+    },
+    {
+      "id": "live.s1.article2.auto",
+      "case_sha256": "ed9db3bfe7dafb1226a942d27dc19da5058fe47e897d530ada7866301d0fb701",
+      "evidence": "Captured source: https://vroomservice.rs/ru/tire-fitting?utm_source=telegram&amp;utm_medium=cpc&amp;utm_campaign=srbnews; independent source review artifacts/adjudication/astra-approved-review.json",
+      "expected": {
+        "state": "extracted",
+        "contains": [
+          "R10-15",
+          "4300",
+          "R21 Runflat",
+          "15400",
+          "Размер колес Стоимость (динар)",
+          "R10-15 4300",
+          "R21 Runflat 15400",
+          "R22 - R26 11000"
+        ],
+        "fields": {
+          "url": "https://vroomservice.rs/ru/tire-fitting?utm_source=telegram&amp;utm_medium=cpc&amp;utm_campaign=srbnews",
+          "title": "Vroom Service Шиномонтаж",
+          "method": "browser_rendering"
+        },
+        "not_contains": [
+          "Button",
+          "Удобный способ сязи Не выбрано",
+          "Согласен с политикой конфиденциальности ЗАПИСАТЬСЯ"
+        ]
+      }
+    },
+    {
+      "id": "live.s2.article1.readability",
+      "case_sha256": "5967dce17d6a440121b2d0b89a7fec28ff5cecb4aa75bf1855130602d65cd39d",
+      "evidence": "Captured source: https://aisecret.us/coreweaves-lenders-want-out/; independent source review artifacts/adjudication/astra-approved-review.json",
+      "expected": {
+        "state": "failed",
+        "fields": {
+          "content": ""
+        },
+        "not_contains": [
+          "This story is for members",
+          "Create a free account to continue reading."
+        ]
+      }
+    },
+    {
+      "id": "live.s2.article1.auto",
+      "case_sha256": "39d0de480ad38628a543637643d617a563a2bf611be6dadc8e25659ce061ebab",
+      "evidence": "Captured source: https://aisecret.us/coreweaves-lenders-want-out/; independent source review artifacts/adjudication/astra-approved-review.json",
+      "expected": {
+        "state": "failed",
+        "fields": {
+          "content": ""
+        },
+        "not_contains": [
+          "This story is for members",
+          "Create a free account to continue reading."
+        ]
+      }
+    },
+    {
+      "id": "live.s2.article2.readability",
+      "case_sha256": "7d8f266cdea296617c2906f48a2b04b19674b3a4808136a01bf8762d3c4885d4",
+      "evidence": "Captured source: https://aisecret.us/a-tool-claims-to-end-all-software/; independent source review artifacts/adjudication/astra-approved-review.json",
+      "expected": {
+        "state": "extracted",
+        "fields": {
+          "url": "https://aisecret.us/a-tool-claims-to-end-all-software/",
+          "title": "🛎️ A Tool Claims to End All Software"
+        },
+        "contains": [
+          "Plus: Anthropic Blames Open AI for Doomsday, Musk Wants Your Credit Card",
+          "Good Morning, AI Enthusiasts!",
+          "A Tool Claims to End All Software",
+          "Build With Meta’s Newest AI Models"
+        ],
+        "not_contains": [
+          "AI Secret Magna Ding",
+          "AI Secret Magna",
+          "Next edition",
+          "← Latest Daily Newsletter",
+          "Share ↗"
+        ]
+      }
+    },
+    {
+      "id": "live.s2.article2.auto",
+      "case_sha256": "0df33f01306131fb0b5e33c99c5fd466746e9e051ee0db2b2c2fbc2d9e1cc670",
+      "evidence": "Captured source: https://aisecret.us/a-tool-claims-to-end-all-software/; independent source review artifacts/adjudication/astra-approved-review.json",
+      "expected": {
+        "state": "extracted",
+        "fields": {
+          "url": "https://aisecret.us/a-tool-claims-to-end-all-software/",
+          "title": "🛎️ A Tool Claims to End All Software"
+        },
+        "contains": [
+          "Plus: Anthropic Blames Open AI for Doomsday, Musk Wants Your Credit Card",
+          "Good Morning, AI Enthusiasts!",
+          "A Tool Claims to End All Software",
+          "Build With Meta’s Newest AI Models"
+        ],
+        "not_contains": [
+          "AI Secret Magna Ding",
+          "AI Secret Magna",
+          "Next edition",
+          "← Latest Daily Newsletter",
+          "Share ↗"
+        ]
+      }
+    },
+    {
+      "id": "live.s3.article1.readability",
+      "case_sha256": "6c66771132107c31c83df17655eb112cdedbfe21bc7c695111ad14727ad6672c",
+      "evidence": "Captured source: https://www.theverge.com/news/1012293/meta-apple-muse-spark-open-ai-model-mlx; independent source review artifacts/adjudication/astra-approved-review.json",
+      "expected": {
+        "state": "extracted",
+        "fields": {
+          "url": "https://www.theverge.com/news/1012293/meta-apple-muse-spark-open-ai-model-mlx",
+          "title": "Meta and Apple team up to make Muse AI models run better on Macs"
+        },
+        "contains": [
+          "Meta and Apple’s CEOs are publicly supporting each company’s work on Muse Spark Open."
+        ],
+        "not_contains": [
+          "Most Popular",
+          "Link Share Gift",
+          "Jay Peters is a senior reporter",
+          "Terrence O'Brien is the Verge’s weekend editor"
+        ]
+      }
+    },
+    {
+      "id": "live.s3.article1.auto",
+      "case_sha256": "af128dffe22a1eeb2ed1d1cd6948692b60d866a4f0cdfa402d119882f010e3f0",
+      "evidence": "Captured source: https://www.theverge.com/news/1012293/meta-apple-muse-spark-open-ai-model-mlx; independent source review artifacts/adjudication/astra-approved-review.json",
+      "expected": {
+        "state": "extracted",
+        "fields": {
+          "url": "https://www.theverge.com/news/1012293/meta-apple-muse-spark-open-ai-model-mlx",
+          "title": "Meta and Apple team up to make Muse AI models run better on Macs"
+        },
+        "contains": [
+          "Meta and Apple’s CEOs are publicly supporting each company’s work on Muse Spark Open."
+        ],
+        "not_contains": [
+          "Most Popular",
+          "Link Share Gift",
+          "Jay Peters is a senior reporter",
+          "Terrence O'Brien is the Verge’s weekend editor"
+        ]
+      }
+    },
+    {
+      "id": "live.s3.article2.readability",
+      "case_sha256": "973f4d007cd7839b08498e6a02f6a8f743444b189831f407c7a904c4e3fbb6e0",
+      "evidence": "Captured source: https://www.theverge.com/tech/1012200/sony-made-a-5900-gold-plated-walkman-mp3-player; independent source review artifacts/adjudication/astra-approved-review.json",
+      "expected": {
+        "state": "extracted",
+        "fields": {
+          "url": "https://www.theverge.com/tech/1012200/sony-made-a-5900-gold-plated-walkman-mp3-player",
+          "title": "Sony made a $5,900 gold-plated Walkman MP3 player"
+        },
+        "contains": [
+          "A $6,000 media player slathered is gold is the perfect gift for the millionaire audiophile in your life."
+        ],
+        "not_contains": [
+          "Most Popular",
+          "Link Share Gift",
+          "Jay Peters is a senior reporter",
+          "Terrence O'Brien is the Verge’s weekend editor"
+        ]
+      }
+    },
+    {
+      "id": "live.s3.article2.auto",
+      "case_sha256": "9146c33e80dded8b38b42007717ccea438e3834c20196cb9b1212cd322516a15",
+      "evidence": "Captured source: https://www.theverge.com/tech/1012200/sony-made-a-5900-gold-plated-walkman-mp3-player; independent source review artifacts/adjudication/astra-approved-review.json",
+      "expected": {
+        "state": "extracted",
+        "fields": {
+          "url": "https://www.theverge.com/tech/1012200/sony-made-a-5900-gold-plated-walkman-mp3-player",
+          "title": "Sony made a $5,900 gold-plated Walkman MP3 player"
+        },
+        "contains": [
+          "A $6,000 media player slathered is gold is the perfect gift for the millionaire audiophile in your life."
+        ],
+        "not_contains": [
+          "Most Popular",
+          "Link Share Gift",
+          "Jay Peters is a senior reporter",
+          "Terrence O'Brien is the Verge’s weekend editor"
+        ]
+      }
+    },
+    {
+      "id": "live.s7.article1.readability",
+      "case_sha256": "c0590d5eae05432a11df805513e8ad6254646b2d903d6cf2a581adfca2f03711",
+      "evidence": "Captured source: https://www.lennysnewsletter.com/p/metas-new-muse-wonder-model-good; independent source review artifacts/adjudication/astra-approved-review.json",
+      "expected": {
+        "state": "extracted",
+        "fields": {
+          "url": "https://www.lennysnewsletter.com/p/metas-new-muse-wonder-model-good",
+          "title": "Meta’s new ‘Muse Wonder’ model: good for AI agents, bad for design"
+        },
+        "contains": [
+          "Meta launched Muse Wonder with claims of frontier agentic performance"
+        ]
+      }
+    },
+    {
+      "id": "live.s7.article1.auto",
+      "case_sha256": "8bd79329ccd6d668b5de5ce71e8cba88fe766673f5951af2b3982680191d2ba3",
+      "evidence": "Captured source: https://www.lennysnewsletter.com/p/metas-new-muse-wonder-model-good; independent source review artifacts/adjudication/astra-approved-review.json",
+      "expected": {
+        "state": "extracted",
+        "fields": {
+          "url": "https://www.lennysnewsletter.com/p/metas-new-muse-wonder-model-good",
+          "title": "Meta’s new ‘Muse Wonder’ model: good for AI agents, bad for design"
+        },
+        "contains": [
+          "Listen or watch on YouTube, Spotify, or Apple Podcasts",
+          "What you’ll learn:",
+          "In this episode, we cover:",
+          "Tools referenced:",
+          "Where to find Claire Vo:"
+        ],
+        "not_contains": [
+          "Playback speed",
+          "Share post at current time",
+          "Discussion about this video",
+          "Appears in episode"
+        ]
+      }
+    },
+    {
+      "id": "live.s7.article2.readability",
+      "case_sha256": "b198ed8915ba086944b3e9a68a1c144b9ce299d9b3ce5fc3811e034108ece83e",
+      "evidence": "Captured source: https://www.lennysnewsletter.com/p/how-to-tell-if-a-startup-has-a-moat; independent source review artifacts/adjudication/astra-approved-review.json",
+      "expected": {
+        "state": "extracted",
+        "fields": {
+          "url": "https://www.lennysnewsletter.com/p/how-to-tell-if-a-startup-has-a-moat",
+          "title": "How to tell if a startup has a moat"
+        },
+        "contains": [
+          "A framework for assessing whether the company you’re considering joining is built to last",
+          "Each week, I share deeply researched product",
+          "definitely subscribe to his fabulous newsletter"
+        ],
+        "not_contains": [
+          "307 2 11 Share"
+        ]
+      }
+    },
+    {
+      "id": "live.s7.article2.auto",
+      "case_sha256": "a40e486b49649329d49aec825062f393d4bf488dff76c35d310c9da4987e6c21",
+      "evidence": "Captured source: https://www.lennysnewsletter.com/p/how-to-tell-if-a-startup-has-a-moat; independent source review artifacts/adjudication/astra-approved-review.json",
+      "expected": {
+        "state": "extracted",
+        "fields": {
+          "url": "https://www.lennysnewsletter.com/p/how-to-tell-if-a-startup-has-a-moat",
+          "title": "How to tell if a startup has a moat"
+        },
+        "contains": [
+          "A framework for assessing whether the company you’re considering joining is built to last",
+          "Each week, I share deeply researched product",
+          "definitely subscribe to his fabulous newsletter"
+        ],
+        "not_contains": [
+          "307 2 11 Share"
+        ]
+      }
+    },
+    {
+      "id": "live.s8.article1.readability",
+      "case_sha256": "79304f05eab80d7e4bd42ec13ba31f8667682bb40e8a71288ba987d76e57b132",
+      "evidence": "Captured source: https://karpathy.bearblog.dev/sequoia-ascent-2026/; independent source review artifacts/adjudication/astra-approved-review.json",
+      "expected": {
+        "state": "extracted",
+        "contains": [
+          "cleaned up transcript",
+          "Agentic Engineering"
+        ],
+        "fields": {
+          "url": "https://karpathy.bearblog.dev/sequoia-ascent-2026/",
+          "title": "Sequoia Ascent 2026 summary"
+        }
+      }
+    },
+    {
+      "id": "live.s8.article1.auto",
+      "case_sha256": "307d60f825da7738d6fa2120582ea9d8baed602bef6e6390dcfc72d187813375",
+      "evidence": "Captured source: https://karpathy.bearblog.dev/sequoia-ascent-2026/; independent source review artifacts/adjudication/astra-approved-review.json",
+      "expected": {
+        "state": "extracted",
+        "contains": [
+          "cleaned up transcript",
+          "Agentic Engineering"
+        ],
+        "fields": {
+          "url": "https://karpathy.bearblog.dev/sequoia-ascent-2026/",
+          "title": "Sequoia Ascent 2026 summary"
+        }
+      }
+    },
+    {
+      "id": "live.s8.article2.readability",
+      "case_sha256": "fb05389584c0df11549db2144b302342d2166d800ee8f38a5e4915bdbab9f6e7",
+      "evidence": "Captured source: https://karpathy.bearblog.dev/year-in-review-2025/; independent source review artifacts/adjudication/astra-approved-review.json",
+      "expected": {
+        "state": "extracted",
+        "fields": {
+          "url": "https://karpathy.bearblog.dev/year-in-review-2025/",
+          "title": "2025 LLM Year in Review"
+        },
+        "contains": [
+          "this shower of thoughts tweet"
+        ]
+      }
+    },
+    {
+      "id": "live.s8.article2.auto",
+      "case_sha256": "e245731aae76c453bfaa13e04c605647204cdf11b04b5a2d210be302a8831948",
+      "evidence": "Captured source: https://karpathy.bearblog.dev/year-in-review-2025/; independent source review artifacts/adjudication/astra-approved-review.json",
+      "expected": {
+        "state": "extracted",
+        "fields": {
+          "url": "https://karpathy.bearblog.dev/year-in-review-2025/",
+          "title": "2025 LLM Year in Review"
+        },
+        "contains": [
+          "this shower of thoughts tweet"
+        ]
+      }
+    },
+    {
+      "id": "live.s10.article1.readability",
+      "case_sha256": "cca956337489ae72416dd14fbe4f533beea353e454d02662abefc70074f661af",
+      "evidence": "Captured source: https://github.com/onehumanbeing/esp32-iphone-agent; independent source review artifacts/adjudication/astra-approved-review.json",
+      "expected": {
+        "state": "extracted",
+        "fields": {
+          "url": "https://github.com/onehumanbeing/esp32-iphone-agent",
+          "title": "GitHub - onehumanbeing/esp32-iphone-agent: Let an AI model use a real iPhone with a $7 ESP32: AirPlay eyes, USB HID hands, any OpenAI-compatible vision model. No Mac, no developer account, no jailbreak.",
+          "publication_date": null
+        },
+        "contains": [
+          "1. Flash the board (plugged into the Mac)",
+          "3. Set up (once, in the app)",
+          "How it works",
+          "Roadmap"
+        ]
+      }
+    },
+    {
+      "id": "live.s10.article1.auto",
+      "case_sha256": "76cb4eb14cb9eea255bf6f4dd9d7c655c57ceaaa008f57631347c1e01600235b",
+      "evidence": "Captured source: https://github.com/onehumanbeing/esp32-iphone-agent; independent source review artifacts/adjudication/astra-approved-review.json",
+      "expected": {
+        "state": "extracted",
+        "fields": {
+          "url": "https://github.com/onehumanbeing/esp32-iphone-agent",
+          "title": "GitHub - onehumanbeing/esp32-iphone-agent: Let an AI model use a real iPhone with a $7 ESP32: AirPlay eyes, USB HID hands, any OpenAI-compatible vision model. No Mac, no developer account, no jailbreak.",
+          "publication_date": null
+        }
+      }
+    },
+    {
+      "id": "live.s10.article2.readability",
+      "case_sha256": "e1c7f99c712161bf01cd1634bbd4ffdb88c0fbd7a0a7d03a6f316fffac502f12",
+      "evidence": "Captured source: https://github.com/Arekejoker/qwen21-nsfw-pose-skill; independent source review artifacts/adjudication/astra-approved-review.json",
+      "expected": {
+        "state": "extracted",
+        "fields": {
+          "url": "https://github.com/Arekejoker/qwen21-nsfw-pose-skill",
+          "title": "GitHub - Arekejoker/qwen21-nsfw-pose-skill: Qwen-Image 2.1 NSFW/姿势出图 skill：作者级提示词配方 + NSFW LoRA + 136 姿势 VNCCS 人偶控制；适用 Claude Code / Codex / Cursor / OpenClaw"
+        },
+        "contains": [
+          "本配方输出：同一海边场景的三级对照（L0 → L1 → L2）",
+          "3D 人偶精确姿势（Route ④，136 姿势库）",
+          "效果展示"
+        ]
+      }
+    },
+    {
+      "id": "live.s10.article2.auto",
+      "case_sha256": "83b6b9ab0d951904eb9c401ae8cf799138bfc016fe9d8fa5c28d866e16550986",
+      "evidence": "Captured source: https://github.com/Arekejoker/qwen21-nsfw-pose-skill; independent source review artifacts/adjudication/astra-approved-review.json",
+      "expected": {
+        "state": "extracted",
+        "fields": {
+          "url": "https://github.com/Arekejoker/qwen21-nsfw-pose-skill",
+          "title": "GitHub - Arekejoker/qwen21-nsfw-pose-skill: Qwen-Image 2.1 NSFW/姿势出图 skill：作者级提示词配方 + NSFW LoRA + 136 姿势 VNCCS 人偶控制；适用 Claude Code / Codex / Cursor / OpenClaw"
+        }
+      }
+    },
+    {
+      "id": "live.s11.article1.readability",
+      "case_sha256": "0f68c598082981dd779184a653a5baeacc520d8a929e35d33e4ce464aa190b45",
+      "evidence": "Captured source: https://snscratchpad.com/posts/models-as-insider-risks/; independent source review artifacts/adjudication/astra-approved-review.json",
+      "expected": {
+        "state": "extracted",
+        "fields": {
+          "url": "https://snscratchpad.com/posts/models-as-insider-risks/",
+          "title": "Models as Insider Risks in the Super Intelligence Era"
+        },
+        "contains": [
+          "mechanisms to share what went wrong",
+          "share learnings industrywide"
+        ]
+      }
+    },
+    {
+      "id": "live.s11.article1.auto",
+      "case_sha256": "835281f3ce0158a3e8987957a68030fc136a03ec6eb9a301eba32e154e1b87bd",
+      "evidence": "Captured source: https://snscratchpad.com/posts/models-as-insider-risks/; independent source review artifacts/adjudication/astra-approved-review.json",
+      "expected": {
+        "state": "extracted",
+        "fields": {
+          "url": "https://snscratchpad.com/posts/models-as-insider-risks/",
+          "title": "Models as Insider Risks in the Super Intelligence Era"
+        },
+        "contains": [
+          "mechanisms to share what went wrong",
+          "share learnings industrywide"
+        ]
+      }
+    },
+    {
+      "id": "live.s11.article2.readability",
+      "case_sha256": "cf5823d5b62b6a79173fae1f294acdb5656544bf96eb7f14ba532ac47ce720ff",
+      "evidence": "Captured source: https://snscratchpad.com/posts/reverse-information-paradox/; independent source review artifacts/adjudication/astra-approved-review.json",
+      "expected": {
+        "state": "extracted",
+        "fields": {
+          "url": "https://snscratchpad.com/posts/reverse-information-paradox/",
+          "title": "The Reverse Information Paradox"
+        }
+      }
+    },
+    {
+      "id": "live.s11.article2.auto",
+      "case_sha256": "7e9d6c08f919845ef4af2372bbdade99fd5d0eed42748198adbcaffaa6a59199",
+      "evidence": "Captured source: https://snscratchpad.com/posts/reverse-information-paradox/; independent source review artifacts/adjudication/astra-approved-review.json",
+      "expected": {
+        "state": "extracted",
+        "fields": {
+          "url": "https://snscratchpad.com/posts/reverse-information-paradox/",
+          "title": "The Reverse Information Paradox"
+        },
+        "contains": [
+          "In the age of intelligence, how should firms protect their core IP?"
+        ]
+      }
+    }
+  ]
+}

@@ -46,6 +46,9 @@ def extraction_update_fields(article_data, metadata):
     image = metadata.get('image_url')
     if not article_data.get('image_url') and isinstance(image, str) and image:
         fields['image_url'] = image
+    media = metadata.get('media_files')
+    if not article_data.get('media_files') and isinstance(media, list) and media:
+        fields['media_files'] = media
     return fields
 
 
@@ -172,6 +175,7 @@ class AIProcessor:
                             
                             # Try AI-enhanced extraction with metadata first
                             extracted_content = None
+                            extraction_result = {}
                             async with ContentExtractor() as content_extractor:
                                 try:
                                     extraction_result = await content_extractor.extract_article_content_with_metadata(article_url, retry_count=4)
@@ -189,8 +193,9 @@ class AIProcessor:
                             if extracted_content and len(extracted_content.strip()) > len(article_content):
                                 logger.info(f"  ✅ Extracted {len(extracted_content)} chars from external URL using parsing schemas")
                                 # Update article with extracted content
-                                article_data['content'] = extracted_content
-                                update_fields = {'content': extracted_content}
+                                update_fields = extraction_update_fields(article_data,
+                                    extraction_result if isinstance(extraction_result, dict) else {'content': extracted_content})
+                                article_data.update(update_fields)
 
                                 # Also save image_url if article has none and extraction found one
                                 if not article_data.get('image_url') and isinstance(extraction_result, dict):
@@ -359,6 +364,7 @@ class AIProcessor:
                         
                         # Try AI-enhanced extraction with metadata first
                         extracted_content = None
+                        extraction_result = {}
                         async with ContentExtractor() as content_extractor:
                             try:
                                 extraction_result = await content_extractor.extract_article_content_with_metadata(article_url, retry_count=4)
@@ -376,8 +382,9 @@ class AIProcessor:
                         if extracted_content and len(extracted_content.strip()) > len(article_content):
                             logger.info(f"  ✅ Extracted {len(extracted_content)} chars from external URL using parsing schemas")
                             # Update article with extracted content
-                            article_data['content'] = extracted_content
-                            update_fields = {'content': extracted_content}
+                            update_fields = extraction_update_fields(article_data,
+                                extraction_result if isinstance(extraction_result, dict) else {'content': extracted_content})
+                            article_data.update(update_fields)
                             await self._save_article_fields(article_id, update_fields)
                             
                         else:
@@ -796,8 +803,8 @@ class AIProcessor:
         except ResourceLimitError as exc:
             return ProcessingOutcome('rejected', fields, 'resource_limit')
         except Exception as exc:
-            return ProcessingOutcome('retry_wait', fields,
-                type(exc).__name__, getattr(exc, 'retry_after_seconds', None))
+            return ProcessingOutcome('rejected' if getattr(exc, 'terminal', False) else 'retry_wait', fields,
+                getattr(exc, 'code', type(exc).__name__), getattr(exc, 'retry_after_seconds', None))
 
     async def get_summary_by_source_type(self, article, source_type: str, stats: Dict[str, Any],
                                          bypass_filter=False) -> Dict[str, Any]:

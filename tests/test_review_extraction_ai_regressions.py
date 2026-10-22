@@ -13,6 +13,36 @@ from news_aggregator.processing.ai_processor import AIProcessor
 from news_aggregator.services.ai_client import AIClient
 
 
+MEMBERSHIP_CHOOSER = (
+    "Independent analysis membership. Choose your edge. Signal costs $69 / year billed annually. "
+    "Weekly reports and your own cloud computer are included. Insider costs $199 / year billed annually "
+    "with additional research tools. Ultimate costs $299 / year and offers priority support for research "
+    "projects. Cancel anytime. AI token usage is billed separately. Continue with free."
+)
+
+
+def test_membership_plan_chooser_signature_rejected_but_editorial_discussion_preserved():
+    utils = ExtractionUtils()
+    discussion = (
+        "Researchers compared independent journalism memberships and the costs of sustaining local reporting. "
+        "The analysis describes a $69 / year plan billed annually and a $199 / year plan billed annually as "
+        "examples of common subscription structures. It notes that some services say cancel anytime, while "
+        "reporting argues that subscribers need transparent funding, independent editorial standards, and "
+        "durable public access. Readers are urged to examine each publication's actual newsroom practices "
+        "before subscribing."
+    )
+    assert not utils.is_good_content(MEMBERSHIP_CHOOSER)
+    assert utils.is_good_content(discussion)
+
+
+@pytest.mark.parametrize('method', ['extract_by_enhanced_selectors', 'extract_by_enhanced_heuristics'])
+def test_membership_plan_chooser_does_not_leak_through_html_candidates(method):
+    processor = HTMLProcessor(ExtractionUtils())
+    soup = BeautifulSoup('<article><p>' + MEMBERSHIP_CHOOSER + '</p></article>', 'html.parser')
+    result = getattr(processor, method)(soup)
+    assert (result[0] if isinstance(result, tuple) else result) is None
+
+
 @pytest.mark.parametrize('method', ['extract_by_enhanced_selectors', 'extract_by_enhanced_heuristics'])
 def test_oversized_container_does_not_hide_smaller_valid_article(monkeypatch, method):
     from news_aggregator.config import settings
