@@ -558,8 +558,14 @@ func telegramNormalizeURL(raw, pageURL string) string {
 func telegramSourceMedia(msg *goquery.Selection, pageURL string) []map[string]any {
 	mediaMsg := msg.Clone()
 	mediaMsg.Find("img").Each(func(_ int, image *goquery.Selection) {
-		if image.AttrOr("src", "") == "" && image.AttrOr("data-lazy-src", "") != "" {
-			image.SetAttr("src", image.AttrOr("data-lazy-src", ""))
+		if image.AttrOr("src", "") == "" {
+			source := image.AttrOr("data-src", "")
+			if source == "" {
+				source = image.AttrOr("data-lazy-src", "")
+			}
+			if source != "" {
+				image.SetAttr("src", source)
+			}
 		}
 	})
 	media := telegramMedia(mediaMsg)
@@ -572,12 +578,13 @@ func telegramSourceMedia(msg *goquery.Selection, pageURL string) []map[string]an
 			u = item.URL
 		}
 		nullDirectVideoURL := u == "" && item.Type == "video" && item.Source == "direct_video"
-		if (u == "" && !nullDirectVideoURL) || seen[u] {
+		nullDirectAudioURL := u == "" && item.Type == "audio" && item.Source == "direct_audio"
+		if (u == "" && !nullDirectVideoURL && !nullDirectAudioURL) || seen[u] {
 			continue
 		}
 		seen[u] = true
 		var mediaURL any = u
-		if nullDirectVideoURL {
+		if nullDirectVideoURL || nullDirectAudioURL {
 			mediaURL = nil
 		}
 		m := map[string]any{"url": mediaURL, "type": item.Type}

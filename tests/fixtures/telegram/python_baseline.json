@@ -879,6 +879,177 @@
         "message_id": "124",
         "telegram_url": "https://t.me/testchannel/124"
       }
+    },
+    {
+      "title": "Unsupported relative direct audio URLs collapse to one null URL record like Python.",
+      "url": "https://t.me/testchannel/125",
+      "content": "Unsupported relative direct audio URLs collapse to one null URL record like Python.",
+      "summary": null,
+      "image_url": null,
+      "media_files": [
+        {
+          "url": null,
+          "type": "audio",
+          "duration": "9",
+          "source": "direct_audio"
+        }
+      ],
+      "published_at": "2026-10-22T12:34:56Z",
+      "source_type": "telegram",
+      "source_name": "Offline Telegram Fixture",
+      "raw_data": {
+        "channel": "testchannel",
+        "access_method": "https://t.me/s/testchannel",
+        "content_length": 83,
+        "media_info": {
+          "video_url": null,
+          "document_url": null,
+          "audio_url": null,
+          "sticker_url": null,
+          "poll_data": null,
+          "location_data": null,
+          "media_type": "audio",
+          "duration": "9",
+          "file_size": null,
+          "file_name": null
+        },
+        "has_media": true,
+        "media_count": 1,
+        "external_links": [],
+        "hashtags": [],
+        "original_link": null,
+        "forwarded_from": null,
+        "message_id": "125",
+        "telegram_url": "https://t.me/testchannel/125"
+      }
+    },
+    {
+      "title": "A nested Telegram sticker uses its data-src when src is absent.",
+      "url": "https://t.me/testchannel/126",
+      "content": "A nested Telegram sticker uses its data-src when src is absent.",
+      "summary": null,
+      "image_url": null,
+      "media_files": [
+        {
+          "url": "https://cdn.example.org/nested-sticker.webp",
+          "type": "animated_sticker",
+          "thumbnail": "https://cdn.example.org/nested-sticker.webp",
+          "source": "sticker"
+        }
+      ],
+      "published_at": "2026-10-22T12:34:56Z",
+      "source_type": "telegram",
+      "source_name": "Offline Telegram Fixture",
+      "raw_data": {
+        "channel": "testchannel",
+        "access_method": "https://t.me/s/testchannel",
+        "content_length": 63,
+        "media_info": {
+          "video_url": null,
+          "document_url": null,
+          "audio_url": null,
+          "sticker_url": null,
+          "poll_data": null,
+          "location_data": null,
+          "media_type": null,
+          "duration": null,
+          "file_size": null,
+          "file_name": null
+        },
+        "has_media": true,
+        "media_count": 1,
+        "external_links": [],
+        "hashtags": [],
+        "original_link": null,
+        "forwarded_from": null,
+        "message_id": "126",
+        "telegram_url": "https://t.me/testchannel/126"
+      }
+    },
+    {
+      "title": "An animated sticker prefers data-src over data-lazy-src when src is empty.",
+      "url": "https://t.me/testchannel/127",
+      "content": "An animated sticker prefers data-src over data-lazy-src when src is empty.",
+      "summary": null,
+      "image_url": null,
+      "media_files": [
+        {
+          "url": "https://cdn.example.org/preferred-sticker.webp",
+          "type": "animated_sticker",
+          "thumbnail": "https://cdn.example.org/preferred-sticker.webp",
+          "source": "sticker"
+        }
+      ],
+      "published_at": "2026-10-22T12:34:56Z",
+      "source_type": "telegram",
+      "source_name": "Offline Telegram Fixture",
+      "raw_data": {
+        "channel": "testchannel",
+        "access_method": "https://t.me/s/testchannel",
+        "content_length": 74,
+        "media_info": {
+          "video_url": null,
+          "document_url": null,
+          "audio_url": null,
+          "sticker_url": null,
+          "poll_data": null,
+          "location_data": null,
+          "media_type": null,
+          "duration": null,
+          "file_size": null,
+          "file_name": null
+        },
+        "has_media": true,
+        "media_count": 1,
+        "external_links": [],
+        "hashtags": [],
+        "original_link": null,
+        "forwarded_from": null,
+        "message_id": "127",
+        "telegram_url": "https://t.me/testchannel/127"
+      }
+    },
+    {
+      "title": "A regular message image falls back to data-lazy-src when src and data-src are empty.",
+      "url": "https://t.me/testchannel/128",
+      "content": "A regular message image falls back to data-lazy-src when src and data-src are empty.",
+      "summary": null,
+      "image_url": "https://cdn.example.org/lazy-content.jpg",
+      "media_files": [
+        {
+          "url": "https://cdn.example.org/lazy-content.jpg",
+          "type": "image",
+          "thumbnail": "https://cdn.example.org/lazy-content.jpg"
+        }
+      ],
+      "published_at": "2026-10-22T12:34:56Z",
+      "source_type": "telegram",
+      "source_name": "Offline Telegram Fixture",
+      "raw_data": {
+        "channel": "testchannel",
+        "access_method": "https://t.me/s/testchannel",
+        "content_length": 84,
+        "media_info": {
+          "video_url": null,
+          "document_url": null,
+          "audio_url": null,
+          "sticker_url": null,
+          "poll_data": null,
+          "location_data": null,
+          "media_type": null,
+          "duration": null,
+          "file_size": null,
+          "file_name": null
+        },
+        "has_media": true,
+        "media_count": 1,
+        "external_links": [],
+        "hashtags": [],
+        "original_link": null,
+        "forwarded_from": null,
+        "message_id": "128",
+        "telegram_url": "https://t.me/testchannel/128"
+      }
     }
   ],
   "fallback_message": [

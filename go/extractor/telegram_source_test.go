@@ -38,7 +38,7 @@ func TestParseTelegramChannelMatchesPythonBaseline(t *testing.T) {
 			if err := json.Unmarshal(baselines[name], &want); err != nil {
 				t.Fatal(err)
 			}
-			articles, err := ParseTelegramChannel(string(html), testCase.pageURL, "Offline Telegram Fixture", 20, fallback)
+			articles, err := ParseTelegramChannel(string(html), testCase.pageURL, "Offline Telegram Fixture", 100, fallback)
 			if err != nil {
 				t.Fatal(err)
 			}

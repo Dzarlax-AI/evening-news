@@ -6,6 +6,8 @@ from datetime import datetime, timedelta
 import logging
 import pytz
 import asyncio
+import time
+from urllib.parse import urlsplit
 from typing import AsyncGenerator, Optional, Dict, List, Any
 from bs4 import BeautifulSoup
 from ..core.resource_limits import ResourceLimitError, read_page_text, read_browser_html
@@ -108,6 +110,13 @@ class TelegramSource(BaseSource):
     
     async def fetch_articles(self, limit: Optional[int] = None) -> AsyncGenerator[Article, None]:
         """Fetch articles from Telegram channel using multiple methods."""
+        from ..config import get_settings
+        if get_settings().telegram_source_mode == 'go':
+            async for article in self._fetch_with_go(limit):
+                yield article
+            return
+        if limit is not None and (type(limit) is not int or limit <= 0):
+            raise SourceError('invalid_telegram_limit')
         logger.info(f"🔍 Fetching from Telegram: @{self.channel_username} (limit: {limit})")
         articles_found = 0
         last_error = None
@@ -154,6 +163,128 @@ class TelegramSource(BaseSource):
             if last_error:
                 error_msg += f". Last error: {last_error}"
             raise SourceError(error_msg)
+
+    async def _fetch_with_go(self, limit: Optional[int]) -> AsyncGenerator[Article, None]:
+        """Fetch a validated Telegram batch through the private Go service."""
+        from ..config import get_settings
+        from .service_client import TelegramServiceClient, TelegramServiceError
+
+        if limit is not None and (type(limit) is not int or limit <= 0):
+            raise SourceError('invalid_telegram_limit')
+        settings = get_settings()
+        if not settings.extraction_service_url or not settings.extraction_service_token:
+            raise SourceError('telegram_service_not_configured')
+        request_limit = min(limit or 100, 100)
+        # SourceManager wraps the full generator in a 120-second timeout and discards
+        # accumulated items if that outer timeout fires. Reserve time for final yields.
+        source_budget = min(settings.extraction_service_total_budget_seconds, 120.0)
+        yield_reserve = min(5.0, source_budget * 0.1)
+        deadline = time.monotonic() + max(0.001, source_budget - yield_reserve)
+        try:
+            client = TelegramServiceClient(
+                settings.extraction_service_url,
+                settings.extraction_service_token.get_secret_value())
+            response = await client.fetch(
+                self.url, self.name, limit=request_limit,
+                timeout_seconds=min(30.0, max(0.001, deadline - time.monotonic())))
+        except (TelegramServiceError, ValueError) as exc:
+            code = exc.code if isinstance(exc, TelegramServiceError) else 'invalid_configuration'
+            logger.warning('Telegram Go source failed code=%s', code)
+            raise SourceError(f'telegram_service_{code}') from None
+        except Exception:
+            logger.warning('Telegram Go source failed code=unavailable')
+            raise SourceError('telegram_service_unavailable') from None
+
+        articles = [self._article_from_go(item) for item in response['articles']]
+        if response['outcome'] == 'partial':
+            logger.warning('Telegram Go source returned partial articles count=%d code=%s',
+                           len(articles), response['error']['code'])
+        for article in articles:
+            remaining = deadline - time.monotonic()
+            if (article.raw_data.get('original_link') and article.content
+                    and len(article.content) < 200 and remaining > 0.05):
+                try:
+                    await self._enrich_go_article(article, settings, min(30.0, remaining))
+                except Exception:
+                    logger.info('Telegram external enrichment skipped code=unavailable')
+            # Keep every validated post even when enrichment fails or exhausts budget.
+            yield article
+
+        if response['outcome'] in {'failed', 'rejected'}:
+            error = response.get('error') or {'code': response['outcome']}
+            logger.warning('Telegram Go source returned no articles code=%s', error['code'])
+            raise SourceError(f"telegram_service_{error['code']}")
+
+    @staticmethod
+    def _article_from_go(data: Dict[str, Any]) -> Article:
+        published_at = data['published_at']
+        if published_at is not None:
+            published_at = datetime.fromisoformat(published_at.replace('Z', '+00:00'))
+        return Article(
+            title=data['title'], url=data['url'], content=data['content'],
+            summary=data['summary'], published_at=published_at,
+            source_type=data['source_type'], source_name=data['source_name'],
+            image_url=data['image_url'], media_files=data['media_files'],
+            raw_data=data['raw_data'])
+
+    async def _enrich_go_article(self, article: Article, settings, timeout_seconds: float) -> None:
+        """Use the existing Go article API and preserve the source post on failure."""
+        from ..extraction.service_client import ExtractionServiceClient, ExtractionServiceError
+        from ..extraction.core_extractor import CoreExtractor
+
+        link = article.raw_data.get('original_link')
+        if not isinstance(link, str) or not link:
+            return
+        try:
+            parsed = urlsplit(link)
+            browser_eligible = (
+                settings.extraction_service_native_browser and parsed.scheme == 'https'
+                and parsed.hostname and parsed.port in (None, 443)
+                and not parsed.username and not parsed.password)
+        except ValueError:
+            browser_eligible = False
+        enrichment_deadline = time.monotonic() + timeout_seconds
+        try:
+            client = ExtractionServiceClient(
+                settings.extraction_service_url,
+                settings.extraction_service_token.get_secret_value(),
+                max_bytes=settings.extraction_http_max_bytes,
+                max_chars=settings.extraction_text_max_chars)
+            response = await client.extract(
+                link, timeout_seconds=timeout_seconds, source_type='article')
+            failure = None
+        except (ExtractionServiceError, ValueError) as exc:
+            response = None
+            failure = exc if isinstance(exc, ExtractionServiceError) else ExtractionServiceError('invalid_configuration')
+
+        if response is not None and response.get('outcome') == 'success':
+            self._apply_go_enrichment(article, response)
+            return
+        if response is not None:
+            error = response.get('error') or {}
+            failure = ExtractionServiceError(error.get('code', 'no_content'), error.get('retryable', False))
+        if (browser_eligible and response is not None and failure is not None
+                and CoreExtractor._native_browser_retry_allowed(failure, response)):
+            remaining = enrichment_deadline - time.monotonic()
+            if remaining <= 0.05:
+                return
+            try:
+                response = await client.extract(
+                    link, timeout_seconds=min(30.0, remaining),
+                    source_type='article', use_browser=True)
+            except (ExtractionServiceError, ValueError):
+                return
+            if response.get('outcome') == 'success':
+                self._apply_go_enrichment(article, response)
+
+    def _apply_go_enrichment(self, article: Article, response: Dict[str, Any]) -> None:
+        content = response['result'].get('content') or ''
+        if len(content) <= 2 * len(article.content or ''):
+            return
+        article.content = content
+        article.title = self.message_parser._extract_title(content)
+        article.raw_data['hashtags'] = self.message_parser._extract_hashtags(content)
+        article.raw_data['content_length'] = len(content)
     
     async def _fetch_with_http(self) -> AsyncGenerator[Article, None]:
         """Fetch articles using HTTP requests."""

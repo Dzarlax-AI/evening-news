@@ -1,40 +1,75 @@
-# Offline Telegram channel parser
+# Telegram channel extraction in Go
+
+The private extractor service exposes `POST /v1/telegram/fetch`. It fetches a
+public Telegram preview over guarded HTTP and uses at most one native Cloak
+render when HTTP fails in an eligible way or contains no posts. It uses the
+existing browser and disposable owned contexts. Auth, policy, resource-limit,
+rate-limit, cancellation and deadline failures do not trigger blind retries.
+
+Python source orchestration remains in place. Set `TELEGRAM_SOURCE_MODE=go` to
+route Telegram sources through this endpoint; the default is `python`. The Go
+mode requires `EXTRACTION_SERVICE_URL` and `EXTRACTION_SERVICE_TOKEN` and does not
+fall back to Python scraping. Article extraction settings remain independent.
+Delivery, Telegraph, AI, persistence and scheduling retain their existing owners.
+
+## Private wire contract
+
+Use the existing service Bearer token. A request contains only:
+
+```json
+{"contract_version":"1","request_id":"unique-id","channel_url":"https://t.me/s/example","source_name":"Example","limit":100,"budget_ms":30000}
+```
+
+The body is limited to 16 KiB. Limits are 1–100 accepted posts and 1–30,000 ms.
+Only HTTPS `t.me` and `telegram.me` channel paths are accepted, without arbitrary
+query parameters, credentials or nonstandard ports. The service canonicalizes
+the channel to `https://t.me/s/<lowercase-name>`; public URL/DNS/dial guards also
+apply to redirects and rendering. Callers cannot inject HTML, network options
+or browser selectors.
+
+The response has `contract_version`, `build_version`, `request_id`,
+`original_url`, `final_url`, `outcome`, `fetch_method`, `articles` and an optional
+`error` with finite `code` and `retryable`. `outcome` is `success`, `partial`,
+`failed` or `rejected`; `fetch_method` is `http` or `native_browser` when a page
+was obtained. The response is bounded to 5 MiB. An article retains the existing
+Python `Article` fields and `raw_data` without replacing its identity with the
+channel URL. Unsupported direct audio/video media can carry a null URL where
+the Python parser does; generated poll/contact/location fragments remain stable
+in Go.
+
+A later post or response limit preserves the already accepted prefix as
+`partial` with an explicit error. The Python source yields that prefix and logs
+a finite warning instead of raising after yield: the existing source manager
+would otherwise discard collected articles. Failed/empty results raise a source
+error; no articles are marked processed by this endpoint. Later scheduled fetches
+remain possible.
+
+For short posts with an external original link, optional enrichment uses the
+existing Go article API. It is sequential and bounded by the source deadline;
+an enrichment failure preserves the Telegram post. Content is replaced only
+when the extracted article is more than twice as long, matching the prior rule.
+
+## Pure parser and compatibility checks
 
 `extractor.ParseTelegramChannel(html, pageURL, sourceName, limit, fallbackTime)`
-parses a captured public-channel page into ordered `TelegramArticle` values.
-It performs no network, browser, database, AI, or delivery work. It is not yet
-connected to the production Telegram source or exposed through the extractor API.
-
-The result mirrors Python `sources.base.Article`, including its `raw_data`.
-An external article can remain the primary `url`; `telegram_url` and `message_id`
-preserve the original Telegram identity separately. Text, media order, nullable
-metadata and UTC dates are checked against the current Python parser.
-
-The DOM is parsed once. `limit` counts accepted posts; short posts without media
-are skipped. The existing extraction ceilings are retained: 5 MiB input and
-100,000 characters per post. Limit violations return explicit errors rather than
-silently truncating content. If a later post exceeds the text limit, already
-parsed posts are returned alongside the error; callers must treat that prefix
-as partial rather than a complete channel result. A zero fallback time is invalid, and the parser
-never reads the wall clock. Malformed-but-recoverable markup follows the HTML
-parser's recovery behavior; missing messages return `ErrTelegramEmpty`.
-
-## Offline compatibility checks
+is the pure parser beneath this endpoint. It performs no network, browser,
+database, AI or delivery work. The DOM is parsed once. The input limit is 5 MiB
+and each post is limited to 100,000 characters. A zero fallback time is invalid;
+the parser never reads the wall clock. Valid prefixes accompany later explicit
+parser-limit errors. Missing messages return `ErrTelegramEmpty`.
 
 The shared synthetic fixtures and Python-generated snapshot live in
 `tests/fixtures/telegram/`. The Python test checks the snapshot against the real
-Python parser; the Go test independently checks its output against that snapshot.
-The Python oracle freezes only the clock and stubs external-article enrichment.
-Real post URLs and IDs are compared without normalization. Generated
-poll/contact/location fragment hash suffixes are normalized because Python's
-`hash()` changes between processes; Go generates stable fragments. UTC timestamp
-serialization is normalized while retaining Python's microsecond precision.
+Python parser; Go independently checks the same fields. The Python oracle
+freezes the clock and stubs external enrichment. Only runtime-dependent hash
+suffixes in generated poll/contact/location fragments and equivalent UTC date
+serialization are normalized. Actual URLs, IDs and metadata are compared.
 
 ```sh
-NO_BROWSER=1 .venv/bin/python -m pytest tests/test_telegram_source_parity.py tests/test_telegram_extraction.py -q
+NO_BROWSER=1 .venv/bin/python -m pytest tests/test_telegram_source_parity.py tests/test_telegram_service_client.py tests/test_telegram_go_source.py -q
 cd go
-go test ./extractor -count=1
-go test -race ./extractor
+go test -race ./extractor ./service ./pipeline ./cmd/extract-service
+go vet ./...
 ```
 
 After intentional Python behavior changes, regenerate and review the snapshot:
@@ -43,5 +78,6 @@ After intentional Python behavior changes, regenerate and review the snapshot:
 PYTHONPATH=. .venv/bin/python tests/fixtures/telegram/export_baseline.py
 ```
 
-Production fetching, browser fallback and the Python caller adapter are a later
-integration step. Existing `extractTelegram` replay behavior remains unchanged.
+The production switch requires reviewed source, Linux CI, real-channel HTTP
+acceptance, an isolated native fallback check and post-deployment acceptance.
+Implementing the endpoint alone is not evidence that production uses it.

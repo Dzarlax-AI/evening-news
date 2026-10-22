@@ -60,6 +60,7 @@ class Settings(BaseSettings):
     telegram_chat_id: Optional[str] = Field(default=None, alias="TELEGRAM_CHAT_ID")
     telegram_service_chat_id: Optional[str] = Field(default=None, alias="TELEGRAM_SERVICE_CHAT_ID")
     telegram_rich_messages_enabled: bool = Field(default=True, alias="TELEGRAM_RICH_MESSAGES_ENABLED")
+    telegram_source_mode: Literal['python', 'go'] = Field(default='python', alias='TELEGRAM_SOURCE_MODE')
     site_base_url: str = Field(default="https://news.dzarlax.dev", alias="SITE_BASE_URL")
     # Deprecated: accepted so older .env files do not break settings loading after Telegraph removal.
     telegraph_access_token: Optional[str] = Field(default=None, alias="TELEGRAPH_ACCESS_TOKEN")
@@ -168,6 +169,15 @@ class Settings(BaseSettings):
             raise ValueError(
                 'EXTRACTION_SERVICE_NATIVE_BROWSER requires EXTRACTION_SERVICE_MODE=go '
                 'and EXTRACTION_SERVICE_PYTHON_FALLBACK=false'
+            )
+        return self
+
+    @model_validator(mode="after")
+    def validate_telegram_source_mode(self):
+        if self.telegram_source_mode == 'go' and (
+                not self.extraction_service_url or not self.extraction_service_token):
+            raise ValueError(
+                'TELEGRAM_SOURCE_MODE=go requires EXTRACTION_SERVICE_URL and EXTRACTION_SERVICE_TOKEN'
             )
         return self
 
