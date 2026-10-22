@@ -80,7 +80,8 @@ class RelayTests(unittest.IsolatedAsyncioTestCase):
         async with serve(fixture, "127.0.0.1", 0) as upstream:
             upstream_port = upstream.sockets[0].getsockname()[1]
             target = relay.Relay("127.0.0.1", "127.0.0.1", upstream_port,
-                                 arm_dir=Path(tempfile.gettempdir()))
+                                 arm_dir=Path(tempfile.gettempdir()),
+                                 allow_loopback_test_peer=True)
             front = await asyncio.start_server(target.handle, "127.0.0.1", 0)
             front_port = front.sockets[0].getsockname()[1]
             try:
@@ -386,7 +387,8 @@ class RelayTests(unittest.IsolatedAsyncioTestCase):
         fixture_port = fixture_server.sockets[0].getsockname()[1]
         with tempfile.TemporaryDirectory() as temp:
             target = relay.Relay("127.0.0.1", "127.0.0.1", fixture_port,
-                                 arm_dir=Path(temp), report=Path(temp)/"report.json")
+                                 arm_dir=Path(temp), report=Path(temp)/"report.json",
+                                 allow_loopback_test_peer=True)
             target.state.armed = True
             front = await asyncio.start_server(target.handle, "127.0.0.1", 0)
             front_port = front.sockets[0].getsockname()[1]

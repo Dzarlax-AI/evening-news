@@ -152,6 +152,8 @@ class _OwnedTab(_OwnedConnection, Tab):
                     await check_proxy_error(self)
                     error = BrowserUnavailableError("Browser navigation was blocked")
                     error.navigation_error_code = _safe_navigation_error_code(error_text)
+                    from .browser_proxy import _proxy_diagnostic_snapshot
+                    error.proxy_diagnostics = _proxy_diagnostic_snapshot(self)
                     raise error
                 # The tab was attached before Fetch.enable. Reattaching here
                 # replaces nodriver's session_id while Fetch remains enabled

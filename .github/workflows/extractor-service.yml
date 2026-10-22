@@ -110,6 +110,53 @@ jobs:
         run: python scripts/smoke_extractor_service.py --endpoint http://127.0.0.1:18080 --expected-build "$EXTRACTOR_TEST_VERSION"
       - name: Compare captured input outside the processing pipeline
         run: python scripts/compare_extractor_service.py --corpus tests/fixtures/extractor-service/source-content-smoke.json --cycles 6 --endpoint http://127.0.0.1:18080 --output artifacts/extractor-service-comparison.json
+      - name: Package verified CI candidate image (test only)
+        run: |
+          set -euo pipefail
+          image_ref="evening-news-extractor-test:${EXTRACTOR_TEST_VERSION}"
+          container_id="$(docker compose --env-file /dev/null -f docker-compose.extractor-test.yml ps -q extractor)"
+          test -n "$container_id"
+          container_image_id="$(docker inspect --format '{{.Image}}' "$container_id")"
+          image_id="$(docker image inspect --format '{{.Id}}' "$image_ref")"
+          test "$container_image_id" = "$image_id"
+
+          artifact_dir=artifacts/extractor-candidate-image
+          mkdir -p "$artifact_dir"
+          archive="$artifact_dir/evening-news-extractor-image.tar"
+          docker save --output "$archive" "$image_ref"
+          IMAGE_REF="$image_ref" IMAGE_ID="$image_id" SOURCE_SHA="$EXTRACTOR_TEST_VERSION" ARCHIVE="$archive" python - <<'PY'
+          import hashlib
+          import json
+          import os
+          from pathlib import Path
+          import re
+
+          image_id = os.environ['IMAGE_ID']
+          source_sha = os.environ['SOURCE_SHA']
+          archive = Path(os.environ['ARCHIVE'])
+          if not re.fullmatch(r'sha256:[0-9a-f]{64}', image_id):
+              raise SystemExit('candidate_image_id_invalid')
+          if not re.fullmatch(r'[0-9a-f]{40}', source_sha):
+              raise SystemExit('candidate_source_sha_invalid')
+          digest = hashlib.sha256()
+          with archive.open('rb') as stream:
+              for block in iter(lambda: stream.read(1024 * 1024), b''):
+                  digest.update(block)
+          metadata = {
+              'artifact_type': 'ci_test_only_candidate',
+              'image_ref': os.environ['IMAGE_REF'],
+              'image_id': image_id,
+              'source_sha': source_sha,
+              'archive': archive.name,
+              'archive_sha256': digest.hexdigest(),
+          }
+          (archive.parent / 'metadata.json').write_text(json.dumps(metadata, indent=2) + '\n')
+          PY
+      - uses: actions/upload-artifact@v4
+        with:
+          name: extractor-candidate-image
+          path: artifacts/extractor-candidate-image/
+          retention-days: 2
       - name: Inspect isolated service on failure
         if: failure()
         run: docker compose --env-file /dev/null -f docker-compose.extractor-test.yml logs --tail 80

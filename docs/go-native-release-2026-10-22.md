@@ -1,6 +1,6 @@
 # Native Go article extraction: release verification, 2026-10-22
 
-Status: source verification passed; production activation blocked by the persistent shared-browser isolation design. No production configuration or image changed.
+Status: Go source verification passed; native activation is deferred. Persistent shared-browser lifecycle assets are an inert review draft. News and Cloak production configuration/images have not changed. Personal Assistant was separately stopped at the user's explicit request, with rollback metadata retained.
 
 ## Current behavior
 
@@ -70,7 +70,7 @@ Python loopback fallback-policy cases passed independently. No limits increased.
 Fresh full local Python suite: 874 passed, 8 skipped, 22 subtests. Affected Go
 service/pipeline/lifecycle packages passed race tests and vet. Prior revision
 `34b7b06` completed all Linux CI checks; the updated revision requires new CI
-and automated review. Production remains unchanged pending isolation approval.
+and automated review. News/Cloak production remains unchanged. Isolation implementation was subsequently approved; activation remains deferred pending acceptance.
 
 ### Media and metadata response bounds
 
@@ -95,3 +95,73 @@ completed all Linux CI jobs successfully; its review finding prompted this
 additional correction. Fresh CI and Codex review of this correction are still
 required. The earlier native Linux campaign predates these response-bound
 changes and does not constitute exact-revision production acceptance.
+
+
+## Persistent runtime preparation and client inventory
+
+The user approved implementing the persistent isolation plan, then deferred the
+shared cutover while Personal Assistant compatibility was investigated. Read-only
+inspection confirmed that the deployed Personal Assistant had enabled plain-CDP
+fallback to the shared Cloak. Readeck and its toolkit configs had no CDP endpoint;
+no active CDP socket was present at the inspection snapshot. This is not a proof
+that every historical or hidden browser client has been enumerated.
+
+At the user's later explicit request, only Personal Assistant was stopped,
+exited with code 0 and received Docker restart policy `no`; its image/container
+and original restart settings remain in a root-only rollback receipt. No
+Assistant code, database, News, Cloak or Readeck deployment was changed. The
+runtime draft excludes it from active controllers and verifies its recorded
+disabled state. No later instruction has explicitly resumed the shared cutover.
+
+The inert `deploy/news-extractor/runtime/` assets provide a root supervisor,
+role namespace policies, a systemd unit and an intentionally incomplete config
+example. Exact controller identities, bounded startup, owned cleanup/recovery,
+explicit DNS, worker HTTP return traffic and Docker lifecycle declarations were
+independently reviewed. Target Linux `systemd-analyze verify` returned 0 on a
+temporary unit; it was not installed. Actual systemd restart/reboot, production
+role-network policy and CI-image namespace acceptance remain unperformed.
+The workflow retains its default-branch manual publication gate; a new temporary
+CI candidate image archive supports isolated acceptance before publication.
+
+The shared Python fixture campaign exposed a test-order defect: Python
+navigation ran before the synthetic origin listened. Finite counters showed a
+paused/continued request and successful proxy-auth continuation followed by
+`ERR_TUNNEL_CONNECTION_FAILED`. The fixture now starts and passes its listener
+check before Python compatibility, preserving the browser-generation check and
+subsequent Go checks. Source tests alone do not accept that real-browser path;
+the regenerated campaign result is recorded separately below.
+
+
+### Shared Python and Go native acceptance
+
+The regenerated 79-source payload with the freshly built Linux binaries passed
+on pinned Cloak 0.5.2 in 186.4 seconds. The Python receipt confirms initial and
+deferred navigation, JS/cookie reads, HTTP rejection before allocation, publisher
+auth cancellation, proxy authentication, production Telegram browser parsing,
+production Page Monitor parsing, six context-baseline checks and bounded HTML
+reads. No DB, AI or delivery code was imported by those parser fixtures.
+
+On the same unchanged browser generation/container, actual CoreExtractor and
+service client extraction passed with metadata, cookie content and zero Python
+fallback. Controlled crash and terminal overflow recovery passed, including
+worker exit1, verified owned cleanup, no allocation before restart, fresh
+readiness and success of the next article. Fourteen raw namespace-denial probes
+passed; trap accepts remained zero. Memory/OOM/reserve guards remained active;
+PSI was diagnostic-only. This is synthetic integration evidence, not production
+capacity or acceptance of the new persistent supervisor policy/lifecycle.
+
+Independent postflight confirmed unchanged healthy News/Cloak fingerprints,
+zero new memory max/OOM events, home/feed success and exact-owned cleanup with no
+remaining containers, networks or stage. Private evidence is under
+`artifacts/shared-native-final-2026-10-22/`: `native-evidence.json`,
+`root-postflight-verification.json`, `cleanup-confirmation.json`, and
+`payload-combined-4/payload-metadata.json` (source-head lineage `2a86e33`, exact
+per-file hashes). The Go source set still matches that revision; the Python
+and harness changes are recorded by the payload's per-file manifest.
+
+Fresh full local Python checks after the ordering correction: 893 passed,
+8 skipped, 22 subtests passed. Subsequent test-only image-ID identity handling
+was independently covered by the 43-test runtime and relay suite. Targeted
+independent proxy/harness review also passed 177 tests. Final PR CI/review must
+cover the complete checkpoint revision. The systemd unit has not been installed;
+News/Cloak activation remains deferred.

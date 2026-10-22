@@ -27,6 +27,7 @@ def test_observer_mounts_staged_python_extraction_sources_read_only(tmp_path):
         str(tmp_path/'benchmark/news_aggregator/extraction/extraction_utils.py') +
         ':/app/news_aggregator/extraction/extraction_utils.py:ro',
     ]
+    assert all(path.endswith(':ro') for path in stand.observer_extraction_mounts(tmp_path))
 
 
 def test_python_proxy_sources_are_separate_read_only_opt_in_mounts(tmp_path):
@@ -35,12 +36,97 @@ def test_python_proxy_sources_are_separate_read_only_opt_in_mounts(tmp_path):
         str(tmp_path/'benchmark/news_aggregator/core/browser_pool.py') + ':/app/news_aggregator/core/browser_pool.py:ro',
         str(tmp_path/'benchmark/news_aggregator/core/browser_proxy.py') + ':/app/news_aggregator/core/browser_proxy.py:ro',
     ]
-    assert stand.observer_extraction_mounts(tmp_path) == [
-        str(tmp_path/'benchmark/news_aggregator/extraction/service_client.py') +
-        ':/app/news_aggregator/extraction/service_client.py:ro',
-        str(tmp_path/'benchmark/news_aggregator/extraction/extraction_utils.py') +
-        ':/app/news_aggregator/extraction/extraction_utils.py:ro',
+
+
+def test_python_source_parser_mounts_are_separate_read_only_opt_in_mounts(tmp_path):
+    mounts=stand.observer_python_parser_mounts(tmp_path)
+    assert mounts==[
+        str(tmp_path/'benchmark/news_aggregator/sources/base.py') +
+        ':/app/news_aggregator/sources/base.py:ro',
+        str(tmp_path/'benchmark/news_aggregator/sources/page_monitor_source.py') +
+        ':/app/news_aggregator/sources/page_monitor_source.py:ro',
+        str(tmp_path/'benchmark/news_aggregator/telegram/telegram_source.py') +
+        ':/app/news_aggregator/telegram/telegram_source.py:ro',
+        str(tmp_path/'benchmark/news_aggregator/telegram/message_parser.py') +
+        ':/app/news_aggregator/telegram/message_parser.py:ro',
+        str(tmp_path/'benchmark/news_aggregator/telegram/media_extractor.py') +
+        ':/app/news_aggregator/telegram/media_extractor.py:ro',
     ]
+    assert all(path.endswith(':ro') for path in mounts)
+
+
+def test_shared_python_compatibility_runs_only_after_synthetic_origin_is_listening(tmp_path):
+    events=[]
+    instance=object.__new__(stand.Stand)
+    instance.stage=tmp_path
+    instance.run_dir=tmp_path
+    instance.anchors={'gateway':{'name':'gateway-test','ip':'172.22.0.4'},
+                      'control':{'ip':'172.22.0.2'}}
+    instance.app='pinned-app'
+    instance.worker_recovery_gate=True
+    instance.go_worker_only=False
+    instance.bounded_profile=True
+    instance.observer='observer-test'
+    def run(suffix,*args,**kwargs):
+        assert suffix=='origin'
+        assert kwargs['network']=='container:gateway-test'
+        events.append('origin_started')
+        return 'origin-test'
+    instance.run=run
+    instance.verify_ns=lambda *_args: events.append('origin_namespace_verified') or 123
+    def wait_listener(role,port,uid):
+        assert (role,port,uid)==('gateway',443,0)
+        events.append('origin_listener_ready')
+    instance.wait_listener=wait_listener
+    generation='a'*64
+    def docker(*args,**kwargs):
+        assert args[:3]==('exec','observer-test','python')
+        events.append('browser_generation_read')
+        return json.dumps({'browser_generation':generation})
+    instance.docker=docker
+    instance.python_shared_browser_gate=lambda: events.append('python_compatibility_gate')
+    def native_gate(_generation):
+        events.append('native_route_gate')
+        raise stand.StandError('stop_after_order_check')
+    instance.production_core_extractor_native_gate=native_gate
+    with pytest.raises(stand.StandError,match='stop_after_order_check'):
+        instance._controlled_browser_routes()
+    assert events==['origin_started','origin_namespace_verified','origin_listener_ready',
+                    'browser_generation_read','python_compatibility_gate','native_route_gate']
+
+
+@pytest.mark.asyncio
+async def test_fixed_fixture_html_runs_through_production_telegram_and_page_monitor_parsers():
+    origin_path=Path(__file__).parent/'fixtures/native-shadow/gate_origin.py'
+    origin_spec=importlib.util.spec_from_file_location('native_gate_origin_fixture',origin_path)
+    origin=importlib.util.module_from_spec(origin_spec)
+    sys.modules[origin_spec.name]=origin
+    origin_spec.loader.exec_module(origin)
+
+    from news_aggregator.sources.base import SourceInfo, SourceType
+    from news_aggregator.sources.page_monitor_source import PageMonitorConfig, PageMonitorSource
+    from news_aggregator.telegram.telegram_source import TelegramSource
+
+    telegram_html=origin.route_response('/telegram-fixture','172.22.0.5').body.decode()
+    telegram=TelegramSource(SourceInfo(
+        name='fixture',source_type=SourceType.TELEGRAM,
+        url='https://native-fixture.test/telegram-fixture',description='fixed fixture'))
+    telegram_articles=await telegram._parse_html(telegram_html,'https://native-fixture.test/telegram-fixture')
+    assert len(telegram_articles)==1
+    assert telegram_articles[0].source_type=='telegram'
+    assert telegram_articles[0].raw_data['message_id']=='1'
+    assert len(telegram_articles[0].content)>=200
+
+    monitor_config=PageMonitorConfig(
+        url='https://native-fixture.test/page-monitor-fixture',name='fixture',
+        article_selectors=['.monitor-item'],title_selectors=['h2'],link_selectors=['a'],
+        enable_ai_analysis=False)
+    monitor=PageMonitorSource(monitor_config)
+    monitor_html=origin.route_response('/page-monitor-fixture','172.22.0.5').body.decode()
+    monitor_articles=await monitor._extract_articles_from_html(monitor_html)
+    assert len(monitor_articles)==1
+    assert monitor_articles[0]['title']=='Gate Page Monitor fixture update'
+    assert monitor_articles[0]['link']=='https://native-fixture.test/article-alpha'
 
 
 def test_go_worker_only_skips_python_compatibility_gate_and_mounts(tmp_path):
@@ -49,9 +135,12 @@ def test_go_worker_only_skips_python_compatibility_gate_and_mounts(tmp_path):
     assert not stand.python_shared_compatibility_enabled(False, True)
     selected_mounts = (stand.observer_python_proxy_mounts(tmp_path)
                        if stand.python_shared_compatibility_enabled(True, False) else [])
+    selected_parser_mounts = (stand.observer_python_parser_mounts(tmp_path)
+                              if stand.python_shared_compatibility_enabled(True, False) else [])
     go_only_mounts = (stand.observer_python_proxy_mounts(tmp_path)
                       if stand.python_shared_compatibility_enabled(True, True) else [])
     assert len(selected_mounts) == 3
+    assert len(selected_parser_mounts) == 5
     assert go_only_mounts == []
 
 
@@ -157,6 +246,11 @@ def test_python_shared_browser_gate_uses_production_pool_and_sanitized_receipt()
     assert 'from news_aggregator.core import browser_pool as pool' in script
     assert 'from news_aggregator.core.resource_limits import read_browser_html' in script
     assert 'pool.browser_tab(' in script and 'pool.run_browser_operation(' in script
+    assert 'from news_aggregator.telegram.telegram_source import TelegramSource' in script
+    assert 'telegram._fetch_with_browser()' in script
+    assert 'from news_aggregator.sources.page_monitor_source import PageMonitorConfig, PageMonitorSource' in script
+    assert 'monitor._extract_articles_from_html(monitor_html)' in script
+    assert 'enable_ai_analysis=False' in script
     assert "hashlib.sha256(websocket.encode()).hexdigest()" in script
     assert "write_receipt({'initial_navigation_succeeded':initial_ok" in script
     assert 'benchmark_native' not in script and 'target_id' not in script
@@ -168,10 +262,11 @@ def test_python_shared_browser_failure_codes_are_finite_and_do_not_export_messag
     tree=ast.parse(stand.PYTHON_SHARED_BROWSER_GATE)
     functions=[node for node in tree.body if
         (isinstance(node,ast.FunctionDef) and node.name in {
-            'classify_failure_code','classify_cause_type','classify_navigation_error_code'})
+            'classify_failure_code','classify_cause_type','classify_navigation_error_code',
+            'classify_proxy_diagnostics'})
         or (isinstance(node,ast.Assign) and any(isinstance(target,ast.Name)
             and target.id=='SAFE_NAVIGATION_ERROR_CODES' for target in node.targets))]
-    assert len(functions)==4
+    assert len(functions)==5
     namespace={}
     exec(compile(ast.Module(body=functions,type_ignores=[]),'<failure-codes>','exec'),namespace)
     class BrowserUnavailableError(Exception): pass
@@ -200,6 +295,17 @@ def test_python_shared_browser_failure_codes_are_finite_and_do_not_export_messag
     assert namespace['classify_navigation_error_code'](error)=='other'
     assert 'raw protocol details' not in namespace['classify_navigation_error_code'](error)
 
+    diagnostic_keys=('request_paused','request_continued','request_blocked','auth_required','auth_proxy',
+        'auth_server','auth_other','auth_provided','auth_cancelled','auth_continued','handler_failed')
+    diagnostics={key:0 for key in diagnostic_keys}
+    diagnostics.update(request_paused=2,auth_required=1,auth_proxy=1,auth_provided=1,auth_continued=1)
+    error.proxy_diagnostics=diagnostics
+    assert namespace['classify_proxy_diagnostics'](error)==diagnostics
+    error.proxy_diagnostics={**diagnostics,'token':'sensitive'}
+    assert namespace['classify_proxy_diagnostics'](error) is None
+    error.proxy_diagnostics={**diagnostics,'auth_proxy':4097}
+    assert namespace['classify_proxy_diagnostics'](error) is None
+
 
 def test_python_shared_browser_optional_navigation_code_is_validated():
     receipt={'state':'failed','navigation_error_code':'net::ERR_PROXY_CONNECTION_FAILED'}
@@ -208,6 +314,15 @@ def test_python_shared_browser_optional_navigation_code_is_validated():
     for code in ('raw CDP errorText', [], 1):
         with pytest.raises(stand.StandError,match='python_shared_browser_receipt_invalid'):
             stand.validate_python_shared_navigation_code({'navigation_error_code':code})
+    keys={'request_paused','request_continued','request_blocked','auth_required','auth_proxy',
+          'auth_server','auth_other','auth_provided','auth_cancelled','auth_continued','handler_failed'}
+    diagnostics={key:0 for key in keys}
+    failed={'state':'failed','proxy_diagnostics':diagnostics}
+    assert stand.validate_python_shared_navigation_code(failed)==failed
+    for invalid in ({**diagnostics,'token':'secret'}, {**diagnostics,'request_paused':True},
+                    {**diagnostics,'handler_failed':4097}):
+        with pytest.raises(stand.StandError,match='python_shared_browser_receipt_invalid'):
+            stand.validate_python_shared_navigation_code({'proxy_diagnostics':invalid})
 
 
 def test_python_context_normalizer_accepts_generated_nodriver_response():
@@ -273,7 +388,10 @@ def test_python_shared_browser_gate_reports_sanitized_setup_failure(tmp_path):
     receipt=json.loads(receipt_path.read_text())
     assert receipt=={
         'initial_navigation_succeeded':False,'deferred_navigation_succeeded':False,
-        'blocked_http_rejected':False,'publisher_auth_rejected':False,'owned_context_cleanup':False,
+        'blocked_http_rejected':False,'publisher_auth_rejected':False,
+        'publisher_auth_cancelled':False,'proxy_authentication_succeeded':False,
+        'telegram_browser_parser_succeeded':False,'page_monitor_browser_parser_succeeded':False,
+        'forbidden_side_effect_imports_absent':False,'owned_context_cleanup':False,
         'browser_generation_unchanged':False,'context_checks':0,'bounded_html_reads':0,
         'failure_phase':'setup','failure_type':'RuntimeError','failure_code':'runtime_error',
         'failure_cause_type':'none',
@@ -287,8 +405,11 @@ def test_python_shared_browser_gate_requires_complete_success_receipt(tmp_path):
     instance.run_dir=tmp_path
     instance.check_budget=lambda: None
     receipt={'initial_navigation_succeeded':True,'deferred_navigation_succeeded':True,
-        'blocked_http_rejected':True,'publisher_auth_rejected':True,'owned_context_cleanup':True,
-        'browser_generation_unchanged':True,'context_checks':4,'bounded_html_reads':3}
+        'blocked_http_rejected':True,'publisher_auth_rejected':True,'publisher_auth_cancelled':True,
+        'proxy_authentication_succeeded':True,'telegram_browser_parser_succeeded':True,
+        'page_monitor_browser_parser_succeeded':True,'forbidden_side_effect_imports_absent':True,
+        'owned_context_cleanup':True,'browser_generation_unchanged':True,
+        'context_checks':6,'bounded_html_reads':4}
     calls=[]
     def docker(*args,**kwargs):
         calls.append((args,kwargs))
@@ -1118,10 +1239,12 @@ def _controlled_gate_stand(tmp_path, monkeypatch, *, wire_ok=True, ready=True, c
     instance.anchors = {'gateway': {'name': 'owned-gateway', 'ip': '172.22.0.4'},
                         'control': {'name': 'owned-control', 'ip': '172.22.0.3'}}
     instance.verify_ns = lambda *_args: 'owned-pid'
-    instance.wait_listener = lambda *_args: None
+    instance.wait_listener = lambda *args: events.append(('listener-ready', *args))
     instance.wait_http = lambda *_args: None
     instance.check_budget = lambda: None
     events = []
+    instance.go_worker_only=False
+    instance.python_shared_browser_gate=lambda: events.append(('python-shared-browser-gate',))
     generation_calls = 0
 
     def run(name, _image, _args, **_kwargs):
@@ -1199,11 +1322,16 @@ def test_production_core_extractor_gate_is_scoped_to_worker_recovery_profile(
     gate_events=[event for event in events if event[0]=='core-native-gate']
     if worker_recovery_gate:
         assert gate_events==[('core-native-gate','a'*64)]
+        assert ('python-shared-browser-gate',) in events
+        listener_index=events.index(('listener-ready','gateway',443,0))
+        assert listener_index<events.index(('python-shared-browser-gate',))
+        assert events.index(('python-shared-browser-gate',))<events.index(gate_events[0])
         assert events.index(gate_events[0])<next(i for i,event in enumerate(events)
                                                    if event[0]=='request')
         assert ('worker-recovery',) in events
     else:
         assert gate_events==[]
+        assert ('python-shared-browser-gate',) not in events
         assert ('overload',) in events
 
 

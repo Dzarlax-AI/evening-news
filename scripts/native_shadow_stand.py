@@ -114,6 +114,23 @@ def observer_python_proxy_mounts(stage: Path) -> list[str]:
     ]
 
 
+def observer_python_parser_mounts(stage: Path) -> list[str]:
+    """Mount current production Telegram and Page Monitor parser paths read-only."""
+    sources = (
+        ('news_aggregator/sources/base.py', '/app/news_aggregator/sources/base.py'),
+        ('news_aggregator/sources/page_monitor_source.py',
+         '/app/news_aggregator/sources/page_monitor_source.py'),
+        ('news_aggregator/telegram/telegram_source.py',
+         '/app/news_aggregator/telegram/telegram_source.py'),
+        ('news_aggregator/telegram/message_parser.py',
+         '/app/news_aggregator/telegram/message_parser.py'),
+        ('news_aggregator/telegram/media_extractor.py',
+         '/app/news_aggregator/telegram/media_extractor.py'),
+    )
+    return [str(stage / ('benchmark/' + source)) + ':' + target + ':ro'
+            for source, target in sources]
+
+
 def observer_core_extractor_mounts(stage: Path) -> list[str]:
     """Mount current config and production CoreExtractor for isolated routed tests."""
     return [
@@ -372,6 +389,14 @@ def validate_python_shared_navigation_code(receipt):
         code=receipt['navigation_error_code']
         if not isinstance(code,str) or code not in PYTHON_NAVIGATION_ERROR_CODES:
             raise StandError('python_shared_browser_receipt_invalid')
+    if 'proxy_diagnostics' in receipt:
+        diagnostics=receipt['proxy_diagnostics']
+        keys={'request_paused','request_continued','request_blocked','auth_required','auth_proxy',
+              'auth_server','auth_other','auth_provided','auth_cancelled','auth_continued','handler_failed'}
+        if (not isinstance(diagnostics,dict) or set(diagnostics)!=keys
+                or any(type(value) is not int or value < 0 or value > 4096
+                       for value in diagnostics.values())):
+            raise StandError('python_shared_browser_receipt_invalid')
     return receipt
 
 
@@ -383,6 +408,7 @@ failure_type=None
 failure_code=None
 failure_cause_type=None
 failure_navigation_code=None
+failure_proxy_diagnostics=None
 cleanup_failure_type=None
 
 SAFE_NAVIGATION_ERROR_CODES={
@@ -440,6 +466,14 @@ def classify_navigation_error_code(exc):
         return None
     return code if code=='other' or code in SAFE_NAVIGATION_ERROR_CODES else 'other'
 
+def classify_proxy_diagnostics(exc):
+    value=getattr(exc,'proxy_diagnostics',None)
+    keys=('request_paused','request_continued','request_blocked','auth_required','auth_proxy',
+          'auth_server','auth_other','auth_provided','auth_cancelled','auth_continued','handler_failed')
+    if not isinstance(value,dict) or set(value)!=set(keys): return None
+    if any(type(value[key]) is not int or value[key]<0 or value[key]>4096 for key in keys): return None
+    return {key:value[key] for key in keys}
+
 def write_receipt(value):
     raw=(json.dumps(value,separators=(',',':'))+'\n').encode()
     fd=os.open('/out/python-shared-browser.json',os.O_WRONLY|os.O_CREAT|os.O_EXCL|os.O_NOFOLLOW,0o600)
@@ -449,7 +483,7 @@ def write_receipt(value):
 
 async def main():
     global phase,failure_phase,failure_type,failure_code,failure_cause_type
-    global failure_navigation_code,cleanup_failure_type
+    global failure_navigation_code,failure_proxy_diagnostics,cleanup_failure_type
     proxy_url=sys.argv[1]
     token=os.environ.get('EXTRACTOR_NATIVE_PROXY_TOKEN','')
     if not token or len(token)>256:
@@ -462,7 +496,18 @@ async def main():
     from news_aggregator.core import browser_pool as pool
     from news_aggregator.core.exceptions import BrowserUnavailableError
     from news_aggregator.core.resource_limits import read_browser_html
+    from news_aggregator.sources.page_monitor_source import PageMonitorConfig, PageMonitorSource
+    from news_aggregator.sources.base import SourceInfo, SourceType
+    from news_aggregator.telegram import telegram_source as telegram_module
+    from news_aggregator.telegram.telegram_source import TelegramSource
     from nodriver import cdp
+
+    telegram_read_browser_html=telegram_module.read_browser_html
+    async def tracked_telegram_read(*args,**kwargs):
+        nonlocal html_reads
+        html_reads+=1
+        return await telegram_read_browser_html(*args,**kwargs)
+    telegram_module.read_browser_html=tracked_telegram_read
 
     def stats_clean():
         stats=pool.get_browser_resource_stats()
@@ -511,7 +556,8 @@ async def main():
         if not isinstance(context_id,str) or active!=baseline|{context_id}:
             raise RuntimeError('owned_context_receipt_invalid')
 
-    initial_ok=False; deferred_ok=False; blocked_ok=False; auth_ok=False; cleanup_ok=True
+    initial_ok=False; deferred_ok=False; blocked_ok=False; auth_ok=False; auth_cancelled=False
+    telegram_parser_ok=False; page_monitor_parser_ok=False; cleanup_ok=True
     context_checks=0; html_reads=0
     phase='discovery'
     try:
@@ -563,11 +609,54 @@ async def main():
                 html=await read_browser_html(tab,timeout_seconds=5)
                 html_reads+=1
                 if html: raise RuntimeError('publisher_auth_html_exposed')
-            except BrowserUnavailableError:
-                auth_ok=True
+            except BrowserUnavailableError as exc:
+                if str(exc)!='Proxy authentication challenge rejected': raise
+                auth_ok=True; auth_cancelled=True
         if await contexts(browser)!=baseline or not stats_clean():
             raise RuntimeError('publisher_auth_context_leaked')
         context_checks+=1
+
+        phase='telegram_fixture'
+        telegram=TelegramSource(SourceInfo(
+            name='native gate Telegram fixture',source_type=SourceType.TELEGRAM,
+            url='https://native-fixture.test/telegram-fixture',description='fixed isolated fixture'))
+        telegram.access_urls=['https://native-fixture.test/telegram-fixture']
+        telegram_articles=[article async for article in telegram._fetch_with_browser()]
+        if (len(telegram_articles)!=1 or not telegram_articles[0].title
+                or not telegram_articles[0].content or len(telegram_articles[0].content)<200
+                or telegram_articles[0].source_type!='telegram'
+                or telegram_articles[0].raw_data.get('message_id')!='1'):
+            raise RuntimeError('telegram_fixture_parse_failed')
+        if not stats_clean() or await contexts(browser)!=baseline:
+            raise RuntimeError('telegram_fixture_context_leaked')
+        telegram_parser_ok=True; context_checks+=1
+
+        phase='page_monitor_fixture'
+        monitor_config=PageMonitorConfig(
+            url='https://native-fixture.test/page-monitor-fixture',
+            name='native gate Page Monitor fixture',
+            article_selectors=['.monitor-item'],title_selectors=['h2'],link_selectors=['a'],
+            use_browser=True,wait_for_js=False,enable_ai_analysis=False)
+        monitor=PageMonitorSource(monitor_config)
+        async with pool.browser_tab(monitor_config.url) as tab:
+            await confirm_owned_context(browser,tab,baseline)
+            monitor_html=await read_browser_html(tab,timeout_seconds=5)
+            html_reads+=1
+            monitor_articles=await monitor._extract_articles_from_html(monitor_html)
+            if (len(monitor_articles)!=1
+                    or monitor_articles[0].get('title')!='Gate Page Monitor fixture update'
+                    or not monitor_articles[0].get('link','').endswith('/article-alpha')):
+                raise RuntimeError('page_monitor_fixture_parse_failed')
+        if not stats_clean() or await contexts(browser)!=baseline:
+            raise RuntimeError('page_monitor_fixture_context_leaked')
+        page_monitor_parser_ok=True; context_checks+=1
+
+        forbidden_prefixes=('news_aggregator.db','news_aggregator.database',
+            'news_aggregator.services.database_queue','news_aggregator.services.extraction_memory',
+            'news_aggregator.services.ai_page_analyzer','news_aggregator.services.telegram_service')
+        if any(name==prefix or name.startswith(prefix+'.')
+               for name in sys.modules for prefix in forbidden_prefixes):
+            raise RuntimeError('python_parser_side_effect_imported')
         if pool._browser_generation!=generation: raise RuntimeError('browser_generation_changed')
     except BaseException as exc:
         failure_phase=phase
@@ -575,6 +664,7 @@ async def main():
         failure_code=classify_failure_code(exc)
         failure_cause_type=classify_cause_type(exc)
         failure_navigation_code=classify_navigation_error_code(exc)
+        failure_proxy_diagnostics=classify_proxy_diagnostics(exc)
         raise
     finally:
         phase='pool_cleanup'
@@ -592,6 +682,11 @@ async def main():
         raise RuntimeError('browser_generation_changed')
     write_receipt({'initial_navigation_succeeded':initial_ok,'deferred_navigation_succeeded':deferred_ok,
         'blocked_http_rejected':blocked_ok,'publisher_auth_rejected':auth_ok,
+        'publisher_auth_cancelled':auth_cancelled,
+        'proxy_authentication_succeeded':initial_ok and deferred_ok,
+        'telegram_browser_parser_succeeded':telegram_parser_ok,
+        'page_monitor_browser_parser_succeeded':page_monitor_parser_ok,
+        'forbidden_side_effect_imports_absent':True,
         'owned_context_cleanup':cleanup_ok,'browser_generation_unchanged':True,
         'context_checks':context_checks,'bounded_html_reads':html_reads})
 
@@ -604,12 +699,17 @@ except BaseException as exc:
     reported_cause=failure_cause_type if failure_cause_type is not None else classify_cause_type(exc)
     try:
         write_receipt({'initial_navigation_succeeded':False,'deferred_navigation_succeeded':False,
-            'blocked_http_rejected':False,'publisher_auth_rejected':False,'owned_context_cleanup':False,
+            'blocked_http_rejected':False,'publisher_auth_rejected':False,
+            'publisher_auth_cancelled':False,'proxy_authentication_succeeded':False,
+            'telegram_browser_parser_succeeded':False,'page_monitor_browser_parser_succeeded':False,
+            'forbidden_side_effect_imports_absent':False,'owned_context_cleanup':False,
             'browser_generation_unchanged':False,'context_checks':0,'bounded_html_reads':0,
             'failure_phase':reported_phase,'failure_type':reported_type,
             'failure_code':reported_code,'failure_cause_type':reported_cause,
             **({'navigation_error_code':failure_navigation_code}
                if failure_navigation_code is not None else {}),
+            **({'proxy_diagnostics':failure_proxy_diagnostics}
+               if failure_proxy_diagnostics is not None else {}),
             **({'cleanup_failure_type':cleanup_failure_type} if cleanup_failure_type is not None else {})})
     except OSError:
         pass
@@ -1728,6 +1828,8 @@ finally: sock.close()
             getattr(self,'worker_recovery_gate',False), getattr(self,'go_worker_only',False))
         proxy_mounts=(observer_python_proxy_mounts(self.stage)
                       if python_shared_compatibility else [])
+        parser_mounts=(observer_python_parser_mounts(self.stage)
+                       if python_shared_compatibility else [])
         production_core_mounts=(observer_core_extractor_mounts(self.stage)
                                 if getattr(self,'worker_recovery_gate',False) else [])
         if python_shared_compatibility and production_core_mounts:
@@ -1736,7 +1838,7 @@ finally: sock.close()
             memory=observer_memory,
             cpu=observer_cpu,
             pids=64 if self.bounded_profile else 128,
-            mounts=[bench_mount,bin_mount,*observer_extraction_mounts(self.stage),*proxy_mounts,
+            mounts=[bench_mount,bin_mount,*observer_extraction_mounts(self.stage),*proxy_mounts,*parser_mounts,
                     *production_core_mounts,str(self.run_dir)+':/out',
                     '/sys/fs/cgroup:/host-cg:ro'] + ([str(self.corpus)+':/corpus/corpus.json:ro',str(self.captures)+':/captures']
                     if hasattr(self,'corpus') else []),env=['PYTHONPATH=/app','BROWSER_WS_ENDPOINT='+chrome_endpoint,
@@ -1812,10 +1914,6 @@ while True:
         try:
             if trap.stdout.readline().strip()!='ready':
                 raise StandError('browser_trap_start_failed')
-            if python_shared_compatibility_enabled(
-                    getattr(self, 'worker_recovery_gate', False),
-                    getattr(self, 'go_worker_only', False)):
-                self.python_shared_browser_gate()
             result=self._controlled_browser_routes()
         finally:
             trap.terminate()
@@ -1831,7 +1929,7 @@ while True:
         return result
 
     def python_shared_browser_gate(self):
-        """Exercise the staged production Python proxy pool before native Go routes."""
+        """Exercise the staged Python proxy pool while the synthetic origin is ready."""
         self.check_budget()
         gateway=self.anchors.get('gateway',{}).get('ip')
         try:
@@ -1862,15 +1960,19 @@ while True:
         if command_failed:
             raise StandError('python_shared_browser_gate_failed')
         flags=('initial_navigation_succeeded','deferred_navigation_succeeded','blocked_http_rejected',
-               'publisher_auth_rejected','owned_context_cleanup','browser_generation_unchanged')
+               'publisher_auth_rejected','publisher_auth_cancelled','proxy_authentication_succeeded',
+               'telegram_browser_parser_succeeded','page_monitor_browser_parser_succeeded',
+               'forbidden_side_effect_imports_absent','owned_context_cleanup','browser_generation_unchanged')
         expected_fields=set(flags)|{'context_checks','bounded_html_reads'}
         if 'navigation_error_code' in receipt:
             expected_fields.add('navigation_error_code')
+        if 'proxy_diagnostics' in receipt:
+            expected_fields.add('proxy_diagnostics')
         if (not isinstance(receipt,dict) or set(receipt)!=expected_fields
                 or any(receipt.get(key) is not True for key in flags)
-                or type(receipt.get('context_checks')) is not int or receipt['context_checks']!=4
+                or type(receipt.get('context_checks')) is not int or receipt['context_checks']!=6
                 or type(receipt.get('bounded_html_reads')) is not int
-                or not 2<=receipt['bounded_html_reads']<=128):
+                or not 4<=receipt['bounded_html_reads']<=128):
             raise StandError('python_shared_browser_receipt_invalid')
         self.check_budget()
         return receipt
@@ -2015,6 +2117,10 @@ print(json.dumps({'status':status,'outcome':value.get('outcome'),
                 raise StandError('native_browser_generation_invalid')
             return generation
         generation=browser_generation()
+        if python_shared_compatibility_enabled(
+                getattr(self, 'worker_recovery_gate', False),
+                getattr(self, 'go_worker_only', False)):
+            self.python_shared_browser_gate()
         if getattr(self, 'worker_recovery_gate', False):
             self.production_core_extractor_native_gate(generation)
             if browser_generation()!=generation:

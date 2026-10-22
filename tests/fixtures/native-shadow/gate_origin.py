@@ -76,6 +76,27 @@ def route_response(path: str, trap_ip: str, cookie: str = "") -> Response:
                 f"document.querySelector('#article').innerHTML='<article data-ready=\"true\"><h1>Gate article</h1><p>'+{story}+'</p><p>'+t+'</p></article>';"
                 "});</script>")
         return Response("js-article", 200, html.encode("utf-8"))
+    if path == "/telegram-fixture":
+        body = ("<!doctype html><meta charset=utf-8><title>Telegram fixture</title>"
+                "<div class='tgme_widget_message_wrap'><div class='tgme_widget_message' "
+                "data-post='gatefixture/1'>"
+                "<a class='tgme_widget_message_date' href='https://t.me/gatefixture/1'>"
+                "<time datetime='2026-10-22T12:00:00+00:00'>today</time></a>"
+                "<div class='tgme_widget_message_text' dir='auto'>Gate Telegram fixture update. "
+                "The harbor office recorded a calibrated tide gauge after technicians compared "
+                "the morning readings with the ferry terminal reference. Engineers will review "
+                "the measurements and publish the checked series with maintenance notes.</div>"
+                "</div></div>")
+        return Response("telegram-fixture", 200, body.encode("utf-8"))
+    if path == "/page-monitor-fixture":
+        body = ("<!doctype html><meta charset=utf-8><title>Page Monitor fixture</title>"
+                "<section class='monitor-list'><article class='monitor-item'>"
+                "<h2>Gate Page Monitor fixture update</h2>"
+                "<a href='/article-alpha'>Read the fixture release</a>"
+                "<p>The fixed page monitor fixture carries enough text to exercise the "
+                "production article selector and link extraction without learned selectors.</p>"
+                "</article></section>")
+        return Response("page-monitor-fixture", 200, body.encode("utf-8"))
     if path == "/wire-limit":
         # Keep large bytes out of DOM layout so this tests the wire budget.
         return Response("wire-limit", 200,

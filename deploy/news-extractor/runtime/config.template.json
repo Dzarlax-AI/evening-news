@@ -1,0 +1,75 @@
+{
+  "schema_version": 1,
+  "mode": "production",
+  "owner_value": "news-REPLACE_WITH_RANDOM_INSTANCE_ID",
+  "networks": {
+    "control": {
+      "name": "REPLACE_WITH_UNIQUE_CONTROL_NETWORK_NAME",
+      "subnet": "REPLACE_WITH_FRESH_CONTROL_SUBNET_CIDR",
+      "gateway": "REPLACE_WITH_CONTROL_GATEWAY_IP"
+    },
+    "egress": {
+      "name": "REPLACE_WITH_UNIQUE_EGRESS_NETWORK_NAME",
+      "subnet": "REPLACE_WITH_FRESH_EGRESS_SUBNET_CIDR",
+      "gateway": "REPLACE_WITH_EGRESS_GATEWAY_IP"
+    }
+  },
+  "addresses": {
+    "browser": "REPLACE_WITH_BROWSER_CONTROL_IP",
+    "gateway": "REPLACE_WITH_GATEWAY_CONTROL_IP",
+    "worker_egress": "REPLACE_WITH_WORKER_EGRESS_IP",
+    "gateway_egress": "REPLACE_WITH_GATEWAY_EGRESS_IP"
+  },
+  "clients": {
+    "news_app": {
+      "label": "com.docker.compose.service",
+      "value": "app",
+      "image": "REPLACE_WITH_APP_IMAGE@sha256:0000000000000000000000000000000000000000000000000000000000000000",
+      "control_ip": "REPLACE_WITH_NEWS_APP_CONTROL_IP",
+      "cdp_proxy_accepted": false
+    },
+    "worker": {
+      "label": "com.dzarlax.news-extractor-runtime.role",
+      "value": "worker",
+      "image": "REPLACE_WITH_EXTRACTOR_IMAGE@sha256:0000000000000000000000000000000000000000000000000000000000000000",
+      "control_ip": "REPLACE_WITH_WORKER_CONTROL_IP",
+      "cdp_proxy_accepted": false
+    }
+  },
+  "images": {
+    "anchor": "REPLACE_WITH_PINNED_ANCHOR_IMAGE@sha256:0000000000000000000000000000000000000000000000000000000000000000",
+    "extractor": "REPLACE_WITH_EXTRACTOR_IMAGE@sha256:0000000000000000000000000000000000000000000000000000000000000000",
+    "cloak": "REPLACE_WITH_PINNED_CLOAK_IMAGE@sha256:0000000000000000000000000000000000000000000000000000000000000000"
+  },
+  "containers": {
+    "legacy_browser_id": "0000000000000000000000000000000000000000000000000000000000000000",
+    "browser_anchor": "news-native-browser-anchor",
+    "worker_anchor": "news-native-worker-anchor",
+    "gateway_anchor": "news-native-gateway-anchor",
+    "cloak": "news-native-cloak",
+    "relay": "news-native-relay",
+    "worker": "news-native-worker",
+    "gateway": "news-native-egress"
+  },
+  "resolver": "REPLACE_WITH_VALIDATED_PUBLIC_IPV4_RESOLVER",
+  "browser_fd_threshold": 800,
+  "paths": {
+    "runtime_dir": "/opt/news-extractor-runtime",
+    "cloak_launch": "/opt/news-extractor-runtime/launch_shadow_cloak.py",
+    "relay_script": "/opt/news-extractor-runtime/shadow_cdp_relay.py",
+    "browser_info_dir": "/var/lib/news-extractor-runtime/browser-info",
+    "gateway_env_file": "/etc/news-extractor-runtime/gateway.env",
+    "worker_env_file": "/etc/news-extractor-runtime/worker.env",
+    "browser_control_volume": "news-extractor-browser-control",
+    "resolv_conf": "/etc/news-extractor-runtime/resolv.conf"
+  },
+  "disabled_clients": [
+    {
+      "name": "personal_assistant",
+      "id": "REPLACE_WITH_EXACT_STOPPED_ASSISTANT_CONTAINER_ID",
+      "label": "REPLACE_WITH_PERSONAL_ASSISTANT_CONTAINER_LABEL",
+      "value": "REPLACE_WITH_PERSONAL_ASSISTANT_LABEL_VALUE",
+      "image": "sha256:0000000000000000000000000000000000000000000000000000000000000000"
+    }
+  ]
+}

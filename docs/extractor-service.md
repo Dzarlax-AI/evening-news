@@ -9,17 +9,20 @@ isolated checks and rollout decision are complete.
 ## Production preparation status
 
 Production uses pinned CloakBrowser 0.5.2 (`cloakserve`), not the ordinary Chrome
-used in the initial local tests. The current Go browser adapter fetches responses
-through Go and fulfills them over CDP. That does **not** preserve native browser
-TLS/HTTP fingerprinting. Controlled same-image tests are not publisher/native
-network compatibility proof. The approved initial pilot and remaining gates are
+used in the initial local tests. The `fulfill-experimental` backend fetches
+responses through Go and fulfills them over CDP; it does **not** preserve native
+browser TLS/HTTP fingerprinting. The separate opt-in `native` backend uses
+browser-owned traffic through the authenticated CONNECT gateway, with an
+independently verified network boundary. Controlled same-image fixtures do not
+prove publisher compatibility or production lifecycle acceptance. The initial pilot and remaining gates are
 in the [production readiness plan](ai-plans/2026-10-16-extractor-production-readiness.html).
 
 `shadow` currently runs inline within its caller's deadline. Its diagnostic logs
 are observational, but the extra runtime can affect authoritative processing.
 Do not enable it on production. Initial comparisons must run outside the
-authoritative processing pipeline. A lifecycle-owned background observer or a
-native-browser egress redesign requires its own approved implementation.
+authoritative processing pipeline. A lifecycle-owned background observer remains
+separate work. Native egress and shared-browser lifecycle preparation are covered
+by the approved [isolation plan](ai-plans/2026-10-22-native-production-isolation.html).
 
 The pilot enforces `EXTRACTOR_HTTP_ONLY=true` by default on Go and
 `use_browser=false` in Python requests. Configuring `CHROME_ENDPOINT` in this
@@ -35,12 +38,20 @@ Go checks public DNS before handing browser-required work to Python. Its
 connection-time DNS pinning applies to Go HTTP requests. The existing native
 Python browser transport retains its own redirect/subrequest policy; the handoff
 check does not extend Go's connection-time guarantees to that second runtime.
-Strict native browser egress is a separate design and verification task.
+The opt-in native path uses its own explicit isolation assertion; the new
+persistent supervisor still requires separate Linux lifecycle acceptance.
 
 Reviewable standby/canary/rollback overlays and release instructions are in
 [`deploy/news-extractor/`](../deploy/news-extractor/README.md). They have not been
 applied. The CI publication job requires a manual default-branch run after
 verification; preparing that workflow does not publish an image.
+
+After the isolated API smoke and comparison pass, CI also uploads the exact
+Compose-built image as the short-lived `extractor-candidate-image` artifact.
+Its metadata records the archive SHA-256, Docker image ID and tested source SHA.
+This two-day artifact is for isolated test runs only; it is not a registry
+release or a production image reference. The separate manual default-branch
+publication gate remains unchanged.
 
 ## API compatibility
 

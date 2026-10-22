@@ -8,8 +8,26 @@ from nodriver import cdp
 from .exceptions import BrowserUnavailableError
 
 _MAX_HANDLER_TASKS = 32
+_MAX_DIAGNOSTIC_COUNT = 4096
+_DIAGNOSTIC_KEYS = (
+    "request_paused", "request_continued", "request_blocked",
+    "auth_required", "auth_proxy", "auth_server", "auth_other",
+    "auth_provided", "auth_cancelled", "auth_continued", "handler_failed",
+)
 _ownership_unknown = False
 _disposed_contexts = set()
+
+
+def _count_diagnostic(tab, name):
+    counters = tab.__dict__.get("_browser_pool_proxy_diagnostics")
+    if isinstance(counters, dict) and name in counters and counters[name] < _MAX_DIAGNOSTIC_COUNT:
+        counters[name] += 1
+
+
+def _proxy_diagnostic_snapshot(tab):
+    counters = tab.__dict__.get("_browser_pool_proxy_diagnostics", {})
+    return {name: counters.get(name, 0) for name in _DIAGNOSTIC_KEYS
+            if type(counters.get(name, 0)) is int and 0 <= counters.get(name, 0) <= _MAX_DIAGNOSTIC_COUNT}
 
 
 def _safe_destination(url: str) -> bool:
@@ -154,19 +172,24 @@ async def create_proxy_tab(browser, initial_url: str):
         tab._browser_pool_proxy_error = None
         tab._browser_pool_proxy_tasks = set()
         tab._browser_pool_proxy_auth_used = set()
+        tab._browser_pool_proxy_diagnostics = {name: 0 for name in _DIAGNOSTIC_KEYS}
         tab._browser_pool_proxy_handlers = []
         await tab.attach()
 
         def on_request(event):
+            _count_diagnostic(tab, "request_paused")
             async def handle():
                 if not _safe_destination(event.request.url):
+                    _count_diagnostic(tab, "request_blocked")
                     _set_proxy_error(tab, "Browser destination blocked by proxy policy")
                     await tab.send(cdp.fetch.fail_request(event.request_id, cdp.network.ErrorReason.BLOCKED_BY_CLIENT))
                     return
                 await tab.send(cdp.fetch.continue_request(event.request_id))
+                _count_diagnostic(tab, "request_continued")
             # nodriver schedules async handlers without a bound. Keep this callback sync.
             tasks = tab._browser_pool_proxy_tasks
             if len(tasks) >= _MAX_HANDLER_TASKS:
+                _count_diagnostic(tab, "handler_failed")
                 _set_proxy_error(tab, "Proxy request handling capacity exceeded")
                 return
             task = asyncio.create_task(handle())
@@ -175,9 +198,12 @@ async def create_proxy_tab(browser, initial_url: str):
             task.add_done_callback(lambda done: _handler_failed(tab, done))
 
         def on_auth(event):
+            _count_diagnostic(tab, "auth_required")
             async def handle():
                 challenge = event.auth_challenge
                 source = getattr(challenge.source, "value", challenge.source)
+                source_key = {"Proxy": "auth_proxy", "Server": "auth_server"}.get(source, "auth_other")
+                _count_diagnostic(tab, source_key)
                 try:
                     origin_ok = (
                         source == "Proxy"
@@ -192,15 +218,19 @@ async def create_proxy_tab(browser, initial_url: str):
                 ):
                     _set_proxy_error(tab, "Proxy authentication challenge rejected")
                     response = cdp.fetch.AuthChallengeResponse(response="CancelAuth")
+                    _count_diagnostic(tab, "auth_cancelled")
                 else:
                     tab._browser_pool_proxy_auth_used.add(key)
+                    _count_diagnostic(tab, "auth_provided")
                     response = cdp.fetch.AuthChallengeResponse(
                         response="ProvideCredentials", username="extractor",
                         password=settings.browser_proxy_token.get_secret_value(),
                     )
                 await tab.send(cdp.fetch.continue_with_auth(event.request_id, response))
+                _count_diagnostic(tab, "auth_continued")
             tasks = tab._browser_pool_proxy_tasks
             if len(tasks) >= _MAX_HANDLER_TASKS:
+                _count_diagnostic(tab, "handler_failed")
                 _set_proxy_error(tab, "Proxy request handling capacity exceeded")
                 return
             task = asyncio.create_task(handle())
@@ -248,6 +278,7 @@ def _handler_failed(tab, task):
     try:
         task.result()
     except Exception:
+        _count_diagnostic(tab, "handler_failed")
         _set_proxy_error(tab, "Proxy request handling failed")
 
 

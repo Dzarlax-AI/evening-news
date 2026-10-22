@@ -120,7 +120,7 @@ def test_relay_forwards_both_directions_and_drains():
 
         target_server = await asyncio.start_server(target, "127.0.0.1", 0)
         target_port = target_server.sockets[0].getsockname()[1]
-        boundary = relay.Relay("127.0.0.1", target_port=target_port)
+        boundary = relay.Relay("127.0.0.1", target_port=target_port, allow_loopback_test_peer=True)
         front = await asyncio.start_server(boundary.handle, "127.0.0.1", 0)
         front_port = front.sockets[0].getsockname()[1]
         try:

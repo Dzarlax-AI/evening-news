@@ -12,6 +12,7 @@ import secrets
 import stat
 import signal
 import time
+from collections.abc import Iterable
 
 LISTEN_HOST = "0.0.0.0"
 LISTEN_PORT = 9222
@@ -28,6 +29,7 @@ MAX_WS_MESSAGE = 1024 * 1024
 MAX_TRACKED_IDS = 64
 MAX_PROTOCOL_ID_BYTES = 256
 ARM_NAME = "overload-once.json"
+MAX_CONTROLLERS = 8
 
 
 def private_controller_ip(value: str) -> str:
@@ -38,6 +40,28 @@ def private_controller_ip(value: str) -> str:
     if not address.is_private or address.is_loopback or address.is_link_local or address.is_multicast:
         raise ValueError("Controller address must be an exact private IPv4 literal")
     return str(address)
+
+
+def private_controller_ips(values: str | Iterable[str], *, allow_loopback: bool = False) -> frozenset[str]:
+    """Validate a finite exact-IP controller allowlist (never CIDRs)."""
+    if isinstance(values, str):
+        values = (values,)
+    parsed = []
+    for value in values:
+        if allow_loopback:
+            try:
+                address = ipaddress.IPv4Address(value)
+            except ipaddress.AddressValueError:
+                raise ValueError("Controller address must be an exact IPv4 literal") from None
+            if not (address.is_private or address.is_loopback) or address.is_link_local or address.is_multicast:
+                raise ValueError("Controller address must be an exact local IPv4 literal")
+            parsed.append(str(address))
+        else:
+            parsed.append(private_controller_ip(value))
+    result = frozenset(parsed)
+    if not result or len(result) > MAX_CONTROLLERS:
+        raise ValueError("Controller allowlist must contain 1 to 8 exact private IPv4 addresses")
+    return result
 
 
 async def copy_stream(reader: asyncio.StreamReader, writer: asyncio.StreamWriter) -> None:
@@ -456,10 +480,13 @@ async def websocket_copy(reader: asyncio.StreamReader, writer: asyncio.StreamWri
 
 
 class Relay:
-    def __init__(self, controller_ip: str, target_host: str = TARGET_HOST,
+    def __init__(self, controller_ip: str | Iterable[str], target_host: str = TARGET_HOST,
                  target_port: int = TARGET_PORT, *, arm_dir: Path | None = None,
-                 report: Path | None = None, diagnostics_report: Path | None = None):
-        self.controller_ip = controller_ip
+                 report: Path | None = None, diagnostics_report: Path | None = None,
+                 allow_loopback_test_peer: bool = False):
+        self.controller_ips = private_controller_ips(controller_ip, allow_loopback=allow_loopback_test_peer)
+        # Keep the historical attribute for single-controller in-process callers.
+        self.controller_ip = next(iter(self.controller_ips)) if len(self.controller_ips) == 1 else None
         self.target_host = target_host
         self.target_port = target_port
         self.active = 0
@@ -580,7 +607,7 @@ class Relay:
                      client_writer: asyncio.StreamWriter) -> None:
         connection_started = time.monotonic()
         peer = client_writer.get_extra_info("peername")
-        if not peer or peer[0] != self.controller_ip:
+        if not peer or peer[0] not in self.controller_ips:
             self._count('peer_rejected')
             client_writer.close()
             await client_writer.wait_closed()
@@ -716,9 +743,9 @@ class Relay:
             await asyncio.gather(to_server, to_client, return_exceptions=True)
 
 
-async def serve(controller_ip: str, arm_dir: Path | None = None, report: Path | None = None,
+async def serve(controller_ip: str | Iterable[str], arm_dir: Path | None = None, report: Path | None = None,
                diagnostics_report: Path | None = None) -> None:
-    relay = Relay(private_controller_ip(controller_ip), arm_dir=arm_dir, report=report,
+    relay = Relay(private_controller_ips(controller_ip), arm_dir=arm_dir, report=report,
                   diagnostics_report=diagnostics_report)
     server = await asyncio.start_server(relay.handle, LISTEN_HOST, LISTEN_PORT,
                                         limit=MAX_HTTP_HEADER + 1, backlog=MAX_CONNECTIONS)
@@ -753,7 +780,8 @@ async def serve(controller_ip: str, arm_dir: Path | None = None, report: Path | 
 
 def main(argv: list[str] | None = None) -> None:
     parser = argparse.ArgumentParser(description=__doc__)
-    parser.add_argument("--controller-ip", required=True)
+    parser.add_argument("--controller-ip", action="append", required=True,
+                        help="one exact private IPv4 controller (repeat for additional known clients)")
     parser.add_argument("--synthetic-arm-dir", type=Path)
     parser.add_argument("--synthetic-report", type=Path)
     parser.add_argument("--synthetic-diagnostics-report", type=Path)
@@ -762,7 +790,11 @@ def main(argv: list[str] | None = None) -> None:
         parser.error("synthetic arm and report paths must be provided together")
     if args.synthetic_diagnostics_report and not args.synthetic_arm_dir:
         parser.error("synthetic diagnostics require synthetic mode")
-    asyncio.run(serve(args.controller_ip, args.synthetic_arm_dir, args.synthetic_report,
+    try:
+        controllers = private_controller_ips(args.controller_ip)
+    except ValueError as exc:
+        parser.error(str(exc))
+    asyncio.run(serve(controllers, args.synthetic_arm_dir, args.synthetic_report,
                       args.synthetic_diagnostics_report))
 
 

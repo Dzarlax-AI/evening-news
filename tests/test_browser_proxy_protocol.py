@@ -17,6 +17,7 @@ from news_aggregator.core.exceptions import BrowserOperationTimeoutError, Browse
 
 @pytest.mark.asyncio
 @pytest.mark.parametrize('mode', ['initial', 'deferred', 'navigation_error', 'navigation_proxy_error',
+    'navigation_proxy_tunnel',
     'delayed_load', 'load_cancel', 'publisher_auth', 'monitor_ok', 'monitor_error', 'next_job'])
 async def test_proxy_context_real_nodriver_protocol(monkeypatch, mode):
     commands = []
@@ -58,7 +59,7 @@ async def test_proxy_context_real_nodriver_protocol(monkeypatch, mode):
                         'url': 'about:blank', 'attached': True, 'canAccessOpener': False,
                     }}
                 elif method == 'Page.navigate':
-                    if mode in ('navigation_error', 'navigation_proxy_error', 'monitor_error'):
+                    if mode in ('navigation_error', 'navigation_proxy_error', 'navigation_proxy_tunnel', 'monitor_error'):
                         if mode == 'navigation_proxy_error':
                             await ws.send(json.dumps({'method': 'Fetch.authRequired', 'params': {
                                 'requestId': 'auth-request', 'frameId': 'frame', 'resourceType': 'Document',
@@ -67,7 +68,24 @@ async def test_proxy_context_real_nodriver_protocol(monkeypatch, mode):
                                 'authChallenge': {'source': 'Server', 'origin': 'https://publisher.invalid',
                                                  'scheme': 'basic', 'realm': 'fixture'},
                             }}))
-                        result = {'frameId': 'frame', 'errorText': 'net::ERR_PROXY_CONNECTION_FAILED'}
+                        if mode == 'navigation_proxy_tunnel':
+                            session=command.get('sessionId')
+                            await ws.send(json.dumps({'method': 'Fetch.requestPaused', 'params': {
+                                'requestId': 'tunnel-request', 'frameId': 'frame', 'resourceType': 'Document',
+                                'request': {'url': params['url'], 'method': 'GET', 'headers': {},
+                                            'initialPriority': 'High', 'referrerPolicy': 'no-referrer'},
+                                'networkId': 'tunnel-network', 'redirectedRequestId': None,
+                            }, 'sessionId': session}))
+                            await ws.send(json.dumps({'method': 'Fetch.authRequired', 'params': {
+                                'requestId': 'tunnel-auth', 'frameId': 'frame', 'resourceType': 'Document',
+                                'request': {'url': params['url'], 'method': 'GET', 'headers': {},
+                                            'initialPriority': 'High', 'referrerPolicy': 'no-referrer'},
+                                'authChallenge': {'source': 'Proxy', 'origin': proxy_url,
+                                                 'scheme': 'basic', 'realm': 'fixture'},
+                            }, 'sessionId': session}))
+                            result = {'frameId': 'frame', 'errorText': 'net::ERR_TUNNEL_CONNECTION_FAILED'}
+                        else:
+                            result = {'frameId': 'frame', 'errorText': 'net::ERR_PROXY_CONNECTION_FAILED'}
                     elif mode in ('delayed_load', 'load_cancel'):
                         result = {'frameId': 'frame', 'loaderId': 'current-loader'}
                         await ws.send(json.dumps({'method': 'Page.lifecycleEvent', 'params': {
@@ -111,7 +129,7 @@ async def test_proxy_context_real_nodriver_protocol(monkeypatch, mode):
                     else:
                         assert response == {'response': 'ProvideCredentials',
                                             'username': 'extractor', 'password': dummy_token}
-                    if mode == 'navigation_proxy_error':
+                    if mode in ('navigation_proxy_error', 'navigation_proxy_tunnel'):
                         await ws.send(json.dumps({'id': command['id'], 'result': {}}))
                     else:
                         await ws.send(json.dumps({'id': pending_navigation.pop(ws), 'result': {'frameId': 'frame'}}))
@@ -178,13 +196,20 @@ async def test_proxy_context_real_nodriver_protocol(monkeypatch, mode):
                 source = object.__new__(PageMonitorSource)
                 source.config = SimpleNamespace(url='https://example.com/monitor', use_browser=True)
                 assert await asyncio.wait_for(source.test_connection(), 3) is (mode == 'monitor_ok')
-            elif mode in ('navigation_error', 'navigation_proxy_error', 'publisher_auth'):
+            elif mode in ('navigation_error', 'navigation_proxy_error', 'navigation_proxy_tunnel', 'publisher_auth'):
                 with pytest.raises(BrowserUnavailableError) as caught:
                     await asyncio.wait_for(operation(), 3)
                 if mode == 'navigation_error':
                     assert caught.value.navigation_error_code == 'net::ERR_PROXY_CONNECTION_FAILED'
                 if mode == 'navigation_proxy_error':
                     assert str(caught.value) == 'Proxy authentication challenge rejected'
+                if mode == 'navigation_proxy_tunnel':
+                    assert caught.value.navigation_error_code == 'net::ERR_TUNNEL_CONNECTION_FAILED'
+                    assert caught.value.proxy_diagnostics == {
+                        'request_paused': 1, 'request_continued': 1, 'request_blocked': 0,
+                        'auth_required': 1, 'auth_proxy': 1, 'auth_server': 0, 'auth_other': 0,
+                        'auth_provided': 1, 'auth_cancelled': 0, 'auth_continued': 1, 'handler_failed': 0,
+                    }
             elif mode == 'load_cancel':
                 with pytest.raises(BrowserOperationTimeoutError):
                     await asyncio.wait_for(operation(), 3)
