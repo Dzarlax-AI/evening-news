@@ -96,6 +96,8 @@ networks:
         self.assertTrue(config["volumes"]["browser-control"]["external"])
         self.assertFalse(any("ports" in service for service in config["services"].values()))
         self.assertTrue(browser["read_only"])
+        self.assertIn("/root/.config:rw,nosuid,nodev,size=16m", browser["tmpfs"])
+        self.assertIn("/root/.cache:rw,nosuid,nodev,size=16m", browser["tmpfs"])
         self.assertEqual(set(browser["cap_add"]), {"NET_ADMIN", "SETPCAP", "SETUID", "SETGID", "KILL"})
 
     def test_native_profile_has_private_authenticated_services(self) -> None:

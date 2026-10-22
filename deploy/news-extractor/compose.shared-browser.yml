@@ -21,6 +21,8 @@ services:
     tmpfs:
       - /tmp:rw,noexec,nosuid,size=256m
       - /run:rw,noexec,nosuid,size=32m
+      - /root/.config:rw,nosuid,nodev,size=16m
+      - /root/.cache:rw,nosuid,nodev,size=16m
     shm_size: 1gb
     cap_drop: [ALL]
     cap_add: [NET_ADMIN, SETPCAP, SETUID, SETGID, KILL]
