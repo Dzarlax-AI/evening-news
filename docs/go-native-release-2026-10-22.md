@@ -165,3 +165,13 @@ was independently covered by the 43-test runtime and relay suite. Targeted
 independent proxy/harness review also passed 177 tests. Final PR CI/review must
 cover the complete checkpoint revision. The systemd unit has not been installed;
 News/Cloak activation remains deferred.
+
+
+### Persistent-supervisor graceful-stop review correction
+
+Codex review of `fd871bb` found a 12-second worker stop grace conflicting with
+the Go drain/cleanup envelope. Both browser-generation restart and owned shutdown
+now give the worker 55 seconds, with a 70-second Docker CLI deadline. Other role
+stop limits remain unchanged. The calculated cleanup CLI wait budget is 137
+seconds within the unit's 150-second stop timeout. Independent runtime/relay
+regressions passed 46 tests. This correction was not installed on production.

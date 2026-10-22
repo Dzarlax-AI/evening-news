@@ -213,6 +213,50 @@ def test_runtime_restarts_only_failed_http_role_but_rebuilds_browser_generation(
     assert events == [("browser-generation", None), ("probe", None)]
 
 
+def test_worker_stop_uses_graceful_drain_envelope_in_docker_command():
+    supervisor = runtime.Supervisor.__new__(runtime.Supervisor)
+    commands = []
+    supervisor._exact_container = lambda _name, _role, allow_missing=False: {"State": {"Running": True}}
+    supervisor.docker = type("FakeDocker", (), {"call": lambda self, *args, **kwargs:
+                                                  commands.append((args, kwargs))})()
+    supervisor._stop_named("runtime-worker", "worker", 55)
+    assert commands == [(('stop', '--time', '55', 'runtime-worker'), {'timeout': 70})]
+
+
+def test_generation_restart_stops_active_worker_with_full_drain_grace():
+    supervisor = runtime.Supervisor.__new__(runtime.Supervisor)
+    config = runtime.validate_config(runtime_config())
+    supervisor.config = config
+    names = config["containers"]
+    running = {names[role]: True for role in ("worker", "relay", "cloak")}
+    commands = []
+
+    class FakeDocker:
+        def call(self, *args, **kwargs):
+            commands.append((args, kwargs))
+            if args[0] == "stop":
+                running[args[-1]] = False
+            elif args[0] == "rm":
+                running.pop(args[-1], None)
+
+    supervisor.docker = FakeDocker()
+    supervisor._exact_container = lambda name, _role, allow_missing=False: (
+        {"State": {"Running": running[name]}} if name in running else None
+    )
+    supervisor._launch_browser_relay_worker = lambda _anchors: None
+    supervisor._restart_browser_generation()
+    assert (('stop', '--time', '55', names["worker"]), {'timeout': 70}) in commands
+
+
+def test_owned_cleanup_passes_worker_grace_budget():
+    supervisor = runtime.Supervisor.__new__(runtime.Supervisor)
+    supervisor.config = runtime.validate_config(runtime_config())
+    stops = []
+    supervisor._stop_named = lambda name, role, timeout=10: stops.append((name, role, timeout))
+    supervisor.stop_owned()
+    assert stops[0] == (supervisor.config["containers"]["worker"], "worker", 55)
+
+
 def test_disabled_assistant_must_remain_stopped_with_restart_disabled():
     supervisor = runtime.Supervisor.__new__(runtime.Supervisor)
     expected = runtime_config("production")["disabled_clients"][0]
@@ -271,6 +315,9 @@ def test_systemd_unit_is_pulled_in_and_stopped_with_docker_restart():
     )
     assert unit["Service"]["Restart"] == "on-failure"
     assert "stop-owned" in unit["Service"]["ExecStopPost"]
+    cleanup_cli_wait_budget = 70 + 13 + 13 + 17 + 3 * 8
+    assert cleanup_cli_wait_budget == 137
+    assert cleanup_cli_wait_budget <= int(unit["Service"]["TimeoutStopSec"].removesuffix("s"))
 
 
 def test_listener_readback_matches_bind_port_state_and_uid():

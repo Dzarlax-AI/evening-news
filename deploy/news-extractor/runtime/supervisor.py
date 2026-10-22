@@ -804,7 +804,10 @@ class Supervisor:
         item = self._exact_container(name, role, allow_missing=True)
         if item is None or item.get("State", {}).get("Running") is not True:
             return
-        self.docker.call("stop", "--time", str(timeout), name, timeout=timeout + 5)
+        # Allow the worker's 55-second graceful-stop budget plus bounded
+        # Docker CLI overhead.
+        cli_timeout = timeout + (15 if role == "worker" else 5)
+        self.docker.call("stop", "--time", str(timeout), name, timeout=cli_timeout)
 
     def stop_owned(self) -> None:
         names = self.config["containers"]
@@ -812,7 +815,7 @@ class Supervisor:
         for key, role in (("worker", "worker"), ("relay", "relay"), ("cloak", "cloak"),
                           ("gateway", "gateway")):
             try:
-                self._stop_named(names[key], role, 12 if key in ("worker", "gateway") else 8)
+                self._stop_named(names[key], role, 55 if key == "worker" else 12 if key == "gateway" else 8)
             except RuntimeErrorSafe as exc:
                 errors.append(str(exc))
         for key, role in (("worker_anchor", "worker_anchor"), ("gateway_anchor", "gateway_anchor"),
@@ -945,7 +948,7 @@ class Supervisor:
 
     def _restart_browser_generation(self) -> None:
         names, images, paths = self.config["containers"], self.config["images"], self.config["paths"]
-        self._stop_named(names["worker"], "worker", 12)
+        self._stop_named(names["worker"], "worker", 55)
         self._stop_named(names["relay"], "relay", 8)
         self._stop_named(names["cloak"], "cloak", 10)
         for key, role in (("worker", "worker"), ("relay", "relay"), ("cloak", "cloak")):
