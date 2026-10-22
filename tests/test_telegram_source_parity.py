@@ -21,6 +21,7 @@ CASES = {
     "channel": (FIXTURE, PAGE_URL, SOURCE_NAME),
     "fallback_message": (ROOT / "tests/fixtures/telegram/fallback_message.html", "https://t.me/testchannel", SOURCE_NAME),
     "fallback_data_post": (ROOT / "tests/fixtures/telegram/fallback_data_post.html", "https://t.me/s/testchannel", SOURCE_NAME),
+    "mixed_case_channel": (ROOT / "tests/fixtures/telegram/fallback_data_post.html", "https://t.me/s/TestChannel", SOURCE_NAME),
     "malformed": (ROOT / "tests/fixtures/telegram/malformed.html", PAGE_URL, SOURCE_NAME),
 }
 

@@ -101,11 +101,11 @@ func telegramChannelName(page *url.URL) string {
 	parts := strings.Split(strings.Trim(page.Path, "/"), "/")
 	for i, part := range parts {
 		if part == "s" && i+1 < len(parts) {
-			return parts[i+1]
+			return strings.ToLower(parts[i+1])
 		}
 	}
 	if len(parts) > 0 && parts[0] != "" {
-		return parts[0]
+		return strings.ToLower(parts[0])
 	}
 	return ""
 }

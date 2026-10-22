@@ -25,6 +25,7 @@ func TestParseTelegramChannelMatchesPythonBaseline(t *testing.T) {
 		"channel":            {"channel.html", "https://t.me/s/testchannel"},
 		"fallback_message":   {"fallback_message.html", "https://t.me/testchannel"},
 		"fallback_data_post": {"fallback_data_post.html", "https://t.me/s/testchannel"},
+		"mixed_case_channel": {"fallback_data_post.html", "https://t.me/s/TestChannel"},
 		"malformed":          {"malformed.html", "https://t.me/s/testchannel"},
 	}
 	for name, testCase := range cases {
