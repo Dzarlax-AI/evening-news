@@ -307,7 +307,8 @@ class PageMonitorSource(BaseSource):
                 if fetch_budget <= 0:
                     raise TimeoutError
                 result = await client.fetch(self._service_config(), limit=scan_limit,
-                                            timeout_seconds=min(30.0, fetch_budget))
+                                            timeout_seconds=min(30.0, fetch_budget,
+                                                                self.config.wait_timeout_ms / 1000.0))
             if (result['outcome'] == 'partial' and not result['items']
                     and result['error']['code'] == 'resource_limit'):
                 raise ResourceLimitError('resource_limit')
@@ -1065,7 +1066,8 @@ class PageMonitorSource(BaseSource):
                 token = settings.extraction_service_token.get_secret_value()
                 client = PageMonitorServiceClient(settings.extraction_service_url, token)
                 result = await client.fetch(self._service_config(), limit=1,
-                                            timeout_seconds=min(30.0, settings.extraction_service_timeout_seconds))
+                                            timeout_seconds=min(30.0, settings.extraction_service_timeout_seconds,
+                                                                self.config.wait_timeout_ms / 1000.0))
                 return result['outcome'] in {'success', 'partial'}
             except Exception as exc:
                 logger.warning("Page Monitor Go connection test failed: %s", type(exc).__name__)

@@ -90,6 +90,36 @@ def test_failed_service_call_preserves_snapshot_and_does_not_open_python_browser
     assert monitor.failure_count == 1
 
 
+def test_go_service_timeouts_respect_configured_wait_timeout_and_preserve_flags(monkeypatch):
+    install_go_mode(monkeypatch)
+    config = PageMonitorConfig('https://example.test/updates', 'Example', use_browser=False,
+                               wait_for_js=False, wait_timeout_ms=1500)
+    monitor = PageMonitorSource(config)
+    monkeypatch.setattr(monitor, '_load_learned_structure', lambda: asyncio.sleep(0))
+    requests = []
+
+    class CapturingClient:
+        def __init__(self, *args, **kwargs):
+            pass
+
+        async def fetch(self, sent_config, *, limit, timeout_seconds):
+            requests.append((sent_config.use_browser, sent_config.wait_for_js, timeout_seconds))
+            return response(config, ['Story one'])
+
+    monkeypatch.setattr('news_aggregator.sources.page_monitor_service_client.PageMonitorServiceClient',
+                        CapturingClient)
+
+    async def run():
+        assert [article.title for article in await monitor.fetch_articles(limit=1)] == ['Story one']
+        assert await monitor.test_connection() is True
+
+    asyncio.run(run())
+    assert len(requests) == 2
+    for use_browser, wait_for_js, timeout_seconds in requests:
+        assert (use_browser, wait_for_js) == (False, False)
+        assert 0 < timeout_seconds <= 1.5
+
+
 def test_partial_prefix_delivers_without_losing_remaining_items(monkeypatch, caplog):
     install_go_mode(monkeypatch)
     config = PageMonitorConfig('https://example.test/updates', 'Example', use_browser=False,

@@ -4,6 +4,7 @@ import (
 	"context"
 	"crypto/md5"
 	"encoding/hex"
+	"errors"
 	"testing"
 	"time"
 
@@ -54,6 +55,37 @@ func TestPageMonitorCancelledParseReportsFiniteError(t *testing.T) {
 	if out.Outcome != "failed" || out.Error != "cancelled" || out.Retryable {
 		t.Fatalf("cancelled parse lost its finite failure: %+v", out)
 	}
+}
+
+func TestPageMonitorTransportFailureClasses(t *testing.T) {
+	tests := []struct {
+		name      string
+		err       error
+		code      string
+		retryable bool
+	}{
+		{"resource_limit", extractor.ErrOutputLimit, "resource_limit", false},
+		{"event_overflow", transport.ErrBrowserEventOverflow, "event_overflow", true},
+		{"unavailable", transport.ErrNativeOwnershipLost, "unavailable", true},
+		{"public_url_denied", transport.ErrUnsafePublicURL, "public_url_denied", false},
+		{"native_policy", transport.ErrNativePolicy, "native_browser_policy_denied", false},
+		{"deadline", context.DeadlineExceeded, "deadline_exceeded", true},
+		{"cancelled", context.Canceled, "cancelled", false},
+	}
+	for _, tc := range tests {
+		t.Run(tc.name, func(t *testing.T) {
+			got := pageMonitorTransportFailure(PageMonitorOutcome{}, tc.err)
+			if got.Error != tc.code || got.Retryable != tc.retryable {
+				t.Fatalf("failure=%+v, want code=%q retryable=%v", got, tc.code, tc.retryable)
+			}
+		})
+	}
+	t.Run("ownership_takes_precedence_over_joined_policy", func(t *testing.T) {
+		got := pageMonitorTransportFailure(PageMonitorOutcome{}, errors.Join(transport.ErrNativeOwnershipLost, transport.ErrNativePolicy))
+		if got.Error != "unavailable" || !got.Retryable {
+			t.Fatalf("joined native failure=%+v", got)
+		}
+	})
 }
 
 func TestPageMonitorFetchUsesExactlyOneSelectedTransport(t *testing.T) {

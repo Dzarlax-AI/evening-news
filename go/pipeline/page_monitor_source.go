@@ -240,6 +240,8 @@ func pageMonitorTransportFailure(out PageMonitorOutcome, err error) PageMonitorO
 	case errors.Is(err, transport.ErrNativeOwnershipLost), errors.Is(err, transport.ErrNativeNotReady), errors.Is(err, transport.ErrNativeBusy):
 		out.Error = "unavailable"
 		out.Retryable = true
+	case errors.Is(err, transport.ErrNativePolicy):
+		out.Error = "native_browser_policy_denied"
 	case errors.Is(err, transport.ErrUnsafePublicURL):
 		out.Error = "public_url_denied"
 	case errors.Is(err, extractor.ErrWireLimit), errors.Is(err, extractor.ErrOutputLimit):
