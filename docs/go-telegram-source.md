@@ -13,7 +13,9 @@ metadata and UTC dates are checked against the current Python parser.
 The DOM is parsed once. `limit` counts accepted posts; short posts without media
 are skipped. The existing extraction ceilings are retained: 5 MiB input and
 100,000 characters per post. Limit violations return explicit errors rather than
-silently truncating content. A zero fallback time is invalid, and the parser
+silently truncating content. If a later post exceeds the text limit, already
+parsed posts are returned alongside the error; callers must treat that prefix
+as partial rather than a complete channel result. A zero fallback time is invalid, and the parser
 never reads the wall clock. Malformed-but-recoverable markup follows the HTML
 parser's recovery behavior; missing messages return `ErrTelegramEmpty`.
 

@@ -89,7 +89,7 @@ func ParseTelegramChannel(pageHTML, pageURL, sourceName string, limit int, fallb
 		return len(articles) < limit
 	})
 	if postErr != nil {
-		return nil, postErr
+		return articles, postErr
 	}
 	if len(articles) == 0 {
 		return articles, ErrTelegramEmpty
@@ -470,7 +470,11 @@ func telegramMediaInfo(msg *goquery.Selection, pageURL string) map[string]any {
 	}
 	for _, sel := range []string{`a[href*="/file/"]`, ".document a[href]", ".attachment a[href]", ".file-download a[href]"} {
 		if el := msg.Find(sel).First(); el.Length() > 0 {
-			info["document_url"] = telegramNormalizeURL(el.AttrOr("href", ""), pageURL)
+			href := el.AttrOr("href", "")
+			if href == "" {
+				continue
+			}
+			info["document_url"] = telegramNormalizeURL(href, pageURL)
 			info["media_type"] = "document"
 			if name := strings.TrimSpace(el.Find(".file-name,.document-name").First().Text()); name != "" {
 				info["file_name"] = name

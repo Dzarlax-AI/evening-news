@@ -160,3 +160,17 @@ func TestParseTelegramChannelErrorsAreDistinct(t *testing.T) {
 		t.Fatalf("over-limit post error = %v", err)
 	}
 }
+
+func TestParseTelegramChannelReturnsValidPrefixOnOversizedPost(t *testing.T) {
+	fallback := time.Date(2026, 10, 22, 0, 0, 0, 0, time.UTC)
+	valid := `<div class="tgme_widget_message" data-post="sample/20"><div class="tgme_widget_message_text">A valid post before oversized input must be returned.</div></div>`
+	oversized := `<div class="tgme_widget_message" data-post="sample/21"><div class="tgme_widget_message_text">` + strings.Repeat("x", telegramSourceMaxChars+1) + `</div></div>`
+	later := `<div class="tgme_widget_message" data-post="sample/22"><div class="tgme_widget_message_text">This later post must not be processed after a bounded error.</div></div>`
+	articles, err := ParseTelegramChannel(valid+oversized+later, "https://t.me/s/sample", "Sample", 3, fallback)
+	if !errors.Is(err, ErrTelegramTextLimit) {
+		t.Fatalf("oversized post error = %v", err)
+	}
+	if len(articles) != 1 || articles[0].URL != "https://t.me/sample/20" {
+		t.Fatalf("returned prefix = %#v, want only valid first post", articles)
+	}
+}
