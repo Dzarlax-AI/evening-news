@@ -723,6 +723,162 @@
         "message_id": "120",
         "telegram_url": "https://t.me/testchannel/120"
       }
+    },
+    {
+      "title": "Path-relative media sources are rejected unless Telegram can normalize them from a leading slash.",
+      "url": "https://t.me/testchannel/121",
+      "content": "Path-relative media sources are rejected unless Telegram can normalize them from a leading slash.",
+      "summary": null,
+      "image_url": null,
+      "media_files": [
+        {
+          "url": null,
+          "type": "video",
+          "thumbnail": null,
+          "duration": null,
+          "source": "direct_video"
+        }
+      ],
+      "published_at": "2026-10-22T12:34:56Z",
+      "source_type": "telegram",
+      "source_name": "Offline Telegram Fixture",
+      "raw_data": {
+        "channel": "testchannel",
+        "access_method": "https://t.me/s/testchannel",
+        "content_length": 97,
+        "media_info": {
+          "video_url": null,
+          "document_url": null,
+          "audio_url": null,
+          "sticker_url": null,
+          "poll_data": null,
+          "location_data": null,
+          "media_type": "video",
+          "duration": null,
+          "file_size": null,
+          "file_name": null
+        },
+        "has_media": true,
+        "media_count": 1,
+        "external_links": [],
+        "hashtags": [],
+        "original_link": null,
+        "forwarded_from": null,
+        "message_id": "121",
+        "telegram_url": "https://t.me/testchannel/121"
+      }
+    },
+    {
+      "title": "An empty sticker source does not set sticker metadata or create a media item.",
+      "url": "https://t.me/testchannel/122",
+      "content": "An empty sticker source does not set sticker metadata or create a media item.",
+      "summary": null,
+      "image_url": null,
+      "media_files": [],
+      "published_at": "2026-10-22T12:34:56Z",
+      "source_type": "telegram",
+      "source_name": "Offline Telegram Fixture",
+      "raw_data": {
+        "channel": "testchannel",
+        "access_method": "https://t.me/s/testchannel",
+        "content_length": 77,
+        "media_info": {
+          "video_url": null,
+          "document_url": null,
+          "audio_url": null,
+          "sticker_url": null,
+          "poll_data": null,
+          "location_data": null,
+          "media_type": null,
+          "duration": null,
+          "file_size": null,
+          "file_name": null
+        },
+        "has_media": false,
+        "media_count": 0,
+        "external_links": [],
+        "hashtags": [],
+        "original_link": null,
+        "forwarded_from": null,
+        "message_id": "122",
+        "telegram_url": "https://t.me/testchannel/122"
+      }
+    },
+    {
+      "title": "Telegram Post",
+      "url": "https://example.org/file/later.pdf",
+      "content": "",
+      "summary": null,
+      "image_url": null,
+      "media_files": [],
+      "published_at": "2026-10-22T12:34:56Z",
+      "source_type": "telegram",
+      "source_name": "Offline Telegram Fixture",
+      "raw_data": {
+        "channel": "testchannel",
+        "access_method": "https://t.me/s/testchannel",
+        "content_length": 0,
+        "media_info": {
+          "video_url": null,
+          "document_url": "https://example.org/file/later.pdf",
+          "audio_url": null,
+          "sticker_url": null,
+          "poll_data": null,
+          "location_data": null,
+          "media_type": "document",
+          "duration": null,
+          "file_size": null,
+          "file_name": null
+        },
+        "has_media": true,
+        "media_count": 0,
+        "external_links": [
+          "https://example.org/file/later.pdf"
+        ],
+        "hashtags": [],
+        "original_link": "https://example.org/file/later.pdf",
+        "forwarded_from": null,
+        "message_id": "123",
+        "telegram_url": "https://t.me/testchannel/123"
+      }
+    },
+    {
+      "title": "An empty first document link remains the selected link even when a later generic URL is present.",
+      "url": "https://cdn.example.org/later-document.pdf",
+      "content": "An empty first document link remains the selected link even when a later generic URL is present.",
+      "summary": null,
+      "image_url": null,
+      "media_files": [],
+      "published_at": "2026-10-22T12:34:56Z",
+      "source_type": "telegram",
+      "source_name": "Offline Telegram Fixture",
+      "raw_data": {
+        "channel": "testchannel",
+        "access_method": "https://t.me/s/testchannel",
+        "content_length": 96,
+        "media_info": {
+          "video_url": null,
+          "document_url": null,
+          "audio_url": null,
+          "sticker_url": null,
+          "poll_data": null,
+          "location_data": null,
+          "media_type": null,
+          "duration": null,
+          "file_size": null,
+          "file_name": null
+        },
+        "has_media": false,
+        "media_count": 0,
+        "external_links": [
+          "https://cdn.example.org/later-document.pdf"
+        ],
+        "hashtags": [],
+        "original_link": "https://cdn.example.org/later-document.pdf",
+        "forwarded_from": null,
+        "message_id": "124",
+        "telegram_url": "https://t.me/testchannel/124"
+      }
     }
   ],
   "fallback_message": [

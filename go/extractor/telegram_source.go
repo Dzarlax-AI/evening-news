@@ -464,7 +464,9 @@ func telegramMediaInfo(msg *goquery.Selection, pageURL string) map[string]any {
 	info := map[string]any{"video_url": nil, "document_url": nil, "audio_url": nil, "sticker_url": nil, "poll_data": nil, "location_data": nil, "media_type": nil, "duration": nil, "file_size": nil, "file_name": nil}
 	for _, sel := range []string{"video[src]", ".video-message video", ".media-video video", "source[src]"} {
 		if el := msg.Find(sel).First(); el.Length() > 0 && el.AttrOr("src", "") != "" {
-			info["video_url"] = telegramNormalizeURL(el.AttrOr("src", ""), pageURL)
+			if normalized := telegramNormalizeURL(el.AttrOr("src", ""), pageURL); normalized != "" {
+				info["video_url"] = normalized
+			}
 			info["media_type"] = "video"
 			if d := el.AttrOr("duration", ""); d != "" {
 				info["duration"] = d
@@ -478,7 +480,9 @@ func telegramMediaInfo(msg *goquery.Selection, pageURL string) map[string]any {
 			if href == "" {
 				continue
 			}
-			info["document_url"] = telegramNormalizeURL(href, pageURL)
+			if normalized := telegramNormalizeURL(href, pageURL); normalized != "" {
+				info["document_url"] = normalized
+			}
 			info["media_type"] = "document"
 			if name := strings.TrimSpace(el.Find(".file-name,.document-name").First().Text()); name != "" {
 				info["file_name"] = name
@@ -491,7 +495,9 @@ func telegramMediaInfo(msg *goquery.Selection, pageURL string) map[string]any {
 	}
 	for _, sel := range []string{"audio[src]", ".audio-message audio", ".voice-message audio"} {
 		if el := msg.Find(sel).First(); el.Length() > 0 && el.AttrOr("src", "") != "" {
-			info["audio_url"] = telegramNormalizeURL(el.AttrOr("src", ""), pageURL)
+			if normalized := telegramNormalizeURL(el.AttrOr("src", ""), pageURL); normalized != "" {
+				info["audio_url"] = normalized
+			}
 			info["media_type"] = "audio"
 			if d := el.AttrOr("duration", ""); d != "" {
 				info["duration"] = d
@@ -499,8 +505,10 @@ func telegramMediaInfo(msg *goquery.Selection, pageURL string) map[string]any {
 			break
 		}
 	}
-	if el := msg.Find(".sticker img,.animated-sticker img").First(); el.Length() > 0 {
-		info["sticker_url"] = telegramNormalizeURL(el.AttrOr("src", ""), pageURL)
+	if el := msg.Find(".sticker img,.animated-sticker img").First(); el.Length() > 0 && el.AttrOr("src", "") != "" {
+		if normalized := telegramNormalizeURL(el.AttrOr("src", ""), pageURL); normalized != "" {
+			info["sticker_url"] = normalized
+		}
 		info["media_type"] = "sticker"
 	}
 	if poll := msg.Find(".poll,.quiz").First(); poll.Length() > 0 {
@@ -541,7 +549,10 @@ func telegramNormalizeURL(raw, pageURL string) string {
 			return "https://t.me/file/" + match[1]
 		}
 	}
-	return raw
+	if strings.HasPrefix(raw, "http://") || strings.HasPrefix(raw, "https://") {
+		return raw
+	}
+	return ""
 }
 
 func telegramSourceMedia(msg *goquery.Selection, pageURL string) []map[string]any {
@@ -557,18 +568,28 @@ func telegramSourceMedia(msg *goquery.Selection, pageURL string) []map[string]an
 	out := make([]map[string]any, 0, len(media))
 	for _, item := range media {
 		u := telegramNormalizeURL(item.URL, pageURL)
-		if u == "" || seen[u] {
+		if u == "" && (item.Type == "poll" || item.Type == "location" || item.Type == "contact") && strings.HasPrefix(item.URL, "#"+item.Type+"_") {
+			u = item.URL
+		}
+		nullDirectVideoURL := u == "" && item.Type == "video" && item.Source == "direct_video"
+		if (u == "" && !nullDirectVideoURL) || seen[u] {
 			continue
 		}
 		seen[u] = true
-		m := map[string]any{"url": u, "type": item.Type}
+		var mediaURL any = u
+		if nullDirectVideoURL {
+			mediaURL = nil
+		}
+		m := map[string]any{"url": mediaURL, "type": item.Type}
 		switch item.Type {
 		case "image":
 			m["thumbnail"] = u
 		case "video":
 			m["thumbnail"] = nil
 			if item.Thumbnail != "" {
-				m["thumbnail"] = telegramNormalizeURL(item.Thumbnail, pageURL)
+				if thumbnail := telegramNormalizeURL(item.Thumbnail, pageURL); thumbnail != "" {
+					m["thumbnail"] = thumbnail
+				}
 			}
 			m["duration"] = nil
 			if item.Duration != "" {
@@ -591,7 +612,9 @@ func telegramSourceMedia(msg *goquery.Selection, pageURL string) []map[string]an
 		case "document":
 			m["thumbnail"] = nil
 			if item.Thumbnail != "" {
-				m["thumbnail"] = telegramNormalizeURL(item.Thumbnail, pageURL)
+				if thumbnail := telegramNormalizeURL(item.Thumbnail, pageURL); thumbnail != "" {
+					m["thumbnail"] = thumbnail
+				}
 			}
 			if item.Type == "document" && m["thumbnail"] == nil {
 				continue
@@ -599,7 +622,9 @@ func telegramSourceMedia(msg *goquery.Selection, pageURL string) []map[string]an
 		case "gif", "sticker", "animated_sticker":
 			m["thumbnail"] = nil
 			if item.Thumbnail != "" {
-				m["thumbnail"] = telegramNormalizeURL(item.Thumbnail, pageURL)
+				if thumbnail := telegramNormalizeURL(item.Thumbnail, pageURL); thumbnail != "" {
+					m["thumbnail"] = thumbnail
+				}
 			}
 			m["source"] = item.Source
 		case "poll":
@@ -653,7 +678,9 @@ func telegramBackgroundImageURLs(msg *goquery.Selection, pageURL string) map[str
 		style := el.AttrOr("style", "")
 		for _, match := range backgroundURL.FindAllStringSubmatch(style, -1) {
 			if len(match) > 1 {
-				backgrounds[telegramNormalizeURL(strings.TrimSpace(match[1]), pageURL)] = true
+				if normalized := telegramNormalizeURL(strings.TrimSpace(match[1]), pageURL); normalized != "" {
+					backgrounds[normalized] = true
+				}
 			}
 		}
 	})
