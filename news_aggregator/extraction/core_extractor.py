@@ -123,32 +123,40 @@ class CoreExtractor:
             return await self._extract_article_content_python(url, retry_count)
 
         supplied_pattern = None
-        async def call_service(timeout):
-            nonlocal supplied_pattern
-            token = settings.extraction_service_token
-            if not settings.extraction_service_url or not token:
-                raise ExtractionServiceError('not_configured')
-            clean_url = self.utils.clean_url(url)
+        clean_url = None
+        browser_eligible = False
+
+        async def prepare_service_request():
+            nonlocal supplied_pattern, clean_url, browser_eligible
+            if clean_url is not None:
+                return
+            candidate_url = self.utils.clean_url(url)
             try:
-                parsed_url = urlsplit(clean_url)
+                parsed_url = urlsplit(candidate_url)
                 # Accessing port also validates malformed bracket/port syntax.
                 port = parsed_url.port
                 if parsed_url.scheme not in {'http', 'https'} or not parsed_url.hostname:
                     raise ValueError('invalid URL')
-                use_browser = (native_mode and parsed_url.scheme.lower() == 'https'
-                               and (port is None or port == 443))
+                browser_eligible = (native_mode and parsed_url.scheme.lower() == 'https'
+                                    and (port is None or port == 443))
                 clean_url = urlunsplit(parsed_url._replace(fragment=''))
             except (TypeError, ValueError):
                 raise ExtractionServiceError('invalid_input') from None
             memory = await get_extraction_memory()
             pattern = await memory.get_successful_pattern(self.utils.extract_domain(clean_url))
             supplied_pattern = dict(pattern) if pattern else None
+
+        async def call_service(timeout, *, use_browser=False):
+            token = settings.extraction_service_token
+            if not settings.extraction_service_url or not token:
+                raise ExtractionServiceError('not_configured')
+            await prepare_service_request()
             max_bytes = settings.extraction_http_max_bytes
             if use_browser:
                 max_bytes = min(max_bytes, settings.extraction_browser_max_bytes)
             client = ExtractionServiceClient(settings.extraction_service_url, token.get_secret_value(),
                 max_bytes=max_bytes, max_chars=settings.extraction_text_max_chars)
-            return await client.extract(clean_url, timeout_seconds=timeout, learned_pattern=pattern,
+            return await client.extract(clean_url, timeout_seconds=timeout, learned_pattern=supplied_pattern,
                                         use_browser=use_browser)
 
         if mode == 'shadow':
@@ -180,36 +188,55 @@ class CoreExtractor:
             async with asyncio.timeout(total_budget):
                 failure = None
                 response = None
-                try:
-                    response = await call_service(min(settings.extraction_service_timeout_seconds, total_budget))
-                except (ExtractionServiceError, ValueError) as exc:
-                    code = self._service_error_label(exc.code if isinstance(exc, ExtractionServiceError) else 'invalid_configuration')
-                    logger.warning('Extractor service unavailable code=%s', code,
-                        extra={'event': 'extractor_service_failed', 'code': code})
-                    failure = exc if isinstance(exc, ExtractionServiceError) else ExtractionServiceError('invalid_configuration')
-                if response is not None and response['outcome'] == 'success':
-                    result = dict(response['result'])
-                    enforce_text_limit(result['content'])
-                    if not self.utils.is_good_content(result['content']):
-                        failure = ExtractionServiceError('invalid_content')
-                    else:
-                        result['method_used'] = result.get('method_used') or result.get('method') or 'go'
-                        result['media_files'] = result.get('media') or []
-                        final_url = response.get('final_url')
-                        original_url = response.get('original_url')
-                        try:
-                            final_document = urlunsplit(urlsplit(final_url)._replace(fragment=''))
-                            original_document = urlunsplit(urlsplit(original_url)._replace(fragment=''))
-                        except (TypeError, ValueError):
-                            final_document = original_document = None
-                        if final_document and original_document and final_document != original_document:
-                            result['full_article_url'] = final_url
-                        await self._record_service_success(url, response, time.monotonic() - started, supplied_pattern)
-                        return result
-                if failure is None:
-                    error = response.get('error') or {}
-                    failure = ExtractionServiceError(error.get('code', 'no_content' if response['outcome'] == 'rejected' else response['outcome']),
-                        error.get('retryable', False), error.get('retry_after_seconds'))
+                use_browser = False
+                while True:
+                    remaining = total_budget - (time.monotonic() - started)
+                    if remaining <= 0:
+                        raise ExtractionServiceError('deadline_exceeded', True)
+                    failure = None
+                    try:
+                        response = await call_service(
+                            min(settings.extraction_service_timeout_seconds, remaining),
+                            use_browser=use_browser)
+                    except (ExtractionServiceError, ValueError) as exc:
+                        code = self._service_error_label(
+                            exc.code if isinstance(exc, ExtractionServiceError) else 'invalid_configuration')
+                        logger.warning('Extractor service unavailable code=%s', code,
+                            extra={'event': 'extractor_service_failed', 'code': code})
+                        failure = (exc if isinstance(exc, ExtractionServiceError)
+                                   else ExtractionServiceError('invalid_configuration'))
+                        response = None
+                    if response is not None and response['outcome'] == 'success':
+                        result = dict(response['result'])
+                        enforce_text_limit(result['content'])
+                        if not self.utils.is_good_content(result['content']):
+                            failure = ExtractionServiceError('invalid_content')
+                        else:
+                            result['method_used'] = result.get('method_used') or result.get('method') or 'go'
+                            result['media_files'] = result.get('media') or []
+                            final_url = response.get('final_url')
+                            original_url = response.get('original_url')
+                            try:
+                                final_document = urlunsplit(urlsplit(final_url)._replace(fragment=''))
+                                original_document = urlunsplit(urlsplit(original_url)._replace(fragment=''))
+                            except (TypeError, ValueError):
+                                final_document = original_document = None
+                            if final_document and original_document and final_document != original_document:
+                                result['full_article_url'] = final_url
+                            await self._record_service_success(
+                                url, response, time.monotonic() - started, supplied_pattern)
+                            return result
+                    elif failure is None:
+                        error = response.get('error') or {}
+                        failure = ExtractionServiceError(
+                            error.get('code', 'no_content' if response['outcome'] == 'rejected' else response['outcome']),
+                            error.get('retryable', False), error.get('retry_after_seconds'))
+
+                    if (not use_browser and browser_eligible
+                            and self._native_browser_retry_allowed(failure, response)):
+                        use_browser = True
+                        continue
+                    break
                 allow_python_fallback = (settings.extraction_service_python_fallback
                                           and not native_mode)
                 if not allow_python_fallback or not self._native_fallback_allowed(failure):
@@ -236,6 +263,13 @@ class CoreExtractor:
             'browser_required', 'no_content', 'needs_selector_study', 'upstream_forbidden', 'challenge',
             'invalid_content', 'transport_error', 'transport_failed', 'unavailable', 'upstream_unavailable',
             'deadline_exceeded'}
+
+    @staticmethod
+    def _native_browser_retry_allowed(failure, response):
+        """Retry only classified extraction outcomes from a valid Go response."""
+        return (response is not None and not failure.terminal and failure.code in {
+            'browser_required', 'no_content', 'needs_selector_study', 'upstream_forbidden',
+            'challenge', 'invalid_content'})
 
     @staticmethod
     def _service_error_label(code):
