@@ -21,6 +21,11 @@ from .extraction_logger import get_extraction_logger
 # Get structured logger
 logger = logging.getLogger('extraction.core')
 
+_BROWSER_LEARNED_METHODS = frozenset({
+    'browser_rendering', 'browser_heuristics',
+    'learned_pattern_browser_rendering', 'learned_pattern_browser_heuristics',
+})
+
 
 class CoreExtractor:
     """Core content extractor that coordinates all extraction strategies."""
@@ -156,7 +161,9 @@ class CoreExtractor:
                 max_bytes = min(max_bytes, settings.extraction_browser_max_bytes)
             client = ExtractionServiceClient(settings.extraction_service_url, token.get_secret_value(),
                 max_bytes=max_bytes, max_chars=settings.extraction_text_max_chars)
-            return await client.extract(clean_url, timeout_seconds=timeout, learned_pattern=supplied_pattern,
+            learned_pattern = (self._request_learned_pattern(supplied_pattern, use_browser)
+                               if native_mode else supplied_pattern)
+            return await client.extract(clean_url, timeout_seconds=timeout, learned_pattern=learned_pattern,
                                         use_browser=use_browser)
 
         if mode == 'shadow':
@@ -255,6 +262,12 @@ class CoreExtractor:
                     return await self._extract_article_content_python(url, retry_count)
         except TimeoutError:
             raise ExtractionServiceError('deadline_exceeded', True) from None
+
+    @staticmethod
+    def _request_learned_pattern(pattern, use_browser):
+        if pattern and not use_browser and pattern.get('method') in _BROWSER_LEARNED_METHODS:
+            return None
+        return pattern
 
     @staticmethod
     def _native_fallback_allowed(failure):

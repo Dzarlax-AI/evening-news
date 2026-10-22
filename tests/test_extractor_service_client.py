@@ -196,12 +196,13 @@ async def test_native_browser_go_route_opts_in_wire_and_preserves_learned_metada
     async def handler(request):
         data = await request.json()
         captured.append(data)
-        assert data['learned_selector'] == '.learned-story'
-        assert data['learned_method'] == 'browser_rendering'
         if not data['use_browser']:
+            assert 'learned_selector' not in data and 'learned_method' not in data
             assert data['max_bytes'] == settings.extraction_http_max_bytes
             return web.json_response(response_for(data, outcome='failed',
                 error={'code': 'browser_required', 'retryable': False}))
+        assert data['learned_selector'] == '.learned-story'
+        assert data['learned_method'] == 'browser_rendering'
         assert data['max_bytes'] == 5242880
         return web.json_response(response_for(data, result={
             'content': 'Native browser extracted the article.', 'title': 'Native title',
@@ -231,12 +232,15 @@ async def test_native_browser_go_route_opts_in_wire_and_preserves_learned_metada
 @pytest.mark.asyncio
 async def test_native_browser_mode_http_success_uses_one_request_without_cdp_fallback():
     settings, core, memory = routing(native_browser=True)
+    memory.get_successful_pattern.return_value = {
+        'selector': '.learned-story', 'method': 'browser_rendering'}
     calls = []
 
     async def handler(request):
         data = await request.json()
         calls.append(data)
         assert data['use_browser'] is False
+        assert 'learned_selector' not in data and 'learned_method' not in data
         return web.json_response(response_for(data, result={
             'content': 'The HTTP extractor returned a validated article.',
             'method_used': 'readability', 'media': []}))
@@ -253,6 +257,47 @@ async def test_native_browser_mode_http_success_uses_one_request_without_cdp_fal
     assert len(calls) == 1
     memory.get_successful_pattern.assert_awaited_once_with('example.org')
     core._extract_article_content_python.assert_not_called()
+
+
+@pytest.mark.asyncio
+async def test_native_browser_http_probe_preserves_nonbrowser_learned_pattern():
+    settings, core, memory = routing(native_browser=True)
+    memory.get_successful_pattern.return_value = {
+        'selector': '.learned-story', 'method': 'readability'}
+
+    async def handler(request):
+        data = await request.json()
+        assert data['use_browser'] is False
+        assert data['learned_selector'] == '.learned-story'
+        assert data['learned_method'] == 'readability'
+        return web.json_response(response_for(data))
+
+    async with server(handler) as endpoint:
+        settings.extraction_service_url = endpoint
+        with patch('news_aggregator.config.get_settings', return_value=settings), \
+                patch('news_aggregator.extraction.core_extractor.get_extraction_memory', AsyncMock(return_value=memory)):
+            await core.extract_article_content_with_metadata(URL)
+
+    memory.get_successful_pattern.assert_awaited_once_with('example.org')
+
+
+@pytest.mark.parametrize('method', [
+    'browser_rendering', 'browser_heuristics',
+    'learned_pattern_browser_rendering', 'learned_pattern_browser_heuristics',
+])
+def test_browser_only_learned_methods_are_not_sent_on_http_probe(method):
+    from news_aggregator.extraction.core_extractor import CoreExtractor
+
+    pattern = {'selector': '.learned-story', 'method': method}
+    assert CoreExtractor._request_learned_pattern(pattern, use_browser=False) is None
+    assert CoreExtractor._request_learned_pattern(pattern, use_browser=True) is pattern
+
+
+def test_native_browser_http_probe_preserves_http_learned_methods():
+    from news_aggregator.extraction.core_extractor import CoreExtractor
+
+    pattern = {'selector': '.learned-story', 'method': 'readability'}
+    assert CoreExtractor._request_learned_pattern(pattern, use_browser=False) is pattern
 
 
 @pytest.mark.parametrize('cancel', [False, True])
