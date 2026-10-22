@@ -1,0 +1,64 @@
+<!doctype html>
+<html><head><meta property="og:description" content="Channel fallback description"></head><body>
+<div class="tgme_widget_message_wrap">
+  <div class="tgme_widget_message" data-post="testchannel/101">
+    <div class="tgme_widget_message_user_photo"><img src="/userpic/avatar.jpg"></div>
+    <div class="tgme_widget_message_forwarded_from"><img src="/userpic/forwarded.jpg">Forwarded <span>from</span> <a href="https://example.org/source">Source Channel</a></div>
+    <div class="tgme_widget_message_reply">Quoted reply that must disappear</div>
+    <div class="tgme_widget_message_text">Привет, мир!<br>Unicode работает #Новости #новости</div>
+    <div class="tgme_widget_message_photo"><img src="/file/photo-one.jpg"></div>
+    <div class="tgme_widget_message_photo"><img src="//cdn.example.org/file/photo-two.jpg"></div>
+    <div class="tgme_widget_message_link_preview"><a href="https://example.org/story?z=1&amp;utm_source=telegram&amp;id=7#chapter-two">Original story</a></div>
+    <a class="tgme_widget_message_date" href="/testchannel/101"><time datetime="2026-10-21T18:30:00+02:00"></time></a>
+    <div class="tgme_widget_message_views">1.2K views</div>
+    <div class="tgme_widget_message_footer">View in Telegram</div>
+  </div>
+</div>
+<div class="tgme_widget_message_wrap">
+  <div class="tgme_widget_message" data-post="testchannel/102">
+    <div class="tgme_widget_message_text">Короткая публикация со ссылкой на источник.</div>
+    <div class="tgme_widget_message_video"><video src="https://cdn.example.org/video.mp4" poster="https://cdn.example.org/poster.jpg" duration="12"></video></div>
+    <div class="tgme_widget_message_audio"><audio src="https://cdn.example.org/voice.ogg" duration="4"></audio></div>
+    <div class="tgme_widget_message_document"><a href="https://cdn.example.org/file/report.pdf"><span class="tgme_widget_message_document_title">report.pdf</span></a></div>
+    <a class="tgme_widget_message_date" href="https://t.me/testchannel/102"><time datetime="2026-10-22T00:15:00Z"></time></a>
+  </div>
+</div>
+<div class="tgme_widget_message_wrap">
+  <div class="tgme_widget_message" data-post="testchannel/103">
+    <div class="tgme_widget_message_text">Альбом с подписью и поддержкой медиа.</div>
+    <div class="media"><img src="https://cdn.example.org/album-a.png"><img src="https://cdn.example.org/album-b.png"></div>
+    <a class="tgme_widget_message_date" href="/testchannel/103"><time datetime="2026-10-22T01:00:00+03:00"></time></a>
+  </div>
+</div>
+<div class="tgme_widget_message_wrap"><div class="tgme_widget_message" data-post="testchannel/104"><div class="tgme_widget_message_text">short</div></div></div>
+<div class="tgme_widget_message_wrap"><div class="tgme_widget_message" data-post="testchannel/105"><div class="tgme_widget_message_sticker"><img src="https://cdn.example.org/sticker.webp"></div></div></div>
+<div class="tgme_widget_message_wrap">
+  <div class="tgme_widget_message" data-post="testchannel/106">
+    <div class="tgme_widget_message_text">Additional supported media types appear in this synthetic post.</div>
+    <div class="document_wrap"><img src="https://cdn.example.org/document-preview.jpg"></div>
+    <div class="tgme_widget_message_gif" data-gif="https://cdn.example.org/animation.gif"><a href="https://cdn.example.org/animation.gif">GIF</a></div>
+    <div class="tgme_widget_message_poll poll">
+      <div class="poll-question poll_question">Which parser is this?</div>
+      <div class="poll-option poll_option">Go</div><div class="poll-option poll_option">Python</div>
+    </div>
+    <div class="tgme_widget_message_location location">Belgrade location</div>
+    <div class="tgme_widget_message_contact contact_wrap"><span>Ada Lovelace</span><span class="phone">+381 11 000</span></div>
+  </div>
+</div>
+<div class="tgme_widget_message_wrap">
+  <div class="tgme_widget_message" data-post="testchannel/107">
+    <div class="tgme_widget_message_text">Длинная строка на русском языке содержит предложение до шестидесяти символов. Затем идёт продолжение текста, которое заставляет заголовок длиннее ста двадцати символов и проверяет правильный перенос.</div>
+  </div>
+</div>
+<div class="tgme_widget_message_wrap"><div class="tgme_widget_message" data-post="testchannel/108"><div class="tgme_widget_message_text">An epoch timestamp gives this post a deterministic UTC date through the Python-compatible selector fallback.</div><span data-time="1792627200"></span></div></div>
+<div class="tgme_widget_message_wrap"><div class="tgme_widget_message" data-post="testchannel/109"><div class="tgme_widget_message_text">An invalid date must use the supplied fixed fallback time instead of the system clock.</div><time datetime="not-a-date"></time></div></div>
+<div class="tgme_widget_message_wrap"><div class="tgme_widget_message" data-post="testchannel/110"><div class="tgme_widget_message_text">@канал: Unicode mentions are stripped from the Python-compatible title while the post content remains intact.</div><time datetime="2026-10-22T03:00:00Z"></time></div></div>
+<div class="tgme_widget_message_wrap"><div class="tgme_widget_message" data-post="testchannel/111"><div class="tgme_widget_message_text">A fractional UTC timestamp preserves Python microsecond precision and serializes with six digits.</div><time datetime="2026-10-22T03:00:00.123456789Z"></time></div></div>
+<div class="tgme_widget_message_wrap"><div class="tgme_widget_message" data-post="testchannel/112"><div class="tgme_widget_message_text">Each video and audio attachment must retain its own duration from its matching element.</div><video src="https://cdn.example.org/first-video.mp4" duration="12"></video><video src="https://cdn.example.org/second-video.mp4" duration="34"></video><audio src="https://cdn.example.org/first-audio.ogg" duration="5"></audio><audio src="https://cdn.example.org/second-audio.ogg" duration="9"></audio></div></div>
+<div class="tgme_widget_message_wrap"><div class="tgme_widget_message" data-post="testchannel/113"><div class="tgme_widget_message_text">A non-finite epoch timestamp is invalid and must use the supplied fallback date.</div><span data-time="NaN"></span></div></div>
+<div class="tgme_widget_message_wrap"><div class="tgme_widget_message" data-post="testchannel/114"><div class="tgme_widget_message_text">A background photo remains after direct video media in Python media order.</div><a class="tgme_widget_message_photo" style="background-image:url('https://cdn.example.org/background-photo.jpg')"></a><video src="https://cdn.example.org/background-video.mp4" duration="7"></video></div></div>
+<div class="tgme_widget_message_wrap"><div class="tgme_widget_message" data-post="testchannel/115"><a class="tgme_widget_message_document" href="https://cdn.example.org/file/metadata-only.pdf">Download document</a></div></div>
+<div class="tgme_widget_message_wrap"><div class="tgme_widget_message" data-post="testchannel/116"><div class="tgme_widget_message_text">Control characters &#x01; are removed while the surrounding content remains meaningful.</div></div></div>
+<div class="tgme_widget_message_wrap"><div class="tgme_widget_message" data-post="testchannel/117"><div class="tgme_widget_message_text">Forwarded from Channel Name<br>Forwarded text stays subject to the Python cleanup order and this remains enough content.</div></div></div>
+<div class="tgme_widget_message_wrap"><div class="tgme_widget_message" data-post="testchannel/118"><div class="tgme_widget_message_text">↩ Reply Channel<br>Arrow-prefixed text follows the same Python cleanup order and retains this remaining message.</div></div></div>
+</body></html>
