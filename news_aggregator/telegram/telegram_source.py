@@ -2,7 +2,7 @@
 
 import re
 import random
-from datetime import datetime, timedelta
+from datetime import datetime, timedelta, timezone
 import logging
 import pytz
 import asyncio
@@ -220,6 +220,7 @@ class TelegramSource(BaseSource):
         published_at = data['published_at']
         if published_at is not None:
             published_at = datetime.fromisoformat(published_at.replace('Z', '+00:00'))
+            published_at = published_at.astimezone(timezone.utc).replace(tzinfo=None)
         return Article(
             title=data['title'], url=data['url'], content=data['content'],
             summary=data['summary'], published_at=published_at,

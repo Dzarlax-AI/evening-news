@@ -31,7 +31,9 @@ The response has `contract_version`, `build_version`, `request_id`,
 `original_url`, `final_url`, `outcome`, `fetch_method`, `articles` and an optional
 `error` with finite `code` and `retryable`. `outcome` is `success`, `partial`,
 `failed` or `rejected`; `fetch_method` is `http` or `native_browser` when a page
-was obtained. The response is bounded to 5 MiB. An article retains the existing
+was obtained. The response is bounded to 5 MiB. Wire timestamps include their timezone; the
+Python adapter converts them to naive UTC to match the existing PostgreSQL
+`DateTime(timezone=False)` persistence contract. An article retains the existing
 Python `Article` fields and `raw_data` without replacing its identity with the
 channel URL. Unsupported direct audio/video media can carry a null URL where
 the Python parser does; generated poll/contact/location fragments remain stable

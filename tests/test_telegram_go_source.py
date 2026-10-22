@@ -1,4 +1,4 @@
-from datetime import datetime, timezone
+from datetime import datetime
 from types import SimpleNamespace
 
 import pytest
@@ -17,7 +17,7 @@ CHANNEL = 'https://t.me/s/example'
 def go_article(**changes):
     value = {
         'title': 'Short title', 'url': 'https://example.org/story', 'content': 'Short post',
-        'summary': None, 'published_at': '2026-10-22T08:15:00Z',
+        'summary': None, 'published_at': '2026-10-22T10:15:00+02:00',
         'source_type': 'telegram', 'source_name': 'Example', 'image_url': None,
         'media_files': [{'url': 'https://cdn.example/video.mp4', 'type': 'video', 'thumbnail': None}],
         'raw_data': {'channel': 'example', 'original_link': 'https://example.org/story',
@@ -65,7 +65,8 @@ async def test_go_mode_avoids_python_browser_and_parser_and_preserves_article(mo
     assert len(result) == 1
     item = result[0]
     assert item.url == 'https://example.org/story'
-    assert item.published_at == datetime(2026, 10, 22, 8, 15, tzinfo=timezone.utc)
+    assert item.published_at == datetime(2026, 10, 22, 8, 15)
+    assert item.published_at.tzinfo is None
     assert item.image_url is None
     assert item.media_files[0]['thumbnail'] is None
     assert item.raw_data['telegram_url'] == 'https://t.me/example/1'
