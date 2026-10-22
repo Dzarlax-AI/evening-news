@@ -187,7 +187,8 @@ async def test_go_success_records_once_and_maps_metadata_media():
 
 
 @pytest.mark.asyncio
-async def test_native_browser_go_route_opts_in_wire_and_preserves_learned_metadata():
+async def test_native_browser_go_route_opts_in_wire_and_preserves_learned_metadata(caplog):
+    caplog.set_level('INFO', logger='extraction.core')
     settings, core, memory = routing(native_browser=True)
     memory.get_successful_pattern.return_value = {
         'selector': '.learned-story', 'method': 'browser_rendering'}
@@ -227,6 +228,11 @@ async def test_native_browser_go_route_opts_in_wire_and_preserves_learned_metada
     memory.get_successful_pattern.assert_awaited_once_with('example.org')
     memory.record_extraction_attempt.assert_awaited_once()
     core._extract_article_content_python.assert_not_called()
+    retry_logs = [record for record in caplog.records
+                  if getattr(record, 'event', None) == 'extractor_native_browser_retry']
+    assert len(retry_logs) == 1
+    assert retry_logs[0].code == 'browser_required'
+    assert retry_logs[0].getMessage() == 'Extractor native browser retry reason=browser_required'
 
 
 @pytest.mark.asyncio

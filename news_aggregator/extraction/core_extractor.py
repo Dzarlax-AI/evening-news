@@ -241,6 +241,9 @@ class CoreExtractor:
 
                     if (not use_browser and browser_eligible
                             and self._native_browser_retry_allowed(failure, response)):
+                        reason = self._service_error_label(failure.code)
+                        logger.info('Extractor native browser retry reason=%s', reason,
+                            extra={'event': 'extractor_native_browser_retry', 'code': reason})
                         use_browser = True
                         continue
                     break
