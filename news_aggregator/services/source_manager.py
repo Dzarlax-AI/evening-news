@@ -217,34 +217,37 @@ class SourceManager:
                 return source_settings.telegram_source_mode == 'go'
             return False
 
+        async def fetch_source_body(source: Source):
+            """Fetch articles from source without DB access or admission waits."""
+            try:
+                source_instance = await self.get_source_instance(source)
+                articles = []
+
+                async for article in source_instance.fetch_articles():
+                    articles.append(article)
+
+                logger.info(f"  ✅ Fetched {len(articles)} articles from {source.name}")
+                return source.name, articles
+            except Exception as e:
+                logger.warning(f"Error fetching from {source.name}: {e}")
+                return source.name, []
+
         async def fetch_source_raw(source: Source):
-            """Fetch articles from source without DB access."""
+            """Apply the shared concurrency limit before starting a normal fetch."""
             async with semaphore:
-                try:
-                    source_instance = await self.get_source_instance(source)
-                    articles = []
-
-                    async for article in source_instance.fetch_articles():
-                        articles.append(article)
-
-                    logger.info(f"  ✅ Fetched {len(articles)} articles from {source.name}")
-                    return source.name, articles
-                except Exception as e:
-                    logger.warning(f"Error fetching from {source.name}: {e}")
-                    return source.name, []
+                return await fetch_source_body(source)
 
         async def fetch_with_timeout(source: Source):
             """Serialize Go-backed clients, then apply the admitted operation timeout."""
             try:
                 if is_go_backed_source(source):
-                    # Waiting for the shared Go service is queue time, not source
-                    # operation time. Start the established deadline only once
-                    # this source has exclusive access to the Go-backed path.
+                    # Queue for both Go serialization and shared I/O capacity
+                    # before starting the source operation deadline.
                     async with go_source_lock:
-                        return await asyncio.wait_for(
-                            fetch_source_raw(source),
-                            timeout=per_source_timeout
-                        )
+                        async with semaphore:
+                            return await asyncio.wait_for(
+                                fetch_source_body(source), timeout=per_source_timeout
+                            )
                 return await asyncio.wait_for(
                     fetch_source_raw(source),
                     timeout=per_source_timeout
