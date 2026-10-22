@@ -166,9 +166,12 @@ def test_python_shared_browser_gate_uses_production_pool_and_sanitized_receipt()
 
 def test_python_shared_browser_failure_codes_are_finite_and_do_not_export_messages():
     tree=ast.parse(stand.PYTHON_SHARED_BROWSER_GATE)
-    functions=[node for node in tree.body if isinstance(node,ast.FunctionDef)
-               and node.name in {'classify_failure_code','classify_cause_type'}]
-    assert len(functions)==2
+    functions=[node for node in tree.body if
+        (isinstance(node,ast.FunctionDef) and node.name in {
+            'classify_failure_code','classify_cause_type','classify_navigation_error_code'})
+        or (isinstance(node,ast.Assign) and any(isinstance(target,ast.Name)
+            and target.id=='SAFE_NAVIGATION_ERROR_CODES' for target in node.targets))]
+    assert len(functions)==4
     namespace={}
     exec(compile(ast.Module(body=functions,type_ignores=[]),'<failure-codes>','exec'),namespace)
     class BrowserUnavailableError(Exception): pass
@@ -186,6 +189,25 @@ def test_python_shared_browser_failure_codes_are_finite_and_do_not_export_messag
         cause_type=namespace['classify_cause_type'](wrapped)
         assert cause_type=='ProtocolException'
     assert 'sensitive CDP payload' not in cause_type
+
+    class NavigationError(Exception): pass
+    error=NavigationError('raw protocol details')
+    error.navigation_error_code='net::ERR_PROXY_CONNECTION_FAILED'
+    assert namespace['classify_navigation_error_code'](error)=='net::ERR_PROXY_CONNECTION_FAILED'
+    error.navigation_error_code='net::ERR_PROXY_CONNECTION_FAILED SECRET'
+    assert namespace['classify_navigation_error_code'](error)=='other'
+    error.navigation_error_code='other'
+    assert namespace['classify_navigation_error_code'](error)=='other'
+    assert 'raw protocol details' not in namespace['classify_navigation_error_code'](error)
+
+
+def test_python_shared_browser_optional_navigation_code_is_validated():
+    receipt={'state':'failed','navigation_error_code':'net::ERR_PROXY_CONNECTION_FAILED'}
+    assert stand.validate_python_shared_navigation_code(receipt)==receipt
+    assert stand.validate_python_shared_navigation_code({'state':'failed'})=={'state':'failed'}
+    for code in ('raw CDP errorText', [], 1):
+        with pytest.raises(stand.StandError,match='python_shared_browser_receipt_invalid'):
+            stand.validate_python_shared_navigation_code({'navigation_error_code':code})
 
 
 def test_python_context_normalizer_accepts_generated_nodriver_response():
@@ -278,6 +300,18 @@ def test_python_shared_browser_gate_requires_complete_success_receipt(tmp_path):
     assert calls[0][1]['timeout']==90
 
     (tmp_path/'python-shared-browser.json').unlink()
+    failed_receipt={'navigation_error_code':'net::ERR_PROXY_CONNECTION_FAILED'}
+    def failed_docker(*_args,**_kwargs):
+        path=tmp_path/'python-shared-browser.json'
+        path.write_text(json.dumps(failed_receipt))
+        path.chmod(0o600)
+        raise subprocess.CalledProcessError(1,['docker','exec'])
+    instance.docker=failed_docker
+    with pytest.raises(stand.StandError,match='python_shared_browser_gate_failed'):
+        instance.python_shared_browser_gate()
+
+    (tmp_path/'python-shared-browser.json').unlink()
+    instance.docker=docker
     receipt['publisher_auth_rejected']=False
     with pytest.raises(stand.StandError,match='python_shared_browser_receipt_invalid'):
         instance.python_shared_browser_gate()

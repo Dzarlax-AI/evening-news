@@ -56,6 +56,25 @@ _managed_connections: weakref.WeakValueDictionary = weakref.WeakValueDictionary(
 _CONNECT_TIMEOUT_SECONDS = 15.0
 _CLOSE_TIMEOUT_SECONDS = 5.0
 _RECONNECT_COOLDOWN_SECONDS = 60.0
+_NAVIGATION_ERROR_CODES = frozenset({
+    "net::ERR_BLOCKED_BY_CLIENT",
+    "net::ERR_CERT_AUTHORITY_INVALID",
+    "net::ERR_CERT_COMMON_NAME_INVALID",
+    "net::ERR_CONNECTION_CLOSED",
+    "net::ERR_CONNECTION_REFUSED",
+    "net::ERR_CONNECTION_RESET",
+    "net::ERR_INTERNET_DISCONNECTED",
+    "net::ERR_NAME_NOT_RESOLVED",
+    "net::ERR_PROXY_CONNECTION_FAILED",
+    "net::ERR_SSL_PROTOCOL_ERROR",
+    "net::ERR_TIMED_OUT",
+    "net::ERR_TUNNEL_CONNECTION_FAILED",
+})
+
+
+def _safe_navigation_error_code(error_text) -> str:
+    """Keep only known Chromium navigation codes; never retain CDP error text."""
+    return error_text if isinstance(error_text, str) and error_text in _NAVIGATION_ERROR_CODES else "other"
 
 # Serializes ALL browser tab usage across the entire app.
 # Remote Chrome has limited RAM and each attached tab owns a WebSocket.
@@ -109,13 +128,48 @@ class _OwnedTab(_OwnedConnection, Tab):
             from .browser_proxy import _safe_destination, check_proxy_error
             if not _safe_destination(url):
                 raise BrowserUnavailableError("Browser destination blocked by proxy policy")
-            result = await self.send(cdp.page.navigate(url))
-            error_text = result[2] if isinstance(result, (tuple, list)) and len(result) > 2 else None
-            if error_text:
-                raise BrowserUnavailableError("Browser navigation was blocked")
-            await self.attach()
-            await check_proxy_error(self)
-            return self
+            load_event = asyncio.Event()
+            expected_loader_ids = set()
+            seen_loaders = []
+
+            def lifecycle(event):
+                if getattr(event, "name", None) != "DOMContentLoaded":
+                    return
+                loader_id = getattr(event, "loader_id", None)
+                if loader_id:
+                    if loader_id in expected_loader_ids:
+                        load_event.set()
+                    elif len(seen_loaders) < 32 and loader_id not in seen_loaders:
+                        seen_loaders.append(loader_id)
+
+            self.add_handler(cdp.page.LifecycleEvent, lifecycle)
+            try:
+                await self.send(cdp.page.enable())
+                await self.send(cdp.page.set_lifecycle_events_enabled(True))
+                result = await self.send(cdp.page.navigate(url))
+                error_text = result[2] if isinstance(result, (tuple, list)) and len(result) > 2 else None
+                if error_text:
+                    await check_proxy_error(self)
+                    error = BrowserUnavailableError("Browser navigation was blocked")
+                    error.navigation_error_code = _safe_navigation_error_code(error_text)
+                    raise error
+                # The tab was attached before Fetch.enable. Reattaching here
+                # replaces nodriver's session_id while Fetch remains enabled
+                # only on the original session, so late intercepted requests
+                # would be continued on the wrong CDP session.
+                await check_proxy_error(self)
+                loader_id = result[1] if isinstance(result, (tuple, list)) and len(result) > 1 else None
+                if loader_id is not None:
+                    expected_loader_ids.add(loader_id)
+                    if loader_id in seen_loaders:
+                        load_event.set()
+                    # browser_tab() and run_browser_operation() own the configured
+                    # creation/operation deadline and cancel this wait when it expires.
+                    await load_event.wait()
+                    await check_proxy_error(self)
+                return self
+            finally:
+                self.remove_handler(cdp.page.LifecycleEvent, lifecycle)
         return await super().get(url, new_tab=new_tab, new_window=new_window)
 
 
@@ -1030,7 +1084,11 @@ async def browser_tab(url: str):
                 if creation_task is not None and tab is None:
                     # Cancellation may arrive after get() returned but before assignment.
                     if not creation_task.done():
-                        creation_task.cancel()
+                        # run_browser_operation may already have cancelled this task.
+                        # A second cancel can interrupt create_proxy_tab's shielded
+                        # owned-context cleanup after its first CancelledError.
+                        if not creation_task.cancelling():
+                            creation_task.cancel()
                         await asyncio.wait({creation_task}, timeout=_CLOSE_TIMEOUT_SECONDS)
                         if not creation_task.done() and settings.browser_proxy_enabled:
                             from . import browser_proxy

@@ -139,6 +139,7 @@ class BoundedProfileTests(unittest.TestCase):
                     patch.object(gate.shutil, 'disk_usage', return_value=Mock(free=10*1024**3)), \
                     patch.object(gate, 'mem_available', return_value=4*1024**3), \
                     patch.object(gate, 'memory_psi_full_avg10', return_value=0), \
+                    patch.object(gate, 'proc_tree_rss_kib', return_value=100), \
                     patch.object(gate, 'verify_pinned_images'), \
                     patch.object(gate, 'verify_source_manifest', return_value='a'*64), \
                     patch.object(gate, 'verify_runtime_bundle', return_value='b'*64), \
@@ -420,7 +421,8 @@ class BoundedProfileTests(unittest.TestCase):
             supervisor.owned_containers = lambda: []
             with patch.object(gate.shutil, 'disk_usage', return_value=Mock(free=10*1024**3)), \
                     patch.object(gate, 'mem_available', return_value=4*1024**3), \
-                    patch.object(gate, 'memory_psi_full_avg10', return_value=0.75):
+                    patch.object(gate, 'memory_psi_full_avg10', return_value=0.75), \
+                    patch.object(gate, 'proc_tree_rss_kib', return_value=100):
                 supervisor.guard(expected_phase='native-worker-recovery-gate')
             self.assertEqual(supervisor.last_guard_sample['memory_psi_policy'], 'observe_only')
             self.assertEqual(supervisor.memory_psi_threshold_observations, 1)
@@ -430,13 +432,15 @@ class BoundedProfileTests(unittest.TestCase):
             with patch.object(gate.shutil, 'disk_usage', return_value=Mock(free=10*1024**3)), \
                     patch.object(gate, 'mem_available', return_value=4*1024**3), \
                     patch.object(gate, 'memory_psi_full_avg10', return_value=0.75), \
+                    patch.object(gate, 'proc_tree_rss_kib', return_value=100), \
                     patch.object(supervisor, 'browser_working_set_bytes', return_value=(
                         gate.BROWSER_WORKING_SET_BUDGET+1, {'cloak': gate.BROWSER_WORKING_SET_BUDGET+1})):
                 with self.assertRaisesRegex(gate.GateError, 'runtime_working_set_above_budget'):
                     supervisor.guard(expected_phase='native-worker-recovery-gate')
             with patch.object(gate.shutil, 'disk_usage', return_value=Mock(free=10*1024**3)), \
                     patch.object(gate, 'mem_available', return_value=gate.RESERVE_MEM_MIN-1), \
-                    patch.object(gate, 'memory_psi_full_avg10', return_value=0.75):
+                    patch.object(gate, 'memory_psi_full_avg10', return_value=0.75), \
+                    patch.object(gate, 'proc_tree_rss_kib', return_value=100):
                 with self.assertRaisesRegex(gate.GateError, 'host_memory_reserve_breached'):
                     supervisor.guard(expected_phase='native-worker-recovery-gate')
 

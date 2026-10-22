@@ -1,6 +1,7 @@
 """Focused tests for opt-in browser proxy policy and credentials."""
 
 import asyncio
+from collections import defaultdict
 from types import SimpleNamespace
 from unittest.mock import AsyncMock, MagicMock, patch
 
@@ -43,6 +44,11 @@ class FakeTab:
 
     def add_handler(self, event_type, callback):
         self.handlers.setdefault(event_type, []).append(callback)
+
+    def remove_handler(self, event_type, callback):
+        handlers = self.handlers.get(event_type, [])
+        if callback in handlers:
+            handlers.remove(callback)
 
     async def attach(self):
         return None
@@ -388,6 +394,9 @@ async def test_proxy_dispose_failure_taints_adapter_without_global_restart():
 async def test_owned_tab_navigation_rejects_unsafe_url_and_chrome_error_text():
     tab = object.__new__(browser_pool._OwnedTab)
     tab.__dict__["_browser_pool_context_id"] = "context"
+    tab.handlers = defaultdict(list)
+    tab.__dict__["_browser_pool_proxy_tasks"] = set()
+    tab.__dict__["_browser_pool_proxy_error"] = None
     tab.send = AsyncMock(return_value=(None, None, "net::ERR_BLOCKED_BY_CLIENT"))
     tab.attach = AsyncMock()
 
@@ -406,6 +415,7 @@ async def test_owned_tab_navigation_rejects_unsafe_url_and_chrome_error_text():
 async def test_about_blank_setup_can_navigate_through_owned_proxy_tab():
     tab = object.__new__(browser_pool._OwnedTab)
     tab.__dict__["_browser_pool_context_id"] = "context"
+    tab.handlers = defaultdict(list)
     tab.__dict__["_browser_pool_proxy_tasks"] = set()
     tab.__dict__["_browser_pool_proxy_error"] = None
     tab.send = AsyncMock(return_value=(None, None, None))
@@ -414,7 +424,7 @@ async def test_about_blank_setup_can_navigate_through_owned_proxy_tab():
     assert await browser_pool._OwnedTab.get(tab, "https://example.com/article") is tab
     command = next(tab.send.await_args.args[0])
     assert command["method"] == "Page.navigate"
-    tab.attach.assert_awaited_once()
+    tab.attach.assert_not_awaited()
 
 
 @pytest.mark.asyncio

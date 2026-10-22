@@ -354,6 +354,27 @@ except BaseException as exc:
 '''
 
 
+PYTHON_NAVIGATION_ERROR_CODES = frozenset({
+    'net::ERR_BLOCKED_BY_CLIENT','net::ERR_CERT_AUTHORITY_INVALID',
+    'net::ERR_CERT_COMMON_NAME_INVALID','net::ERR_CONNECTION_CLOSED',
+    'net::ERR_CONNECTION_REFUSED','net::ERR_CONNECTION_RESET',
+    'net::ERR_INTERNET_DISCONNECTED','net::ERR_NAME_NOT_RESOLVED',
+    'net::ERR_PROXY_CONNECTION_FAILED','net::ERR_SSL_PROTOCOL_ERROR',
+    'net::ERR_TIMED_OUT','net::ERR_TUNNEL_CONNECTION_FAILED','other',
+})
+
+
+def validate_python_shared_navigation_code(receipt):
+    """Validate optional, non-sensitive Chromium navigation diagnostics."""
+    if not isinstance(receipt, dict):
+        raise StandError('python_shared_browser_receipt_invalid')
+    if 'navigation_error_code' in receipt:
+        code=receipt['navigation_error_code']
+        if not isinstance(code,str) or code not in PYTHON_NAVIGATION_ERROR_CODES:
+            raise StandError('python_shared_browser_receipt_invalid')
+    return receipt
+
+
 PYTHON_SHARED_BROWSER_GATE = r'''import asyncio,hashlib,json,os,sys,time,urllib.request
 
 phase='setup'
@@ -361,7 +382,17 @@ failure_phase=None
 failure_type=None
 failure_code=None
 failure_cause_type=None
+failure_navigation_code=None
 cleanup_failure_type=None
+
+SAFE_NAVIGATION_ERROR_CODES={
+    'net::ERR_BLOCKED_BY_CLIENT','net::ERR_CERT_AUTHORITY_INVALID',
+    'net::ERR_CERT_COMMON_NAME_INVALID','net::ERR_CONNECTION_CLOSED',
+    'net::ERR_CONNECTION_REFUSED','net::ERR_CONNECTION_RESET',
+    'net::ERR_INTERNET_DISCONNECTED','net::ERR_NAME_NOT_RESOLVED',
+    'net::ERR_PROXY_CONNECTION_FAILED','net::ERR_SSL_PROTOCOL_ERROR',
+    'net::ERR_TIMED_OUT','net::ERR_TUNNEL_CONNECTION_FAILED',
+}
 
 def classify_failure(exc):
     name=type(exc).__name__
@@ -403,6 +434,12 @@ def classify_cause_type(exc):
         'BrowserUnavailableError','ConnectionError','ProtocolException','TimeoutError',
         'RuntimeError','ValueError','TypeError','OSError','AssertionError','KeyError'} else 'other'
 
+def classify_navigation_error_code(exc):
+    code=getattr(exc,'navigation_error_code',None)
+    if code is None:
+        return None
+    return code if code=='other' or code in SAFE_NAVIGATION_ERROR_CODES else 'other'
+
 def write_receipt(value):
     raw=(json.dumps(value,separators=(',',':'))+'\n').encode()
     fd=os.open('/out/python-shared-browser.json',os.O_WRONLY|os.O_CREAT|os.O_EXCL|os.O_NOFOLLOW,0o600)
@@ -411,7 +448,8 @@ def write_receipt(value):
     finally: os.close(fd)
 
 async def main():
-    global phase,failure_phase,failure_type,failure_code,failure_cause_type,cleanup_failure_type
+    global phase,failure_phase,failure_type,failure_code,failure_cause_type
+    global failure_navigation_code,cleanup_failure_type
     proxy_url=sys.argv[1]
     token=os.environ.get('EXTRACTOR_NATIVE_PROXY_TOKEN','')
     if not token or len(token)>256:
@@ -536,6 +574,7 @@ async def main():
         failure_type=classify_failure(exc)
         failure_code=classify_failure_code(exc)
         failure_cause_type=classify_cause_type(exc)
+        failure_navigation_code=classify_navigation_error_code(exc)
         raise
     finally:
         phase='pool_cleanup'
@@ -569,6 +608,8 @@ except BaseException as exc:
             'browser_generation_unchanged':False,'context_checks':0,'bounded_html_reads':0,
             'failure_phase':reported_phase,'failure_type':reported_type,
             'failure_code':reported_code,'failure_cause_type':reported_cause,
+            **({'navigation_error_code':failure_navigation_code}
+               if failure_navigation_code is not None else {}),
             **({'cleanup_failure_type':cleanup_failure_type} if cleanup_failure_type is not None else {})})
     except OSError:
         pass
@@ -1803,20 +1844,29 @@ while True:
         if receipt_path.exists() or receipt_path.is_symlink():
             raise StandError('python_shared_browser_receipt_stale')
         proxy_url='http://'+str(gateway_ip)+':8081'
+        command_failed=False
         try:
             self.docker('exec',self.observer,'python','-c',PYTHON_SHARED_BROWSER_GATE,
                         proxy_url,timeout=90)
         except (StandError,subprocess.TimeoutExpired,subprocess.CalledProcessError):
-            raise StandError('python_shared_browser_gate_failed') from None
+            command_failed=True
         try:
             if receipt_path.is_symlink() or not receipt_path.is_file() or receipt_path.stat().st_size>2048:
                 raise ValueError
             receipt=json.loads(receipt_path.read_text())
         except (OSError,ValueError,TypeError):
+            if command_failed:
+                raise StandError('python_shared_browser_gate_failed') from None
             raise StandError('python_shared_browser_receipt_invalid') from None
+        validate_python_shared_navigation_code(receipt)
+        if command_failed:
+            raise StandError('python_shared_browser_gate_failed')
         flags=('initial_navigation_succeeded','deferred_navigation_succeeded','blocked_http_rejected',
                'publisher_auth_rejected','owned_context_cleanup','browser_generation_unchanged')
-        if (not isinstance(receipt,dict) or set(receipt)!=set(flags)|{'context_checks','bounded_html_reads'}
+        expected_fields=set(flags)|{'context_checks','bounded_html_reads'}
+        if 'navigation_error_code' in receipt:
+            expected_fields.add('navigation_error_code')
+        if (not isinstance(receipt,dict) or set(receipt)!=expected_fields
                 or any(receipt.get(key) is not True for key in flags)
                 or type(receipt.get('context_checks')) is not int or receipt['context_checks']!=4
                 or type(receipt.get('bounded_html_reads')) is not int

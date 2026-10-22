@@ -884,10 +884,11 @@ func TestNativeDisconnectLosesReadinessWithoutReplay(t *testing.T) {
 	disconnected, transportFailure, cleanupFailure := false, false, false
 	for _, diagnostic := range diagnostics {
 		disconnected = disconnected || diagnostic == [2]string{"events", "client_disconnected"}
-		transportFailure = transportFailure || diagnostic == [2]string{"dom", "transport_error"} || diagnostic == [2]string{"navigate", "transport_error"}
+		transportFailure = transportFailure || diagnostic == [2]string{"events", "transport_error"} || diagnostic == [2]string{"dom", "transport_error"} || diagnostic == [2]string{"navigate", "transport_error"}
 		cleanupFailure = cleanupFailure || diagnostic == [2]string{"cleanup", "ownership_loss"}
 	}
-	// The pending RPC and event consumer can observe the socket closing first.
+	// The event consumer or pending RPC can observe the socket closing first;
+	// cleanup may then report the same lost connection as ownership loss.
 	if !disconnected && !(transportFailure && cleanupFailure) {
 		t.Fatalf("unexpected finite disconnect diagnostic: %v", diagnostics)
 	}

@@ -34,3 +34,26 @@ Local private evidence: `artifacts/core-native-e2e-2026-10-22/native-evidence.js
 The test stand creates ephemeral namespace policy. The current production Cloak runs as UID0 on the shared infra network and its existing root healthcheck/restart marker is incompatible with blindly applying the tested loopback CDP policy. Compose isolation assertions alone are insufficient.
 
 The proposed permanent lifecycle and its approval gate are in [the production isolation plan](ai-plans/2026-10-22-native-production-isolation.html). Python Telegram and Page Monitor still use this shared browser; their proxy compatibility remains a release requirement even though parser migration is deferred. PR/CI success does not accept that topology or authorize claiming native production activation.
+
+
+## PR review corrections
+
+PR #9 at initial revision `29233dd` received Codex review. The native runbook
+was corrected to describe direct browser routing, and the Python proxy tab now
+waits for DOMContentLoaded from the exact navigation loader under the existing
+caller deadline. It no longer reattaches after Fetch guards are enabled: a
+session-aware delayed-resource regression reproduced that real defect and now
+verifies continuations stay on the original session. Cancellation cannot
+re-cancel and interrupt an owned-context teardown already in progress.
+
+CI also exposed test nondeterminism: harness unit tests read the actual CI
+process RSS, and a disconnect assertion omitted a legitimate event-reader
+transport diagnostic. The unit fixtures now supply deterministic RSS; the Go
+assertion accepts the existing valid diagnostic pair while retaining readiness,
+empty output and no-replay checks. Production limits were not changed.
+
+Fresh local verification after all corrections: 871 Python tests passed,
+8 skipped, 22 subtests passed; all Go race tests, vet and module verification
+passed. The disconnect test independently passed 20 race repetitions, and
+an independent browser review passed 76 tests. New PR CI and final automated
+review are still required; this does not close the production-isolation gate.

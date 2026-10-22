@@ -178,10 +178,13 @@ requests from that app instance; it is not percentage routing. The older
 `compose.canary.yml` remains explicitly HTTP-only.
 
 The native flag defaults to false. When enabled it requires Go mode and disables
-automatic Python fallback; invalid combinations fail client configuration. The
-request uses `use_browser=true` and the smaller of the HTTP/browser byte caps.
-The Go worker retains HTTP-first extraction and may use native Cloak within its
-existing limits. Failures continue through existing durable processing state;
+automatic Python fallback; invalid combinations fail client configuration.
+HTTPS port-443 requests use `use_browser=true` and the smaller of the HTTP/browser
+byte caps, entering native rendering directly. HTTP requests use
+the Go HTTP route with `use_browser=false`; existing public-network port policy
+still rejects unsupported ports. URL fragments are omitted on the wire while
+the original article identity is retained for persistence. Failures continue
+through existing durable processing state;
 there is no second immediate Python browser attempt. Shadow mode remains the
 HTTP-only diagnostic path. No API deadline or processing retry policy is changed.
 
