@@ -401,8 +401,7 @@ def _write_state(value: dict[str, Any]) -> None:
     if STATE_DIR.is_symlink() or final.is_symlink() or temporary.is_symlink():
         raise StartupError("runtime_state_invalid")
     directory_info = STATE_DIR.stat(follow_symlinks=False)
-    if (not STATE_DIR.is_dir() or directory_info.st_uid != 0
-            or directory_info.st_mode & 0o066 or directory_info.st_mode & 0o011 != 0o011):
+    if (not STATE_DIR.is_dir() or directory_info.st_uid != 0 or directory_info.st_mode & 0o077):
         raise StartupError("runtime_state_invalid")
     try:
         old_final = final.stat(follow_symlinks=False)

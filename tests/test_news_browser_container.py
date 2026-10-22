@@ -292,6 +292,35 @@ def test_launch_info_cleanup_rejects_symlinked_directory(tmp_path, monkeypatch):
         entrypoint._clear_stale_launch_info()
 
 
+def test_runtime_state_writer_accepts_private_bootstrap_directory(tmp_path, monkeypatch):
+    state_dir = tmp_path / "news-browser"
+    state_file = state_dir / "runtime.json"
+    monkeypatch.setattr(entrypoint, "STATE_DIR", state_dir)
+    monkeypatch.setattr(entrypoint, "STATE_FILE", state_file)
+    monkeypatch.setattr(entrypoint.os, "geteuid", lambda: 0)
+
+    # The test host is often not root. Preserve the real mode and directory
+    # checks while modeling the root-owned container tmpfs entry.
+    real_stat = Path.stat
+
+    def root_owned_stat(path, *, follow_symlinks=True):
+        result = real_stat(path, follow_symlinks=follow_symlinks)
+        if path == state_dir:
+            values = list(result)
+            values[4] = 0  # st_uid
+            return os.stat_result(values)
+        return result
+
+    monkeypatch.setattr(Path, "stat", root_owned_stat)
+    value = {"version": 1, "chrome_pid": 101, "relay_pid": 202,
+             "supervisor_pid": 303, "supervisor_starttime": 404,
+             "policy_fingerprint": "a" * 64}
+    entrypoint._write_state(value)
+
+    assert state_dir.stat().st_mode & 0o077 == 0
+    assert json.loads(state_file.read_text()) == value
+
+
 def test_runtime_keeps_pinned_display_path_and_disables_updates_and_widevine(monkeypatch):
     monkeypatch.setenv("PATH", "/usr/bin:/bin")
     environment = entrypoint._child_environment()
