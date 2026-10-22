@@ -16,6 +16,7 @@ services:
       EXTRACTION_SERVICE_NATIVE_BROWSER: 'true'
       EXTRACTION_SERVICE_PYTHON_FALLBACK: 'false'
       TELEGRAM_SOURCE_MODE: go
+      PAGE_MONITOR_SOURCE_MODE: go
     labels:
       com.dzarlax.news-extractor-runtime.client: news_app
     volumes:

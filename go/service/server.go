@@ -111,6 +111,8 @@ func (s *Server) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 		s.extract(w, r)
 	case "/v1/telegram/fetch":
 		s.fetchTelegram(w, r)
+	case "/v1/page-monitor/extract":
+		s.extractPageMonitor(w, r)
 	default:
 		http.NotFound(w, r)
 	}

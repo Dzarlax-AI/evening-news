@@ -662,7 +662,7 @@ func (w *NativeBrowser) Fetch(ctx context.Context, raw string, opts NativeBrowse
 	if timeout == 0 {
 		timeout = 30 * time.Second
 	}
-	if timeout < 0 || timeout > 30*time.Second || len(opts.ReadySelector) > 2048 {
+	if timeout < 0 || timeout > 30*time.Second || opts.MinSettle < 0 || opts.MinSettle > 5*time.Second || len(opts.ReadySelector) > 2048 {
 		return doc, errors.New("native_browser_invalid_options")
 	}
 	ctx, done, err := w.begin(ctx, false)
@@ -1089,7 +1089,8 @@ func (w *NativeBrowser) Fetch(ctx context.Context, raw string, opts NativeBrowse
 				previous = value.HTML
 				stableSince = time.Now()
 			}
-			if time.Since(started) >= 500*time.Millisecond && time.Since(stableSince) >= 250*time.Millisecond && time.Since(time.Unix(0, lastActivity.Load())) >= 250*time.Millisecond && activeRequests.Load() == 0 && eventRPCs.pending.Load() == 0 && status.Load() == 200 {
+			minimumWait := max(500*time.Millisecond, opts.MinSettle)
+			if time.Since(started) >= minimumWait && time.Since(stableSince) >= 250*time.Millisecond && time.Since(time.Unix(0, lastActivity.Load())) >= 250*time.Millisecond && activeRequests.Load() == 0 && eventRPCs.pending.Load() == 0 && status.Load() == 200 {
 				if cause := context.Cause(work); cause != nil {
 					return doc, cause
 				}

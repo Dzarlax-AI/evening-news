@@ -46,7 +46,7 @@ func browserFetchPublic(ctx context.Context, endpoint, rawURL string, opts Brows
 	if timeout == 0 {
 		timeout = 30 * time.Second
 	}
-	if timeout < 0 || timeout > 30*time.Second {
+	if timeout < 0 || timeout > 30*time.Second || opts.MinSettle < 0 || opts.MinSettle > 5*time.Second {
 		return doc, errors.New("prototype_browser_invalid_timeout")
 	}
 	ctx, cancel := context.WithTimeout(ctx, timeout)
@@ -237,6 +237,7 @@ func browserFetchPublic(ctx context.Context, endpoint, rawURL string, opts Brows
 	started := time.Now()
 	stableSince := time.Now()
 	previousHTML := ""
+	minimumSettle := max(500*time.Millisecond, opts.MinSettle)
 	for {
 		// Both guards execute in Chrome before HTML is transferred. The UTF-16
 		// character count avoids encoding a huge DOM; TextEncoder enforces the
@@ -293,7 +294,7 @@ func browserFetchPublic(ctx context.Context, endpoint, rawURL string, opts Brows
 			}
 			// Let short asynchronous fetches and timers populate an existing shell.
 			// A finite settle window is bounded by the shared request deadline.
-			if time.Since(started) < 500*time.Millisecond || time.Since(stableSince) < 250*time.Millisecond || time.Since(time.Unix(0, lastRequest.Load())) < 250*time.Millisecond {
+			if time.Since(started) < minimumSettle || time.Since(stableSince) < 250*time.Millisecond || time.Since(time.Unix(0, lastRequest.Load())) < 250*time.Millisecond {
 				select {
 				case <-work.Done():
 					return doc, context.Cause(work)

@@ -4,6 +4,7 @@ package service
 import (
 	"context"
 	"github.com/Dzarlax-AI/evening-news/go/extractor"
+	"time"
 )
 
 const ContractVersion = "1"
@@ -88,4 +89,52 @@ type TelegramResponse struct {
 
 type TelegramRunner interface {
 	RunTelegram(context.Context, TelegramRequest) TelegramResponse
+}
+
+type PageMonitorRequest struct {
+	ContractVersion           string                                 `json:"contract_version"`
+	RequestID                 string                                 `json:"request_id"`
+	Operation                 string                                 `json:"operation"`
+	URL                       string                                 `json:"url"`
+	SourceName                string                                 `json:"source_name"`
+	BudgetMS                  int64                                  `json:"budget_ms"`
+	Limit                     int                                    `json:"limit,omitempty"`
+	Offset                    int                                    `json:"offset,omitempty"`
+	MinTitleLength            int                                    `json:"min_title_length,omitempty"`
+	UseBrowser                *bool                                  `json:"use_browser,omitempty"`
+	WaitForJS                 *bool                                  `json:"wait_for_js,omitempty"`
+	ProvidedHTML              *string                                `json:"provided_html,omitempty"`
+	SnapshotAt                *time.Time                             `json:"snapshot_at,omitempty"`
+	ArticleSelectors          []string                               `json:"article_selectors,omitempty"`
+	TitleSelectors            []string                               `json:"title_selectors,omitempty"`
+	DateSelectors             []string                               `json:"date_selectors,omitempty"`
+	LinkSelectors             []string                               `json:"link_selectors,omitempty"`
+	LearnedContainerSelectors []string                               `json:"learned_container_selectors,omitempty"`
+	LearnedTitleSelectors     []string                               `json:"learned_title_selectors,omitempty"`
+	LearnedLinkSelectors      []string                               `json:"learned_link_selectors,omitempty"`
+	LearnedDateSelectors      []string                               `json:"learned_date_selectors,omitempty"`
+	LearnedGeneralSelectors   []extractor.PageMonitorGeneralSelector `json:"learned_general_selectors,omitempty"`
+}
+
+type PageMonitorResponse struct {
+	ContractVersion    string                      `json:"contract_version"`
+	BuildVersion       string                      `json:"build_version"`
+	RequestID          string                      `json:"request_id"`
+	Outcome            string                      `json:"outcome"`
+	OriginalURL        string                      `json:"original_url"`
+	FinalURL           string                      `json:"final_url"`
+	FetchMethod        string                      `json:"fetch_method,omitempty"`
+	SnapshotAt         *time.Time                  `json:"snapshot_at,omitempty"`
+	ContentHash        string                      `json:"content_hash,omitempty"`
+	SelectorsUsed      []string                    `json:"selectors_used"`
+	Items              []extractor.PageMonitorItem `json:"items"`
+	NextOffset         *int                        `json:"next_offset,omitempty"`
+	NeedsSelectorStudy bool                        `json:"needs_selector_study"`
+	StudyHTML          string                      `json:"study_html,omitempty"`
+	StudyHTMLOmitted   bool                        `json:"study_html_omitted,omitempty"`
+	Error              *Failure                    `json:"error,omitempty"`
+}
+
+type PageMonitorRunner interface {
+	RunPageMonitor(context.Context, PageMonitorRequest) PageMonitorResponse
 }

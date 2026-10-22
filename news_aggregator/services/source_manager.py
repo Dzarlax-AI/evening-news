@@ -196,34 +196,58 @@ class SourceManager:
                                            max_concurrent: int = 5,
                                            per_source_timeout: int = 120) -> Dict[str, List[Article]]:
         """
-        Fetch articles from sources via HTTP - NO DATABASE ACCESS.
-        This is purely I/O bound HTTP fetching, no semaphore locks.
-        Each source has a timeout to prevent a single stuck source from blocking everything.
+        Fetch source I/O without holding a database transaction.
+        Go-backed sources share a batch admission queue; other sources remain
+        concurrent. Each admitted fetch has its own operation timeout.
         """
         results = {}
 
         # Create semaphore to limit concurrent fetches
         semaphore = asyncio.Semaphore(max_concurrent)
+        go_source_lock = asyncio.Lock()
+
+        from ..config import get_settings
+        source_settings = get_settings()
+
+        def is_go_backed_source(source: Source) -> bool:
+            source_type = getattr(source, 'source_type', None)
+            if source_type == SourceType.CUSTOM or source_type == SourceType.CUSTOM.value:
+                return source_settings.page_monitor_source_mode == 'go'
+            if source_type == SourceType.TELEGRAM or source_type == SourceType.TELEGRAM.value:
+                return source_settings.telegram_source_mode == 'go'
+            return False
+
+        async def fetch_source_body(source: Source):
+            """Fetch articles from source without DB access or admission waits."""
+            try:
+                source_instance = await self.get_source_instance(source)
+                articles = []
+
+                async for article in source_instance.fetch_articles():
+                    articles.append(article)
+
+                logger.info(f"  ✅ Fetched {len(articles)} articles from {source.name}")
+                return source.name, articles
+            except Exception as e:
+                logger.warning(f"Error fetching from {source.name}: {e}")
+                return source.name, []
 
         async def fetch_source_raw(source: Source):
-            """Fetch articles from source without DB access."""
+            """Apply the shared concurrency limit before starting a normal fetch."""
             async with semaphore:
-                try:
-                    source_instance = await self.get_source_instance(source)
-                    articles = []
-
-                    async for article in source_instance.fetch_articles():
-                        articles.append(article)
-
-                    logger.info(f"  ✅ Fetched {len(articles)} articles from {source.name}")
-                    return source.name, articles
-                except Exception as e:
-                    logger.warning(f"Error fetching from {source.name}: {e}")
-                    return source.name, []
+                return await fetch_source_body(source)
 
         async def fetch_with_timeout(source: Source):
-            """Wrap fetch in a per-source timeout."""
+            """Serialize Go-backed clients, then apply the admitted operation timeout."""
             try:
+                if is_go_backed_source(source):
+                    # Queue for both Go serialization and shared I/O capacity
+                    # before starting the source operation deadline.
+                    async with go_source_lock:
+                        async with semaphore:
+                            return await asyncio.wait_for(
+                                fetch_source_body(source), timeout=per_source_timeout
+                            )
                 return await asyncio.wait_for(
                     fetch_source_raw(source),
                     timeout=per_source_timeout
@@ -232,7 +256,7 @@ class SourceManager:
                 logger.error(f"  ⏰ Source '{source.name}' timed out after {per_source_timeout}s — skipping")
                 return source.name, []
 
-        # Execute fetches concurrently (HTTP only, no DB lock)
+        # Keep ordinary source concurrency while queuing the shared Go path.
         tasks = [fetch_with_timeout(source) for source in sources]
         fetch_results = await asyncio.gather(*tasks, return_exceptions=True)
 

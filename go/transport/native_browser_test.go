@@ -48,6 +48,8 @@ type nativeFixture struct {
 	discoveryID                                                                                                        string
 	discoveryDelay                                                                                                     time.Duration
 	contextsDelay                                                                                                      time.Duration
+	lateAppendAfter                                                                                                    time.Duration
+	evaluationStarted                                                                                                  time.Time
 	targetCrashed                                                                                                      bool
 	changeGenerationOnCrash, disconnectOnCrash, unavailableOnCrash, foreignTargetCrash, hangStopLoading, detachOnCrash bool
 	navigated                                                                                                          chan struct{}
@@ -325,7 +327,15 @@ func newNativeFixture(t *testing.T) *nativeFixture {
 				f.eventFlood = 0
 				value := map[string]any{"ready": false}
 				if !f.empty {
-					value = map[string]any{"ready": true, "html": `<html><body><article>Native browser fixture.</article></body></html>`, "bytes": 78, "url": "https://origin.example/final"}
+					now := time.Now()
+					if f.evaluationStarted.IsZero() {
+						f.evaluationStarted = now
+					}
+					html := `<html><body><article>Native browser fixture.</article></body></html>`
+					if f.lateAppendAfter > 0 && now.Sub(f.evaluationStarted) >= f.lateAppendAfter {
+						html = `<html><body><article>Native browser fixture.</article><article>Late second post.</article></body></html>`
+					}
+					value = map[string]any{"ready": true, "html": html, "bytes": len(html), "url": "https://origin.example/final"}
 				}
 				result["result"] = map[string]any{"value": value}
 			case "Fetch.fulfillRequest", "Network.setUserAgentOverride", "Emulation.setDeviceMetricsOverride", "Browser.close":
@@ -703,6 +713,26 @@ func TestNativeCleanupOverflowClearsCompletedHTML(t *testing.T) {
 	}
 	if len(doc.HTML) != 0 {
 		t.Fatalf("HTML escaped after cleanup overload: %d bytes", len(doc.HTML))
+	}
+}
+
+func TestNativePageMonitorMinimumSettleCapturesLateArticle(t *testing.T) {
+	f := newNativeFixture(t)
+	f.lateAppendAfter = 1400 * time.Millisecond
+	w := f.worker(t)
+	if err := w.Probe(context.Background()); err != nil {
+		t.Fatal(err)
+	}
+	started := time.Now()
+	doc, err := w.Fetch(context.Background(), "https://origin.example/", NativeBrowserOptions{BrowserOptions: BrowserOptions{MinSettle: 2 * time.Second}})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if time.Since(started) < 2*time.Second {
+		t.Fatalf("minimum settle returned too early: %v", time.Since(started))
+	}
+	if !strings.Contains(string(doc.HTML), "Late second post.") {
+		t.Fatalf("late post lost: %s", doc.HTML)
 	}
 }
 

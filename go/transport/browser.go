@@ -54,6 +54,7 @@ type BrowserOptions struct {
 	Timeout      time.Duration
 	MaxWireBytes int64
 	MaxDOMBytes  int64
+	MinSettle    time.Duration
 }
 
 // RenderedDocument preserves metadata, attributes and script-rendered HTML.
@@ -87,7 +88,7 @@ func BrowserFetch(ctx context.Context, endpoint, rawURL string, opts BrowserOpti
 	if timeout == 0 {
 		timeout = 30 * time.Second
 	}
-	if timeout < 0 || timeout > 30*time.Second {
+	if timeout < 0 || timeout > 30*time.Second || opts.MinSettle < 0 || opts.MinSettle > 5*time.Second {
 		return doc, errors.New("prototype_browser_invalid_timeout")
 	}
 	ctx, cancel := context.WithTimeout(ctx, timeout)
@@ -318,6 +319,8 @@ func BrowserFetch(ctx context.Context, endpoint, rawURL string, opts BrowserOpti
 	}
 	ticker := time.NewTicker(50 * time.Millisecond)
 	defer ticker.Stop()
+	started, stableSince := time.Now(), time.Now()
+	previousHTML := ""
 	for {
 		// Both guards execute in Chrome before HTML is transferred. The UTF-16
 		// character count avoids encoding a huge DOM; TextEncoder enforces the
@@ -367,6 +370,20 @@ func BrowserFetch(ctx context.Context, endpoint, rawURL string, opts BrowserOpti
 			}
 			if cause := context.Cause(work); cause != nil {
 				return doc, cause
+			}
+			if opts.MinSettle > 0 {
+				if value.HTML != previousHTML {
+					previousHTML = value.HTML
+					stableSince = time.Now()
+				}
+				if time.Since(started) < max(500*time.Millisecond, opts.MinSettle) || time.Since(stableSince) < 250*time.Millisecond {
+					select {
+					case <-work.Done():
+						return doc, context.Cause(work)
+					case <-ticker.C:
+					}
+					continue
+				}
 			}
 			return RenderedDocument{Document: Document{HTML: []byte(value.HTML), StatusCode: int(responseStatus.Load()), Encoding: "utf-8", URL: value.URL}, DOMBytes: value.Bytes}, nil
 		}
