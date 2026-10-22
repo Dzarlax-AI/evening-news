@@ -4,7 +4,9 @@ import asyncio
 import base64
 import importlib.util
 import json
+import os
 from pathlib import Path
+import stat
 import sys
 from types import SimpleNamespace
 
@@ -62,6 +64,81 @@ def test_relay_cli_rejects_persistent_synthetic_mode(monkeypatch, tmp_path):
     with pytest.raises(SystemExit) as error:
         relay.main()
     assert error.value.code == 2
+
+
+def test_relay_cli_forwards_heartbeat_only_for_persistent_mode(monkeypatch, tmp_path):
+    captured = []
+    monkeypatch.setattr(relay.asyncio, "run", captured.append)
+    heartbeat = tmp_path / "heartbeat.json"
+    monkeypatch.setattr(sys, "argv", ["shadow_cdp_relay.py", "--controller-ip", "10.55.0.3",
+                                       "--persistent", "--heartbeat-path", str(heartbeat)])
+    relay.main()
+    assert len(captured) == 1
+    assert captured[0].cr_frame.f_locals["heartbeat_path"] == heartbeat
+    captured[0].close()
+
+    monkeypatch.setattr(sys, "argv", ["shadow_cdp_relay.py", "--controller-ip", "10.55.0.3",
+                                       "--heartbeat-path", str(heartbeat)])
+    with pytest.raises(SystemExit) as error:
+        relay.main()
+    assert error.value.code == 2
+
+
+def test_heartbeat_publishes_complete_file_by_atomic_replace(tmp_path, monkeypatch):
+    directory = tmp_path / "relay"
+    directory.mkdir(mode=0o700)
+    directory.chmod(0o733)
+    heartbeat = directory / "heartbeat.json"
+    old = b'{"pid":1,"monotonic_ns":1}'
+    heartbeat.write_bytes(old)
+    heartbeat.chmod(0o644)
+    monkeypatch.setattr(relay, "HEARTBEAT_DIRECTORY_UID", os.geteuid())
+
+    real_replace = os.replace
+    observations = []
+
+    def check_then_replace(src, dst, *, src_dir_fd=None, dst_dir_fd=None):
+        # Until the single rename, readers still see the prior complete record.
+        assert heartbeat.read_bytes() == old
+        temp = directory / src
+        payload = json.loads(temp.read_text())
+        assert payload == {"pid": 4321, "monotonic_ns": 987654321}
+        observations.append(payload)
+        return real_replace(src, dst, src_dir_fd=src_dir_fd, dst_dir_fd=dst_dir_fd)
+
+    monkeypatch.setattr(relay.os, "replace", check_then_replace)
+    relay.write_heartbeat(heartbeat, 4321, monotonic_ns=987654321)
+
+    assert observations == [{"pid": 4321, "monotonic_ns": 987654321}]
+    assert json.loads(heartbeat.read_text()) == observations[0]
+    assert sorted(item.name for item in directory.iterdir()) == ["heartbeat.json"]
+
+
+def test_heartbeat_opens_search_only_directory_without_read_permission(tmp_path, monkeypatch):
+    directory = tmp_path / "relay"
+    directory.mkdir(mode=0o700)
+    directory.chmod(0o733)
+    monkeypatch.setattr(relay, "HEARTBEAT_DIRECTORY_UID", os.geteuid())
+    flags_seen = []
+    real_open = os.open
+
+    def capture_open(path, flags, *args, **kwargs):
+        if Path(path) == directory:
+            flags_seen.append(flags)
+        return real_open(path, flags, *args, **kwargs)
+
+    monkeypatch.setattr(relay.os, "open", capture_open)
+    fd = relay.open_heartbeat_directory(directory)
+    try:
+        info = os.fstat(fd)
+        assert stat.S_ISDIR(info.st_mode)
+        assert stat.S_IMODE(info.st_mode) == 0o733
+        # Linux uses O_PATH so uid 65534 can traverse this directory without
+        # acquiring the directory-read permission that mode 0733 omits.
+        if hasattr(os, "O_PATH"):
+            assert flags_seen and flags_seen[0] & os.O_PATH
+    finally:
+        os.close(fd)
 
 
 def test_launcher_uses_only_pinned_args_and_fixed_debug_binding(tmp_path):
