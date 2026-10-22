@@ -71,3 +71,27 @@ Fresh full local Python suite: 874 passed, 8 skipped, 22 subtests. Affected Go
 service/pipeline/lifecycle packages passed race tests and vet. Prior revision
 `34b7b06` completed all Linux CI checks; the updated revision requires new CI
 and automated review. Production remains unchanged pending isolation approval.
+
+### Media and metadata response bounds
+
+The third Codex review identified JSON amplification from a large number of
+relative media URLs. Media collection now stops at 256 unique entries or a
+256-KiB serialized-array budget, skips whole URLs over 8 KiB, and bounds alt text
+to 1 KiB. Duplicate embedded URLs do not consume the unique-entry limit.
+Article metadata is bounded on every return path, including failed extraction
+and resource-limit results; title/author are 1 KiB each, description 4 KiB,
+publication date 128 bytes, and oversize image URLs are omitted whole. Trace
+markers expose changed output. Article identities are preserved.
+
+The same amplification pattern existed in alternative-page discovery: all links
+were collected before retaining two. Collection now retains at most two from
+the outset and skips raw/resolved URLs over 8 KiB whole. Existing ordering and
+self-canonical behavior remain covered by pipeline tests.
+
+Offline Python/Go replay on 432 pairs passed with zero assertion failures,
+zero golden failures and no new unreviewed differences. Fresh full Go race tests,
+vet and module verification passed after these corrections. Revision `22e36fe`
+completed all Linux CI jobs successfully; its review finding prompted this
+additional correction. Fresh CI and Codex review of this correction are still
+required. The earlier native Linux campaign predates these response-bound
+changes and does not constitute exact-revision production acceptance.

@@ -76,6 +76,33 @@ func TestAlternativeAdmissionAndIdentity(t *testing.T) {
 	}
 }
 
+func TestAlternativeURLCollectionBoundsCandidatesAndSkipsOversizeValues(t *testing.T) {
+	base := "https://news.example/" + strings.Repeat("b", 7970) + "/"
+	longRelative := strings.Repeat("x", 300)
+	longRaw := strings.Repeat("y", maxAlternativeURLBytes+1)
+	var page strings.Builder
+	page.WriteString(`<link rel="canonical" href="` + longRelative + `">`)
+	page.WriteString(`<link rel="amphtml" href="/amp">`)
+	page.WriteString(`<a href="` + longRaw + `">Read more</a>`)
+	page.WriteString(`<a href="full">Read more</a>`)
+	for i := 0; i < 5000; i++ {
+		page.WriteString(`<a href="extra">Full article</a>`)
+	}
+	got := alternativeURLs(base, page.String())
+	want := []string{"https://news.example/amp", base + "full"}
+	if len(got) != len(want) {
+		t.Fatalf("candidate count=%d want=%d: %v", len(got), len(want), got)
+	}
+	for i := range want {
+		if got[i] != want[i] || len(got[i]) > maxAlternativeURLBytes {
+			t.Errorf("candidate %d = %q, want bounded %q", i, got[i], want[i])
+		}
+	}
+	if got := alternativeURLs(base+strings.Repeat("z", maxAlternativeURLBytes), `<a href="/valid">Read more</a>`); len(got) != 0 {
+		t.Fatalf("overlong base was resolved: %v", got)
+	}
+}
+
 func TestCancelDoesNotFallbackToSource(t *testing.T) {
 	ctx, cancel := context.WithCancel(context.Background())
 	r := Runner{Fetch: func(context.Context, string, transport.Options) (transport.Document, error) {

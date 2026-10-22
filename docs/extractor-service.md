@@ -180,3 +180,17 @@ alternative-URL processing, but the current Python client does not consume it.
 The configured Python fallback obtains its own input; returning a near-limit
 page would only inflate the JSON envelope and could hide the intended outcome
 behind `response_too_large`. No byte or memory limits are increased.
+
+Article and web result metadata is bounded on success and failure: title and
+author each use at most 1 KiB, description 4 KiB, and publication date 128 bytes,
+on UTF-8 boundaries. Image URLs over 8 KiB are omitted whole. The trace includes
+`metadata_truncated` when these limits change output. Article identity is not
+truncated.
+
+Article media retains first-seen order and URL deduplication, with at most 256
+items, 8 KiB per raw/resolved URL, 1 KiB per alt text and 256 KiB for the serialized
+media array. Oversize URLs are skipped whole; `media_truncated` records omitted or
+shortened output. Embedded-video matching scans incrementally so duplicate
+matches do not consume slots. Alternate-page discovery retains at most two
+candidates during collection and skips raw/resolved URLs over 8 KiB, preventing
+long base URLs from multiplying across an unbounded candidate list.

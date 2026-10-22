@@ -2,8 +2,12 @@ package extractor
 
 import (
 	"context"
+	"encoding/json"
+	"fmt"
+	"html"
 	"strings"
 	"testing"
+	"unicode/utf8"
 )
 
 func TestArticleIdentityIsSeparateFromNormalizedRequest(t *testing.T) {
@@ -61,6 +65,164 @@ func TestProxiedImageRetainsCanonicalExtensionType(t *testing.T) {
 	got := articleMedia(`<img src="https://proxy.test/opaque-hash" data-canonical-src="https://badges.test/license.svg" alt="License badge">`, "https://example.test/article")
 	if len(got) != 1 || got[0].URL != "https://proxy.test/opaque-hash" || got[0].MediaType != "image/svg" {
 		t.Fatalf("proxy media lost canonical type: %+v", got)
+	}
+}
+
+func TestArticleMediaBoundsEscapedOutputAndPreservesArticle(t *testing.T) {
+	base := "https://example.test/" + strings.Repeat("b", 6800) + "/"
+	alt := strings.Repeat("é\"\\", 600)
+	var page strings.Builder
+	page.WriteString(article(prose))
+	for i := 0; i < 400; i++ {
+		fmt.Fprintf(&page, `<img src="asset-%d.jpg" alt="%s">`, i, html.EscapeString(alt))
+	}
+	r := Extract(context.Background(), Input{URL: base, HTML: page.String(), SourceType: "article"})
+	if r.State != "extracted" || r.Content == "" {
+		t.Fatalf("media bounding discarded article extraction: state=%s error=%s", r.State, r.Error)
+	}
+	if len(r.Media) == 0 || len(r.Media) >= 256 {
+		t.Fatalf("media bounds/order not preserved: count=%d", len(r.Media))
+	}
+	if r.Media[0].URL != base+"asset-0.jpg" {
+		t.Fatalf("first media item changed: %+v", r.Media[0])
+	}
+	if len(r.Media[0].AltText) > maxArticleMediaAltTextBytes || len(r.Media[0].AltText) != maxArticleMediaAltTextBytes || !strings.Contains(strings.Join(r.Trace, ","), "media_truncated") {
+		t.Fatalf("alt text/output truncation was not made visible: alt_bytes=%d trace=%v", len(r.Media[0].AltText), r.Trace)
+	}
+	encoded, err := json.Marshal(r.Media)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(encoded) > maxArticleMediaJSONBytes {
+		t.Fatalf("serialized media exceeds budget: %d > %d", len(encoded), maxArticleMediaJSONBytes)
+	}
+}
+
+func TestArticleMediaSkipsOversizeURLWithoutTruncatingIdentity(t *testing.T) {
+	oversize := "https://cdn.example/" + strings.Repeat("x", maxArticleMediaURLBytes) + ".jpg"
+	h := `<img src="/first.png"><img src="` + oversize + `"><img src="/last.png">`
+	got, truncated := boundedArticleMedia(h, "https://example.test/article")
+	if !truncated || len(got) != 2 || got[0].URL != "https://example.test/first.png" || got[1].URL != "https://example.test/last.png" {
+		t.Fatalf("oversized media URL was not skipped intact: truncated=%v media=%+v", truncated, got)
+	}
+}
+
+func TestEmbeddedMediaDedupDoesNotConsumeCandidateBudget(t *testing.T) {
+	var page strings.Builder
+	for i := 0; i < maxArticleMediaCount+1; i++ {
+		page.WriteString(" https://youtu.be/repeated ")
+	}
+	page.WriteString(" https://youtu.be/unique ")
+	got := articleMedia(page.String(), "https://example.test/article")
+	if len(got) != 2 || got[0].URL != "https://youtu.be/repeated" || got[1].URL != "https://youtu.be/unique" {
+		t.Fatalf("duplicate matches consumed media budget: %+v", got)
+	}
+}
+
+func TestArticleMetadataBoundsQuoteHeavyOutputWithoutLosingArticle(t *testing.T) {
+	quotes := strings.Repeat(`"`, 2*1024*1024)
+	imageURL := "https://image.example/" + strings.Repeat("x", maxArticleImageURLBytes)
+	page := "<html><head><meta property='og:title' content='" + quotes +
+		"'><meta property='og:description' content='" + quotes +
+		"'><meta property='og:image' content='" + imageURL + "'></head><body>" + article(prose) + "</body></html>"
+	if len(page) > 5*1024*1024 {
+		t.Fatalf("fixture exceeds extraction input cap: %d", len(page))
+	}
+	r := Extract(context.Background(), Input{URL: "https://example.test/story", HTML: page, SourceType: "article"})
+	if r.State != "extracted" || r.Content == "" || !strings.Contains(r.Content, "independent stations") {
+		t.Fatalf("metadata bounds discarded article content: state=%s error=%s", r.State, r.Error)
+	}
+	if len(r.Title) != maxArticleTitleBytes || len(r.Description) != maxArticleDescriptionBytes || r.ImageURL != "" {
+		t.Fatalf("metadata limits not applied: title=%d description=%d image=%d", len(r.Title), len(r.Description), len(r.ImageURL))
+	}
+	if !strings.Contains(strings.Join(r.Trace, ","), "metadata_truncated") {
+		t.Fatalf("metadata truncation is not visible: %v", r.Trace)
+	}
+	encoded, err := json.Marshal(r)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(encoded) >= 5*1024*1024 {
+		t.Fatalf("bounded result still exceeds client response cap: %d", len(encoded))
+	}
+}
+
+func TestFailedArticleMetadataIsBoundedForSelectorStudyResponse(t *testing.T) {
+	quotes := strings.Repeat(`"`, 2*1024*1024)
+	page := "<html><head><meta property='og:title' content='" + quotes +
+		"'><meta property='og:description' content='" + quotes +
+		"'></head><body>Loading</body></html>"
+	if len(page) > 5*1024*1024 {
+		t.Fatalf("fixture exceeds extraction input cap: %d", len(page))
+	}
+	r := Extract(context.Background(), Input{URL: "https://example.test/story", HTML: page, SourceType: "article"})
+	if r.State != "failed" || len(r.Title) != maxArticleTitleBytes || len(r.Description) != maxArticleDescriptionBytes {
+		t.Fatalf("failed selector-study metadata was not bounded: state=%s title=%d description=%d", r.State, len(r.Title), len(r.Description))
+	}
+	if !strings.Contains(strings.Join(r.Trace, ","), "metadata_truncated") {
+		t.Fatalf("failed metadata truncation is not visible: %v", r.Trace)
+	}
+	encoded, err := json.Marshal(r)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(encoded) >= 5*1024*1024 {
+		t.Fatalf("failed result still exceeds client response cap: %d", len(encoded))
+	}
+}
+
+func TestArticleMetadataBoundsOnTextResourceLimit(t *testing.T) {
+	quotes := strings.Repeat(`"`, 2*1024*1024)
+	page := "<html><head><meta property='og:title' content='" + quotes +
+		"'><meta property='og:description' content='" + quotes +
+		"'></head><body>Loading</body></html>"
+	if len(page) > 5*1024*1024 {
+		t.Fatalf("fixture exceeds extraction input cap: %d", len(page))
+	}
+
+	// The web extractor leaves this selector-study page without content. The
+	// caller content fallback then takes the MaxChars return after metadata has
+	// already been parsed, exercising the early resource-limit path.
+	r := Extract(context.Background(), Input{
+		URL:        "https://example.test/story",
+		HTML:       page,
+		Content:    strings.Repeat("article fallback ", 20),
+		MaxChars:   32,
+		SourceType: "article",
+	})
+	if r.State != "resource_limit" || r.Error != "extraction_text_limit" || r.Content != "" {
+		t.Fatalf("resource-limit outcome changed: state=%s error=%s content=%q", r.State, r.Error, r.Content)
+	}
+	if len(r.Title) != maxArticleTitleBytes || len(r.Description) != maxArticleDescriptionBytes {
+		t.Fatalf("resource-limit metadata was not bounded: title=%d description=%d", len(r.Title), len(r.Description))
+	}
+	if !strings.Contains(strings.Join(r.Trace, ","), "metadata_truncated") {
+		t.Fatalf("resource-limit metadata truncation is not visible: %v", r.Trace)
+	}
+	encoded, err := json.Marshal(r)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(encoded) >= 5*1024*1024 {
+		t.Fatalf("bounded resource-limit result exceeds client response cap: %d", len(encoded))
+	}
+}
+
+func TestArticleMetadataBoundsAllFieldsOnUTF8BoundariesAndPreservesIdentity(t *testing.T) {
+	result := Result{URL: "https://example.test/original", ExtractedFrom: "https://example.test/final"}
+	result.Title = strings.Repeat("é", maxArticleTitleBytes/2) + "é"
+	result.Author = strings.Repeat("a", maxArticleAuthorBytes+1)
+	result.Description = strings.Repeat("d", maxArticleDescriptionBytes+1)
+	result.PublicationDate = strings.Repeat("p", maxArticlePublicationDateBytes+1)
+	result.ImageURL = "https://image.example/" + strings.Repeat("x", maxArticleImageURLBytes)
+	if !boundArticleMetadata(&result) {
+		t.Fatal("oversize metadata was not reported")
+	}
+	if len(result.Title) != maxArticleTitleBytes || !utf8.ValidString(result.Title) || len(result.Author) != maxArticleAuthorBytes || len(result.Description) != maxArticleDescriptionBytes || len(result.PublicationDate) != maxArticlePublicationDateBytes || result.ImageURL != "" {
+		t.Fatalf("metadata did not honor UTF-8/URL bounds: %+v", result)
+	}
+	if result.URL != "https://example.test/original" || result.ExtractedFrom != "https://example.test/final" {
+		t.Fatalf("metadata bounding changed article identity: %+v", result)
 	}
 }
 

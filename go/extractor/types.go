@@ -39,6 +39,16 @@ type Limits struct {
 	MaxChars int `json:"max_chars"`
 }
 
+// Article metadata byte limits bound JSON expansion at the extractor service
+// boundary while preserving short publisher metadata unchanged.
+const (
+	maxArticleTitleBytes           = 1024
+	maxArticleAuthorBytes          = 1024
+	maxArticleDescriptionBytes     = 4096
+	maxArticlePublicationDateBytes = 128
+	maxArticleImageURLBytes        = 8 * 1024
+)
+
 type Media struct {
 	Type         string         `json:"type"`
 	URL          string         `json:"url"`
@@ -112,8 +122,15 @@ type Result struct {
 }
 
 // Extract returns a terminal result for every input, including rejected and unsupported inputs.
-func Extract(ctx context.Context, in Input) Result {
-	r := Result{URL: in.URL, Title: in.Title, State: "failed", Trace: []string{}, Media: []Media{}}
+func Extract(ctx context.Context, in Input) (r Result) {
+	r = Result{URL: in.URL, Title: in.Title, State: "failed", Trace: []string{}, Media: []Media{}}
+	defer func() {
+		if in.SourceType == "article" || in.SourceType == "web" || in.SourceType == "" {
+			if boundArticleMetadata(&r) {
+				r.Trace = append(r.Trace, "metadata_truncated")
+			}
+		}
+	}()
 	if in.Limits != nil {
 		in.MaxBytes = in.Limits.MaxBytes
 		in.MaxChars = in.Limits.MaxChars
@@ -234,7 +251,11 @@ func Extract(ctx context.Context, in Input) Result {
 			if strings.Contains(r.Method, "browser") {
 				h = in.RenderedHTML
 			}
-			r.Media = articleMedia(h, in.URL)
+			var mediaTruncated bool
+			r.Media, mediaTruncated = boundedArticleMedia(h, in.URL)
+			if mediaTruncated {
+				r.Trace = append(r.Trace, "media_truncated")
+			}
 		}
 		r.State = "extracted"
 		r.Error = ""
@@ -252,7 +273,32 @@ func Extract(ctx context.Context, in Input) Result {
 		r.Content = ""
 		r.State = "failed"
 		r.Error = err.Error()
-		return r
 	}
 	return r
+}
+
+// boundArticleMetadata caps article metadata for both successful and failed
+// outcomes without changing the caller's article identity. Whole URLs are
+// skipped rather than rewritten when they exceed the output contract.
+func boundArticleMetadata(r *Result) bool {
+	changed := false
+	for _, field := range []struct {
+		value *string
+		limit int
+	}{
+		{&r.Title, maxArticleTitleBytes},
+		{&r.Author, maxArticleAuthorBytes},
+		{&r.Description, maxArticleDescriptionBytes},
+		{&r.PublicationDate, maxArticlePublicationDateBytes},
+	} {
+		if len(*field.value) > field.limit {
+			*field.value = truncateUTF8(*field.value, field.limit)
+			changed = true
+		}
+	}
+	if len(r.ImageURL) > maxArticleImageURLBytes {
+		r.ImageURL = ""
+		changed = true
+	}
+	return changed
 }

@@ -45,6 +45,8 @@ type Runner struct {
 	Render func(context.Context, string, string, transport.BrowserOptions) (transport.RenderedDocument, error)
 }
 
+const maxAlternativeURLBytes = 8 * 1024
+
 func failed(raw, reason string) extractor.Result {
 	return extractor.Result{URL: raw, State: "failed", Error: reason, Trace: []string{}, Media: []extractor.Media{}}
 }
@@ -544,6 +546,9 @@ func redditLinkedURL(raw string) string {
 	return p.URL
 }
 func alternativeURLs(base, html string) []string {
+	if len(base) > maxAlternativeURLBytes {
+		return nil
+	}
 	d, err := goquery.NewDocumentFromReader(strings.NewReader(html))
 	if err != nil {
 		return nil
@@ -554,14 +559,26 @@ func alternativeURLs(base, html string) []string {
 	}
 	var out []string
 	add := func(s *goquery.Selection) {
-		href := s.AttrOr("href", "")
-		v, e := url.Parse(href)
-		if e != nil || href == "" {
+		if len(out) >= 2 {
 			return
 		}
-		out = append(out, u.ResolveReference(v).String())
+		href := s.AttrOr("href", "")
+		if href == "" || len(href) > maxAlternativeURLBytes {
+			return
+		}
+		v, e := url.Parse(href)
+		if e != nil {
+			return
+		}
+		resolved := u.ResolveReference(v).String()
+		if len(resolved) <= maxAlternativeURLBytes {
+			out = append(out, resolved)
+		}
 	}
 	for _, rel := range []string{"canonical", "amphtml"} {
+		if len(out) >= 2 {
+			break
+		}
 		d.Find("link[rel]").EachWithBreak(func(_ int, s *goquery.Selection) bool {
 			for _, token := range strings.Fields(s.AttrOr("rel", "")) {
 				if token == rel {
@@ -572,17 +589,17 @@ func alternativeURLs(base, html string) []string {
 			return true
 		})
 	}
-	d.Find("a[href]").Each(func(_ int, s *goquery.Selection) {
-		text := strings.ToLower(s.Text())
-		for _, phrase := range []string{"read more", "full article", "continue reading", "read full", "view full", "more details"} {
-			if strings.Contains(text, phrase) {
-				add(s)
-				break
+	if len(out) < 2 {
+		d.Find("a[href]").EachWithBreak(func(_ int, s *goquery.Selection) bool {
+			text := strings.ToLower(s.Text())
+			for _, phrase := range []string{"read more", "full article", "continue reading", "read full", "view full", "more details"} {
+				if strings.Contains(text, phrase) {
+					add(s)
+					return len(out) < 2
+				}
 			}
-		}
-	})
-	if len(out) > 2 {
-		out = out[:2]
+			return len(out) < 2
+		})
 	}
 	return out
 }
