@@ -52,7 +52,7 @@ async def test_go_page_monitor_article_round_trips_through_source_manager(monkey
         class FixtureClient:
             def __init__(self, *args, **kwargs):
                 pass
-            async def fetch(self, sent_config, *, limit, timeout_seconds):
+            async def fetch(self, sent_config, *, limit, timeout_seconds, offset=0):
                 assert sent_config.url == config.url and limit == config.max_articles_per_check
                 return {
                     'outcome': 'success', 'snapshot_at': '2026-10-22T08:15:00Z',

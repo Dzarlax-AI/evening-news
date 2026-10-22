@@ -8,7 +8,7 @@ import pytest
 
 from news_aggregator.config import settings
 from news_aggregator.sources.page_monitor_service_client import PageMonitorServiceError
-from news_aggregator.sources.page_monitor_source import PageMonitorConfig, PageMonitorSource
+from news_aggregator.sources.page_monitor_source import PageMonitorConfig, PageMonitorSource, PageSnapshot
 from news_aggregator.core.resource_limits import ResourceLimitError
 
 
@@ -41,7 +41,7 @@ def test_delivery_limit_acknowledges_only_yielded_items_and_recovers_reappearing
     class FakeClient:
         def __init__(self, *args, **kwargs):
             pass
-        async def fetch(self, sent_config, *, limit, timeout_seconds):
+        async def fetch(self, sent_config, *, limit, timeout_seconds, offset=0):
             assert limit == 20  # caller delivery limit must not truncate the scan
             calls.append(limit)
             titles = ['Story one', 'Story two', 'Story three', 'Story four', 'Story five']
@@ -60,6 +60,186 @@ def test_delivery_limit_acknowledges_only_yielded_items_and_recovers_reappearing
         assert await monitor.fetch_articles(limit=2) == []
         assert [a.title for a in await monitor.fetch_articles(limit=2)] == ['Story one', 'Story two']
     asyncio.run(run())
+
+
+def test_go_offset_continuation_delivers_full_window_then_resets_without_redelivery(monkeypatch):
+    install_go_mode(monkeypatch)
+    config = PageMonitorConfig('https://example.test/updates', 'Example', max_articles_per_check=5)
+    monitor = PageMonitorSource(config)
+    monkeypatch.setattr(monitor, '_load_learned_structure', lambda: asyncio.sleep(0))
+    calls = []
+    titles = ['Story one', 'Story two', 'Story three', 'Story four', 'Story five']
+
+    class CursorClient:
+        def __init__(self, *args, **kwargs):
+            pass
+
+        async def fetch(self, sent_config, *, limit, timeout_seconds, offset=0):
+            calls.append(offset)
+            result_items = response(config, titles[offset:offset + 2])['items']
+            if offset + len(result_items) < limit:
+                result = response(config, titles[offset:offset + 2], 'partial')
+                result.update(error={'code': 'resource_limit', 'retryable': False},
+                              next_offset=offset + len(result_items))
+                return result
+            return response(config, titles[offset:])
+
+    monkeypatch.setattr('news_aggregator.sources.page_monitor_service_client.PageMonitorServiceClient', CursorClient)
+
+    async def run():
+        assert [article.title for article in await monitor.fetch_articles(limit=2)] == titles[:2]
+        assert [article.title for article in await monitor.fetch_articles(limit=2)] == titles[2:4]
+        assert [article.title for article in await monitor.fetch_articles(limit=2)] == titles[4:]
+        assert await monitor.fetch_articles(limit=2) == []
+        assert await monitor.fetch_articles(limit=2) == []
+        assert await monitor.fetch_articles(limit=2) == []
+
+    asyncio.run(run())
+    assert calls == [0, 2, 4, 0, 2, 4]
+    assert monitor._go_offset == 0 and monitor._go_scan_active is False
+    assert len(monitor._go_previous_segments) == 5
+
+
+def test_go_source_seeds_acknowledged_hashes_from_existing_snapshot(monkeypatch):
+    install_go_mode(monkeypatch)
+    config = PageMonitorConfig('https://example.test/updates', 'Example')
+    monitor = PageMonitorSource(config)
+    old_item = response(config, ['Story one'])['items'][0]
+    monitor.last_snapshot = PageSnapshot(
+        url=config.url, content_hash='b' * 32,
+        article_hashes={monitor._hash_article(old_item)}, extracted_items=[old_item],
+        timestamp=datetime(2026, 10, 22, 8, 15), selectors_used=['article'])
+    monkeypatch.setattr(monitor, '_load_learned_structure', lambda: asyncio.sleep(0))
+
+    class ExistingSnapshotClient:
+        def __init__(self, *args, **kwargs):
+            pass
+
+        async def fetch(self, sent_config, *, limit, timeout_seconds, offset=0):
+            return response(config, ['Story one', 'Story two'])
+
+    monkeypatch.setattr('news_aggregator.sources.page_monitor_service_client.PageMonitorServiceClient',
+                        ExistingSnapshotClient)
+    delivered = asyncio.run(monitor.fetch_articles(limit=1))
+    assert [article.title for article in delivered] == ['Story two']
+
+
+def test_empty_resource_limit_advances_cursor_without_acknowledging_or_resetting_snapshot(monkeypatch):
+    install_go_mode(monkeypatch)
+    config = PageMonitorConfig('https://example.test/updates', 'Example', max_articles_per_check=3)
+    monitor = PageMonitorSource(config)
+    previous_snapshot = object()
+    monitor.last_snapshot = previous_snapshot
+    monkeypatch.setattr(monitor, '_load_learned_structure', lambda: asyncio.sleep(0))
+    calls = []
+
+    class EmptyResourceClient:
+        def __init__(self, *args, **kwargs):
+            pass
+
+        async def fetch(self, sent_config, *, limit, timeout_seconds, offset=0):
+            calls.append(offset)
+            if offset == 0:
+                result = response(config, [], 'partial')
+                result.update(error={'code': 'resource_limit', 'retryable': False}, next_offset=1)
+                return result
+            return response(config, ['Story two', 'Story three'])
+
+    monkeypatch.setattr('news_aggregator.sources.page_monitor_service_client.PageMonitorServiceClient',
+                        EmptyResourceClient)
+
+    async def run():
+        with pytest.raises(ResourceLimitError):
+            await monitor.fetch_articles(limit=2)
+        assert monitor._go_offset == 1 and monitor._go_scan_active is True
+        assert monitor.failure_count == 0
+        assert monitor.last_snapshot is previous_snapshot
+        assert [article.title for article in await monitor.fetch_articles(limit=2)] == ['Story two', 'Story three']
+
+    asyncio.run(run())
+    assert calls == [0, 1]
+    assert len(monitor._go_previous_segments) == 2
+
+
+def test_empty_resource_without_cursor_and_failed_continuation_preserve_acknowledged_state(monkeypatch):
+    install_go_mode(monkeypatch)
+    config = PageMonitorConfig('https://example.test/updates', 'Example', max_articles_per_check=3)
+    monitor = PageMonitorSource(config)
+    previous_snapshot = object()
+    monitor.last_snapshot = previous_snapshot
+    monitor._go_previous_segments = {0: 'a' * 32, 1: 'b' * 32}
+    monkeypatch.setattr(monitor, '_load_learned_structure', lambda: asyncio.sleep(0))
+    responses = [response(config, [], 'partial'), response(config, ['Story two'], 'partial')]
+    responses[0]['error'] = {'code': 'resource_limit', 'retryable': False}
+    responses[1].update(error={'code': 'resource_limit', 'retryable': False}, next_offset=1)
+    calls = []
+
+    class InterruptedClient:
+        def __init__(self, *args, **kwargs):
+            pass
+
+        async def fetch(self, sent_config, *, limit, timeout_seconds, offset=0):
+            calls.append(offset)
+            if len(calls) == 3:
+                raise PageMonitorServiceError('unavailable', True)
+            return responses[len(calls) - 1]
+
+    monkeypatch.setattr('news_aggregator.sources.page_monitor_service_client.PageMonitorServiceClient',
+                        InterruptedClient)
+
+    # The second request advances to offset one; a subsequent transport error
+    # must leave that continuation and all acknowledged state intact.
+    async def run_continuation():
+        with pytest.raises(ResourceLimitError):
+            await monitor.fetch_articles(limit=2)
+        assert monitor._go_offset == 0 and monitor._go_scan_active is False
+        assert monitor._go_previous_segments == {0: 'a' * 32, 1: 'b' * 32}
+        assert monitor.last_snapshot is previous_snapshot
+        assert [article.title for article in await monitor.fetch_articles(limit=2)] == ['Story two']
+        assert monitor._go_offset == 1 and monitor._go_scan_active is True
+        snapshot_after_prefix = monitor.last_snapshot
+        await monitor.fetch_articles(limit=2)
+        assert monitor._go_offset == 1 and monitor._go_scan_active is True
+        assert monitor._go_previous_segments == {0: 'a' * 32, 1: 'b' * 32}
+        assert monitor.last_snapshot is snapshot_after_prefix
+        assert calls == [0, 0, 1]
+
+    asyncio.run(run_continuation())
+
+
+def test_empty_resource_continuation_keeps_hash_metadata_within_window_bound(monkeypatch):
+    install_go_mode(monkeypatch)
+    config = PageMonitorConfig('https://example.test/updates', 'Example', max_articles_per_check=100)
+    monitor = PageMonitorSource(config)
+    old_segments = {index: f'{index:032x}' for index in range(100)}
+    monitor._go_previous_segments = dict(old_segments)
+    monkeypatch.setattr(monitor, '_load_learned_structure', lambda: asyncio.sleep(0))
+
+    class BoundedClient:
+        def __init__(self, *args, **kwargs):
+            pass
+
+        async def fetch(self, sent_config, *, limit, timeout_seconds, offset=0):
+            if offset == 0:
+                result = response(config, [], 'partial')
+                result.update(error={'code': 'resource_limit', 'retryable': False}, next_offset=1)
+                return result
+            return response(config, [f'Story item {index}' for index in range(offset, 100)])
+
+    monkeypatch.setattr('news_aggregator.sources.page_monitor_service_client.PageMonitorServiceClient',
+                        BoundedClient)
+
+    async def run():
+        with pytest.raises(ResourceLimitError):
+            await monitor.fetch_articles(limit=100)
+        assert monitor._go_offset == 1
+        assert monitor._go_scan_segments == {0: old_segments[0]}
+        assert monitor._go_scan_acknowledged == {0: old_segments[0]}
+        delivered = await monitor.fetch_articles(limit=100)
+        assert len(delivered) == 99
+
+    asyncio.run(run())
+    assert len(monitor._go_previous_segments) == 100
 
 
 def test_failed_service_call_preserves_snapshot_and_does_not_open_python_browser(monkeypatch):
@@ -102,7 +282,7 @@ def test_go_service_timeouts_respect_configured_wait_timeout_and_preserve_flags(
         def __init__(self, *args, **kwargs):
             pass
 
-        async def fetch(self, sent_config, *, limit, timeout_seconds):
+        async def fetch(self, sent_config, *, limit, timeout_seconds, offset=0):
             requests.append((sent_config.use_browser, sent_config.wait_for_js, timeout_seconds))
             return response(config, ['Story one'])
 
@@ -129,7 +309,7 @@ def test_partial_prefix_delivers_without_losing_remaining_items(monkeypatch, cap
     class PartialClient:
         def __init__(self, *args, **kwargs):
             pass
-        async def fetch(self, sent_config, *, limit, timeout_seconds):
+        async def fetch(self, sent_config, *, limit, timeout_seconds, offset=0):
             result = response(config, ['Story one', 'Story two', 'Story three'], 'partial')
             result['error'] = {'code': 'resource_limit', 'retryable': False}
             return result
@@ -150,7 +330,7 @@ def test_partial_resource_limit_prefix_skips_selector_learning(monkeypatch):
     class StudyNeededPartialClient:
         def __init__(self, *args, **kwargs):
             pass
-        async def fetch(self, sent_config, *, limit, timeout_seconds):
+        async def fetch(self, sent_config, *, limit, timeout_seconds, offset=0):
             result = response(config, ['Story one'], 'partial')
             result.update(error={'code': 'resource_limit', 'retryable': False},
                           needs_selector_study=True, study_html='<article>fallback</article>')
@@ -169,7 +349,7 @@ def test_changed_article_hash_is_delivered_again(monkeypatch):
     class ChangingClient:
         def __init__(self, *args, **kwargs):
             pass
-        async def fetch(self, sent_config, *, limit, timeout_seconds):
+        async def fetch(self, sent_config, *, limit, timeout_seconds, offset=0):
             counter['calls'] += 1
             result = response(config, ['Stable story'])
             if counter['calls'] == 2:
@@ -196,11 +376,11 @@ def test_ai_study_reparses_the_same_html_and_failure_keeps_original_prefix(monke
     class StudyClient:
         def __init__(self, *args, **kwargs):
             pass
-        async def fetch(self, sent_config, *, limit, timeout_seconds):
+        async def fetch(self, sent_config, *, limit, timeout_seconds, offset=0):
             result = response(config, ['Story one', 'Story two'])
             result.update(needs_selector_study=True, study_html='<article>captured once</article>')
             return result
-        async def parse(self, sent_config, html, snapshot_at, *, limit, timeout_seconds):
+        async def parse(self, sent_config, html, snapshot_at, *, limit, timeout_seconds, offset=0):
             captured.update(html=html, snapshot_at=snapshot_at, limit=limit)
             raise PageMonitorServiceError('unsupported_selector')
 
@@ -213,6 +393,47 @@ def test_ai_study_reparses_the_same_html_and_failure_keeps_original_prefix(monke
                         'snapshot_at': datetime(2026, 10, 22, 8, 15), 'limit': 20}
     assert 'keeping extracted prefix' in caplog.text
     assert len(monitor.last_snapshot.article_hashes) == 1
+
+
+def test_ai_reparse_partial_cursor_continues_from_reparsed_prefix(monkeypatch):
+    install_go_mode(monkeypatch)
+    config = PageMonitorConfig('https://example.test/updates', 'Example', use_browser=True,
+                               max_articles_per_check=5, enable_ai_analysis=True)
+    monitor = PageMonitorSource(config)
+    monkeypatch.setattr(monitor, '_load_learned_structure', lambda: asyncio.sleep(0))
+    monkeypatch.setattr(monitor, '_study_source_structure', lambda html: asyncio.sleep(0, result=True))
+    calls = []
+
+    class ReparseCursorClient:
+        def __init__(self, *args, **kwargs):
+            pass
+
+        async def fetch(self, sent_config, *, limit, timeout_seconds, offset=0):
+            calls.append(('fetch', offset))
+            result = response(config, ['Story three', 'Story four', 'Story five'][offset - 2:])
+            if offset == 0:
+                result = response(config, ['Story one', 'Story two'])
+                result.update(needs_selector_study=True, study_html='<article>captured</article>')
+            return result
+
+        async def parse(self, sent_config, html, snapshot_at, *, limit, timeout_seconds, offset=0):
+            calls.append(('parse', offset))
+            result = response(config, ['Story one', 'Story two'], 'partial')
+            result.update(error={'code': 'deadline_exceeded', 'retryable': True}, next_offset=2)
+            return result
+
+    monkeypatch.setattr('news_aggregator.sources.page_monitor_service_client.PageMonitorServiceClient',
+                        ReparseCursorClient)
+
+    async def run():
+        first = await monitor.fetch_articles(limit=2)
+        assert [article.title for article in first] == ['Story one', 'Story two']
+        assert monitor._go_offset == 2
+        tail = await monitor.fetch_articles(limit=3)
+        assert [article.title for article in tail] == ['Story three', 'Story four', 'Story five']
+
+    asyncio.run(run())
+    assert calls == [('fetch', 0), ('parse', 0), ('fetch', 2)]
 
 
 @pytest.mark.parametrize('hanging_phase', ['study', 'reparse'])
@@ -233,7 +454,7 @@ def test_short_deadline_hanging_optional_phase_keeps_prefix_and_ack(monkeypatch,
     class HangingOptionalClient:
         def __init__(self, *args, **kwargs):
             pass
-        async def fetch(self, sent_config, *, limit, timeout_seconds):
+        async def fetch(self, sent_config, *, limit, timeout_seconds, offset=0):
             result = response(config, ['Story one'])
             result.update(needs_selector_study=True, study_html='<article>captured</article>')
             return result
@@ -267,7 +488,7 @@ def test_empty_resource_limit_partial_preserves_ack_and_propagates_without_learn
     class EmptyLimitClient:
         def __init__(self, *args, **kwargs):
             pass
-        async def fetch(self, sent_config, *, limit, timeout_seconds):
+        async def fetch(self, sent_config, *, limit, timeout_seconds, offset=0):
             result = response(config, [], 'partial')
             result['error'] = {'code': 'resource_limit', 'retryable': False}
             return result

@@ -117,6 +117,48 @@ func TestParsePageMonitorConfiguredArticlesAndAncestorLink(t *testing.T) {
 	}
 }
 
+func TestParsePageMonitorOffsetUsesUniqueFirstWindowAndKeepsRawSelectorStop(t *testing.T) {
+	now := time.Date(2026, 10, 22, 0, 0, 0, 0, time.UTC)
+	html := `<main>
+<article class="learned"><h2>First unique title</h2></article>
+<article class="learned"><h2>FIRST UNIQUE TITLE</h2></article>
+<article class="learned"><h2>Second unique title</h2></article>
+<article class="learned"><h2>Third unique title</h2></article>
+<article class="configured-one"><h2>Configured first unique title</h2></article>
+<article class="configured-one"><h2>CONFIGURED FIRST UNIQUE TITLE</h2></article>
+<article class="configured-one"><h2>Configured second unique title</h2></article>
+<article class="configured-two"><h2>Must stop before this title</h2></article>
+</main>`
+	learned, _, err := ParsePageMonitorList(PageMonitorOptions{
+		URL: "https://example.org/", HTML: html, Now: now, Limit: 3, Offset: 1,
+		Selectors:                 PageMonitorSelectors{Article: []string{".configured-one", ".configured-two"}, Title: []string{"h2"}},
+		LearnedContainerSelectors: []string{".learned"},
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(learned) != 2 || learned[0].Title != "Second unique title" || learned[1].Title != "Third unique title" {
+		t.Fatalf("learned offset page=%#v", learned)
+	}
+	configured, _, err := ParsePageMonitorList(PageMonitorOptions{
+		URL: "https://example.org/", HTML: html, Now: now, Limit: 3, Offset: 1,
+		Selectors: PageMonitorSelectors{Article: []string{".configured-one", ".configured-two"}, Title: []string{"h2"}},
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(configured) != 1 || configured[0].Title != "Configured second unique title" {
+		t.Fatalf("configured raw-limit offset page=%#v", configured)
+	}
+}
+
+func TestParsePageMonitorOffsetRejectsOutsideWindow(t *testing.T) {
+	_, _, err := ParsePageMonitorList(PageMonitorOptions{URL: "https://example.org/", HTML: "", Limit: 2, Offset: 2})
+	if err == nil || err.Error() != "invalid_offset" {
+		t.Fatalf("offset at window end: %v", err)
+	}
+}
+
 func TestParsePageMonitorListUsesPythonIDAndOriginalURL(t *testing.T) {
 	got, _, err := ParsePageMonitorList(PageMonitorOptions{URL: "https://example.com/original", HTML: `<article><a href="/post"><h2>A sufficiently long title</h2></a></article>`, SourceName: "Source", Now: time.Date(2026, 10, 22, 0, 0, 0, 0, time.UTC), Selectors: PageMonitorSelectors{Article: []string{"article"}}})
 	if err != nil {

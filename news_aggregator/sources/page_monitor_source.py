@@ -149,6 +149,13 @@ class PageMonitorSource(BaseSource):
         self.last_snapshot: Optional[PageSnapshot] = None
         self.failure_count = 0
         self.ai_analysis_count = 0
+        # Go pagination retains only bounded offset/hash metadata, never HTML or
+        # article payloads. Position keys index the configured first-Limit window.
+        self._go_offset = 0
+        self._go_previous_segments: Dict[int, str] = {}
+        self._go_scan_segments: Dict[int, str] = {}
+        self._go_scan_acknowledged: Dict[int, str] = {}
+        self._go_scan_active = False
         
         # Dynamic selectors learned through AI analysis
         self.learned_selectors: Dict[str, float] = {}  # selector -> confidence
@@ -281,6 +288,27 @@ class PageMonitorSource(BaseSource):
         reserve = min(5.0, total_budget * 0.10)
         usable_deadline = deadline - reserve
         scan_limit = max(1, min(self.config.max_articles_per_check, 100))
+        offset = self._go_offset if self._go_scan_active else 0
+        if offset >= scan_limit:
+            offset = 0
+        scan_segments = dict(self._go_scan_segments) if self._go_scan_active else {}
+        scan_acknowledged = dict(self._go_scan_acknowledged) if self._go_scan_active else {}
+        previous_segments = dict(self._go_previous_segments)
+        if not previous_segments and isinstance(self.last_snapshot, PageSnapshot):
+            acknowledged = self.last_snapshot.article_hashes
+            previous_segments = {
+                index: self._hash_article(item)
+                for index, item in enumerate(self.last_snapshot.extracted_items[:scan_limit])
+                if self._hash_article(item) in acknowledged
+            }
+
+        def hashes_in(segments):
+            return set(segments.values())
+
+        def prune_from_offset(segments, start):
+            for position in tuple(segments):
+                if position >= start:
+                    segments.pop(position, None)
 
         def remaining():
             return max(0.0, usable_deadline - loop.time())
@@ -307,20 +335,60 @@ class PageMonitorSource(BaseSource):
                 if fetch_budget <= 0:
                     raise TimeoutError
                 result = await client.fetch(self._service_config(), limit=scan_limit,
+                                            offset=offset,
                                             timeout_seconds=min(30.0, fetch_budget,
                                                                 self.config.wait_timeout_ms / 1000.0))
-            if (result['outcome'] == 'partial' and not result['items']
-                    and result['error']['code'] == 'resource_limit'):
-                raise ResourceLimitError('resource_limit')
             if result['outcome'] == 'partial':
                 logger.warning("Page Monitor Go returned a partial prefix: %s",
                                result['error']['code'])
                 if not result['items']:
-                    self.failure_count += 1
+                    if result.get('next_offset') is not None:
+                        # An unrepresentable item is skipped for this bounded
+                        # scan only. Keep its previous hash acknowledged if one
+                        # was known; no new item is acknowledged here.
+                        prior_scan_prefix = {position: article_hash
+                                             for position, article_hash in scan_segments.items()
+                                             if position >= offset}
+                        prior_scan_ack = {position: article_hash
+                                          for position, article_hash in scan_acknowledged.items()
+                                          if position >= offset}
+                        old_acknowledged = hashes_in(previous_segments) | set(prior_scan_ack.values())
+                        prior_prefix_pending = any(
+                            article_hash not in old_acknowledged
+                            for article_hash in prior_scan_prefix.values()
+                        )
+                        if (not prior_prefix_pending and offset not in scan_segments
+                                and offset in previous_segments):
+                            scan_segments[offset] = previous_segments[offset]
+                            scan_acknowledged[offset] = previous_segments[offset]
+                        self._go_scan_segments = scan_segments
+                        self._go_scan_acknowledged = scan_acknowledged
+                        next_offset = result['next_offset']
+                        if prior_prefix_pending:
+                            self._go_offset = offset
+                            self._go_scan_active = True
+                        elif next_offset >= scan_limit:
+                            current_hashes = hashes_in(scan_segments)
+                            acknowledged = (hashes_in(previous_segments) & current_hashes) | hashes_in(scan_acknowledged)
+                            self._go_previous_segments = {
+                                position: article_hash for position, article_hash in scan_segments.items()
+                                if article_hash in acknowledged
+                            }
+                            self._go_offset = 0
+                            self._go_scan_segments = {}
+                            self._go_scan_acknowledged = {}
+                            self._go_scan_active = False
+                        else:
+                            self._go_offset = next_offset
+                            self._go_scan_active = True
+                    if result['error']['code'] == 'resource_limit':
+                        raise ResourceLimitError('resource_limit')
+                    if result.get('next_offset') is None:
+                        self.failure_count += 1
                     return []
             current_snapshot = snapshot_from(result)
             # A single optional study pass operates on the exact captured HTML.
-            if (result['outcome'] == 'success' and result.get('needs_selector_study')
+            if (offset == 0 and result['outcome'] == 'success' and result.get('needs_selector_study')
                     and self.config.enable_ai_analysis
                     and result.get('study_html')):
                 study_html = result['study_html']
@@ -333,16 +401,18 @@ class PageMonitorSource(BaseSource):
                         async with asyncio.timeout_at(usable_deadline):
                             reparsed = await client.parse(
                                 self._service_config(), study_html, current_snapshot.timestamp,
-                                limit=scan_limit, timeout_seconds=min(30.0, remaining()))
+                                limit=scan_limit, timeout_seconds=min(30.0, remaining()), offset=0)
                         if reparsed['outcome'] == 'partial':
                             logger.warning("Page Monitor Go reparse returned a partial prefix: %s",
                                            reparsed['error']['code'])
                             if not reparsed['items']:
                                 raise PageMonitorServiceError(reparsed['error']['code'])
-                        current_snapshot = snapshot_from(reparsed)
+                        reparsed_snapshot = snapshot_from(reparsed)
+                        current_snapshot = reparsed_snapshot
+                        result = reparsed
                 except (PageMonitorServiceError, TimeoutError):
                     logger.warning("Page Monitor selector study or same-snapshot reparse failed; keeping extracted prefix")
-            elif (result['outcome'] == 'success' and result.get('needs_selector_study')
+            elif (offset == 0 and result['outcome'] == 'success' and result.get('needs_selector_study')
                   and self.config.enable_ai_analysis):
                 logger.warning("Page Monitor selector study HTML was omitted or unavailable")
         except ResourceLimitError:
@@ -363,23 +433,69 @@ class PageMonitorSource(BaseSource):
             return []
 
         self.failure_count = 0
-        if self.last_snapshot:
-            old_acknowledged = self.last_snapshot.article_hashes
-            new_hashes = current_snapshot.article_hashes - old_acknowledged
-            candidates = [item for item in current_snapshot.extracted_items
-                          if self._hash_article(item) in new_hashes]
-            articles = await self._convert_extracted_to_articles(candidates)
-        else:
-            articles = await self._convert_extracted_to_articles(current_snapshot.extracted_items)
+        base_acknowledged = hashes_in(previous_segments)
+        segment_hashes = [self._hash_article(item) for item in current_snapshot.extracted_items]
+        prior_segment_ack = {position: article_hash for position, article_hash in scan_acknowledged.items()
+                             if position >= offset}
+        prune_from_offset(scan_segments, offset)
+        prune_from_offset(scan_acknowledged, offset)
+        for index, article_hash in enumerate(segment_hashes):
+            position = offset + index
+            scan_segments[position] = article_hash
+            if prior_segment_ack.get(position) == article_hash:
+                scan_acknowledged[position] = article_hash
+        current_scan_acknowledged = hashes_in(scan_acknowledged)
+        candidates = [item for item, article_hash in zip(current_snapshot.extracted_items, segment_hashes)
+                      if article_hash not in base_acknowledged and article_hash not in current_scan_acknowledged]
+        articles = await self._convert_extracted_to_articles(candidates)
         delivered = articles[:delivery_limit]
-        delivered_keys = {(article.title, article.url) for article in delivered}
-        current_hashes = current_snapshot.article_hashes
-        retained = ((self.last_snapshot.article_hashes & current_hashes) if self.last_snapshot else set())
-        acknowledged = retained | {
-            self._hash_article(item) for item in current_snapshot.extracted_items
-            if (item.get('title'), item.get('link')) in delivered_keys
-        }
-        self.last_snapshot = replace(current_snapshot, article_hashes=acknowledged)
+        delivered_titles_urls = {(article.title, article.url) for article in delivered}
+        for index, (item, article_hash) in enumerate(zip(current_snapshot.extracted_items, segment_hashes)):
+            if (item.get('title'), item.get('link')) in delivered_titles_urls:
+                scan_acknowledged[offset + index] = article_hash
+
+        # A service cursor can advance only after every item it returned has
+        # either been acknowledged earlier in this scan or delivered now.
+        scan_acknowledged_values = hashes_in(scan_acknowledged)
+        consumed = all(article_hash in base_acknowledged or article_hash in scan_acknowledged_values
+                       for article_hash in segment_hashes)
+        next_offset = result.get('next_offset')
+        if consumed and next_offset is not None:
+            cursor = next_offset
+            complete = cursor >= scan_limit
+        elif consumed and next_offset is None and result['outcome'] in {'success', 'partial'}:
+            cursor = scan_limit
+            complete = True
+        else:
+            cursor = offset
+            complete = False
+
+        # Partial responses without a continuation cursor preserve the current
+        # offset. They may still acknowledge the delivered prefix safely.
+        if result['outcome'] == 'partial' and next_offset is None and not consumed:
+            complete = False
+
+        if complete:
+            current_hashes = hashes_in(scan_segments)
+            acknowledged = (base_acknowledged & current_hashes) | scan_acknowledged_values
+            previous_segments = {
+                position: article_hash for position, article_hash in scan_segments.items()
+                if article_hash in acknowledged
+            }
+            self._go_previous_segments = previous_segments
+            self._go_offset = 0
+            self._go_scan_segments = {}
+            self._go_scan_acknowledged = {}
+            self._go_scan_active = False
+        else:
+            self._go_offset = cursor
+            self._go_scan_segments = scan_segments
+            self._go_scan_acknowledged = scan_acknowledged
+            self._go_scan_active = True
+
+        segment_ack = (set(current_snapshot.article_hashes) &
+                       (base_acknowledged | scan_acknowledged_values))
+        self.last_snapshot = replace(current_snapshot, article_hashes=segment_ack)
         logger.info("Page Monitor Go delivered %d new articles", len(delivered))
         return delivered
 

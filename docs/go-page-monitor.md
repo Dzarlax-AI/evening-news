@@ -17,6 +17,16 @@ list at 100 items (source default: 20). Browser sources retain a two-second
 minimum settling period when JavaScript waiting is enabled. Other extraction
 routes keep their existing settling behavior.
 
+An optional zero-based `offset` continues a resource-limited prefix within the
+same configured first-N unique-title window. `limit` is the total window size,
+not a page size. A partial response can return `next_offset`; the client advances
+only after all received items were delivered or previously acknowledged. The
+next scan starts at zero. One item too large for a response advances one position
+for that scan without acknowledging the missing item; later scans retry it.
+Continuation refetches the page; it does not pin a historical DOM, so a changing
+list can shift positions between calls. State stores only bounded position/hash
+maps and the current snapshot, with no server cache or stored HTML.
+
 Python retains selector memory, AI calls, article hashes, acknowledged snapshots
 and normal SourceManager persistence. Only delivered items are acknowledged;
 caller limits do not discard the remainder of a captured list. Optional learning

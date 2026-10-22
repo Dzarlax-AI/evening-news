@@ -99,6 +99,7 @@ type PageMonitorRequest struct {
 	SourceName                string                                 `json:"source_name"`
 	BudgetMS                  int64                                  `json:"budget_ms"`
 	Limit                     int                                    `json:"limit,omitempty"`
+	Offset                    int                                    `json:"offset,omitempty"`
 	MinTitleLength            int                                    `json:"min_title_length,omitempty"`
 	UseBrowser                *bool                                  `json:"use_browser,omitempty"`
 	WaitForJS                 *bool                                  `json:"wait_for_js,omitempty"`
@@ -127,6 +128,7 @@ type PageMonitorResponse struct {
 	ContentHash        string                      `json:"content_hash,omitempty"`
 	SelectorsUsed      []string                    `json:"selectors_used"`
 	Items              []extractor.PageMonitorItem `json:"items"`
+	NextOffset         *int                        `json:"next_offset,omitempty"`
 	NeedsSelectorStudy bool                        `json:"needs_selector_study"`
 	StudyHTML          string                      `json:"study_html,omitempty"`
 	StudyHTMLOmitted   bool                        `json:"study_html_omitted,omitempty"`

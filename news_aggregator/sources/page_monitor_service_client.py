@@ -48,11 +48,11 @@ class PageMonitorServiceClient:
         self.max_bytes = min(max_bytes, MAX_RESPONSE_BYTES)
         self._session_factory = session_factory
 
-    async def fetch(self, config, *, limit, timeout_seconds):
+    async def fetch(self, config, *, limit, timeout_seconds, offset=0):
         return await self._call(config, operation='fetch', limit=limit,
-                                 timeout_seconds=timeout_seconds)
+                                timeout_seconds=timeout_seconds, offset=offset)
 
-    async def parse(self, config, html, snapshot_at, *, limit, timeout_seconds):
+    async def parse(self, config, html, snapshot_at, *, limit, timeout_seconds, offset=0):
         if not isinstance(html, str) or not isinstance(snapshot_at, datetime):
             raise PageMonitorServiceError('invalid_request')
         try:
@@ -65,11 +65,15 @@ class PageMonitorServiceClient:
             snapshot_at = snapshot_at.replace(tzinfo=timezone.utc)
         return await self._call(config, operation='parse', limit=limit,
                                 timeout_seconds=timeout_seconds, html=html,
-                                snapshot_at=snapshot_at.astimezone(timezone.utc).isoformat().replace('+00:00', 'Z'))
+                                snapshot_at=snapshot_at.astimezone(timezone.utc).isoformat().replace('+00:00', 'Z'),
+                                offset=offset)
 
-    async def _call(self, config, *, operation, limit, timeout_seconds, html=None, snapshot_at=None):
+    async def _call(self, config, *, operation, limit, timeout_seconds, html=None, snapshot_at=None,
+                    offset=0):
         if type(limit) is not int or not 1 <= limit <= MAX_ITEMS:
             raise ValueError('invalid_page_monitor_limit')
+        if type(offset) is not int or not 0 <= offset < limit:
+            raise ValueError('invalid_page_monitor_offset')
         if (isinstance(timeout_seconds, bool) or not isinstance(timeout_seconds, (int, float))
                 or not math.isfinite(timeout_seconds) or timeout_seconds <= 0):
             raise PageMonitorServiceError('deadline_exceeded', True)
@@ -111,7 +115,7 @@ class PageMonitorServiceClient:
             'contract_version': '1', 'request_id': str(uuid4()), 'operation': operation,
             'url': config.url, 'source_name': config.name,
             'budget_ms': max(1, min(30_000, int(timeout_seconds * 1000))),
-            'limit': limit, 'min_title_length': config.min_title_length,
+            'limit': limit, 'offset': offset, 'min_title_length': config.min_title_length,
             **selectors,
         }
         if operation == 'fetch':
@@ -162,7 +166,7 @@ class PageMonitorServiceClient:
         required = {'contract_version', 'build_version', 'request_id', 'outcome',
                     'original_url', 'final_url', 'selectors_used', 'items', 'needs_selector_study'}
         allowed = required | {'fetch_method', 'snapshot_at', 'content_hash', 'study_html',
-                              'study_html_omitted', 'error'}
+                              'study_html_omitted', 'error', 'next_offset'}
         if (not isinstance(data, dict) or not required.issubset(data) or set(data) - allowed
                 or data.get('contract_version') != '1' or data.get('request_id') != request['request_id']
                 or data.get('original_url') != config.url
@@ -191,7 +195,8 @@ class PageMonitorServiceClient:
         if not isinstance(selectors, list) or len(selectors) > 256 or any(not cls._bounded_text(v, 2048) for v in selectors):
             raise PageMonitorServiceError('invalid_payload')
         items = data['items']
-        if not isinstance(items, list) or len(items) > min(limit, MAX_ITEMS):
+        if (not isinstance(items, list)
+                or len(items) > min(limit - request['offset'], MAX_ITEMS)):
             raise PageMonitorServiceError('invalid_payload')
         for item in items:
             cls._validate_item(item, config)
@@ -215,11 +220,22 @@ class PageMonitorServiceClient:
                 or (outcome == 'partial' and error is None)
                 or (outcome == 'success' and error is not None)):
             raise PageMonitorServiceError('invalid_payload')
-        if outcome in {'failed', 'rejected'}:
-            raise PageMonitorServiceError(error['code'], error['retryable'])
         if outcome == 'partial' and error['code'] not in {
                 'resource_limit', 'deadline_exceeded', 'cancelled', 'parse_failed'}:
             raise PageMonitorServiceError('invalid_payload')
+        if 'next_offset' in data:
+            next_offset = data['next_offset']
+            offset = request['offset']
+            if (outcome != 'partial' or type(next_offset) is not int
+                    or not offset < next_offset <= limit):
+                raise PageMonitorServiceError('invalid_payload')
+            if items:
+                if next_offset != offset + len(items):
+                    raise PageMonitorServiceError('invalid_payload')
+            elif error['code'] != 'resource_limit' or next_offset != offset + 1:
+                raise PageMonitorServiceError('invalid_payload')
+        if outcome in {'failed', 'rejected'}:
+            raise PageMonitorServiceError(error['code'], error['retryable'])
         return data
 
     @classmethod

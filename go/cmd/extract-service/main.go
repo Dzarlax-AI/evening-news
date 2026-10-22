@@ -216,7 +216,7 @@ func (r runtimeRunner) RunPageMonitor(ctx context.Context, req service.PageMonit
 	if req.WaitForJS != nil {
 		waitForJS = *req.WaitForJS
 	}
-	input := pipeline.PageMonitorRequest{Operation: req.Operation, URL: req.URL, SourceName: req.SourceName, Budget: time.Duration(req.BudgetMS) * time.Millisecond, Limit: req.Limit, MinTitleLength: req.MinTitleLength, UseBrowser: useBrowser, WaitForJS: waitForJS, Selectors: extractor.PageMonitorSelectors{Article: req.ArticleSelectors, Title: req.TitleSelectors, Date: req.DateSelectors, Link: req.LinkSelectors}, LearnedContainers: req.LearnedContainerSelectors, LearnedTitles: req.LearnedTitleSelectors, LearnedLinks: req.LearnedLinkSelectors, LearnedDates: req.LearnedDateSelectors, LearnedGeneral: req.LearnedGeneralSelectors}
+	input := pipeline.PageMonitorRequest{Operation: req.Operation, URL: req.URL, SourceName: req.SourceName, Budget: time.Duration(req.BudgetMS) * time.Millisecond, Limit: req.Limit, Offset: req.Offset, MinTitleLength: req.MinTitleLength, UseBrowser: useBrowser, WaitForJS: waitForJS, Selectors: extractor.PageMonitorSelectors{Article: req.ArticleSelectors, Title: req.TitleSelectors, Date: req.DateSelectors, Link: req.LinkSelectors}, LearnedContainers: req.LearnedContainerSelectors, LearnedTitles: req.LearnedTitleSelectors, LearnedLinks: req.LearnedLinkSelectors, LearnedDates: req.LearnedDateSelectors, LearnedGeneral: req.LearnedGeneralSelectors}
 	if req.ProvidedHTML != nil {
 		input.HTML = *req.ProvidedHTML
 	}
@@ -224,7 +224,7 @@ func (r runtimeRunner) RunPageMonitor(ctx context.Context, req service.PageMonit
 		input.SnapshotAt = *req.SnapshotAt
 	}
 	out := r.pageMonitor.Extract(ctx, input)
-	resp := service.PageMonitorResponse{Outcome: out.Outcome, OriginalURL: out.OriginalURL, FinalURL: out.FinalURL, FetchMethod: out.FetchMethod, ContentHash: out.ContentHash, SelectorsUsed: out.SelectorsUsed, Items: out.Items, NeedsSelectorStudy: out.NeedsSelectorStudy, StudyHTML: out.StudyHTML}
+	resp := service.PageMonitorResponse{Outcome: out.Outcome, OriginalURL: out.OriginalURL, FinalURL: out.FinalURL, FetchMethod: out.FetchMethod, ContentHash: out.ContentHash, SelectorsUsed: out.SelectorsUsed, Items: out.Items, NextOffset: out.NextOffset, NeedsSelectorStudy: out.NeedsSelectorStudy, StudyHTML: out.StudyHTML}
 	if !out.SnapshotAt.IsZero() {
 		at := out.SnapshotAt
 		resp.SnapshotAt = &at

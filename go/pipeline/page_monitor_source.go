@@ -19,6 +19,7 @@ type PageMonitorRequest struct {
 	SourceName                                                   string
 	Budget                                                       time.Duration
 	Limit                                                        int
+	Offset                                                       int
 	MinTitleLength                                               int
 	UseBrowser                                                   bool
 	WaitForJS                                                    bool
@@ -42,6 +43,7 @@ type PageMonitorOutcome struct {
 	Outcome            string                      `json:"outcome"`
 	Error              string                      `json:"error,omitempty"`
 	Retryable          bool                        `json:"retryable"`
+	NextOffset         *int                        `json:"next_offset,omitempty"`
 }
 
 type PageMonitorSource struct {
@@ -66,7 +68,7 @@ func (s PageMonitorSource) Extract(ctx context.Context, in PageMonitorRequest) P
 	if in.MinTitleLength == 0 {
 		in.MinTitleLength = 10
 	}
-	if in.Limit < 1 || in.Limit > 100 || in.MinTitleLength < 1 {
+	if in.Limit < 1 || in.Limit > 100 || in.Offset < 0 || in.Offset >= in.Limit || in.MinTitleLength < 1 {
 		out.Outcome = "rejected"
 		out.Error = "invalid_input"
 		return out
@@ -147,7 +149,7 @@ func (s PageMonitorSource) Extract(ctx context.Context, in PageMonitorRequest) P
 		out.Error = "resource_limit"
 		return out
 	}
-	items, used, err := extractor.ParsePageMonitorList(extractor.PageMonitorOptions{Context: ctx, URL: in.URL, HTML: html, Now: snapshot, Limit: in.Limit, MinTitleLength: in.MinTitleLength, SourceName: in.SourceName, Selectors: in.Selectors, LearnedContainerSelectors: in.LearnedContainers, LearnedTitleSelectors: in.LearnedTitles, LearnedLinkSelectors: in.LearnedLinks, LearnedDateSelectors: in.LearnedDates, LearnedGeneral: in.LearnedGeneral})
+	items, used, err := extractor.ParsePageMonitorList(extractor.PageMonitorOptions{Context: ctx, URL: in.URL, HTML: html, Now: snapshot, Limit: in.Limit, Offset: in.Offset, MinTitleLength: in.MinTitleLength, SourceName: in.SourceName, Selectors: in.Selectors, LearnedContainerSelectors: in.LearnedContainers, LearnedTitleSelectors: in.LearnedTitles, LearnedLinkSelectors: in.LearnedLinks, LearnedDateSelectors: in.LearnedDates, LearnedGeneral: in.LearnedGeneral})
 	out.Items = items
 	out.SelectorsUsed = used
 	if err != nil {
@@ -164,6 +166,12 @@ func (s PageMonitorSource) Extract(ctx context.Context, in PageMonitorRequest) P
 		if len(items) > 0 {
 			out.Outcome = "partial"
 			out.Retryable = errors.Is(err, context.DeadlineExceeded)
+		}
+		if errors.Is(err, extractor.ErrOutputLimit) {
+			out.Outcome = "partial"
+			out.NextOffset = pageMonitorNextOffset(in.Offset, len(items), in.Limit, len(items) == 0)
+		} else if (errors.Is(err, context.DeadlineExceeded) || errors.Is(err, context.Canceled)) && len(items) > 0 {
+			out.NextOffset = pageMonitorNextOffset(in.Offset, len(items), in.Limit, false)
 		}
 		out.FinalURL = finalURL
 		out.FetchMethod = method
@@ -189,12 +197,24 @@ func (s PageMonitorSource) Extract(ctx context.Context, in PageMonitorRequest) P
 		out = pageMonitorTransportFailure(out, err)
 		if len(out.Items) > 0 {
 			out.Outcome = "partial"
+			out.NextOffset = pageMonitorNextOffset(in.Offset, len(out.Items), in.Limit, false)
 		} else {
 			out.Outcome = "failed"
 		}
 		return out
 	}
 	return out
+}
+
+func pageMonitorNextOffset(offset, retained, limit int, advanceOne bool) *int {
+	next := offset + retained
+	if advanceOne {
+		next = offset + 1
+	}
+	if next <= offset || next > limit || (!advanceOne && next == limit) {
+		return nil
+	}
+	return &next
 }
 
 const pageMonitorReadySelector = "body"

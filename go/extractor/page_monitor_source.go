@@ -3,6 +3,7 @@ package extractor
 import (
 	"context"
 	"crypto/md5"
+	"crypto/sha256"
 	"encoding/hex"
 	"errors"
 	"fmt"
@@ -49,6 +50,7 @@ type PageMonitorOptions struct {
 	HTML                      string
 	Now                       time.Time
 	Limit                     int
+	Offset                    int
 	MinTitleLength            int
 	Selectors                 PageMonitorSelectors
 	SourceName                string
@@ -79,6 +81,9 @@ func ParsePageMonitorList(in PageMonitorOptions) ([]PageMonitorItem, []string, e
 	if in.Limit < 1 || in.Limit > 100 {
 		return nil, nil, errors.New("invalid_limit")
 	}
+	if in.Offset < 0 || in.Offset >= in.Limit {
+		return nil, nil, errors.New("invalid_offset")
+	}
 	if in.MinTitleLength == 0 {
 		in.MinTitleLength = 10
 	}
@@ -107,7 +112,8 @@ func ParsePageMonitorList(in PageMonitorOptions) ([]PageMonitorItem, []string, e
 		return nil, nil, err
 	}
 	rawItems := []PageMonitorItem{}
-	seenTitles := map[string]bool{}
+	seenTitles := map[[32]byte]struct{}{}
+	uniqueCount := 0
 	rawCount := 0
 	retainedBytes := 0
 	outputLimitReached := false
@@ -129,21 +135,24 @@ func ParsePageMonitorList(in PageMonitorOptions) ([]PageMonitorItem, []string, e
 				item, ok := pageMonitorItem(in, element, in.Now)
 				if ok {
 					rawCount++
-					key := cases.Lower(language.Und).String(strings.TrimSpace(item.Title))
-					if !seenTitles[key] && len(rawItems) < in.Limit {
-						itemBytes := pageMonitorRetainedItemBytes(item)
-						if itemBytes > pageMonitorRetainedOutputLimit-retainedBytes {
-							outputLimitReached = true
-							return false
+					key := sha256.Sum256([]byte(cases.Lower(language.Und).String(strings.TrimSpace(item.Title))))
+					if _, duplicate := seenTitles[key]; !duplicate && uniqueCount < in.Limit {
+						seenTitles[key] = struct{}{}
+						uniqueCount++
+						if uniqueCount > in.Offset {
+							itemBytes := pageMonitorRetainedItemBytes(item)
+							if itemBytes > pageMonitorRetainedOutputLimit-retainedBytes {
+								outputLimitReached = true
+								return false
+							}
+							rawItems = append(rawItems, item)
+							retainedBytes += itemBytes
 						}
-						seenTitles[key] = true
-						rawItems = append(rawItems, item)
-						retainedBytes += itemBytes
 					}
 					// The Python source finishes the current selector before checking
 					// its raw article count against the configured limit. Keeping only
 					// unique output items bounds memory while preserving that behavior.
-					if len(rawItems) >= in.Limit {
+					if uniqueCount >= in.Limit {
 						return false
 					}
 				}
@@ -169,18 +178,18 @@ func ParsePageMonitorList(in PageMonitorOptions) ([]PageMonitorItem, []string, e
 	general := append([]PageMonitorGeneralSelector(nil), in.LearnedGeneral...)
 	sort.SliceStable(general, func(i, j int) bool { return general[i].Confidence > general[j].Confidence })
 	generalCount := 0
-	if len(rawItems) == 0 {
+	if uniqueCount == 0 {
 		for _, g := range general {
 			if g.Confidence > .7 {
 				collect([]string{g.Selector}, true, 0)
 				generalCount++
-				if len(rawItems) > 0 || generalCount >= 3 {
+				if uniqueCount > 0 || generalCount >= 3 {
 					break
 				}
 			}
 		}
 	}
-	if len(rawItems) == 0 {
+	if uniqueCount == 0 {
 		collect(in.Selectors.Article, false, in.Limit)
 	}
 	items := rawItems

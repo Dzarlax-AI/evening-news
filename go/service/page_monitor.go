@@ -92,6 +92,9 @@ func (s *Server) extractPageMonitor(w http.ResponseWriter, r *http.Request) {
 		resp.StudyHTMLOmitted = resp.NeedsSelectorStudy
 		if len(resp.Items) > 0 {
 			resp.Outcome = "partial"
+			if next := req.Offset + len(resp.Items); next < req.Limit {
+				resp.NextOffset = &next
+			}
 		} else {
 			resp.Outcome = "failed"
 		}
@@ -114,7 +117,7 @@ func (s *Server) extractPageMonitor(w http.ResponseWriter, r *http.Request) {
 		resp.Outcome = "failed"
 		resp.Error = &Failure{Code: "invalid_runner_response"}
 	}
-	resp = boundPageMonitorResponse(resp)
+	resp = boundPageMonitorResponse(resp, req.Offset, req.Limit)
 	s.mu.Lock()
 	s.completed++
 	s.latency += time.Since(started)
@@ -143,6 +146,9 @@ func validatePageMonitorRequest(r *PageMonitorRequest) string {
 		r.Limit = 20
 	}
 	if r.Limit < 1 || r.Limit > 100 {
+		return "invalid_request"
+	}
+	if r.Offset < 0 || r.Offset >= r.Limit {
 		return "invalid_request"
 	}
 	if r.MinTitleLength == 0 {
@@ -217,7 +223,7 @@ func (s *Server) pageMonitorHTTPFailure(w http.ResponseWriter, status int, code,
 }
 
 // Bound response content using JSON's actual string escaping rules before encoding.
-func boundPageMonitorResponse(resp PageMonitorResponse) PageMonitorResponse {
+func boundPageMonitorResponse(resp PageMonitorResponse, offset, limit int) PageMonitorResponse {
 	const budget = MaxJSONBytes - 256 // reserve room for final status and error metadata
 	originalItems := resp.Items
 	resp.Items = []extractor.PageMonitorItem{}
@@ -244,6 +250,17 @@ func boundPageMonitorResponse(resp PageMonitorResponse) PageMonitorResponse {
 		kept = append(kept, item)
 	}
 	resp.Items = kept
+	if len(kept) < len(originalItems) {
+		next := offset + len(kept)
+		if len(kept) == 0 {
+			next = offset + 1
+		}
+		if (len(kept) == 0 && next <= limit) || (len(kept) > 0 && next < limit) {
+			resp.NextOffset = &next
+		}
+	} else if resp.NextOffset != nil && (*resp.NextOffset <= offset || *resp.NextOffset > limit) {
+		resp.NextOffset = nil
+	}
 	return resp
 }
 

@@ -100,6 +100,7 @@ def test_fetch_request_is_authenticated_bounded_and_preserves_false_flags():
     request = json.loads(state['data'])
     assert request['contract_version'] == '1' and request['operation'] == 'fetch'
     assert request['use_browser'] is False and request['wait_for_js'] is False
+    assert request['offset'] == 0
     assert request['learned_general_selectors'] == [{'selector': '.general', 'confidence': 0.9}]
     assert state['headers']['Authorization'] == 'Bearer private-token'
     assert state['headers']['Accept-Encoding'] == 'identity' and state['allow_redirects'] is False
@@ -173,6 +174,49 @@ def test_response_byte_cap_and_invalid_limit():
         asyncio.run(client.fetch(Config, limit=1, timeout_seconds=2))
     with pytest.raises(ValueError, match='invalid_page_monitor_limit'):
         asyncio.run(client.fetch(Config, limit=True, timeout_seconds=1))
+    with pytest.raises(ValueError, match='invalid_page_monitor_offset'):
+        asyncio.run(client.fetch(Config, limit=1, timeout_seconds=1, offset=1))
+    with pytest.raises(ValueError, match='invalid_page_monitor_offset'):
+        asyncio.run(client.fetch(Config, limit=2, timeout_seconds=1, offset=True))
+
+
+def test_partial_continuation_cursor_is_sent_and_validated():
+    client, state = client_for(lambda req: FakeResponse(json.dumps(envelope(
+        req, outcome='partial', items=[item(), item()],
+        error={'code': 'resource_limit', 'retryable': False}, next_offset=4)).encode()))
+    result = asyncio.run(client.fetch(Config, limit=6, timeout_seconds=2, offset=2))
+    assert result['next_offset'] == 4
+    assert json.loads(state['data'])['offset'] == 2
+
+    invalid_results = [
+        {'outcome': 'success', 'next_offset': 2},
+        {'outcome': 'partial', 'next_offset': 5},
+        {'outcome': 'partial', 'next_offset': True},
+        {'outcome': 'partial', 'next_offset': 3},
+    ]
+    for changes in invalid_results:
+        def malformed(req, changes=changes):
+            result = envelope(req, outcome=changes['outcome'],
+                error=({'code': 'resource_limit', 'retryable': False}
+                       if changes['outcome'] == 'partial' else None),
+                next_offset=changes['next_offset'])
+            return FakeResponse(json.dumps(result).encode())
+        malformed_client, _ = client_for(malformed)
+        with pytest.raises(PageMonitorServiceError, match='invalid_payload'):
+            asyncio.run(malformed_client.fetch(Config, limit=4, timeout_seconds=2, offset=1))
+
+
+def test_empty_resource_limit_can_advance_one_unrepresentable_item():
+    client, _ = client_for(lambda req: FakeResponse(json.dumps(envelope(
+        req, outcome='partial', items=[],
+        error={'code': 'resource_limit', 'retryable': False}, next_offset=2)).encode()))
+    result = asyncio.run(client.fetch(Config, limit=4, timeout_seconds=2, offset=1))
+    assert result['next_offset'] == 2
+
+    over_window, _ = client_for(lambda req: FakeResponse(json.dumps(envelope(
+        req, items=[item(), item()])).encode()))
+    with pytest.raises(PageMonitorServiceError, match='invalid_payload'):
+        asyncio.run(over_window.fetch(Config, limit=2, timeout_seconds=2, offset=1))
 
 
 def test_long_selected_title_and_large_minimum_title_length_match_go_bounds():
