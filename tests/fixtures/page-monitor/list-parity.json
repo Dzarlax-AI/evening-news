@@ -443,6 +443,103 @@
           "id": "6e235fa3755c4407142af37245026890"
         }
       ]
+    },
+    {
+      "name": "invalid_learned_groups_skip_to_valid_selectors",
+      "url": "https://example.com/updates",
+      "source_name": "Example",
+      "now": "2026-10-22T08:30:00",
+      "article_selectors": [
+        "article.configured"
+      ],
+      "title_selectors": [
+        "h2"
+      ],
+      "date_selectors": [],
+      "link_selectors": [],
+      "learned_container_selectors": [
+        "[",
+        ".learned-container"
+      ],
+      "learned_title_selectors": [
+        "[",
+        ".learned-title"
+      ],
+      "learned_link_selectors": [
+        "[",
+        ".learned-link"
+      ],
+      "learned_date_selectors": [
+        "[",
+        ".learned-date"
+      ],
+      "learned_general_selectors": [],
+      "min_title_length": 10,
+      "limit": 20,
+      "html": "<main><article class='learned-container'><h3 class='learned-title'>Valid learned selectors recover without failure</h3><a class='learned-link' href='/learned'>read</a><time class='learned-date' datetime='2026-10-20'>date</time><p>Details.</p></article><article class='configured'><h2>Configured fallback article stays available</h2></article></main>",
+      "expected": [
+        {
+          "title": "Valid learned selectors recover without failure",
+          "link": "https://example.com/learned",
+          "published": "2026-10-20T00:00:00",
+          "description": "Valid learned selectors recover without failure read date Details.",
+          "source": "Example",
+          "source_url": "https://example.com/updates",
+          "content_type": "general",
+          "id": "bcffde0a1ed33a01f5462135b7b1cd03"
+        }
+      ]
+    },
+    {
+      "name": "invalid_general_candidates_still_consume_top_three",
+      "url": "https://example.com/updates",
+      "source_name": "Example",
+      "now": "2026-10-22T08:30:00",
+      "article_selectors": [
+        "article.configured"
+      ],
+      "title_selectors": [
+        "h2"
+      ],
+      "date_selectors": [],
+      "link_selectors": [],
+      "learned_container_selectors": [],
+      "learned_title_selectors": [],
+      "learned_link_selectors": [],
+      "learned_date_selectors": [],
+      "learned_general_selectors": [
+        [
+          "[",
+          0.99
+        ],
+        [
+          "article[",
+          0.98
+        ],
+        [
+          "div,]",
+          0.97
+        ],
+        [
+          "article.learned",
+          0.96
+        ]
+      ],
+      "min_title_length": 10,
+      "limit": 20,
+      "html": "<main><article class='learned'><h2>Fourth learned candidate must remain outside top three</h2></article><article class='configured'><h2>Configured fallback after three invalid candidates</h2><a href='/configured'>read</a></article></main>",
+      "expected": [
+        {
+          "title": "Configured fallback after three invalid candidates",
+          "link": "https://example.com/configured",
+          "published": "2026-10-22T08:30:00",
+          "description": "Configured fallback after three invalid candidates read",
+          "source": "Example",
+          "source_url": "https://example.com/updates",
+          "content_type": "general",
+          "id": "b7d7bdb2b937e56fd512030d3cbf2178"
+        }
+      ]
     }
   ]
 }

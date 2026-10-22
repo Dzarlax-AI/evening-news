@@ -90,14 +90,16 @@ func TestPageMonitorTransportFailureClasses(t *testing.T) {
 
 func TestPageMonitorFetchUsesExactlyOneSelectedTransport(t *testing.T) {
 	called := ""
+	var renderSettle time.Duration
 	source := PageMonitorSource{
 		Admit: func(context.Context, string) error { called = "admit"; return nil },
 		Fetch: func(context.Context, string, transport.Options) (transport.Document, error) {
 			called = "http"
 			return transport.Document{URL: "https://example.org/final", HTML: []byte(`<article><h2>HTTP snapshot article</h2></article>`)}, nil
 		},
-		Render: func(context.Context, string, transport.BrowserOptions, string, time.Duration) (transport.RenderedDocument, error) {
+		Render: func(_ context.Context, _ string, _ transport.BrowserOptions, _ string, settle time.Duration) (transport.RenderedDocument, error) {
 			called = "browser"
+			renderSettle = settle
 			return transport.RenderedDocument{Document: transport.Document{URL: "https://example.org/final", HTML: []byte(`<article><h2>Browser snapshot article</h2></article>`)}}, nil
 		},
 		Now: func() time.Time { return time.Date(2026, 10, 22, 0, 0, 0, 0, time.UTC) },
@@ -106,7 +108,7 @@ func TestPageMonitorFetchUsesExactlyOneSelectedTransport(t *testing.T) {
 		called = ""
 		out := source.Extract(context.Background(), PageMonitorRequest{
 			Operation: "fetch", URL: "https://example.org/updates", SourceName: "Example", Budget: time.Second,
-			UseBrowser: browser, WaitForJS: false, Selectors: extractor.PageMonitorSelectors{Article: []string{"article"}},
+			UseBrowser: browser, WaitForJS: browser, Selectors: extractor.PageMonitorSelectors{Article: []string{"article"}},
 		})
 		want := "http"
 		if browser {
@@ -114,6 +116,9 @@ func TestPageMonitorFetchUsesExactlyOneSelectedTransport(t *testing.T) {
 		}
 		if out.Outcome != "success" || called != want || len(out.Items) != 1 || out.FinalURL != "https://example.org/final" {
 			t.Fatalf("browser=%v call=%q response=%+v", browser, called, out)
+		}
+		if browser && renderSettle != 2*time.Second || !browser && renderSettle != 0 {
+			t.Fatalf("browser=%v render settle=%s", browser, renderSettle)
 		}
 	}
 }

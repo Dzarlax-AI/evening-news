@@ -43,7 +43,6 @@ type NativeBrowserConfig struct {
 type NativeBrowserOptions struct {
 	BrowserOptions
 	ReadySelector string
-	MinSettle     time.Duration
 }
 
 const nativeEventRPCMaxInFlight = 32

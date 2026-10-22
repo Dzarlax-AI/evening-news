@@ -88,7 +88,9 @@ func ParsePageMonitorList(in PageMonitorOptions) ([]PageMonitorItem, []string, e
 	if in.Now.Location() != time.UTC {
 		in.Now = in.Now.UTC()
 	}
-	for _, group := range [][]string{in.Selectors.Article, in.Selectors.Title, in.Selectors.Date, in.Selectors.Link, in.LearnedContainerSelectors, in.LearnedTitleSelectors, in.LearnedLinkSelectors, in.LearnedDateSelectors} {
+	// Configured selectors are explicit caller input and stay strict. Learned
+	// selectors are persisted best-effort hints; malformed ones are skipped.
+	for _, group := range [][]string{in.Selectors.Article, in.Selectors.Title, in.Selectors.Date, in.Selectors.Link} {
 		for _, selector := range group {
 			if _, e := cascadia.Compile(selector); e != nil {
 				return nil, nil, fmt.Errorf("%w: %s", ErrPageMonitorSelector, selector)
@@ -98,9 +100,6 @@ func ParsePageMonitorList(in PageMonitorOptions) ([]PageMonitorItem, []string, e
 	for _, learned := range in.LearnedGeneral {
 		if !finitePageMonitorConfidence(learned.Confidence) {
 			return nil, nil, errors.New("invalid_learned_confidence")
-		}
-		if _, e := cascadia.Compile(learned.Selector); e != nil {
-			return nil, nil, fmt.Errorf("%w: %s", ErrPageMonitorSelector, learned.Selector)
 		}
 	}
 	doc, err := goquery.NewDocumentFromReader(strings.NewReader(in.HTML))
@@ -118,7 +117,10 @@ func ParsePageMonitorList(in PageMonitorOptions) ([]PageMonitorItem, []string, e
 			if in.Context.Err() != nil || outputLimitReached {
 				return
 			}
-			matcher, _ := cascadia.Compile(selector)
+			matcher, compileErr := cascadia.Compile(selector)
+			if compileErr != nil {
+				continue
+			}
 			before := rawCount
 			doc.FindMatcher(matcher).EachWithBreak(func(_ int, element *goquery.Selection) bool {
 				if in.Context.Err() != nil {
@@ -217,13 +219,19 @@ func pageMonitorItem(in PageMonitorOptions, element *goquery.Selection, now time
 		return PageMonitorItem{}, false
 	}
 	if linkFound && !strings.HasPrefix(link, "#") {
-		if base, e := url.Parse(in.URL); e == nil {
-			if ref, e := url.Parse(link); e == nil {
-				link = base.ResolveReference(ref).String()
+		base, baseErr := url.Parse(in.URL)
+		ref, refErr := url.Parse(link)
+		if baseErr == nil && refErr == nil {
+			resolved := base.ResolveReference(ref)
+			if pageMonitorHTTPLink(resolved) {
+				link = resolved.String()
+			} else {
+				link = in.URL
 			}
+		} else {
+			link = in.URL
 		}
-	}
-	if !linkFound || strings.HasPrefix(link, "#") {
+	} else {
 		link = in.URL
 	}
 	published, ok := pageMonitorSelectedDate(in.Context, element, in.LearnedDateSelectors, true, now)
@@ -252,6 +260,13 @@ func pageMonitorItem(in PageMonitorOptions, element *goquery.Selection, now time
 		return PageMonitorItem{}, false
 	}
 	return PageMonitorItem{Title: title, Link: link, Description: description, Published: published, ContentType: contentType, ID: pageMonitorMD5(title + link), Source: in.SourceName, SourceURL: in.URL}, true
+}
+
+func pageMonitorHTTPLink(link *url.URL) bool {
+	// Python's article wire model accepts only ordinary HTTP(S) links. Replace
+	// script, contact, credentialed, oversized, and malformed targets with the
+	// source URL so one bad href cannot invalidate the entire extracted batch.
+	return link != nil && (link.Scheme == "http" || link.Scheme == "https") && link.Hostname() != "" && link.User == nil && link.Opaque == "" && len(link.String()) <= 8192
 }
 
 func pageMonitorTextBySelectors(ctx context.Context, s *goquery.Selection, selectors []string) string {

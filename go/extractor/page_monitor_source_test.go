@@ -130,6 +130,62 @@ func TestParsePageMonitorListUsesPythonIDAndOriginalURL(t *testing.T) {
 	}
 }
 
+func TestParsePageMonitorNormalizesNonWebLinksToSourceURL(t *testing.T) {
+	const sourceURL = "https://example.com/updates"
+	html := `<main>
+<article><h2>Valid relative article link</h2><a href="/story">read</a></article>
+<article><h2>Mail address is not article URL</h2><a href="mailto:editor@example.com">email</a></article>
+<article><h2>Telephone address is not article URL</h2><a href="tel:+381111111">call</a></article>
+<article><h2>Script address is not article URL</h2><a href="javascript:void(0)">open</a></article>
+<article><h2>Credentialed URL is not article URL</h2><a href="https://user:pass@example.net/story">read</a></article>
+
+</main>`
+	html = strings.Replace(html, "</main>", `<article><h2>Oversized article URL falls back</h2><a href="https://example.net/`+strings.Repeat("x", 8200)+`">read</a></article></main>`, 1)
+	got, _, err := ParsePageMonitorList(PageMonitorOptions{
+		URL: sourceURL, SourceName: "Example", HTML: html, Limit: 20,
+		Selectors: PageMonitorSelectors{Article: []string{"article"}, Title: []string{"h2"}},
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	wantLinks := []string{
+		"https://example.com/story", sourceURL, sourceURL, sourceURL, sourceURL, sourceURL,
+	}
+	if len(got) != len(wantLinks) {
+		t.Fatalf("items=%d, want %d", len(got), len(wantLinks))
+	}
+	for i, item := range got {
+		if item.Link != wantLinks[i] || item.ID != pageMonitorMD5(item.Title+wantLinks[i]) {
+			t.Errorf("item %d link/id=%q/%q, want %q/%q", i, item.Link, item.ID, wantLinks[i], pageMonitorMD5(item.Title+wantLinks[i]))
+		}
+	}
+}
+
+func TestParsePageMonitorInvalidLearnedSelectorsDoNotPoisonSubsequentCalls(t *testing.T) {
+	opts := PageMonitorOptions{
+		URL: "https://example.com/updates", SourceName: "Example",
+		HTML: `<article class="learned"><h2>Learned selector recovers on each parse</h2><a href="/story">read</a></article>`,
+		Now:  time.Date(2026, 10, 22, 8, 30, 0, 0, time.UTC), Limit: 20, MinTitleLength: 10,
+		Selectors:                 PageMonitorSelectors{Article: []string{"article"}, Title: []string{"h2"}},
+		LearnedContainerSelectors: []string{"[", ".learned"},
+		LearnedTitleSelectors:     []string{"[", ".missing", "h2"},
+		LearnedLinkSelectors:      []string{"[", "a[href]"},
+		LearnedDateSelectors:      []string{"[", "time"},
+		LearnedGeneral:            []PageMonitorGeneralSelector{{Selector: "[", Confidence: 0.99}},
+	}
+	first, _, err := ParsePageMonitorList(opts)
+	if err != nil {
+		t.Fatalf("first learned parse: %v", err)
+	}
+	second, _, err := ParsePageMonitorList(opts)
+	if err != nil {
+		t.Fatalf("subsequent learned parse: %v", err)
+	}
+	if len(first) != 1 || !reflect.DeepEqual(first, second) || first[0].Link != "https://example.com/story" {
+		t.Fatalf("learned parses differ or fell back incorrectly: first=%#v second=%#v", first, second)
+	}
+}
+
 func TestParsePageMonitorListRejectsBadSelectorsAndBoundsDescription(t *testing.T) {
 	_, _, err := ParsePageMonitorList(PageMonitorOptions{URL: "https://example.com", HTML: "<article/>", Selectors: PageMonitorSelectors{Article: []string{"article["}}})
 	if !errors.Is(err, ErrPageMonitorSelector) {

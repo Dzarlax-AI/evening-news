@@ -724,7 +724,7 @@ func TestNativePageMonitorMinimumSettleCapturesLateArticle(t *testing.T) {
 		t.Fatal(err)
 	}
 	started := time.Now()
-	doc, err := w.Fetch(context.Background(), "https://origin.example/", NativeBrowserOptions{MinSettle: 2 * time.Second})
+	doc, err := w.Fetch(context.Background(), "https://origin.example/", NativeBrowserOptions{BrowserOptions: BrowserOptions{MinSettle: 2 * time.Second}})
 	if err != nil {
 		t.Fatal(err)
 	}

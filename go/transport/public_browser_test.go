@@ -11,6 +11,15 @@ import (
 	"time"
 )
 
+func TestPublicBrowserRejectsInvalidMinimumSettle(t *testing.T) {
+	for _, duration := range []time.Duration{-time.Nanosecond, 5*time.Second + time.Nanosecond} {
+		_, err := BrowserFetchPublic(context.Background(), "", "https://example.com/", BrowserOptions{MinSettle: duration})
+		if err == nil || !strings.Contains(err.Error(), "invalid_timeout") {
+			t.Errorf("MinSettle=%s error=%v", duration, err)
+		}
+	}
+}
+
 func TestPublicBrowserLiveJSAndEgress(t *testing.T) {
 	endpoint := browserTestEndpoint(t)
 	ctx, cancel := context.WithTimeout(context.Background(), 15*time.Second)
@@ -56,6 +65,11 @@ func TestPublicBrowserLiveJSAndEgress(t *testing.T) {
  attempt(()=>window.open('` + private.URL + `/popup'));
 </script><img src="https://fixture.example/image"></body></html>`
 			mime = "text/html"
+		case "https://fixture.example/late":
+			html = `<!doctype html><html><body><article id="first">Initial article</article><script>
+setTimeout(()=>{const article=document.createElement('article');article.id='second';article.textContent='Late second article';document.body.append(article)},1300);
+</script></body></html>`
+			mime = "text/html"
 		case "https://fixture.example/data":
 			html = `{"answer":"settled"}`
 			mime = "application/json"
@@ -79,6 +93,13 @@ func TestPublicBrowserLiveJSAndEgress(t *testing.T) {
 	}
 	if requests.Load() < 3 {
 		t.Fatalf("JS fetch did not run: %d calls", requests.Load())
+	}
+	late, err := browserFetchPublic(ctx, endpoint, "https://fixture.example/late", BrowserOptions{MinSettle: 2 * time.Second}, backend)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if strings.Count(string(late.HTML), "<article") != 2 || !strings.Contains(string(late.HTML), `id="second"`) {
+		t.Fatalf("minimum settle missed delayed article: %s", string(late.HTML))
 	}
 	final := browserTargets(t, observer)
 	if len(final) != len(baseline) || !final[foreign.TargetID] {

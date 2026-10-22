@@ -24,9 +24,18 @@ and parsing share a source deadline with time reserved for returning captured
 items. Resource limits do not trigger learning. Publication dates become naive
 UTC before reaching the existing ORM.
 
+SourceManager queues Go-backed Page Monitor and Telegram sources within each
+fetch batch because they share the worker's admission slot. Queue time precedes
+the per-source operation timeout. RSS and Python-mode sources remain concurrent.
+
 The shared oracle in `tests/fixtures/page-monitor/list-parity.json` checks the
-actual Python and Go parsers with a frozen clock. Unsupported CSS produces a
-finite error. Invalid nested-anchor HTML can differ because the HTML5 Go parser
+actual Python and Go parsers with a frozen clock. Unsupported configured CSS
+produces a finite error. Malformed learned selectors are skipped, preserving
+their priority and the top-three general-selector attempts, so persisted AI
+output cannot disable the source. Non-web, invalid, credentialed or oversized
+item links fall back to the source URL before ID generation. This normalization
+intentionally tightens the legacy parser's unrestricted href handling to the
+HTTP(S) wire contract. Invalid nested-anchor HTML can differ because the HTML5 Go parser
 and Python's `html.parser` repair malformed markup differently; browser DOM
 captures have already undergone HTML5 normalization.
 
