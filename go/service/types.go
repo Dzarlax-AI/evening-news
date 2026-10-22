@@ -9,6 +9,7 @@ import (
 const ContractVersion = "1"
 const MaxBytes = 5 * 1024 * 1024
 const MaxJSONBytes = 8 * 1024 * 1024
+const MaxTelegramJSONBytes = 5 * 1024 * 1024
 
 // Request deliberately excludes replay injection fields and server configuration.
 type Request struct {
@@ -61,3 +62,30 @@ type Runner interface {
 type RunnerFunc func(context.Context, Request) Response
 
 func (f RunnerFunc) Run(ctx context.Context, r Request) Response { return f(ctx, r) }
+
+// TelegramRequest is deliberately narrower than Request: callers cannot inject
+// page HTML, selectors, or browser/network configuration.
+type TelegramRequest struct {
+	ContractVersion string `json:"contract_version"`
+	RequestID       string `json:"request_id"`
+	ChannelURL      string `json:"channel_url"`
+	SourceName      string `json:"source_name"`
+	Limit           int    `json:"limit"`
+	BudgetMS        int64  `json:"budget_ms"`
+}
+
+type TelegramResponse struct {
+	ContractVersion string                      `json:"contract_version"`
+	BuildVersion    string                      `json:"build_version"`
+	RequestID       string                      `json:"request_id"`
+	OriginalURL     string                      `json:"original_url"`
+	FinalURL        string                      `json:"final_url"`
+	Outcome         string                      `json:"outcome"`
+	FetchMethod     string                      `json:"fetch_method,omitempty"`
+	Articles        []extractor.TelegramArticle `json:"articles"`
+	Error           *Failure                    `json:"error,omitempty"`
+}
+
+type TelegramRunner interface {
+	RunTelegram(context.Context, TelegramRequest) TelegramResponse
+}

@@ -110,7 +110,7 @@ func run() error {
 		}
 		return !httpOnly && chromeReady(endpoint)
 	}
-	runner := service.RunnerFunc(func(ctx context.Context, r service.Request) service.Response {
+	articleRunner := service.RunnerFunc(func(ctx context.Context, r service.Request) service.Response {
 		if native != nil && r.UseBrowser != nil && *r.UseBrowser {
 			return nativeArticleResponse(ctx, r, func(ctx context.Context, raw string, opts transport.BrowserOptions, selector string) (transport.RenderedDocument, error) {
 				return native.Fetch(ctx, raw, transport.NativeBrowserOptions{BrowserOptions: opts, ReadySelector: nativeSelector})
@@ -124,6 +124,13 @@ func run() error {
 		out := requestEngine.Extract(ctx, pipeline.Request{Input: in, ChromeEndpoint: endpoint})
 		return toServiceResponse(out)
 	})
+	telegramSource := pipeline.TelegramSource{Fetch: transport.FetchPublic}
+	if native != nil {
+		telegramSource.Render = func(ctx context.Context, raw string, opts transport.BrowserOptions, selector string) (transport.RenderedDocument, error) {
+			return native.Fetch(ctx, raw, transport.NativeBrowserOptions{BrowserOptions: opts, ReadySelector: selector})
+		}
+	}
+	runner := runtimeRunner{article: articleRunner, telegram: telegramSource}
 	var ready func() bool
 	if native != nil {
 		ready = nativeReady
@@ -165,6 +172,24 @@ func run() error {
 		}
 		return nil
 	}
+}
+
+type runtimeRunner struct {
+	article  service.Runner
+	telegram pipeline.TelegramSource
+}
+
+func (r runtimeRunner) Run(ctx context.Context, req service.Request) service.Response {
+	return r.article.Run(ctx, req)
+}
+
+func (r runtimeRunner) RunTelegram(ctx context.Context, req service.TelegramRequest) service.TelegramResponse {
+	out := r.telegram.FetchChannel(ctx, req.ChannelURL, req.SourceName, req.Limit)
+	resp := service.TelegramResponse{Outcome: out.Outcome, FinalURL: out.FinalURL, FetchMethod: out.AccessMethod, Articles: out.Articles}
+	if out.Error != "" {
+		resp.Error = &service.Failure{Code: out.Error, Retryable: out.Retryable}
+	}
+	return resp
 }
 
 func shutdownExtractionServer(httpServer *http.Server, drain func(context.Context) error) error {

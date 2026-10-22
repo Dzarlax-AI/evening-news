@@ -1,0 +1,1243 @@
+{
+  "channel": [
+    {
+      "title": "Привет, мир! Unicode работает #Новости #новости",
+      "url": "https://example.org/story?z=1&id=7",
+      "content": "Привет, мир! Unicode работает #Новости #новости",
+      "summary": null,
+      "image_url": "https://t.me/file/photo-one.jpg",
+      "media_files": [
+        {
+          "url": "https://t.me/file/photo-one.jpg",
+          "type": "image",
+          "thumbnail": "https://t.me/file/photo-one.jpg"
+        },
+        {
+          "url": "https://cdn.example.org/file/photo-two.jpg",
+          "type": "image",
+          "thumbnail": "https://cdn.example.org/file/photo-two.jpg"
+        }
+      ],
+      "published_at": "2026-10-21T16:30:00Z",
+      "source_type": "telegram",
+      "source_name": "Offline Telegram Fixture",
+      "raw_data": {
+        "channel": "testchannel",
+        "access_method": "https://t.me/s/testchannel",
+        "content_length": 47,
+        "media_info": {
+          "video_url": null,
+          "document_url": null,
+          "audio_url": null,
+          "sticker_url": null,
+          "poll_data": null,
+          "location_data": null,
+          "media_type": null,
+          "duration": null,
+          "file_size": null,
+          "file_name": null
+        },
+        "has_media": true,
+        "media_count": 2,
+        "external_links": [
+          "https://example.org/story?z=1&id=7",
+          "https://example.org/source"
+        ],
+        "hashtags": [
+          "новости"
+        ],
+        "original_link": "https://example.org/story?z=1&id=7",
+        "forwarded_from": "ForwardedfromSource Channel",
+        "message_id": "101",
+        "telegram_url": "https://t.me/testchannel/101"
+      }
+    },
+    {
+      "title": "Короткая публикация со ссылкой на источник.",
+      "url": "https://cdn.example.org/file/report.pdf",
+      "content": "Короткая публикация со ссылкой на источник.",
+      "summary": null,
+      "image_url": null,
+      "media_files": [
+        {
+          "url": "https://cdn.example.org/video.mp4",
+          "type": "video",
+          "thumbnail": "https://cdn.example.org/poster.jpg",
+          "duration": "12",
+          "source": "direct_video"
+        },
+        {
+          "url": "https://cdn.example.org/voice.ogg",
+          "type": "audio",
+          "duration": "4",
+          "source": "direct_audio"
+        }
+      ],
+      "published_at": "2026-10-22T00:15:00Z",
+      "source_type": "telegram",
+      "source_name": "Offline Telegram Fixture",
+      "raw_data": {
+        "channel": "testchannel",
+        "access_method": "https://t.me/s/testchannel",
+        "content_length": 43,
+        "media_info": {
+          "video_url": "https://cdn.example.org/video.mp4",
+          "document_url": "https://cdn.example.org/file/report.pdf",
+          "audio_url": "https://cdn.example.org/voice.ogg",
+          "sticker_url": null,
+          "poll_data": null,
+          "location_data": null,
+          "media_type": "audio",
+          "duration": "4",
+          "file_size": null,
+          "file_name": null
+        },
+        "has_media": true,
+        "media_count": 2,
+        "external_links": [
+          "https://cdn.example.org/file/report.pdf"
+        ],
+        "hashtags": [],
+        "original_link": "https://cdn.example.org/file/report.pdf",
+        "forwarded_from": null,
+        "message_id": "102",
+        "telegram_url": "https://t.me/testchannel/102"
+      }
+    },
+    {
+      "title": "Альбом с подписью и поддержкой медиа.",
+      "url": "https://t.me/testchannel/103",
+      "content": "Альбом с подписью и поддержкой медиа.",
+      "summary": null,
+      "image_url": "https://cdn.example.org/album-a.png",
+      "media_files": [
+        {
+          "url": "https://cdn.example.org/album-a.png",
+          "type": "image",
+          "thumbnail": "https://cdn.example.org/album-a.png"
+        },
+        {
+          "url": "https://cdn.example.org/album-b.png",
+          "type": "image",
+          "thumbnail": "https://cdn.example.org/album-b.png"
+        }
+      ],
+      "published_at": "2026-10-21T22:00:00Z",
+      "source_type": "telegram",
+      "source_name": "Offline Telegram Fixture",
+      "raw_data": {
+        "channel": "testchannel",
+        "access_method": "https://t.me/s/testchannel",
+        "content_length": 37,
+        "media_info": {
+          "video_url": null,
+          "document_url": null,
+          "audio_url": null,
+          "sticker_url": null,
+          "poll_data": null,
+          "location_data": null,
+          "media_type": null,
+          "duration": null,
+          "file_size": null,
+          "file_name": null
+        },
+        "has_media": true,
+        "media_count": 2,
+        "external_links": [],
+        "hashtags": [],
+        "original_link": null,
+        "forwarded_from": null,
+        "message_id": "103",
+        "telegram_url": "https://t.me/testchannel/103"
+      }
+    },
+    {
+      "title": "Telegram Post",
+      "url": "https://t.me/testchannel/105",
+      "content": "",
+      "summary": null,
+      "image_url": null,
+      "media_files": [
+        {
+          "url": "https://cdn.example.org/sticker.webp",
+          "type": "animated_sticker",
+          "thumbnail": "https://cdn.example.org/sticker.webp",
+          "source": "sticker"
+        }
+      ],
+      "published_at": "2026-10-22T12:34:56Z",
+      "source_type": "telegram",
+      "source_name": "Offline Telegram Fixture",
+      "raw_data": {
+        "channel": "testchannel",
+        "access_method": "https://t.me/s/testchannel",
+        "content_length": 0,
+        "media_info": {
+          "video_url": null,
+          "document_url": null,
+          "audio_url": null,
+          "sticker_url": null,
+          "poll_data": null,
+          "location_data": null,
+          "media_type": null,
+          "duration": null,
+          "file_size": null,
+          "file_name": null
+        },
+        "has_media": true,
+        "media_count": 1,
+        "external_links": [],
+        "hashtags": [],
+        "original_link": null,
+        "forwarded_from": null,
+        "message_id": "105",
+        "telegram_url": "https://t.me/testchannel/105"
+      }
+    },
+    {
+      "title": "Additional supported media types appear in this synthetic post.",
+      "url": "https://cdn.example.org/animation.gif",
+      "content": "Additional supported media types appear in this synthetic post.",
+      "summary": null,
+      "image_url": null,
+      "media_files": [
+        {
+          "url": "https://cdn.example.org/animation.gif",
+          "type": "gif",
+          "thumbnail": null,
+          "source": "gif"
+        },
+        {
+          "url": "https://cdn.example.org/document-preview.jpg",
+          "type": "document",
+          "thumbnail": "https://cdn.example.org/document-preview.jpg"
+        },
+        {
+          "type": "poll",
+          "url": "#poll_<runtime-hash>",
+          "poll_data": {
+            "question": "Which parser is this?",
+            "options": [
+              "Go",
+              "Python"
+            ]
+          },
+          "source": "poll"
+        },
+        {
+          "type": "location",
+          "url": "#location_<runtime-hash>",
+          "location_data": {
+            "text": "Belgrade location",
+            "url": null
+          },
+          "source": "location"
+        },
+        {
+          "type": "contact",
+          "url": "#contact_<runtime-hash>",
+          "contact_data": {
+            "text": "Ada Lovelace+381 11 000",
+            "phone": "+381 11 000"
+          },
+          "source": "contact"
+        }
+      ],
+      "published_at": "2026-10-22T12:34:56Z",
+      "source_type": "telegram",
+      "source_name": "Offline Telegram Fixture",
+      "raw_data": {
+        "channel": "testchannel",
+        "access_method": "https://t.me/s/testchannel",
+        "content_length": 63,
+        "media_info": {
+          "video_url": null,
+          "document_url": null,
+          "audio_url": null,
+          "sticker_url": null,
+          "poll_data": {
+            "question": "Which parser is this?",
+            "options": [
+              "Go",
+              "Python"
+            ],
+            "type": "poll"
+          },
+          "location_data": {
+            "text": "Belgrade location",
+            "url": null
+          },
+          "media_type": "location",
+          "duration": null,
+          "file_size": null,
+          "file_name": null
+        },
+        "has_media": true,
+        "media_count": 5,
+        "external_links": [
+          "https://cdn.example.org/animation.gif"
+        ],
+        "hashtags": [],
+        "original_link": "https://cdn.example.org/animation.gif",
+        "forwarded_from": null,
+        "message_id": "106",
+        "telegram_url": "https://t.me/testchannel/106"
+      }
+    },
+    {
+      "title": "Длинная строка на русском языке содержит предложение до шестидесяти символов.",
+      "url": "https://t.me/testchannel/107",
+      "content": "Длинная строка на русском языке содержит предложение до шестидесяти символов. Затем идёт продолжение текста, которое заставляет заголовок длиннее ста двадцати символов и проверяет правильный перенос.",
+      "summary": null,
+      "image_url": null,
+      "media_files": [],
+      "published_at": "2026-10-22T12:34:56Z",
+      "source_type": "telegram",
+      "source_name": "Offline Telegram Fixture",
+      "raw_data": {
+        "channel": "testchannel",
+        "access_method": "https://t.me/s/testchannel",
+        "content_length": 199,
+        "media_info": {
+          "video_url": null,
+          "document_url": null,
+          "audio_url": null,
+          "sticker_url": null,
+          "poll_data": null,
+          "location_data": null,
+          "media_type": null,
+          "duration": null,
+          "file_size": null,
+          "file_name": null
+        },
+        "has_media": false,
+        "media_count": 0,
+        "external_links": [],
+        "hashtags": [],
+        "original_link": null,
+        "forwarded_from": null,
+        "message_id": "107",
+        "telegram_url": "https://t.me/testchannel/107"
+      }
+    },
+    {
+      "title": "An epoch timestamp gives this post a deterministic UTC date through the Python-compatible selector fallback.",
+      "url": "https://t.me/testchannel/108",
+      "content": "An epoch timestamp gives this post a deterministic UTC date through the Python-compatible selector fallback.",
+      "summary": null,
+      "image_url": null,
+      "media_files": [],
+      "published_at": "2026-10-22T00:00:00Z",
+      "source_type": "telegram",
+      "source_name": "Offline Telegram Fixture",
+      "raw_data": {
+        "channel": "testchannel",
+        "access_method": "https://t.me/s/testchannel",
+        "content_length": 108,
+        "media_info": {
+          "video_url": null,
+          "document_url": null,
+          "audio_url": null,
+          "sticker_url": null,
+          "poll_data": null,
+          "location_data": null,
+          "media_type": null,
+          "duration": null,
+          "file_size": null,
+          "file_name": null
+        },
+        "has_media": false,
+        "media_count": 0,
+        "external_links": [],
+        "hashtags": [],
+        "original_link": null,
+        "forwarded_from": null,
+        "message_id": "108",
+        "telegram_url": "https://t.me/testchannel/108"
+      }
+    },
+    {
+      "title": "An invalid date must use the supplied fixed fallback time instead of the system clock.",
+      "url": "https://t.me/testchannel/109",
+      "content": "An invalid date must use the supplied fixed fallback time instead of the system clock.",
+      "summary": null,
+      "image_url": null,
+      "media_files": [],
+      "published_at": "2026-10-22T12:34:56Z",
+      "source_type": "telegram",
+      "source_name": "Offline Telegram Fixture",
+      "raw_data": {
+        "channel": "testchannel",
+        "access_method": "https://t.me/s/testchannel",
+        "content_length": 86,
+        "media_info": {
+          "video_url": null,
+          "document_url": null,
+          "audio_url": null,
+          "sticker_url": null,
+          "poll_data": null,
+          "location_data": null,
+          "media_type": null,
+          "duration": null,
+          "file_size": null,
+          "file_name": null
+        },
+        "has_media": false,
+        "media_count": 0,
+        "external_links": [],
+        "hashtags": [],
+        "original_link": null,
+        "forwarded_from": null,
+        "message_id": "109",
+        "telegram_url": "https://t.me/testchannel/109"
+      }
+    },
+    {
+      "title": "Unicode mentions are stripped from the Python-compatible title while the post content remains intact.",
+      "url": "https://t.me/testchannel/110",
+      "content": "@канал: Unicode mentions are stripped from the Python-compatible title while the post content remains intact.",
+      "summary": null,
+      "image_url": null,
+      "media_files": [],
+      "published_at": "2026-10-22T03:00:00Z",
+      "source_type": "telegram",
+      "source_name": "Offline Telegram Fixture",
+      "raw_data": {
+        "channel": "testchannel",
+        "access_method": "https://t.me/s/testchannel",
+        "content_length": 109,
+        "media_info": {
+          "video_url": null,
+          "document_url": null,
+          "audio_url": null,
+          "sticker_url": null,
+          "poll_data": null,
+          "location_data": null,
+          "media_type": null,
+          "duration": null,
+          "file_size": null,
+          "file_name": null
+        },
+        "has_media": false,
+        "media_count": 0,
+        "external_links": [],
+        "hashtags": [],
+        "original_link": null,
+        "forwarded_from": null,
+        "message_id": "110",
+        "telegram_url": "https://t.me/testchannel/110"
+      }
+    },
+    {
+      "title": "A fractional UTC timestamp preserves Python microsecond precision and serializes with six digits.",
+      "url": "https://t.me/testchannel/111",
+      "content": "A fractional UTC timestamp preserves Python microsecond precision and serializes with six digits.",
+      "summary": null,
+      "image_url": null,
+      "media_files": [],
+      "published_at": "2026-10-22T03:00:00.123456Z",
+      "source_type": "telegram",
+      "source_name": "Offline Telegram Fixture",
+      "raw_data": {
+        "channel": "testchannel",
+        "access_method": "https://t.me/s/testchannel",
+        "content_length": 97,
+        "media_info": {
+          "video_url": null,
+          "document_url": null,
+          "audio_url": null,
+          "sticker_url": null,
+          "poll_data": null,
+          "location_data": null,
+          "media_type": null,
+          "duration": null,
+          "file_size": null,
+          "file_name": null
+        },
+        "has_media": false,
+        "media_count": 0,
+        "external_links": [],
+        "hashtags": [],
+        "original_link": null,
+        "forwarded_from": null,
+        "message_id": "111",
+        "telegram_url": "https://t.me/testchannel/111"
+      }
+    },
+    {
+      "title": "Each video and audio attachment must retain its own duration from its matching element.",
+      "url": "https://t.me/testchannel/112",
+      "content": "Each video and audio attachment must retain its own duration from its matching element.",
+      "summary": null,
+      "image_url": null,
+      "media_files": [
+        {
+          "url": "https://cdn.example.org/first-video.mp4",
+          "type": "video",
+          "thumbnail": null,
+          "duration": "12",
+          "source": "direct_video"
+        },
+        {
+          "url": "https://cdn.example.org/second-video.mp4",
+          "type": "video",
+          "thumbnail": null,
+          "duration": "34",
+          "source": "direct_video"
+        },
+        {
+          "url": "https://cdn.example.org/first-audio.ogg",
+          "type": "audio",
+          "duration": "5",
+          "source": "direct_audio"
+        },
+        {
+          "url": "https://cdn.example.org/second-audio.ogg",
+          "type": "audio",
+          "duration": "9",
+          "source": "direct_audio"
+        }
+      ],
+      "published_at": "2026-10-22T12:34:56Z",
+      "source_type": "telegram",
+      "source_name": "Offline Telegram Fixture",
+      "raw_data": {
+        "channel": "testchannel",
+        "access_method": "https://t.me/s/testchannel",
+        "content_length": 87,
+        "media_info": {
+          "video_url": "https://cdn.example.org/first-video.mp4",
+          "document_url": null,
+          "audio_url": "https://cdn.example.org/first-audio.ogg",
+          "sticker_url": null,
+          "poll_data": null,
+          "location_data": null,
+          "media_type": "audio",
+          "duration": "5",
+          "file_size": null,
+          "file_name": null
+        },
+        "has_media": true,
+        "media_count": 4,
+        "external_links": [],
+        "hashtags": [],
+        "original_link": null,
+        "forwarded_from": null,
+        "message_id": "112",
+        "telegram_url": "https://t.me/testchannel/112"
+      }
+    },
+    {
+      "title": "A non-finite epoch timestamp is invalid and must use the supplied fallback date.",
+      "url": "https://t.me/testchannel/113",
+      "content": "A non-finite epoch timestamp is invalid and must use the supplied fallback date.",
+      "summary": null,
+      "image_url": null,
+      "media_files": [],
+      "published_at": "2026-10-22T12:34:56Z",
+      "source_type": "telegram",
+      "source_name": "Offline Telegram Fixture",
+      "raw_data": {
+        "channel": "testchannel",
+        "access_method": "https://t.me/s/testchannel",
+        "content_length": 80,
+        "media_info": {
+          "video_url": null,
+          "document_url": null,
+          "audio_url": null,
+          "sticker_url": null,
+          "poll_data": null,
+          "location_data": null,
+          "media_type": null,
+          "duration": null,
+          "file_size": null,
+          "file_name": null
+        },
+        "has_media": false,
+        "media_count": 0,
+        "external_links": [],
+        "hashtags": [],
+        "original_link": null,
+        "forwarded_from": null,
+        "message_id": "113",
+        "telegram_url": "https://t.me/testchannel/113"
+      }
+    },
+    {
+      "title": "A background photo remains after direct video media in Python media order.",
+      "url": "https://t.me/testchannel/114",
+      "content": "A background photo remains after direct video media in Python media order.",
+      "summary": null,
+      "image_url": "https://cdn.example.org/background-photo.jpg",
+      "media_files": [
+        {
+          "url": "https://cdn.example.org/background-video.mp4",
+          "type": "video",
+          "thumbnail": null,
+          "duration": "7",
+          "source": "direct_video"
+        },
+        {
+          "url": "https://cdn.example.org/background-photo.jpg",
+          "type": "image",
+          "thumbnail": "https://cdn.example.org/background-photo.jpg"
+        }
+      ],
+      "published_at": "2026-10-22T12:34:56Z",
+      "source_type": "telegram",
+      "source_name": "Offline Telegram Fixture",
+      "raw_data": {
+        "channel": "testchannel",
+        "access_method": "https://t.me/s/testchannel",
+        "content_length": 74,
+        "media_info": {
+          "video_url": "https://cdn.example.org/background-video.mp4",
+          "document_url": null,
+          "audio_url": null,
+          "sticker_url": null,
+          "poll_data": null,
+          "location_data": null,
+          "media_type": "video",
+          "duration": "7",
+          "file_size": null,
+          "file_name": null
+        },
+        "has_media": true,
+        "media_count": 2,
+        "external_links": [],
+        "hashtags": [],
+        "original_link": null,
+        "forwarded_from": null,
+        "message_id": "114",
+        "telegram_url": "https://t.me/testchannel/114"
+      }
+    },
+    {
+      "title": "Download document",
+      "url": "https://cdn.example.org/file/metadata-only.pdf",
+      "content": "Download document",
+      "summary": null,
+      "image_url": null,
+      "media_files": [],
+      "published_at": "2026-10-22T12:34:56Z",
+      "source_type": "telegram",
+      "source_name": "Offline Telegram Fixture",
+      "raw_data": {
+        "channel": "testchannel",
+        "access_method": "https://t.me/s/testchannel",
+        "content_length": 17,
+        "media_info": {
+          "video_url": null,
+          "document_url": "https://cdn.example.org/file/metadata-only.pdf",
+          "audio_url": null,
+          "sticker_url": null,
+          "poll_data": null,
+          "location_data": null,
+          "media_type": "document",
+          "duration": null,
+          "file_size": null,
+          "file_name": null
+        },
+        "has_media": true,
+        "media_count": 0,
+        "external_links": [
+          "https://cdn.example.org/file/metadata-only.pdf"
+        ],
+        "hashtags": [],
+        "original_link": "https://cdn.example.org/file/metadata-only.pdf",
+        "forwarded_from": null,
+        "message_id": "115",
+        "telegram_url": "https://t.me/testchannel/115"
+      }
+    },
+    {
+      "title": "Control characters  are removed while the surrounding content remains meaningful.",
+      "url": "https://t.me/testchannel/116",
+      "content": "Control characters  are removed while the surrounding content remains meaningful.",
+      "summary": null,
+      "image_url": null,
+      "media_files": [],
+      "published_at": "2026-10-22T12:34:56Z",
+      "source_type": "telegram",
+      "source_name": "Offline Telegram Fixture",
+      "raw_data": {
+        "channel": "testchannel",
+        "access_method": "https://t.me/s/testchannel",
+        "content_length": 81,
+        "media_info": {
+          "video_url": null,
+          "document_url": null,
+          "audio_url": null,
+          "sticker_url": null,
+          "poll_data": null,
+          "location_data": null,
+          "media_type": null,
+          "duration": null,
+          "file_size": null,
+          "file_name": null
+        },
+        "has_media": false,
+        "media_count": 0,
+        "external_links": [],
+        "hashtags": [],
+        "original_link": null,
+        "forwarded_from": null,
+        "message_id": "116",
+        "telegram_url": "https://t.me/testchannel/116"
+      }
+    },
+    {
+      "title": "A malformed encoded ampersand in a query remains a nontracking parameter exactly as in the Python parser.",
+      "url": "https://example.org/story?keep=one&keep=two&amp%3Butm_source=synthetic",
+      "content": "A malformed encoded ampersand in a query remains a nontracking parameter exactly as in the Python parser.",
+      "summary": null,
+      "image_url": null,
+      "media_files": [],
+      "published_at": "2026-10-22T12:34:56Z",
+      "source_type": "telegram",
+      "source_name": "Offline Telegram Fixture",
+      "raw_data": {
+        "channel": "testchannel",
+        "access_method": "https://t.me/s/testchannel",
+        "content_length": 105,
+        "media_info": {
+          "video_url": null,
+          "document_url": null,
+          "audio_url": null,
+          "sticker_url": null,
+          "poll_data": null,
+          "location_data": null,
+          "media_type": null,
+          "duration": null,
+          "file_size": null,
+          "file_name": null
+        },
+        "has_media": false,
+        "media_count": 0,
+        "external_links": [
+          "https://example.org/story?keep=one&keep=two&amp%3Butm_source=synthetic"
+        ],
+        "hashtags": [],
+        "original_link": "https://example.org/story?keep=one&keep=two&amp%3Butm_source=synthetic",
+        "forwarded_from": null,
+        "message_id": "120",
+        "telegram_url": "https://t.me/testchannel/120"
+      }
+    },
+    {
+      "title": "Path-relative media sources are rejected unless Telegram can normalize them from a leading slash.",
+      "url": "https://t.me/testchannel/121",
+      "content": "Path-relative media sources are rejected unless Telegram can normalize them from a leading slash.",
+      "summary": null,
+      "image_url": null,
+      "media_files": [
+        {
+          "url": null,
+          "type": "video",
+          "thumbnail": null,
+          "duration": null,
+          "source": "direct_video"
+        }
+      ],
+      "published_at": "2026-10-22T12:34:56Z",
+      "source_type": "telegram",
+      "source_name": "Offline Telegram Fixture",
+      "raw_data": {
+        "channel": "testchannel",
+        "access_method": "https://t.me/s/testchannel",
+        "content_length": 97,
+        "media_info": {
+          "video_url": null,
+          "document_url": null,
+          "audio_url": null,
+          "sticker_url": null,
+          "poll_data": null,
+          "location_data": null,
+          "media_type": "video",
+          "duration": null,
+          "file_size": null,
+          "file_name": null
+        },
+        "has_media": true,
+        "media_count": 1,
+        "external_links": [],
+        "hashtags": [],
+        "original_link": null,
+        "forwarded_from": null,
+        "message_id": "121",
+        "telegram_url": "https://t.me/testchannel/121"
+      }
+    },
+    {
+      "title": "An empty sticker source does not set sticker metadata or create a media item.",
+      "url": "https://t.me/testchannel/122",
+      "content": "An empty sticker source does not set sticker metadata or create a media item.",
+      "summary": null,
+      "image_url": null,
+      "media_files": [],
+      "published_at": "2026-10-22T12:34:56Z",
+      "source_type": "telegram",
+      "source_name": "Offline Telegram Fixture",
+      "raw_data": {
+        "channel": "testchannel",
+        "access_method": "https://t.me/s/testchannel",
+        "content_length": 77,
+        "media_info": {
+          "video_url": null,
+          "document_url": null,
+          "audio_url": null,
+          "sticker_url": null,
+          "poll_data": null,
+          "location_data": null,
+          "media_type": null,
+          "duration": null,
+          "file_size": null,
+          "file_name": null
+        },
+        "has_media": false,
+        "media_count": 0,
+        "external_links": [],
+        "hashtags": [],
+        "original_link": null,
+        "forwarded_from": null,
+        "message_id": "122",
+        "telegram_url": "https://t.me/testchannel/122"
+      }
+    },
+    {
+      "title": "Telegram Post",
+      "url": "https://example.org/file/later.pdf",
+      "content": "",
+      "summary": null,
+      "image_url": null,
+      "media_files": [],
+      "published_at": "2026-10-22T12:34:56Z",
+      "source_type": "telegram",
+      "source_name": "Offline Telegram Fixture",
+      "raw_data": {
+        "channel": "testchannel",
+        "access_method": "https://t.me/s/testchannel",
+        "content_length": 0,
+        "media_info": {
+          "video_url": null,
+          "document_url": "https://example.org/file/later.pdf",
+          "audio_url": null,
+          "sticker_url": null,
+          "poll_data": null,
+          "location_data": null,
+          "media_type": "document",
+          "duration": null,
+          "file_size": null,
+          "file_name": null
+        },
+        "has_media": true,
+        "media_count": 0,
+        "external_links": [
+          "https://example.org/file/later.pdf"
+        ],
+        "hashtags": [],
+        "original_link": "https://example.org/file/later.pdf",
+        "forwarded_from": null,
+        "message_id": "123",
+        "telegram_url": "https://t.me/testchannel/123"
+      }
+    },
+    {
+      "title": "An empty first document link remains the selected link even when a later generic URL is present.",
+      "url": "https://cdn.example.org/later-document.pdf",
+      "content": "An empty first document link remains the selected link even when a later generic URL is present.",
+      "summary": null,
+      "image_url": null,
+      "media_files": [],
+      "published_at": "2026-10-22T12:34:56Z",
+      "source_type": "telegram",
+      "source_name": "Offline Telegram Fixture",
+      "raw_data": {
+        "channel": "testchannel",
+        "access_method": "https://t.me/s/testchannel",
+        "content_length": 96,
+        "media_info": {
+          "video_url": null,
+          "document_url": null,
+          "audio_url": null,
+          "sticker_url": null,
+          "poll_data": null,
+          "location_data": null,
+          "media_type": null,
+          "duration": null,
+          "file_size": null,
+          "file_name": null
+        },
+        "has_media": false,
+        "media_count": 0,
+        "external_links": [
+          "https://cdn.example.org/later-document.pdf"
+        ],
+        "hashtags": [],
+        "original_link": "https://cdn.example.org/later-document.pdf",
+        "forwarded_from": null,
+        "message_id": "124",
+        "telegram_url": "https://t.me/testchannel/124"
+      }
+    },
+    {
+      "title": "Unsupported relative direct audio URLs collapse to one null URL record like Python.",
+      "url": "https://t.me/testchannel/125",
+      "content": "Unsupported relative direct audio URLs collapse to one null URL record like Python.",
+      "summary": null,
+      "image_url": null,
+      "media_files": [
+        {
+          "url": null,
+          "type": "audio",
+          "duration": "9",
+          "source": "direct_audio"
+        }
+      ],
+      "published_at": "2026-10-22T12:34:56Z",
+      "source_type": "telegram",
+      "source_name": "Offline Telegram Fixture",
+      "raw_data": {
+        "channel": "testchannel",
+        "access_method": "https://t.me/s/testchannel",
+        "content_length": 83,
+        "media_info": {
+          "video_url": null,
+          "document_url": null,
+          "audio_url": null,
+          "sticker_url": null,
+          "poll_data": null,
+          "location_data": null,
+          "media_type": "audio",
+          "duration": "9",
+          "file_size": null,
+          "file_name": null
+        },
+        "has_media": true,
+        "media_count": 1,
+        "external_links": [],
+        "hashtags": [],
+        "original_link": null,
+        "forwarded_from": null,
+        "message_id": "125",
+        "telegram_url": "https://t.me/testchannel/125"
+      }
+    },
+    {
+      "title": "A nested Telegram sticker uses its data-src when src is absent.",
+      "url": "https://t.me/testchannel/126",
+      "content": "A nested Telegram sticker uses its data-src when src is absent.",
+      "summary": null,
+      "image_url": null,
+      "media_files": [
+        {
+          "url": "https://cdn.example.org/nested-sticker.webp",
+          "type": "animated_sticker",
+          "thumbnail": "https://cdn.example.org/nested-sticker.webp",
+          "source": "sticker"
+        }
+      ],
+      "published_at": "2026-10-22T12:34:56Z",
+      "source_type": "telegram",
+      "source_name": "Offline Telegram Fixture",
+      "raw_data": {
+        "channel": "testchannel",
+        "access_method": "https://t.me/s/testchannel",
+        "content_length": 63,
+        "media_info": {
+          "video_url": null,
+          "document_url": null,
+          "audio_url": null,
+          "sticker_url": null,
+          "poll_data": null,
+          "location_data": null,
+          "media_type": null,
+          "duration": null,
+          "file_size": null,
+          "file_name": null
+        },
+        "has_media": true,
+        "media_count": 1,
+        "external_links": [],
+        "hashtags": [],
+        "original_link": null,
+        "forwarded_from": null,
+        "message_id": "126",
+        "telegram_url": "https://t.me/testchannel/126"
+      }
+    },
+    {
+      "title": "An animated sticker prefers data-src over data-lazy-src when src is empty.",
+      "url": "https://t.me/testchannel/127",
+      "content": "An animated sticker prefers data-src over data-lazy-src when src is empty.",
+      "summary": null,
+      "image_url": null,
+      "media_files": [
+        {
+          "url": "https://cdn.example.org/preferred-sticker.webp",
+          "type": "animated_sticker",
+          "thumbnail": "https://cdn.example.org/preferred-sticker.webp",
+          "source": "sticker"
+        }
+      ],
+      "published_at": "2026-10-22T12:34:56Z",
+      "source_type": "telegram",
+      "source_name": "Offline Telegram Fixture",
+      "raw_data": {
+        "channel": "testchannel",
+        "access_method": "https://t.me/s/testchannel",
+        "content_length": 74,
+        "media_info": {
+          "video_url": null,
+          "document_url": null,
+          "audio_url": null,
+          "sticker_url": null,
+          "poll_data": null,
+          "location_data": null,
+          "media_type": null,
+          "duration": null,
+          "file_size": null,
+          "file_name": null
+        },
+        "has_media": true,
+        "media_count": 1,
+        "external_links": [],
+        "hashtags": [],
+        "original_link": null,
+        "forwarded_from": null,
+        "message_id": "127",
+        "telegram_url": "https://t.me/testchannel/127"
+      }
+    },
+    {
+      "title": "A regular message image falls back to data-lazy-src when src and data-src are empty.",
+      "url": "https://t.me/testchannel/128",
+      "content": "A regular message image falls back to data-lazy-src when src and data-src are empty.",
+      "summary": null,
+      "image_url": "https://cdn.example.org/lazy-content.jpg",
+      "media_files": [
+        {
+          "url": "https://cdn.example.org/lazy-content.jpg",
+          "type": "image",
+          "thumbnail": "https://cdn.example.org/lazy-content.jpg"
+        }
+      ],
+      "published_at": "2026-10-22T12:34:56Z",
+      "source_type": "telegram",
+      "source_name": "Offline Telegram Fixture",
+      "raw_data": {
+        "channel": "testchannel",
+        "access_method": "https://t.me/s/testchannel",
+        "content_length": 84,
+        "media_info": {
+          "video_url": null,
+          "document_url": null,
+          "audio_url": null,
+          "sticker_url": null,
+          "poll_data": null,
+          "location_data": null,
+          "media_type": null,
+          "duration": null,
+          "file_size": null,
+          "file_name": null
+        },
+        "has_media": true,
+        "media_count": 1,
+        "external_links": [],
+        "hashtags": [],
+        "original_link": null,
+        "forwarded_from": null,
+        "message_id": "128",
+        "telegram_url": "https://t.me/testchannel/128"
+      }
+    }
+  ],
+  "fallback_message": [
+    {
+      "title": "Fallback message selectors must produce this complete article.",
+      "url": "https://t.me/testchannel/151",
+      "content": "Fallback message selectors must produce this complete article.",
+      "summary": null,
+      "image_url": null,
+      "media_files": [],
+      "published_at": "2026-10-22T12:34:56Z",
+      "source_type": "telegram",
+      "source_name": "Offline Telegram Fixture",
+      "raw_data": {
+        "channel": "testchannel",
+        "access_method": "https://t.me/testchannel",
+        "content_length": 62,
+        "media_info": {
+          "video_url": null,
+          "document_url": null,
+          "audio_url": null,
+          "sticker_url": null,
+          "poll_data": null,
+          "location_data": null,
+          "media_type": null,
+          "duration": null,
+          "file_size": null,
+          "file_name": null
+        },
+        "has_media": false,
+        "media_count": 0,
+        "external_links": [],
+        "hashtags": [],
+        "original_link": null,
+        "forwarded_from": null,
+        "message_id": "151",
+        "telegram_url": "https://t.me/testchannel/151"
+      }
+    }
+  ],
+  "fallback_data_post": [
+    {
+      "title": "The data-post selector fallback must preserve this complete article.",
+      "url": "https://t.me/testchannel/152",
+      "content": "The data-post selector fallback must preserve this complete article.",
+      "summary": null,
+      "image_url": null,
+      "media_files": [],
+      "published_at": "2026-10-22T12:34:56Z",
+      "source_type": "telegram",
+      "source_name": "Offline Telegram Fixture",
+      "raw_data": {
+        "channel": "testchannel",
+        "access_method": "https://t.me/s/testchannel",
+        "content_length": 68,
+        "media_info": {
+          "video_url": null,
+          "document_url": null,
+          "audio_url": null,
+          "sticker_url": null,
+          "poll_data": null,
+          "location_data": null,
+          "media_type": null,
+          "duration": null,
+          "file_size": null,
+          "file_name": null
+        },
+        "has_media": false,
+        "media_count": 0,
+        "external_links": [],
+        "hashtags": [],
+        "original_link": null,
+        "forwarded_from": null,
+        "message_id": "152",
+        "telegram_url": "https://t.me/testchannel/152"
+      }
+    }
+  ],
+  "mixed_case_channel": [
+    {
+      "title": "The data-post selector fallback must preserve this complete article.",
+      "url": "https://t.me/testchannel/152",
+      "content": "The data-post selector fallback must preserve this complete article.",
+      "summary": null,
+      "image_url": null,
+      "media_files": [],
+      "published_at": "2026-10-22T12:34:56Z",
+      "source_type": "telegram",
+      "source_name": "Offline Telegram Fixture",
+      "raw_data": {
+        "channel": "testchannel",
+        "access_method": "https://t.me/s/TestChannel",
+        "content_length": 68,
+        "media_info": {
+          "video_url": null,
+          "document_url": null,
+          "audio_url": null,
+          "sticker_url": null,
+          "poll_data": null,
+          "location_data": null,
+          "media_type": null,
+          "duration": null,
+          "file_size": null,
+          "file_name": null
+        },
+        "has_media": false,
+        "media_count": 0,
+        "external_links": [],
+        "hashtags": [],
+        "original_link": null,
+        "forwarded_from": null,
+        "message_id": "152",
+        "telegram_url": "https://t.me/testchannel/152"
+      }
+    }
+  ],
+  "malformed": [
+    {
+      "title": "First valid post survives malformed surrounding markup.",
+      "url": "https://t.me/testchannel/201",
+      "content": "First valid post survives malformed surrounding markup.",
+      "summary": null,
+      "image_url": null,
+      "media_files": [],
+      "published_at": "2026-10-22T12:34:56Z",
+      "source_type": "telegram",
+      "source_name": "Offline Telegram Fixture",
+      "raw_data": {
+        "channel": "testchannel",
+        "access_method": "https://t.me/s/testchannel",
+        "content_length": 55,
+        "media_info": {
+          "video_url": null,
+          "document_url": null,
+          "audio_url": null,
+          "sticker_url": null,
+          "poll_data": null,
+          "location_data": null,
+          "media_type": null,
+          "duration": null,
+          "file_size": null,
+          "file_name": null
+        },
+        "has_media": false,
+        "media_count": 0,
+        "external_links": [],
+        "hashtags": [],
+        "original_link": null,
+        "forwarded_from": null,
+        "message_id": "201",
+        "telegram_url": "https://t.me/testchannel/201"
+      }
+    },
+    {
+      "title": "Second valid post survives malformed surrounding markup.",
+      "url": "https://t.me/testchannel/202",
+      "content": "Second valid post survives malformed surrounding markup.",
+      "summary": null,
+      "image_url": null,
+      "media_files": [],
+      "published_at": "2026-10-22T12:34:56Z",
+      "source_type": "telegram",
+      "source_name": "Offline Telegram Fixture",
+      "raw_data": {
+        "channel": "testchannel",
+        "access_method": "https://t.me/s/testchannel",
+        "content_length": 56,
+        "media_info": {
+          "video_url": null,
+          "document_url": null,
+          "audio_url": null,
+          "sticker_url": null,
+          "poll_data": null,
+          "location_data": null,
+          "media_type": null,
+          "duration": null,
+          "file_size": null,
+          "file_name": null
+        },
+        "has_media": false,
+        "media_count": 0,
+        "external_links": [],
+        "hashtags": [],
+        "original_link": null,
+        "forwarded_from": null,
+        "message_id": "202",
+        "telegram_url": "https://t.me/testchannel/202"
+      }
+    }
+  ]
+}

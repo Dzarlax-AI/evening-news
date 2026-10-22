@@ -9,11 +9,13 @@ import (
 	"fmt"
 	"net/http"
 	"net/url"
+	"regexp"
 	"runtime"
 	"strings"
 	"sync"
 	"time"
 
+	"github.com/Dzarlax-AI/evening-news/go/extractor"
 	"github.com/Dzarlax-AI/evening-news/go/internal/jsonsingle"
 )
 
@@ -107,9 +109,157 @@ func (s *Server) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 		_, _ = w.Write(b)
 	case "/v1/extract":
 		s.extract(w, r)
+	case "/v1/telegram/fetch":
+		s.fetchTelegram(w, r)
 	default:
 		http.NotFound(w, r)
 	}
+}
+
+var telegramUsername = regexp.MustCompile(`^[A-Za-z0-9_]{1,64}$`)
+
+func normalizeTelegramChannel(raw string) (string, error) {
+	u, err := url.Parse(raw)
+	if err != nil || u.Scheme != "https" || u.User != nil || u.Opaque != "" || u.RawQuery != "" || u.Fragment != "" || u.RawFragment != "" || u.ForceQuery || strings.ContainsAny(raw, "?#") {
+		return "", errors.New("invalid channel url")
+	}
+	host := strings.ToLower(strings.TrimSuffix(u.Hostname(), "."))
+	if host != "t.me" && host != "telegram.me" || (u.Port() != "" && u.Port() != "443") || u.Path == "" || u.EscapedPath() != u.Path {
+		return "", errors.New("invalid channel url")
+	}
+	if !strings.HasPrefix(u.Path, "/") || strings.HasSuffix(u.Path, "/") {
+		return "", errors.New("invalid channel url")
+	}
+	parts := strings.Split(strings.TrimPrefix(u.Path, "/"), "/")
+	username := parts[0]
+	if len(parts) == 2 && parts[0] == "s" {
+		username = parts[1]
+	} else if len(parts) != 1 {
+		return "", errors.New("invalid channel url")
+	}
+	if !telegramUsername.MatchString(username) {
+		return "", errors.New("invalid channel url")
+	}
+	return "https://t.me/s/" + strings.ToLower(username), nil
+}
+
+func (s *Server) fetchTelegram(w http.ResponseWriter, r *http.Request) {
+	if r.Method != http.MethodPost {
+		w.WriteHeader(http.StatusMethodNotAllowed)
+		return
+	}
+	if !s.authorized(r) {
+		s.telegramHTTPFailure(w, http.StatusUnauthorized, "unauthorized", "", "")
+		return
+	}
+	if !s.ready() {
+		s.telegramHTTPFailure(w, http.StatusServiceUnavailable, "unavailable", "", "")
+		return
+	}
+	select {
+	case s.slots <- struct{}{}:
+		defer func() { <-s.slots }()
+	default:
+		w.Header().Set("Retry-After", "1")
+		s.telegramHTTPFailure(w, http.StatusTooManyRequests, "busy", "", "")
+		return
+	}
+	var req TelegramRequest
+	tooLarge, err := jsonsingle.Decode(http.MaxBytesReader(w, r.Body, 16*1024), 16*1024, &req)
+	if tooLarge {
+		s.telegramHTTPFailure(w, http.StatusRequestEntityTooLarge, "request_too_large", "", "")
+		return
+	}
+	if err != nil {
+		var large *http.MaxBytesError
+		if errors.As(err, &large) {
+			s.telegramHTTPFailure(w, http.StatusRequestEntityTooLarge, "request_too_large", "", "")
+		} else {
+			s.telegramHTTPFailure(w, http.StatusBadRequest, "invalid_request", "", "")
+		}
+		return
+	}
+	originalURL := req.ChannelURL
+	canonical, err := normalizeTelegramChannel(req.ChannelURL)
+	if err != nil || req.ContractVersion != ContractVersion || req.RequestID == "" || len(req.RequestID) > 128 || req.SourceName == "" || len(req.SourceName) > 256 || req.Limit < 1 || req.Limit > 100 || req.BudgetMS < 1 || req.BudgetMS > 30000 {
+		s.telegramHTTPFailure(w, http.StatusBadRequest, "invalid_request", req.RequestID, "")
+		return
+	}
+	runner, ok := s.runner.(TelegramRunner)
+	if !ok {
+		s.telegramHTTPFailure(w, http.StatusServiceUnavailable, "telegram_unavailable", req.RequestID, canonical)
+		return
+	}
+	ctx, cancel := context.WithTimeout(r.Context(), time.Duration(req.BudgetMS)*time.Millisecond)
+	defer cancel()
+	s.mu.Lock()
+	if s.draining {
+		s.mu.Unlock()
+		s.telegramHTTPFailure(w, http.StatusServiceUnavailable, "unavailable", req.RequestID, canonical)
+		return
+	}
+	s.next++
+	id := s.next
+	s.active[id] = cancel
+	s.mu.Unlock()
+	defer func() { s.mu.Lock(); delete(s.active, id); s.mu.Unlock() }()
+	started := time.Now()
+	req.ChannelURL = canonical
+	resp := runner.RunTelegram(ctx, req)
+	if ctx.Err() != nil {
+		code, retryable := "cancelled", false
+		if errors.Is(ctx.Err(), context.DeadlineExceeded) {
+			code, retryable = "deadline_exceeded", true
+		}
+		resp = TelegramResponse{Outcome: "failed", Articles: []extractor.TelegramArticle{}, Error: &Failure{Code: code, Retryable: retryable}}
+	}
+	resp.ContractVersion = ContractVersion
+	resp.BuildVersion = s.cfg.BuildVersion
+	resp.RequestID = req.RequestID
+	resp.OriginalURL = originalURL
+	if resp.FinalURL == "" {
+		resp.FinalURL = req.ChannelURL
+	}
+	if resp.Articles == nil {
+		resp.Articles = []extractor.TelegramArticle{}
+	}
+	if resp.Outcome != "success" && resp.Outcome != "partial" && resp.Outcome != "failed" && resp.Outcome != "rejected" {
+		resp.Outcome = "failed"
+		resp.Error = &Failure{Code: "invalid_runner_response", Retryable: false}
+	}
+	s.mu.Lock()
+	s.completed++
+	s.latency += time.Since(started)
+	s.outcomes[boundedOutcome(resp.Outcome)]++
+	s.methods["telegram"]++
+	s.mu.Unlock()
+	s.writeTelegram(w, http.StatusOK, resp)
+}
+
+func (s *Server) authorized(r *http.Request) bool {
+	expected := sha256.Sum256([]byte("Bearer " + s.cfg.Token))
+	actual := sha256.Sum256([]byte(r.Header.Get("Authorization")))
+	return subtle.ConstantTimeCompare(expected[:], actual[:]) == 1
+}
+
+func (s *Server) telegramHTTPFailure(w http.ResponseWriter, status int, code, requestID, originalURL string) {
+	s.mu.Lock()
+	s.rejected[status]++
+	s.mu.Unlock()
+	s.writeTelegram(w, status, TelegramResponse{ContractVersion: ContractVersion, BuildVersion: s.cfg.BuildVersion, RequestID: requestID, OriginalURL: originalURL, FinalURL: originalURL, Outcome: "rejected", Articles: []extractor.TelegramArticle{}, Error: &Failure{Code: code, Retryable: status == 429 || status == 503}})
+}
+
+func (s *Server) writeTelegram(w http.ResponseWriter, status int, v TelegramResponse) {
+	b, err := json.Marshal(v)
+	if err != nil || len(b) > MaxTelegramJSONBytes {
+		status = http.StatusInternalServerError
+		fallback := TelegramResponse{ContractVersion: ContractVersion, BuildVersion: v.BuildVersion, RequestID: v.RequestID, OriginalURL: v.OriginalURL, FinalURL: v.FinalURL, Outcome: "failed", Articles: []extractor.TelegramArticle{}, Error: &Failure{Code: "response_too_large", Retryable: false}}
+		b, _ = json.Marshal(fallback)
+	}
+	w.Header().Set("Content-Type", "application/json")
+	w.Header().Set("Cache-Control", "no-store")
+	w.WriteHeader(status)
+	_, _ = w.Write(b)
 }
 func (s *Server) fail(w http.ResponseWriter, status int, code string) {
 	s.mu.Lock()

@@ -12,11 +12,12 @@ from sqlalchemy.ext.asyncio import AsyncSession, create_async_engine
 from sqlalchemy.orm import sessionmaker
 
 from news_aggregator.database import Base
-from news_aggregator.models import Article, ArticleCategory, Category
+from news_aggregator.models import Article, ArticleCategory, Category, Source
 from news_aggregator.migrations.article_processing_state import ArticleProcessingStateMigration
 from news_aggregator.orchestrator import NewsOrchestrator
 from news_aggregator.processing.processing_outcome import ProcessingOutcome
 from news_aggregator.services.database_queue import DatabaseQueueManager
+from news_aggregator.services.source_manager import SourceManager
 
 
 def local_test_url():
@@ -28,6 +29,50 @@ def local_test_url():
     if parsed.host not in {'127.0.0.1', 'localhost'}:
         raise RuntimeError('These tests require a loopback-only PostgreSQL test DB')
     return url
+
+
+@pytest.mark.asyncio
+async def test_telegram_go_adapter_timestamp_round_trips_as_naive_utc():
+    from news_aggregator.telegram.telegram_source import TelegramSource
+
+    url = local_test_url()
+    schema = 'test_telegram_datetime_' + uuid.uuid4().hex
+    admin = create_async_engine(url)
+    engine = create_async_engine(url, connect_args={'server_settings': {'search_path': schema}})
+    try:
+        async with admin.begin() as connection:
+            await connection.execute(text(f'CREATE SCHEMA {schema}'))
+        async with engine.begin() as connection:
+            await connection.run_sync(Source.__table__.create)
+            await connection.run_sync(Article.__table__.create)
+
+        item = TelegramSource._article_from_go({
+            'title': 'Telegram test', 'url': 'https://t.me/test/1', 'content': 'Post body',
+            'summary': None, 'published_at': '2026-10-22T10:15:00+02:00',
+            'source_type': 'telegram', 'source_name': 'Test', 'image_url': None,
+            'media_files': [], 'raw_data': {'telegram_url': 'https://t.me/test/1'},
+        })
+        expected = datetime(2026, 10, 22, 8, 15)
+        assert item.published_at == expected
+        assert item.published_at.tzinfo is None
+
+        factory = sessionmaker(engine, class_=AsyncSession, expire_on_commit=False)
+        async with factory() as db:
+            source = Source(name='Test', source_type='telegram', url='https://t.me/test')
+            db.add(source)
+            await db.flush()
+            saved = await SourceManager().save_fetched_articles_with_sources(
+                {'Test': [item]}, {'Test': source}, db)
+            assert len(saved['Test']) == 1
+            await db.commit()
+            stored = await db.get(Article, saved['Test'][0].id)
+            assert stored.published_at == expected
+            assert stored.published_at.tzinfo is None
+    finally:
+        await engine.dispose()
+        async with admin.begin() as connection:
+            await connection.execute(text(f'DROP SCHEMA IF EXISTS {schema} CASCADE'))
+        await admin.dispose()
 
 
 @pytest.mark.asyncio
