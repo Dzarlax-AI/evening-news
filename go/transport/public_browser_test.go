@@ -106,8 +106,8 @@ func TestNativeBrowserDiscoveryBoundsRepeatedSocketCloses(t *testing.T) {
 	if err == nil {
 		t.Fatal("discovery succeeded despite every connection closing")
 	}
-	if got := requests.Load(); got != nativeDiscoveryAttempts {
-		t.Fatalf("discovery GET count=%d, want bounded maximum %d", got, nativeDiscoveryAttempts)
+	if got := requests.Load(); got != nativeBrowserSetupAttempts {
+		t.Fatalf("discovery GET count=%d, want bounded maximum %d", got, nativeBrowserSetupAttempts)
 	}
 }
 
@@ -148,7 +148,7 @@ func TestNativeBrowserDiscoveryBackoffUsesOriginalContext(t *testing.T) {
 		}
 		done := make(chan result, 1)
 		go func() {
-			_, err := retryBrowserDiscovery(ctx, func(context.Context) (string, error) {
+			_, err := retryNativeBrowserSetup(ctx, func(context.Context) (string, error) {
 				attempts.Add(1)
 				close(attempted)
 				return "", io.EOF
@@ -166,7 +166,7 @@ func TestNativeBrowserDiscoveryBackoffUsesOriginalContext(t *testing.T) {
 		ctx, cancel := context.WithTimeout(context.Background(), time.Millisecond)
 		defer cancel()
 		var attempts atomic.Int32
-		_, err := retryBrowserDiscovery(ctx, func(context.Context) (string, error) {
+		_, err := retryNativeBrowserSetup(ctx, func(context.Context) (string, error) {
 			attempts.Add(1)
 			return "", io.EOF
 		})
@@ -178,7 +178,7 @@ func TestNativeBrowserDiscoveryBackoffUsesOriginalContext(t *testing.T) {
 
 func TestTransientBrowserDiscoveryErrorClassification(t *testing.T) {
 	for _, err := range []error{io.EOF, io.ErrUnexpectedEOF, fmt.Errorf("dial: %w", syscall.ECONNRESET), fmt.Errorf("write: %w", syscall.EPIPE)} {
-		if !transientBrowserDiscoveryError(err) {
+		if !transientBrowserConnectionError(err) {
 			t.Errorf("transient discovery error was not retried: %v", err)
 		}
 	}
@@ -190,7 +190,7 @@ func TestTransientBrowserDiscoveryErrorClassification(t *testing.T) {
 		errors.New("browser_discovery_status"),
 		errors.New("invalid character 'x' looking for beginning of value"),
 	} {
-		if transientBrowserDiscoveryError(err) {
+		if transientBrowserConnectionError(err) {
 			t.Errorf("non-transient discovery error was retried: %v", err)
 		}
 	}

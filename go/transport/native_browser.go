@@ -241,29 +241,37 @@ func (w *NativeBrowser) reportDiagnostic(stage string, err error) {
 	}
 }
 
-const nativeDiscoveryAttempts = 3
+const nativeBrowserSetupAttempts = 3
 
 func nativeBrowserEndpoint(ctx context.Context, endpoint string) (string, error) {
 	return nativeBrowserEndpointWithResolver(ctx, endpoint, net.DefaultResolver)
 }
 
 func nativeBrowserEndpointWithResolver(ctx context.Context, endpoint string, resolver publicResolver) (string, error) {
-	return retryBrowserDiscovery(ctx, func(ctx context.Context) (string, error) {
+	return retryNativeBrowserSetup(ctx, func(ctx context.Context) (string, error) {
 		return configuredBrowserEndpointWithResolver(ctx, endpoint, resolver)
 	})
 }
 
-// retryBrowserDiscovery retries only transient TCP resets during the bounded
-// read-only discovery GET. Every attempt and the backoff share the original
-// context; callers retain control of the overall readiness or render budget.
-func retryBrowserDiscovery(ctx context.Context, discover func(context.Context) (string, error)) (string, error) {
-	for attempt := 1; attempt <= nativeDiscoveryAttempts; attempt++ {
+func dialNativeBrowser(ctx context.Context, endpoint string) (*browserCDP, error) {
+	return retryNativeBrowserSetup(ctx, func(ctx context.Context) (*browserCDP, error) {
+		return dialBrowser(ctx, endpoint)
+	})
+}
+
+// retryNativeBrowserSetup covers only read-only discovery and the initial
+// websocket handshake, both of which precede resource allocation and commands.
+// The retryable error set excludes policy, ownership, HTTP upgrade, and DNS
+// failures. Each attempt and its backoff use the caller's original context.
+func retryNativeBrowserSetup[T any](ctx context.Context, connect func(context.Context) (T, error)) (T, error) {
+	var zero T
+	for attempt := 1; attempt <= nativeBrowserSetupAttempts; attempt++ {
 		if err := ctx.Err(); err != nil {
-			return "", err
+			return zero, err
 		}
-		endpoint, err := discover(ctx)
-		if err == nil || !transientBrowserDiscoveryError(err) || attempt == nativeDiscoveryAttempts {
-			return endpoint, err
+		value, err := connect(ctx)
+		if err == nil || !transientBrowserConnectionError(err) || attempt == nativeBrowserSetupAttempts {
+			return value, err
 		}
 		timer := time.NewTimer(20 * time.Millisecond)
 		select {
@@ -274,14 +282,14 @@ func retryBrowserDiscovery(ctx context.Context, discover func(context.Context) (
 				default:
 				}
 			}
-			return "", ctx.Err()
+			return zero, ctx.Err()
 		case <-timer.C:
 		}
 	}
-	return "", errors.New("browser_discovery_attempts_exhausted")
+	return zero, errors.New("native_browser_setup_attempts_exhausted")
 }
 
-func transientBrowserDiscoveryError(err error) bool {
+func transientBrowserConnectionError(err error) bool {
 	if errors.Is(err, context.Canceled) || errors.Is(err, context.DeadlineExceeded) ||
 		errors.Is(err, ErrNativeOwnershipLost) || errors.Is(err, ErrNativePolicy) || errors.Is(err, ErrNativeUnsupported) {
 		return false
@@ -568,7 +576,7 @@ func (w *NativeBrowser) open(ctx context.Context) (res *nativeResources, err err
 		w.reportDiagnostic("discovery", ErrNativeOwnershipLost)
 		return nil, ErrNativeOwnershipLost
 	}
-	client, err := dialBrowser(ctx, ws)
+	client, err := dialNativeBrowser(ctx, ws)
 	if err != nil {
 		w.unavailable()
 		w.reportDiagnostic("websocket", err)
@@ -746,7 +754,7 @@ func (w *NativeBrowser) verifyCrashRecovery(generation string) error {
 	if err != nil || current != generation {
 		return errors.Join(ErrNativeOwnershipLost, err)
 	}
-	client, err := dialBrowser(ctx, current)
+	client, err := dialNativeBrowser(ctx, current)
 	if err != nil {
 		return errors.Join(ErrNativeOwnershipLost, err)
 	}

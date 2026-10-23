@@ -1516,6 +1516,120 @@ func TestNativeBrowserIgnoresSiblingSessionDetach(t *testing.T) {
 	}
 }
 
+func TestNativeBrowserDialRetriesOnlyInitialHandshake(t *testing.T) {
+	var requests atomic.Int32
+	var textCommands atomic.Int32
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		attempt := requests.Add(1)
+		if attempt <= 2 {
+			conn, _, err := w.(http.Hijacker).Hijack()
+			if err != nil {
+				t.Errorf("hijack handshake %d: %v", attempt, err)
+				return
+			}
+			_ = conn.Close()
+			return
+		}
+		conn, _, _, err := ws.UpgradeHTTP(r, w)
+		if err != nil {
+			t.Errorf("upgrade handshake: %v", err)
+			return
+		}
+		defer conn.Close()
+		for {
+			_, opcode, err := wsutil.ReadClientData(conn)
+			if err != nil {
+				return
+			}
+			if opcode == ws.OpText {
+				textCommands.Add(1)
+			}
+		}
+	}))
+	defer server.Close()
+	ctx, cancel := context.WithTimeout(context.Background(), time.Second)
+	defer cancel()
+	client, err := dialNativeBrowser(ctx, "ws"+strings.TrimPrefix(server.URL, "http"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	client.close()
+	if got := requests.Load(); got != 3 {
+		t.Fatalf("websocket handshake attempts=%d, want two resets then success", got)
+	}
+	if got := textCommands.Load(); got != 0 {
+		t.Fatalf("initial dial replayed %d CDP commands", got)
+	}
+}
+
+func TestNativeBrowserDialCapsInitialHandshakeRetries(t *testing.T) {
+	var requests atomic.Int32
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		requests.Add(1)
+		conn, _, err := w.(http.Hijacker).Hijack()
+		if err != nil {
+			t.Errorf("hijack handshake: %v", err)
+			return
+		}
+		_ = conn.Close()
+	}))
+	defer server.Close()
+	ctx, cancel := context.WithTimeout(context.Background(), time.Second)
+	defer cancel()
+	_, err := dialNativeBrowser(ctx, "ws"+strings.TrimPrefix(server.URL, "http"))
+	if err == nil {
+		t.Fatal("dial succeeded despite every handshake connection closing")
+	}
+	if got := requests.Load(); got != nativeBrowserSetupAttempts {
+		t.Fatalf("websocket handshake attempts=%d, want bounded maximum %d", got, nativeBrowserSetupAttempts)
+	}
+}
+
+func TestNativeBrowserDialDoesNotRetryUpgradeRejection(t *testing.T) {
+	var requests atomic.Int32
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
+		requests.Add(1)
+		http.Error(w, "upgrade rejected", http.StatusForbidden)
+	}))
+	defer server.Close()
+	ctx, cancel := context.WithTimeout(context.Background(), time.Second)
+	defer cancel()
+	_, err := dialNativeBrowser(ctx, "ws"+strings.TrimPrefix(server.URL, "http"))
+	if err == nil || requests.Load() != 1 {
+		t.Fatalf("HTTP websocket rejection retried: requests=%d err=%v", requests.Load(), err)
+	}
+}
+
+func TestNativeBrowserDialCancellationStopsHandshakeBackoff(t *testing.T) {
+	var requests atomic.Int32
+	firstClosed := make(chan struct{})
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		requests.Add(1)
+		conn, _, err := w.(http.Hijacker).Hijack()
+		if err != nil {
+			t.Errorf("hijack handshake: %v", err)
+			return
+		}
+		_ = conn.Close()
+		close(firstClosed)
+	}))
+	defer server.Close()
+	ctx, cancel := context.WithCancel(context.Background())
+	done := make(chan error, 1)
+	go func() {
+		client, err := dialNativeBrowser(ctx, "ws"+strings.TrimPrefix(server.URL, "http"))
+		if client != nil {
+			client.close()
+		}
+		done <- err
+	}()
+	<-firstClosed
+	cancel()
+	if err := <-done; !errors.Is(err, context.Canceled) || requests.Load() != 1 {
+		t.Fatalf("handshake retry ignored cancellation: requests=%d err=%v", requests.Load(), err)
+	}
+}
+
 func TestNativeDiscoveryLossClearsReadiness(t *testing.T) {
 	f := newNativeFixture(t)
 	w := f.worker(t)
