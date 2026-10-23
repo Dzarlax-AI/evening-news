@@ -187,11 +187,13 @@ AI calls are the main operating cost. Several mechanisms keep them in check:
 
 This standalone example is for local use. It starts the app with its own PostgreSQL and browser containers; it is separate from the production shared-browser topology.
 
+Configure the example's credentials before starting it.
+
 ```bash
 docker compose -f docker-compose.example.yml up -d
 ```
 
-Configure the example's credentials before starting it. The app will be available at `http://localhost:8000`, with the admin panel at `/admin`.
+The app will be available at `http://localhost:8000`, with the admin panel at `/admin`.
 
 ### For local development
 
