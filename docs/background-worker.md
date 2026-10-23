@@ -138,8 +138,9 @@ do not cancel accepted work.
 
 Worker startup recovers interrupted durable jobs under its database lease,
 preserving accepted job identity and completed stages. Legacy numeric
-`schedule_id` payloads remain recoverable, but the worker does not calculate or
-change calendar due times.
+`schedule_id` payloads remain recoverable, and completing or recovering those
+legacy jobs may update `ScheduleSettings.next_run`. The worker does not calculate
+or mutate Go-owned calendar due times.
 
 Digest jobs can have an uncertain external outcome after a crash. Such jobs
 become `delivery_unknown` and are not resent automatically. An explicit user
@@ -150,18 +151,18 @@ Telegram sends or exactly-once external AI billing.
 
 Only the worker writes processing caches and domain statistics. Web status reads
 use persisted metadata rather than constructing an orchestrator. Backup downloads
-need access to the worker's backup files without creating a second writer.
-
-Mount `/app/data` writable only in the worker and mount its `/app/backups` output
-read-only in web for downloads. Keep process log directories separate. The
+need access to the worker's backup files. Mount `/app/data` writable only in the
+worker and share a persistent `/app/backups` volume between web and worker so
+both processes see the same archives. Worker-mode upload, cleanup, and restore
+API requests remain disabled; those maintenance actions require a stopped
+worker and an offline procedure. Keep process log directories separate. The
 worker's backup command uses its installed PostgreSQL client and does not require
 a Docker socket. Keep both application images at the same revision. Allow a
 container stop grace period longer than the configured shutdown drain.
 
 Backup creation is queued and backup downloads remain available. In worker mode,
-the web API rejects backup upload, cleanup, and restore with HTTP 409: these
-maintenance operations require a stopped worker and an offline procedure. A
-live restore must not race accepted jobs or replace their ownership metadata.
+the web API rejects backup upload, cleanup, and restore with HTTP 409. A live
+restore must not race accepted jobs or replace their ownership metadata.
 
 Measure web and worker idle/active memory separately and together. Separating
 Python processes adds independent interpreter and connection-pool overhead; it

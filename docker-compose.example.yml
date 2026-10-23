@@ -50,6 +50,7 @@ services:
     volumes:
       - app_cache:/app/cache
       - app_logs:/app/logs
+      - app_backups:/app/backups
     restart: unless-stopped
     healthcheck:
       test: ["CMD", "curl", "-f", "http://localhost:8000/health"]
@@ -70,6 +71,7 @@ services:
     volumes:
       - app_cache:/app/cache
       - app_logs:/app/logs
+      - app_backups:/app/backups
     restart: unless-stopped
     healthcheck:
       test: ["CMD", "python", "-m", "news_aggregator.worker", "--healthcheck"]
@@ -79,7 +81,7 @@ services:
       retries: 3
 
   postgres:
-    image: postgres:17-alpine
+    image: postgres:16-alpine
     environment:
       POSTGRES_DB: newsdb
       POSTGRES_USER: newsuser
@@ -157,3 +159,4 @@ volumes:
   scheduler_postgres_data:
   app_cache:
   app_logs:
+  app_backups:

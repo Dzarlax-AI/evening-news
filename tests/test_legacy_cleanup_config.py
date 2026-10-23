@@ -63,10 +63,10 @@ def test_runtime_missing_config_is_reported_without_secrets():
     settings = Settings(
         _env_file=None,
         EXTRACTION_SERVICE_URL=None,
-        EXTRACTION_SERVICE_TOKEN=None,
+        EXTRACTION_SERVICE_TOKEN=TOKEN,
         SCHEDULER_API_URL=None,
-        SCHEDULER_API_TOKEN=None,
-        SCHEDULED_JOBS_TOKEN=None,
+        SCHEDULER_API_TOKEN=TOKEN,
+        SCHEDULED_JOBS_TOKEN=TOKEN,
     )
     with pytest.raises(RuntimeError) as error:
         settings.validate_runtime_services()

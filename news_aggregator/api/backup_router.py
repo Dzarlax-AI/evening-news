@@ -179,7 +179,7 @@ async def upload_backup(file: UploadFile = File(...)):
     if settings.background_execution_mode == "worker":
         raise HTTPException(
             status_code=409,
-            detail="Backup uploads are disabled in worker mode because the web backup mount is read-only.",
+            detail="Backup uploads are disabled in worker mode; use offline maintenance with the worker stopped.",
         )
     try:
         # Validate file type
@@ -216,7 +216,7 @@ async def cleanup_old_backups(keep_count: int = 5):
     if settings.background_execution_mode == "worker":
         raise HTTPException(
             status_code=409,
-            detail="Backup cleanup is disabled in worker mode because the web backup mount is read-only.",
+            detail="Backup cleanup is disabled in worker mode; use offline maintenance with the worker stopped.",
         )
     try:
         backup_dir = Path("backups")
