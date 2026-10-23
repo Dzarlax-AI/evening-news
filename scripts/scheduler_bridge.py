@@ -11,6 +11,7 @@ import json
 import os
 import re
 import sys
+import uuid
 from datetime import datetime, timezone
 from pathlib import Path
 from urllib.parse import urlencode, urlsplit
@@ -297,11 +298,66 @@ def is_news_owned_schedule(resource):
         return False
     operation = resource.get("operation")
     key = resource.get("schedule_key")
-    if operation not in OPERATIONS or not isinstance(key, str) or not key.startswith("news:"):
+    return isinstance(operation, str) and operation in OPERATIONS and is_news_schedule_key(key)
+
+
+def is_news_schedule_key(key):
+    if not isinstance(key, str) or not key.startswith("news:"):
         return False
     suffix = key[len("news:"):]
-    return (suffix == operation
+    return (suffix in OPERATIONS
             or (suffix.isascii() and suffix.isdigit() and int(suffix) > 0))
+
+
+def is_news_owned_occurrence(occurrence):
+    return (isinstance(occurrence, dict)
+            and occurrence.get("target_alias") == "news-worker")
+
+
+def _is_utc_timestamp(value):
+    if not isinstance(value, str) or not re.fullmatch(
+            r"\d{4}-\d\d-\d\dT\d\d:\d\d:\d\d(?:\.\d{1,6})?Z", value):
+        return False
+    try:
+        datetime.fromisoformat(value[:-1] + "+00:00")
+    except ValueError:
+        return False
+    return True
+
+
+def validate_occurrence_record(item):
+    required = {
+        "occurrence_id", "schedule_key", "schedule_revision", "scheduled_for", "status",
+        "attempts", "created_at", "updated_at", "job_id", "target_alias",
+        "lease_expires_at", "lease_active",
+    }
+    if not isinstance(item, dict) or set(item) != required:
+        raise ValueError("scheduler occurrence inventory row has an invalid field set")
+    try:
+        occurrence_id = str(uuid.UUID(item["occurrence_id"]))
+        job_id = None if item["job_id"] is None else str(uuid.UUID(item["job_id"]))
+    except (AttributeError, TypeError, ValueError):
+        raise ValueError("scheduler occurrence inventory identifiers are invalid") from None
+    if (occurrence_id != item["occurrence_id"]
+            or (job_id is not None and job_id != item["job_id"])
+            or not isinstance(item["schedule_key"], str)
+            or not re.fullmatch(r"[a-z0-9][a-z0-9._:-]{0,127}", item["schedule_key"])
+            or type(item["schedule_revision"]) is not int or item["schedule_revision"] < 1
+            or type(item["attempts"]) is not int or item["attempts"] < 0
+            or not isinstance(item["status"], str)
+            or item["status"] not in {"pending", "leased", "blocked", "accepted"}
+            or not isinstance(item["target_alias"], str)
+            or not item["target_alias"] or len(item["target_alias"]) > 128
+            or type(item["lease_active"]) is not bool
+            or not _is_utc_timestamp(item["scheduled_for"])
+            or not _is_utc_timestamp(item["created_at"])
+            or not _is_utc_timestamp(item["updated_at"])
+            or (item["lease_expires_at"] is not None
+                and not _is_utc_timestamp(item["lease_expires_at"]))
+            or (item["lease_active"]
+                and (item["status"] != "leased" or item["lease_expires_at"] is None))):
+        raise ValueError("scheduler occurrence inventory row is invalid")
+    return item
 
 
 def validate_paused_status(status):
@@ -364,8 +420,12 @@ async def rollback_inventory(args):
         initial_control_revision, initial_pending_outbox = validate_paused_status(status)
         schedules, next_cursor, seen = [], None, set()
         while True:
-            query = "?" + urlencode({"limit": 100, **({"cursor": next_cursor} if next_cursor else {})})
+            query = "?" + urlencode({"limit": 2, **({"cursor": next_cursor} if next_cursor else {})})
             page = await request_json(session, "GET", base + "/v1/schedules" + query, token)
+            if (not isinstance(page, dict) or set(page) != {"schedules", "next_cursor"}
+                    or not isinstance(page["schedules"], list) or len(page["schedules"]) > 2
+                    or (page["next_cursor"] is not None and not isinstance(page["next_cursor"], str))):
+                raise ValueError("scheduler schedule inventory page is invalid")
             schedules.extend(page["schedules"])
             next_cursor = page.get("next_cursor")
             if not next_cursor:
@@ -378,6 +438,12 @@ async def rollback_inventory(args):
         while True:
             query = "?" + urlencode({"limit": 100, **({"cursor": next_cursor} if next_cursor else {})})
             page = await request_json(session, "GET", base + "/v1/occurrences" + query, token)
+            if (not isinstance(page, dict) or set(page) != {"occurrences", "next_cursor"}
+                    or not isinstance(page["occurrences"], list) or len(page["occurrences"]) > 100
+                    or (page["next_cursor"] is not None and not isinstance(page["next_cursor"], str))):
+                raise ValueError("scheduler occurrence inventory page is invalid")
+            for occurrence in page["occurrences"]:
+                validate_occurrence_record(occurrence)
             occurrences.extend(page["occurrences"])
             next_cursor = page.get("next_cursor")
             if not next_cursor:
@@ -385,11 +451,15 @@ async def rollback_inventory(args):
             if next_cursor in seen or len(occurrences) > 1_000_000:
                 raise ValueError("scheduler occurrence inventory cursor or size is invalid")
             seen.add(next_cursor)
-        if any(occurrence.get("status") == "leased" for occurrence in occurrences):
+        news_occurrences = [occurrence for occurrence in occurrences
+                            if is_news_owned_occurrence(occurrence)]
+        if any(occurrence["lease_active"] for occurrence in news_occurrences):
             raise ValueError("scheduler has an in-flight leased dispatch; retry rollback inventory")
-        owned_keys = {schedule["schedule_key"] for schedule in schedules}
-        occurrences = [occurrence for occurrence in occurrences
-                       if occurrence.get("schedule_key") in owned_keys]
+        current_news_keys = {schedule["schedule_key"] for schedule in schedules}
+        occurrence_news_keys = {occurrence["schedule_key"] for occurrence in news_occurrences}
+        orphaned_news_keys = sorted(occurrence_news_keys - current_news_keys)
+        news_schedule_keys = current_news_keys | set(orphaned_news_keys)
+        occurrences = news_occurrences
         final_status = await request_json(session, "GET", base + "/v1/status", token)
         final_control_revision, final_pending_outbox = validate_paused_status(final_status)
         if (final_control_revision != initial_control_revision
@@ -400,7 +470,7 @@ async def rollback_inventory(args):
     factory = sessionmaker(engine, expire_on_commit=False)
     try:
         async with factory() as session:
-            keys = [schedule["schedule_key"] for schedule in schedules]
+            keys = sorted(news_schedule_keys)
             jobs = (await session.execute(
                 select(BackgroundJob).where(BackgroundJob.schedule_key.in_(keys))
                 .order_by(BackgroundJob.created_at, BackgroundJob.id).limit(100001)
@@ -434,6 +504,7 @@ async def rollback_inventory(args):
             "format": "news-scheduler-rollback-config-v1",
             "schedules": rollback_schedules,
         },
+        "orphaned_news_schedule_keys": orphaned_news_keys,
         "news_execution_inventory": news_jobs,
         "scheduler_occurrences": occurrences,
         "note": "Inventory only. It preserves current configuration, successful News execution history, and pending/blocked/accepted occurrences. It does not delete, replay, or enable Python scheduling.",

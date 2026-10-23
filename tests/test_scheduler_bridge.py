@@ -3,11 +3,12 @@
 import asyncio
 from datetime import datetime
 from types import SimpleNamespace
+from uuid import uuid4
 
 import pytest
 
 from scripts.scheduler_bridge import (
-    is_news_owned_schedule, legacy_item, legacy_rollback_record, legacy_run_history,
+    is_news_owned_occurrence, is_news_owned_schedule, legacy_item, legacy_rollback_record, legacy_run_history,
     rollback_inventory, safe_payload, utc_timestamp, write_artifact,
 )
 
@@ -69,6 +70,15 @@ def test_rollback_inventory_ownership_requires_news_key_and_target_alias():
     assert is_news_owned_schedule(news)
     assert not is_news_owned_schedule({**news, "target_alias": "archive-worker"})
     assert not is_news_owned_schedule({**news, "schedule_key": "archive:backup"})
+    assert is_news_owned_occurrence({
+        "schedule_key": "news:42", "target_alias": "news-worker",
+    })
+    assert is_news_owned_occurrence({
+        "schedule_key": "fixture:queue-capacity", "target_alias": "news-worker",
+    })
+    assert not is_news_owned_occurrence({
+        "schedule_key": "news:42", "target_alias": "other-worker",
+    })
 
 
 def _fake_inventory_session(monkeypatch, responses, calls, *, db_session=None):
@@ -153,7 +163,7 @@ def test_rollback_inventory_rejects_leased_dispatch(monkeypatch):
     responses = iter([
         {"paused": True, "control_revision": 4, "pending_outbox": 1},
         {"schedules": [], "next_cursor": None},
-        {"occurrences": [{"schedule_key": "other:job", "status": "leased"}],
+        {"occurrences": [_occurrence("news:42", status="leased", lease_active=True)],
          "next_cursor": None},
     ])
 
@@ -167,6 +177,112 @@ def test_rollback_inventory_rejects_leased_dispatch(monkeypatch):
     assert [url.rsplit("/", 1)[-1].split("?", 1)[0] for _, url in calls] == [
         "status", "schedules", "occurrences",
     ]
+
+
+@pytest.mark.parametrize("remove_field", ["target_alias", "lease_active", "lease_expires_at"])
+def test_rollback_inventory_fails_closed_on_missing_occurrence_ownership_or_lease_metadata(
+        monkeypatch, remove_field):
+    calls = []
+    row = _occurrence("news:77")
+    row.pop(remove_field)
+    responses = iter([
+        {"paused": True, "control_revision": 4, "pending_outbox": 1},
+        {"schedules": [], "next_cursor": None},
+        {"occurrences": [row], "next_cursor": None},
+    ])
+    import scripts.scheduler_bridge as bridge
+    bridge = _fake_inventory_session(monkeypatch, lambda _url: next(responses), calls)
+    with pytest.raises(ValueError, match="occurrence inventory row has an invalid field set"):
+        asyncio.run(bridge.rollback_inventory(SimpleNamespace(timeout=1, output="unused.json")))
+    assert calls[-1][1].endswith("/v1/occurrences?limit=100")
+
+
+def _occurrence(schedule_key, *, status="pending", alias="news-worker", lease_active=False):
+    return {
+        "occurrence_id": str(uuid4()), "schedule_key": schedule_key,
+        "schedule_revision": 1, "scheduled_for": "2026-10-23T00:00:00.000001Z",
+        "status": status, "attempts": 0,
+        "created_at": "2026-10-23T00:00:00Z", "updated_at": "2026-10-23T00:00:00Z",
+        "job_id": None, "target_alias": alias,
+        "lease_expires_at": "2026-10-22T00:00:00Z" if status == "leased" else None,
+        "lease_active": lease_active,
+    }
+
+
+def test_rollback_inventory_keeps_news_orphan_occurrences_and_jobs_but_excludes_foreign_alias(
+        monkeypatch):
+    calls, artifacts, queries = [], [], []
+    status = {"paused": True, "control_revision": 4, "pending_outbox": 2}
+    schedule = {
+        "schedule_key": "news:news_digest", "revision": 1, "enabled": True,
+        "calendar": {"type": "daily", "timezone": "UTC", "hour": 1, "minute": 2},
+        "target_alias": "news-worker", "operation": "news_digest", "payload": {},
+        "next_due_at": None, "created_at": "2026-10-22T00:00:00Z",
+        "updated_at": "2026-10-23T00:00:00Z",
+    }
+    rows = [
+        _occurrence("news:77", status="pending"),
+        _occurrence("news:77", status="blocked"),
+        _occurrence("news:77", status="accepted"),
+        _occurrence("news:88", status="leased", lease_active=False),
+        _occurrence("news:independent-dispatch", status="pending"),
+        _occurrence("fixture:queue-capacity", status="accepted"),
+        _occurrence("news:99", status="accepted", alias="other-worker"),
+        _occurrence("news:77", status="accepted", alias="other-worker"),
+    ]
+    responses = iter([
+        status,
+        {"schedules": [schedule], "next_cursor": None},
+        {"occurrences": rows, "next_cursor": None},
+        status,
+    ])
+
+    class DBSession:
+        async def __aenter__(self):
+            return self
+
+        async def __aexit__(self, *_args):
+            return None
+
+        async def execute(self, statement):
+            queries.append(str(statement.compile().params))
+            jobs = [
+                SimpleNamespace(
+                    id=uuid4(), schedule_key=key, occurrence_id=uuid4(), state="succeeded",
+                    result={"status": "success"}, created_at=datetime(2026, 10, 23),
+                    finished_at=datetime(2026, 10, 23, 0, 1),
+                ) for key in (
+                    "news:news_digest", "news:77", "news:88",
+                    "news:independent-dispatch", "fixture:queue-capacity",
+                )
+            ]
+            return SimpleNamespace(scalars=lambda: SimpleNamespace(all=lambda: jobs))
+
+    bridge = _fake_inventory_session(
+        monkeypatch, lambda _url: next(responses), calls, db_session=DBSession,
+    )
+    monkeypatch.setattr(bridge, "write_artifact", lambda _path, artifact: artifacts.append(artifact))
+    asyncio.run(bridge.rollback_inventory(SimpleNamespace(timeout=1, output="unused.json")))
+
+    artifact = artifacts[0]
+    assert artifact["orphaned_news_schedule_keys"] == [
+        "fixture:queue-capacity", "news:77", "news:88", "news:independent-dispatch",
+    ]
+    assert {row["schedule_key"] for row in artifact["scheduler_occurrences"]} == {
+        "news:77", "news:88", "news:independent-dispatch", "fixture:queue-capacity",
+    }
+    assert {row["status"] for row in artifact["scheduler_occurrences"]} == {
+        "pending", "blocked", "accepted", "leased",
+    }
+    assert {job["schedule_key"] for job in artifact["news_execution_inventory"]} == {
+        "news:news_digest", "news:77", "news:88",
+        "news:independent-dispatch", "fixture:queue-capacity",
+    }
+    assert "news:99" not in repr(artifact)
+    assert all(key in queries[0] for key in (
+        "news:news_digest", "news:77", "news:88",
+        "news:independent-dispatch", "fixture:queue-capacity",
+    ))
 
 
 def test_rollback_inventory_rejects_control_change_during_capture(monkeypatch):

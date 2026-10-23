@@ -674,10 +674,11 @@ func (s *Store) ListOccurrences(ctx context.Context, key, cursor string, limit i
 	}
 	var rows pgx.Rows
 	var err error
+	const occurrenceColumns = `occurrence_id::text,schedule_key,schedule_revision,scheduled_for,target_alias,status,lease_until,COALESCE(status='leased' AND lease_until>clock_timestamp(),FALSE),attempts,created_at,updated_at,job_id::text`
 	if key != "" {
-		rows, err = s.Pool.Query(ctx, `SELECT occurrence_id::text,schedule_key,schedule_revision,scheduled_for,status,attempts,created_at,updated_at,job_id::text FROM `+s.outbox+` WHERE schedule_key=$1 AND (created_at,occurrence_id)>($2,$3::uuid) ORDER BY created_at,occurrence_id LIMIT $4`, key, created, id, limit+1)
+		rows, err = s.Pool.Query(ctx, `SELECT `+occurrenceColumns+` FROM `+s.outbox+` WHERE schedule_key=$1 AND (created_at,occurrence_id)>($2,$3::uuid) ORDER BY created_at,occurrence_id LIMIT $4`, key, created, id, limit+1)
 	} else {
-		rows, err = s.Pool.Query(ctx, `SELECT occurrence_id::text,schedule_key,schedule_revision,scheduled_for,status,attempts,created_at,updated_at,job_id::text FROM `+s.outbox+` WHERE (created_at,occurrence_id)>($1,$2::uuid) ORDER BY created_at,occurrence_id LIMIT $3`, created, id, limit+1)
+		rows, err = s.Pool.Query(ctx, `SELECT `+occurrenceColumns+` FROM `+s.outbox+` WHERE (created_at,occurrence_id)>($1,$2::uuid) ORDER BY created_at,occurrence_id LIMIT $3`, created, id, limit+1)
 	}
 	if err != nil {
 		return nil, "", err
@@ -687,7 +688,7 @@ func (s *Store) ListOccurrences(ctx context.Context, key, cursor string, limit i
 	for rows.Next() {
 		var x model.Occurrence
 		var job *string
-		if err := rows.Scan(&x.ID, &x.ScheduleKey, &x.ScheduleRevision, &x.ScheduledFor, &x.Status, &x.Attempts, &x.CreatedAt, &x.UpdatedAt, &job); err != nil {
+		if err := rows.Scan(&x.ID, &x.ScheduleKey, &x.ScheduleRevision, &x.ScheduledFor, &x.TargetAlias, &x.Status, &x.LeaseExpiresAt, &x.LeaseActive, &x.Attempts, &x.CreatedAt, &x.UpdatedAt, &job); err != nil {
 			return nil, "", err
 		}
 		x.JobID = job

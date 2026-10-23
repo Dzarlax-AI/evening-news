@@ -125,4 +125,37 @@ func TestHTTPEmptyCreateAndImportContract(t *testing.T) {
 	if err != nil || got.NextDueAt == nil || got.NextDueAt.UTC().Format(time.RFC3339Nano) != "2030-01-02T17:30:19.728869Z" {
 		t.Fatal("HTTP import did not preserve its exact microsecond timestamp")
 	}
+	now := time.Now().UTC().Truncate(time.Microsecond)
+	schedules := pgx.Identifier{schema, "schedules"}.Sanitize()
+	if _, err := db.Pool.Exec(ctx, `UPDATE `+schedules+` SET next_due_at=$2 WHERE schedule_key=$1`, "news:microseconds", now.Add(-time.Second)); err != nil {
+		t.Fatal("could not prepare occurrence inventory")
+	}
+	if _, err := db.SetPaused(ctx, 0, false, now); err != nil {
+		t.Fatal("could not resume scheduler for occurrence inventory")
+	}
+	if generated, err := db.GenerateDue(ctx, now, 100, 100); err != nil || generated != 1 {
+		t.Fatal("could not generate an inventory occurrence")
+	}
+	if claimed, err := db.Claim(ctx, now, 30*time.Second, 1); err != nil || len(claimed) != 1 {
+		t.Fatal("could not lease an inventory occurrence")
+	}
+	leasedInventory := request(http.MethodGet, "/v1/occurrences?schedule_key=news:microseconds", "")
+	if leasedInventory.Code != http.StatusOK {
+		t.Fatalf("leased occurrence inventory returned status %d: %s", leasedInventory.Code, leasedInventory.Body.String())
+	}
+	var leasedBody struct {
+		Occurrences []struct {
+			TargetAlias    string     `json:"target_alias"`
+			Status         string     `json:"status"`
+			LeaseExpiresAt *time.Time `json:"lease_expires_at"`
+			LeaseActive    bool       `json:"lease_active"`
+		} `json:"occurrences"`
+	}
+	if err := json.Unmarshal(leasedInventory.Body.Bytes(), &leasedBody); err != nil || len(leasedBody.Occurrences) != 1 {
+		t.Fatal("leased occurrence inventory response was malformed")
+	}
+	entry := leasedBody.Occurrences[0]
+	if entry.TargetAlias != "worker" || entry.Status != "leased" || entry.LeaseExpiresAt == nil || !entry.LeaseActive {
+		t.Fatal("leased occurrence inventory omitted its target or active lease state")
+	}
 }

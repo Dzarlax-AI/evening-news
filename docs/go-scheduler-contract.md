@@ -197,13 +197,13 @@ The request is atomic: if any item conflicts or is invalid, no item is imported.
 
 ### `GET /v1/occurrences`
 
-Authenticated, bounded inventory for rollback and operations. Query parameters: optional `schedule_key`, `limit` 1–100 (default 100), and opaque `cursor`. If `schedule_key` is supplied, it must refer to a schedule that currently exists; otherwise the endpoint returns `404` `schedule_not_found`. A valid schedule with no occurrences returns an empty array. Returns `200` `{"occurrences":[...],"next_cursor":"<opaque or null>"}` ordered by creation time then occurrence UUID. Each item is exactly:
+Authenticated, bounded inventory for rollback and operations. Query parameters: optional `schedule_key`, `limit` 1–100 (default 100), and opaque `cursor`. If `schedule_key` is supplied, it must refer to a schedule that currently exists; otherwise the endpoint returns `404` `schedule_not_found`. A valid schedule with no occurrences returns an empty array. Without the filter, inventory includes orphaned occurrences retained after their schedule is deleted. Returns `200` `{"occurrences":[...],"next_cursor":"<opaque or null>"}` ordered by creation time then occurrence UUID. Each item is exactly:
 
 ```json
-{"occurrence_id":"79c2d7b2-96ee-4eb3-ad6d-81969a0e348e","schedule_key":"news:42","schedule_revision":3,"scheduled_for":"2026-10-23T17:30:19.728869Z","status":"accepted","attempts":1,"created_at":"2026-10-23T17:30:19.728869Z","updated_at":"2026-10-23T17:30:20.000001Z","job_id":"d35ec3f9-4196-4bf8-840a-61e7972442f9"}
+{"occurrence_id":"79c2d7b2-96ee-4eb3-ad6d-81969a0e348e","schedule_key":"news:42","schedule_revision":3,"scheduled_for":"2026-10-23T17:30:19.728869Z","target_alias":"news-worker","status":"leased","lease_expires_at":"2026-10-23T17:30:49.728869Z","lease_active":true,"attempts":1,"created_at":"2026-10-23T17:30:19.728869Z","updated_at":"2026-10-23T17:30:20.000001Z","job_id":null}
 ```
 
-`status` is one of `pending`, `leased`, `blocked`, or `accepted`; `job_id` is null until a valid receipt is stored. The response never includes target URLs, tokens, raw payload, or log text. `404 schedule_not_found` is returned for an unknown schedule filter.
+`status` is one of `pending`, `leased`, `blocked`, or `accepted`; `job_id` is null until a valid receipt is stored. `target_alias` is captured immutably on the occurrence even if its schedule is later deleted. `lease_expires_at` is the stored lease deadline or null when no lease is held. `lease_active` is calculated by PostgreSQL at inventory-query time as `status='leased' AND lease_until > clock_timestamp()`. An expired lease remains `status='leased'` and has `lease_active:false` until reclaimed. The response never includes lease tokens, target URLs, tokens, raw payload, or log text. `404 schedule_not_found` is returned for an unknown schedule filter.
 
 ### `POST /v1/occurrences/{occurrence_id}/retry`
 

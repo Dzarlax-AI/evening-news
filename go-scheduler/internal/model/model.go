@@ -44,15 +44,18 @@ type Envelope struct {
 }
 
 type Occurrence struct {
-	ID               string    `json:"occurrence_id"`
-	ScheduleKey      string    `json:"schedule_key"`
-	ScheduleRevision int64     `json:"schedule_revision"`
-	ScheduledFor     time.Time `json:"scheduled_for"`
-	Status           string    `json:"status"`
-	Attempts         int       `json:"attempts"`
-	CreatedAt        time.Time `json:"created_at"`
-	UpdatedAt        time.Time `json:"updated_at"`
-	JobID            *string   `json:"job_id"`
+	ID               string     `json:"occurrence_id"`
+	ScheduleKey      string     `json:"schedule_key"`
+	ScheduleRevision int64      `json:"schedule_revision"`
+	ScheduledFor     time.Time  `json:"scheduled_for"`
+	TargetAlias      string     `json:"target_alias"`
+	Status           string     `json:"status"`
+	LeaseExpiresAt   *time.Time `json:"lease_expires_at"`
+	LeaseActive      bool       `json:"lease_active"`
+	Attempts         int        `json:"attempts"`
+	CreatedAt        time.Time  `json:"created_at"`
+	UpdatedAt        time.Time  `json:"updated_at"`
+	JobID            *string    `json:"job_id"`
 }
 
 type Receipt struct {

@@ -870,7 +870,7 @@ components:
     Occurrence:
       type: object
       additionalProperties: false
-      required: [occurrence_id, schedule_key, schedule_revision, scheduled_for, status, attempts, created_at, updated_at, job_id]
+      required: [occurrence_id, schedule_key, schedule_revision, scheduled_for, target_alias, status, lease_expires_at, lease_active, attempts, created_at, updated_at, job_id]
       properties:
         occurrence_id:
           $ref: '#/components/schemas/UUID'
@@ -882,8 +882,17 @@ components:
           minimum: 1
         scheduled_for:
           $ref: '#/components/schemas/UTCTimestamp'
+        target_alias:
+          $ref: '#/components/schemas/TargetAlias'
         status:
           enum: [pending, leased, blocked, accepted]
+        lease_expires_at:
+          allOf:
+            - $ref: '#/components/schemas/NullableTimestamp'
+          description: Stored lease deadline, or null if no lease is held.
+        lease_active:
+          type: boolean
+          description: True when status is leased and the stored deadline is later than PostgreSQL clock_timestamp() at inventory read time.
         attempts:
           type: integer
           minimum: 0

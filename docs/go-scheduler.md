@@ -116,7 +116,10 @@ migration or assume that changing a mode flag transfers persisted state.
 
 For rollback, pause the scheduler and inventory pending/blocked/accepted
 occurrences and News jobs. The bridge rejects unpaused or changing control state
-and any in-flight leased dispatch before writing an inventory artifact. Export current calendar configuration and next due
+and any active News dispatch lease before writing an inventory artifact.
+Expired leases remain visible with database-clock lease status. Occurrences and
+execution jobs belonging to deleted News schedules remain in inventory; their
+configuration is not recreated. Export current calendar configuration and next due
 times back through the bridge before resuming Python scheduling. Never restore
 an old configuration snapshot blindly, delete outbox entries, or discard jobs.
 The shared collector, browser, egress gateway, and their clients are outside the
@@ -134,7 +137,7 @@ liveness; `/readyz` additionally checks schema/DB readiness and loop freshness.
 An open port or a successful acceptance receipt alone is not execution acceptance.
 Local verification on October 23, 2026:
 
-- Python regression suite against isolated PostgreSQL 16: 1,245 passed, five
+- Python regression suite against isolated PostgreSQL 16: 1,256 passed, five
   explicit real-browser/network checks skipped, and 22 subtests passed.
 - Go unit and PostgreSQL integration tests passed with the race detector;
   `go vet` and Linux amd64 / macOS ARM64 cross-compilation passed.
@@ -157,16 +160,16 @@ Synthetic Docker resource snapshots (MiB; CPU percent in parentheses):
 
 | Process | Slow target in flight | News queue at capacity | Final |
 |---|---:|---:|---:|
-| Scheduler | 7.39 (0.77%) | 7.58 (0.96%) | 4.78 (0.90%) |
-| News web | 101.10 (0.26%) | 101.90 (0.26%) | 96.66 (0.29%) |
-| News worker | 81.96 (0.23%) | 82.35 (0.00%) | 77.85 (0.69%) |
-| PostgreSQL | 96.27 (1.11%) | 99.16 (0.76%) | 92.52 (1.09%) |
-| Fake consumers/providers | 13.70 (0.05%) | 14.02 (0.06%) | 12.84 (0.06%) |
-| Total | 300.42 (2.42%) | 305.01 (2.04%) | 284.65 (3.03%) |
+| Scheduler | 8.27 (0.55%) | 8.89 (0.80%) | 4.80 (1.05%) |
+| News web | 102.00 (0.30%) | 102.20 (0.29%) | 96.34 (0.23%) |
+| News worker | 81.46 (0.65%) | 81.75 (0.00%) | 77.02 (0.69%) |
+| PostgreSQL | 97.89 (0.85%) | 101.60 (0.85%) | 92.58 (0.97%) |
+| Fake consumers/providers | 14.07 (0.04%) | 14.55 (0.08%) | 12.87 (0.05%) |
+| Total | 303.69 (2.39%) | 308.99 (2.02%) | 283.61 (2.99%) |
 
-The scheduler used 5.48 MiB at 0.95% CPU before dispatch; that idle sample was
-captured before starting the worker, so its 202.81 MiB total is not comparable
-with the full five-process samples. These are point-in-time observations from a
-small synthetic workload, not peak measurements or production sizing evidence.
+The scheduler used 5.18 MiB before dispatch; that idle sample was captured
+before starting the worker, so its 203.41 MiB total is not comparable with the
+full five-process samples. These are point-in-time observations from a small
+synthetic workload, not peak measurements or production sizing evidence.
 The capacity check observed 32 queued jobs and one running job with a live
 worker heartbeat; no worker pause or runtime timeout changes were needed.

@@ -155,11 +155,32 @@ func TestPostgresPersistenceAndFencing(t *testing.T) {
 	if err != nil || len(claimed) != 1 {
 		t.Fatal("could not claim generated occurrence")
 	}
+	if _, err := db.Pool.Exec(ctx, `UPDATE `+db.outbox+` SET lease_until=clock_timestamp()+interval '1 hour' WHERE occurrence_id=$1::uuid`, claimed[0].Envelope.OccurrenceID); err != nil {
+		t.Fatal("could not prepare active lease inventory")
+	}
+	if _, err := db.SetPaused(ctx, 1, true, now.Add(10*time.Second)); err != nil {
+		t.Fatal("could not pause scheduler with a live lease")
+	}
+	liveInventory, _, err := db.ListOccurrences(ctx, importItem.Key, "", 100)
+	if err != nil || len(liveInventory) != 1 || liveInventory[0].TargetAlias != "worker" || liveInventory[0].Status != "leased" || liveInventory[0].LeaseExpiresAt == nil || !liveInventory[0].LeaseActive {
+		t.Fatal("inventory did not identify the active lease while paused")
+	}
 	if _, err := db.Pool.Exec(ctx, `UPDATE `+db.outbox+` SET lease_until=clock_timestamp()-interval '1 microsecond' WHERE occurrence_id=$1::uuid`, claimed[0].Envelope.OccurrenceID); err != nil {
 		t.Fatal("could not expire the claimed lease")
 	}
+	expiredInventory, _, err := db.ListOccurrences(ctx, importItem.Key, "", 100)
+	if err != nil || len(expiredInventory) != 1 || expiredInventory[0].TargetAlias != "worker" || expiredInventory[0].Status != "leased" || expiredInventory[0].LeaseExpiresAt == nil || expiredInventory[0].LeaseActive {
+		t.Fatal("inventory did not report the expired lease as inactive while paused")
+	}
 	if err := db.Ack(ctx, claimed[0].Envelope.OccurrenceID, claimed[0].LeaseToken, "00000000-0000-4000-8000-000000000001", now.Add(10*time.Second)); !errors.Is(err, ErrLeaseLost) {
 		t.Fatal("expired lease incorrectly acknowledged an occurrence")
+	}
+	newClaims, err := db.Claim(ctx, now.Add(12*time.Second), 10*time.Second, 10)
+	if err != nil || len(newClaims) != 0 {
+		t.Fatal("paused scheduler claimed new dispatch work")
+	}
+	if _, err := db.SetPaused(ctx, 2, false, now.Add(13*time.Second)); err != nil {
+		t.Fatal("could not resume scheduler after lease inspection")
 	}
 	if generated, err = db.GenerateDue(ctx, now.Add(9*time.Second), 100, 10); err != nil || generated != 1 {
 		t.Fatal("a separate due schedule was not allowed while the first remains leased")
@@ -168,12 +189,28 @@ func TestPostgresPersistenceAndFencing(t *testing.T) {
 	if err := db.Pool.QueryRow(ctx, `SELECT count(*) FROM `+db.outbox+` WHERE schedule_key=$1 AND status<>'accepted'`, importItem.Key).Scan(&sameScheduleOpen); err != nil || sameScheduleOpen != 1 {
 		t.Fatal("a schedule created multiple non-accepted occurrences")
 	}
-	if _, err = db.SetPaused(ctx, 1, true, now.Add(11*time.Second)); err != nil {
+	if _, err = db.SetPaused(ctx, 3, true, now.Add(14*time.Second)); err != nil {
 		t.Fatal("could not pause scheduler")
 	}
-	newClaims, err := db.Claim(ctx, now.Add(12*time.Second), 10*time.Second, 10)
+	newClaims, err = db.Claim(ctx, now.Add(15*time.Second), 10*time.Second, 10)
 	if err != nil || len(newClaims) != 0 {
 		t.Fatal("paused scheduler claimed new dispatch work")
+	}
+	if err := db.DeleteSchedule(ctx, importItem.Key, 1); err != nil {
+		t.Fatal("could not delete schedule with retained occurrence")
+	}
+	orphanedInventory, _, err := db.ListOccurrences(ctx, "", "", 100)
+	if err != nil {
+		t.Fatal("could not list inventory after schedule deletion")
+	}
+	foundOrphan := false
+	for _, item := range orphanedInventory {
+		if item.ScheduleKey == importItem.Key {
+			foundOrphan = item.TargetAlias == "worker" && item.Status == "leased" && item.LeaseExpiresAt != nil && !item.LeaseActive
+		}
+	}
+	if !foundOrphan {
+		t.Fatal("schedule deletion removed or altered its occurrence inventory")
 	}
 }
 

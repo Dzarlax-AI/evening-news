@@ -9,6 +9,7 @@ import aiohttp
 
 MAX_RESPONSE_BYTES = 64 * 1024
 MAX_IMPORT_REQUEST_BYTES = 512 * 1024
+SCHEDULE_PAGE_SIZE = 2
 
 
 class SchedulerServiceError(Exception):
@@ -83,12 +84,14 @@ class SchedulerServiceClient:
     async def list_schedules(self):
         schedules, cursor, seen_cursors = [], None, set()
         while True:
-            query = "?limit=100" + ("&" + urlencode({"cursor": cursor}) if cursor else "")
+            query = "?limit=" + str(SCHEDULE_PAGE_SIZE) + (
+                "&" + urlencode({"cursor": cursor}) if cursor else ""
+            )
             result = await self.request("GET", "/v1/schedules" + query)
             if (not isinstance(result, dict)
                     or set(result) != {"schedules", "next_cursor"}
                     or not isinstance(result["schedules"], list)
-                    or len(result["schedules"]) > 100
+                    or len(result["schedules"]) > SCHEDULE_PAGE_SIZE
                     or (result["next_cursor"] is not None
                         and not isinstance(result["next_cursor"], str))):
                 raise SchedulerServiceError("invalid_response")
@@ -185,17 +188,26 @@ class SchedulerServiceClient:
                 or (result["next_cursor"] is not None and not isinstance(result["next_cursor"], str))):
             raise SchedulerServiceError("invalid_response")
         expected_fields = {"occurrence_id", "schedule_key", "schedule_revision", "scheduled_for",
-                           "status", "attempts", "created_at", "updated_at", "job_id"}
+                           "status", "attempts", "created_at", "updated_at", "job_id",
+                           "target_alias", "lease_expires_at", "lease_active"}
         for item in result["occurrences"]:
             if (not isinstance(item, dict) or set(item) != expected_fields
                     or type(item["schedule_revision"]) is not int
                     or type(item["attempts"]) is not int
                     or not isinstance(item["occurrence_id"], str)
                     or not isinstance(item["schedule_key"], str)
+                    or not isinstance(item["target_alias"], str)
+                    or not item["target_alias"] or len(item["target_alias"]) > 128
                     or not isinstance(item["scheduled_for"], str)
                     or not isinstance(item["created_at"], str)
                     or not isinstance(item["updated_at"], str)
+                    or not isinstance(item["status"], str)
                     or item["status"] not in {"pending", "leased", "blocked", "accepted"}
+                    or type(item["lease_active"]) is not bool
+                    or (item["lease_expires_at"] is not None
+                        and not _is_utc_timestamp(item["lease_expires_at"]))
+                    or (item["lease_active"] and
+                        (item["status"] != "leased" or item["lease_expires_at"] is None))
                     or (item["job_id"] is not None and not isinstance(item["job_id"], str))):
                 raise SchedulerServiceError("invalid_response")
         return result
@@ -233,3 +245,15 @@ def validate_schedule_resource(value):
     else:
         raise SchedulerServiceError("invalid_response")
     return value
+
+
+def _is_utc_timestamp(value):
+    if not isinstance(value, str) or not re.fullmatch(
+            r"\d{4}-\d\d-\d\dT\d\d:\d\d:\d\d(?:\.\d{1,6})?Z", value):
+        return False
+    from datetime import datetime
+    try:
+        datetime.fromisoformat(value[:-1] + "+00:00")
+    except ValueError:
+        return False
+    return True
