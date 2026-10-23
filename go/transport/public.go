@@ -336,23 +336,23 @@ func publicDecode(wire []byte, encoding string, outputLimit int64) ([]byte, erro
 // FetchPublic fetches public HTTP(S) content with independently bounded wire,
 // decompressed and UTF-8 output and a validated, pinned destination socket.
 func FetchPublic(ctx context.Context, raw string, opts Options) (Document, error) {
-	return fetchPublicWithTimeout(ctx, raw, opts, 30*time.Second)
+	return fetchPublicWithTimeout(ctx, raw, opts, 30*time.Second, decodeCharset)
 }
 
 // FetchPublicRSS is the RSS collector's public HTTP path. It keeps the same
 // DNS pinning, redirect checks, request headers, and wire/decode bounds as
 // FetchPublic while allowing the RSS plan's longer 60-second source timeout.
 func FetchPublicRSS(ctx context.Context, raw string, opts Options) (Document, error) {
-	return fetchPublicWithTimeout(ctx, raw, opts, 60*time.Second)
+	return fetchPublicWithTimeout(ctx, raw, opts, 60*time.Second, decodeRSSCharset)
 }
 
-func fetchPublicWithTimeout(ctx context.Context, raw string, opts Options, maxTimeout time.Duration) (Document, error) {
+func fetchPublicWithTimeout(ctx context.Context, raw string, opts Options, maxTimeout time.Duration, decode func([]byte, string, int64) ([]byte, string, error)) (Document, error) {
 	r, err := publicGetModeWithTimeout(ctx, raw, opts, true, maxTimeout)
 	if err != nil {
 		return Document{}, err
 	}
 	limit, _ := pageLimit(opts.MaxDecodedBytes)
-	body, encoding, err := decodeCharset(r.body, r.header.Get("Content-Type"), limit)
+	body, encoding, err := decode(r.body, r.header.Get("Content-Type"), limit)
 	if err != nil {
 		return Document{}, err
 	}

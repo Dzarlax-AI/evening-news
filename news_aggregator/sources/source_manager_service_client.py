@@ -203,12 +203,14 @@ class SourceManagerServiceClient:
                   'source_type', 'source_name', 'raw_data'}
         if (not isinstance(article, dict) or set(article) != fields
                 or not isinstance(article.get('title'), str)
-                or not isinstance(article.get('url'), str) or not article['url']
+                or not SourceManagerServiceClient._safe_rss_url(article.get('url'))
                 or article.get('source_type') != 'rss' or article.get('source_name') != source_name):
             raise SourceManagerServiceError('invalid_payload')
         for field in ('content', 'summary', 'image_url'):
             if article[field] is not None and not isinstance(article[field], str):
                 raise SourceManagerServiceError('invalid_payload')
+        if article['image_url'] is not None and not SourceManagerServiceClient._safe_rss_url(article['image_url']):
+            raise SourceManagerServiceError('invalid_payload')
         published_at = article.get('published_at')
         if not isinstance(published_at, str):
             raise SourceManagerServiceError('invalid_payload')
@@ -224,6 +226,22 @@ class SourceManagerServiceClient:
                 or not isinstance(raw['tags'], list)
                 or any(not isinstance(tag, str) for tag in raw['tags'])):
             raise SourceManagerServiceError('invalid_payload')
+
+    @staticmethod
+    def _safe_rss_url(value):
+        if (not isinstance(value, str) or not value or len(value) > 8192
+                or any(char in value for char in ('"', "'", '<', '>', '`'))
+                or any(ord(char) < 0x20 or 0x7F <= ord(char) <= 0x9F or char.isspace()
+                       for char in value)):
+            return False
+        try:
+            parsed = urlsplit(value)
+            # Reading .port validates malformed port syntax.
+            parsed.port
+        except ValueError:
+            return False
+        return (parsed.scheme in {'http', 'https'} and parsed.hostname is not None
+                and parsed.username is None and parsed.password is None and not parsed.netloc.endswith('@'))
 
     @staticmethod
     def _validate_telegram_result(response, source):

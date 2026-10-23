@@ -9,6 +9,8 @@ import (
 	"strings"
 	"testing"
 	"time"
+
+	"github.com/mmcdole/gofeed"
 )
 
 func readRSSFixture(t *testing.T, name string) string {
@@ -123,10 +125,118 @@ func TestParseRSSSourceGoldenPythonParity(t *testing.T) {
 			if err := json.Unmarshal(entry.Articles, &expectedValue); err != nil {
 				t.Fatal(err)
 			}
+			if filename == "atom-base-sanitize.xml" {
+				// Intentional Go security deviation from feedparser parity: image
+				// URLs emitted into src attributes must be absolute HTTP(S).
+				articles := expectedValue.([]any)
+				articles[0].(map[string]any)["image_url"] = "https://publisher.example/images/thumb.jpg"
+			}
 			if !reflect.DeepEqual(actualValue, expectedValue) {
 				t.Fatalf("Python Article baseline mismatch\nactual:   %s\nexpected: %s", actualJSON, entry.Articles)
 			}
 		})
+	}
+}
+
+func TestParseRSSSourceSkipsUnsafeArticleURLsAndDropsUnsafeImages(t *testing.T) {
+	tests := []struct {
+		name      string
+		feedURL   string
+		wantURLs  []string
+		wantImage []string
+	}{
+		{
+			name:    "rss-unsafe-urls.xml",
+			feedURL: "https://publisher.example/feeds/rss.xml",
+			wantURLs: []string{
+				"https://publisher.example/items/story-one.html",
+				"https://publisher.example/items/story-two.html",
+			},
+			wantImage: []string{"", "https://publisher.example/images/safe.jpg"},
+		},
+		{
+			name:    "atom-unsafe-urls.xml",
+			feedURL: "https://publisher.example/feeds/atom.xml",
+			wantURLs: []string{
+				"https://publisher.example/%22%20onload=alert%281%29",
+				"https://publisher.example/%3Csvg%20onload=x%3E",
+				"https://publisher.example/%60onload=alert%281%29",
+				"https://publisher.example/atom/stories/relative.html",
+				"https://publisher.example/atom/stories/second.html",
+			},
+			wantImage: []string{"", "", "", "", "https://publisher.example/atom/images/atom-safe.jpg"},
+		},
+	}
+	for _, test := range tests {
+		t.Run(test.name, func(t *testing.T) {
+			articles, err := ParseRSSSource(context.Background(), readRSSFixture(t, test.name), test.feedURL, "Fixture", 0, time.Time{})
+			if err != nil {
+				t.Fatal(err)
+			}
+			if len(articles) != len(test.wantURLs) {
+				t.Fatalf("got %d articles, want %d: %+v", len(articles), len(test.wantURLs), articles)
+			}
+			for i, article := range articles {
+				if article.URL != test.wantURLs[i] {
+					t.Errorf("article %d URL = %q, want %q", i, article.URL, test.wantURLs[i])
+				}
+				image := ""
+				if article.ImageURL != nil {
+					image = *article.ImageURL
+				}
+				if image != test.wantImage[i] {
+					t.Errorf("article %d image = %q, want %q", i, image, test.wantImage[i])
+				}
+			}
+		})
+	}
+}
+
+func TestParseRSSSourceRejectsControlBearingAtomURLWithoutRewritingFeed(t *testing.T) {
+	if _, err := ParseRSSSource(context.Background(), readRSSFixture(t, "atom-control-url.xml"), "https://publisher.example/feeds/atom.xml", "Fixture", 0, time.Time{}); !errors.Is(err, ErrInvalidRSSFeed) {
+		t.Fatalf("control-bearing Atom URI should fail parsing without rewriting the XML, got %v", err)
+	}
+}
+
+func TestParseRSSSourcePreservesGoFeedAlternateSelection(t *testing.T) {
+	feed := `<feed xmlns="http://www.w3.org/2005/Atom"><title>Alternates</title><id>urn:feed:alternates</id><entry><title>Selected</title><id>urn:alternates:1</id><link rel="alternate" href="https://publisher.example/first"/><link rel="alternate" href="https://publisher.example/selected"/></entry></feed>`
+	parsed, err := gofeed.NewParser().ParseString(feed)
+	if err != nil || len(parsed.Items) != 1 {
+		t.Fatalf("gofeed fixture parse: items=%v err=%v", parsed, err)
+	}
+	articles, err := ParseRSSSource(context.Background(), feed, "https://publisher.example/feed.xml", "Fixture", 0, time.Time{})
+	if err != nil || len(articles) != 1 {
+		t.Fatalf("source parse: articles=%v err=%v", articles, err)
+	}
+	want := safeRSSHTTPURL(parsed.Items[0].Link, "https://publisher.example/feed.xml")
+	if articles[0].URL != want {
+		t.Fatalf("selected alternate changed: got %q want gofeed-selected %q", articles[0].URL, want)
+	}
+}
+
+func TestSafeRSSHTTPURLRejectsAttributeInjectionCharacters(t *testing.T) {
+	for _, raw := range []string{
+		"javascript:alert(1)",
+		`https://publisher.example/" onerror=alert(1)`,
+		"https://publisher.example/<svg>",
+		"https://publisher.example/bad\npath",
+		"https://publisher.example/with\u00a0space",
+		"https://publisher.example/?q=bad\tvalue",
+		"https://publisher.example/`onload=alert(1)",
+		"https://user:pass@publisher.example/private",
+		"https://publisher.example:65536/too-high",
+		"https://publisher.example:abc/not-numeric",
+		"https://publisher.example:/empty-port",
+	} {
+		if got := safeRSSHTTPURL(raw, "https://publisher.example/feed.xml"); got != "" {
+			t.Errorf("safeRSSHTTPURL(%q) = %q, want rejection", raw, got)
+		}
+	}
+	if got := safeRSSHTTPURL("../stories/item.html", "https://publisher.example/feeds/rss.xml"); got != "https://publisher.example/stories/item.html" {
+		t.Fatalf("relative article URL = %q", got)
+	}
+	if got := safeRSSHTTPURL("//publisher.example/story", "https://publisher.example/feeds/rss.xml"); got != "https://publisher.example/story" {
+		t.Fatalf("protocol-relative URL with valid base = %q", got)
 	}
 }
 

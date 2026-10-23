@@ -340,8 +340,12 @@ class SourceManager:
             elif source_type == 'telegram':
                 try:
                     instance = await self.get_source_instance(source)
-                    descriptor['telegram'] = instance.go_collection_config(source_config.get('limit'))
                     tg_limit = source_config.get('limit')
+                    # Match Python Telegram's existing upper bound before its
+                    # typed config validator; malformed and nonpositive values
+                    # still reach the validator unchanged and are rejected.
+                    config_limit = min(tg_limit, 100) if type(tg_limit) is int and tg_limit > 0 else tg_limit
+                    descriptor['telegram'] = instance.go_collection_config(config_limit)
                     if type(tg_limit) is int:
                         descriptor['limit'] = min(tg_limit, 100)
                 except Exception:

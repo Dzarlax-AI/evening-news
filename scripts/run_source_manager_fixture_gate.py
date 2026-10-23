@@ -329,14 +329,58 @@ def assert_subnet_available() -> None:
                 raise GateError("fixture_subnet_overlaps_docker_network")
 
 
-def resolve_amd64_image(image: str) -> dict[str, str | None]:
-    command(["docker", "pull", "--platform", "linux/amd64", image], timeout=300)
-    selected = docker_json(["image", "inspect", "--platform", "linux/amd64", image])
-    if not isinstance(selected, list) or not selected:
+def _platform_flag_unsupported(stderr: str) -> bool:
+    text = stderr.lower()
+    if "platform" not in text:
+        return False
+    return any(marker in text for marker in (
+        "unknown flag", "unrecognized option", "not supported", "unsupported",
+        "does not support", "minimum api version",
+    ))
+
+
+def inspect_linux_amd64_image(reference: str, engine_architecture: str) -> tuple[dict[str, Any], bool]:
+    """Inspect the amd64 image; permit old inspect CLIs only on native amd64."""
+    try:
+        selected = subprocess.run(
+            ["docker", "image", "inspect", "--platform", "linux/amd64", reference],
+            check=False, capture_output=True, text=True, timeout=30,
+        )
+    except (OSError, subprocess.TimeoutExpired):
+        raise GateError("docker_image_inspect_unavailable") from None
+    fallback = False
+    if selected.returncode != 0:
+        if not _platform_flag_unsupported(selected.stderr):
+            raise GateError("docker_image_inspect_failed")
+        if engine_architecture not in {"x86_64", "amd64"}:
+            raise GateError("platform_inspect_unsupported_on_non_amd64_engine")
+        try:
+            selected = subprocess.run(
+                ["docker", "image", "inspect", reference],
+                check=False, capture_output=True, text=True, timeout=30,
+            )
+        except (OSError, subprocess.TimeoutExpired):
+            raise GateError("docker_image_inspect_unavailable") from None
+        if selected.returncode != 0:
+            raise GateError("docker_image_inspect_failed")
+        fallback = True
+    try:
+        data = json.loads(selected.stdout)
+    except (ValueError, TypeError):
+        raise GateError("docker_invalid_response") from None
+    if not isinstance(data, list) or not data or not isinstance(data[0], dict):
         raise GateError("docker_image_unavailable")
-    platform_image = selected[0]
-    if platform_image.get("Architecture") != "amd64" or platform_image.get("Os") != "linux":
+    image = data[0]
+    # The legacy path is safe only when inspection proves the host-native
+    # image itself is the required Linux/amd64 platform.
+    if image.get("Os") != "linux" or image.get("Architecture") != "amd64":
         raise GateError("fixture_image_not_linux_amd64")
+    return image, fallback
+
+
+def resolve_amd64_image(image: str, engine_architecture: str) -> dict[str, Any]:
+    command(["docker", "pull", "--platform", "linux/amd64", image], timeout=300)
+    platform_image, fallback = inspect_linux_amd64_image(image, engine_architecture)
     image_id = platform_image.get("Id")
     if not isinstance(image_id, str) or not image_id.startswith("sha256:"):
         raise GateError("docker_image_digest_unavailable")
@@ -354,21 +398,21 @@ def resolve_amd64_image(image: str) -> dict[str, str | None]:
     # run that config ID directly. Use the immutable repository index digest
     # plus --platform, then verify the created container resolved to this ID.
     return {"reference": repo_digest, "platform_image_id": image_id,
-            "repo_digest": repo_digest, "platform": "linux/amd64"}
+            "repo_digest": repo_digest, "platform": "linux/amd64",
+            "platform_inspection_fallback": fallback}
 
 
-def verify_container_image(container_state: dict[str, Any], image: dict[str, Any], name: str) -> None:
+def verify_container_image(container_state: dict[str, Any], image: dict[str, Any], name: str,
+                           engine_architecture: str) -> bool:
     reference = container_state.get("Image")
     if not isinstance(reference, str) or not reference.startswith("sha256:"):
         raise GateError(f"{name}_resolved_image_reference_invalid")
-    resolved = docker_json(["image", "inspect", "--platform", "linux/amd64", reference])
-    if not isinstance(resolved, list) or not resolved:
-        raise GateError(f"{name}_resolved_image_unavailable")
-    actual = resolved[0]
+    actual, fallback = inspect_linux_amd64_image(reference, engine_architecture)
     if (actual.get("Id") != image["platform_image_id"]
             or actual.get("Os") != "linux" or actual.get("Architecture") != "amd64"
             or image["repo_digest"] not in (actual.get("RepoDigests") or [])):
         raise GateError(f"{name}_resolved_image_mismatch")
+    return fallback
 
 
 def go_source_sha256() -> dict[str, Any]:
@@ -609,6 +653,11 @@ async def exercise_python_path(endpoint: str, token: str, cycles: int, db_path: 
     initial_source_counts = {}
     expected_urls_by_id = {}
     cycle_times = []
+    rss_windows1251_titles_verified = False
+    rss_windows1251_expected_titles = [
+        "Новости: выпуск два — история 1",
+        "Новости: выпуск два — история 2",
+    ]
 
     class AsyncSQLiteSession:
         """Async facade over isolated sync SQLite for this DB-only save method."""
@@ -639,6 +688,10 @@ async def exercise_python_path(endpoint: str, token: str, cycles: int, db_path: 
                 rss_ids = [source.id for source in sources[:2]]
                 if any(len(raw[source_id]) < 2 for source_id in rss_ids):
                     raise GateError("rss_fixture_count_mismatch")
+                second_rss_titles = [article.title for article in raw[rss_ids[1]]]
+                if second_rss_titles != rss_windows1251_expected_titles:
+                    raise GateError("rss_windows1251_title_mismatch")
+                rss_windows1251_titles_verified = True
                 if len(raw[sources[2].id]) < 1:
                     raise GateError("telegram_fixture_count_mismatch")
                 if cycle == 0 and len(raw[sources[3].id]) < 2:
@@ -696,6 +749,7 @@ async def exercise_python_path(endpoint: str, token: str, cycles: int, db_path: 
         "source_types": 4,
         "source_ids_distinct": len({source.id for source in sources}) == 4,
         "duplicate_rss_names_preserved_by_id": True,
+        "rss_windows1251_without_charset_exact_titles_verified": rss_windows1251_titles_verified,
         "first_cycle_articles_by_source_id": initial_source_counts,
         "per_cycle_articles_by_source_id": source_counts,
         "sqlite_article_counts": counts,
@@ -870,8 +924,8 @@ def main() -> int:
         source_sha = go_source_sha256()
         assert_subnet_available()
         phase = "resolve_images"
-        images = {"origin": resolve_amd64_image(PYTHON_IMAGE),
-                  "worker": resolve_amd64_image(WORKER_IMAGE)}
+        images = {"origin": resolve_amd64_image(PYTHON_IMAGE, architecture),
+                  "worker": resolve_amd64_image(WORKER_IMAGE, architecture)}
         name = f"rssfix-{run}"
         phase = "create_internal_network"
         network_id = create_network(name, run)
@@ -902,10 +956,12 @@ def main() -> int:
             wait_fixture_origin(worker_id)
             phase = "verify_container_isolation"
             origin_state = docker_json(["container", "inspect", origin_id])[0]
-            verify_container_image(origin_state, images["origin"], "origin")
+            origin_inspect_fallback = verify_container_image(
+                origin_state, images["origin"], "origin", architecture)
             origin_networks = origin_state.get("NetworkSettings", {}).get("Networks", {})
             worker_state = docker_json(["container", "inspect", worker_id])[0]
-            verify_container_image(worker_state, images["worker"], "worker")
+            worker_inspect_fallback = verify_container_image(
+                worker_state, images["worker"], "worker", architecture)
             worker_networks = worker_state.get("NetworkSettings", {}).get("Networks", {})
             network_name = docker_json(["network", "inspect", network_id])[0].get("Name")
             if set(origin_networks) != {network_name} or set(worker_networks) != {network_name}:
@@ -961,6 +1017,10 @@ def main() -> int:
                 "worker_platform": "linux/amd64",
                 "go_source": source_sha,
                 "images": images,
+                "container_image_platform_inspection_fallback": {
+                    "origin": origin_inspect_fallback,
+                    "worker": worker_inspect_fallback,
+                },
                 "worker_limit_bytes": MEMORY_LIMIT,
                 "fixture_origin_limit_bytes": 128 * 1024 * 1024,
                 "worker_cgroup_memory_current_bytes": cgroup_current,

@@ -16,6 +16,8 @@ on:
       - 'tests/test_telegram*'
       - 'tests/test_page_monitor*'
       - 'tests/test_source_manager*'
+      - 'tests/test_public_feed_template_security.py'
+      - 'web/templates/public/_feed_core.html'
       - 'tests/test_browser*'
       - 'tests/test_native*'
       - 'tests/test_shadow_cdp_relay*'
@@ -49,6 +51,8 @@ on:
       - 'tests/test_telegram*'
       - 'tests/test_page_monitor*'
       - 'tests/test_source_manager*'
+      - 'tests/test_public_feed_template_security.py'
+      - 'web/templates/public/_feed_core.html'
       - 'tests/test_browser*'
       - 'tests/test_native*'
       - 'tests/test_shadow_cdp_relay*'
@@ -109,6 +113,9 @@ jobs:
         with:
           python-version: '3.12'
           cache: pip
+      - uses: actions/setup-node@v4
+        with:
+          node-version: '22'
       - run: python -m pip install -r requirements.txt
       - name: Test Go contracts and lifecycle
         working-directory: go

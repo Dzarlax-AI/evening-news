@@ -2,6 +2,7 @@ import asyncio
 from datetime import datetime, timezone
 from types import SimpleNamespace
 
+import pytest
 from pydantic import SecretStr
 
 from news_aggregator.config import settings
@@ -76,6 +77,69 @@ def test_go_descriptor_uses_caller_per_source_timeout_budget(monkeypatch):
         [source(301, 'Feed', 'rss')], per_source_timeout=0.25))
     assert received[0]['per_source_budget_ms'] == 250
     assert result == {301: []}
+
+
+def test_go_telegram_limit_above_python_cap_is_clamped_before_adapter_validation(monkeypatch):
+    go_settings(monkeypatch)
+    item = source(302, 'Channel', 'telegram', config={'limit': 101})
+    received = []
+
+    class TelegramAdapter:
+        @staticmethod
+        def go_collection_config(limit=None):
+            from news_aggregator.telegram.telegram_source import TelegramSource
+            return TelegramSource.go_collection_config(limit)
+
+        async def consume_go_collection(self, payload, **kwargs):
+            yield Article('Channel story', 'https://example.test/tg')
+
+    async def get_instance(_source):
+        return TelegramAdapter()
+
+    class FakeClient:
+        def __init__(self, *args):
+            pass
+
+        async def collect(self, descriptors, *, timeout_seconds):
+            received.extend(descriptors)
+            return {'results': [{'source_id': 302, 'type': 'telegram', 'outcome': 'success',
+                                 'telegram': {'outcome': 'success', 'articles': []}}]}
+
+    monkeypatch.setattr('news_aggregator.sources.source_manager_service_client.SourceManagerServiceClient', FakeClient)
+    manager = SourceManager()
+    monkeypatch.setattr(manager, 'get_source_instance', get_instance)
+    result = asyncio.run(manager.fetch_from_all_sources_no_db([item]))
+    assert received[0]['telegram'] == {'limit': 100}
+    assert received[0]['limit'] == 100
+    assert [article.title for article in result[302]] == ['Channel story']
+
+
+@pytest.mark.parametrize('limit', [True, 0])
+def test_go_telegram_invalid_limits_are_rejected_during_preparation(monkeypatch, limit):
+    go_settings(monkeypatch)
+    item = source(303, 'Invalid channel', 'telegram', config={'limit': limit})
+
+    class TelegramAdapter:
+        @staticmethod
+        def go_collection_config(value=None):
+            from news_aggregator.telegram.telegram_source import TelegramSource
+            return TelegramSource.go_collection_config(value)
+
+    async def get_instance(_source):
+        return TelegramAdapter()
+
+    class ForbiddenClient:
+        def __init__(self, *args):
+            pass
+
+        async def collect(self, *args, **kwargs):
+            raise AssertionError('invalid Telegram config must not reach Go collection')
+
+    monkeypatch.setattr('news_aggregator.sources.source_manager_service_client.SourceManagerServiceClient', ForbiddenClient)
+    manager = SourceManager()
+    monkeypatch.setattr(manager, 'get_source_instance', get_instance)
+    result = asyncio.run(manager.fetch_from_all_sources_no_db([item]))
+    assert result == {303: []}
 
 
 def test_go_collection_retains_duplicate_names_by_source_id_without_python_fetch(monkeypatch):

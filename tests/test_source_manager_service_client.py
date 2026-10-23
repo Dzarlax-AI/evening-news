@@ -49,6 +49,49 @@ def test_successful_rss_rejects_null_articles_payload():
             [{'source_id': 10, 'type': 'rss', 'source_name': 'Feed'}])
 
 
+@pytest.mark.parametrize('unsafe_url', [
+    'javascript:alert(1)',
+    '//example.test/story',
+    'https://user:secret@example.test/story',
+    'https://example.test/story" onmouseover="alert(1)',
+    "https://example.test/story' onclick='alert(1)",
+    'https://example.test/<svg>',
+    'https://example.test/story`x`',
+    'https://example.test/story\nnext',
+    'https://example.test/' + ('x' * 8200),
+])
+def test_mixed_go_rss_wire_rejects_unsafe_article_urls(unsafe_url):
+    response = json.loads((Path(__file__).parent / 'fixtures/go-source-manager/rss-failed-mixed-response.json')
+                          .read_text())
+    response['results'][1]['rss_articles'][0]['url'] = unsafe_url
+    sources = [
+        {'source_id': 10, 'type': 'rss', 'source_name': 'Failed feed'},
+        {'source_id': 11, 'type': 'rss', 'source_name': 'Empty-title feed'},
+    ]
+    with pytest.raises(SourceManagerServiceError, match='invalid_payload'):
+        SourceManagerServiceClient._validate(response, 'batch-actual-wire', sources)
+
+
+@pytest.mark.parametrize('unsafe_url', [
+    'javascript:alert(1)',
+    'https://user:secret@example.test/image.png',
+    'https://example.test/" onerror="alert(1)',
+    'https://example.test/<svg>',
+    'https://example.test/image.png`x`',
+    'https://example.test/image.png\x00',
+])
+def test_mixed_go_rss_wire_rejects_unsafe_nonnull_image_urls(unsafe_url):
+    response = json.loads((Path(__file__).parent / 'fixtures/go-source-manager/rss-failed-mixed-response.json')
+                          .read_text())
+    response['results'][1]['rss_articles'][0]['image_url'] = unsafe_url
+    sources = [
+        {'source_id': 10, 'type': 'rss', 'source_name': 'Failed feed'},
+        {'source_id': 11, 'type': 'rss', 'source_name': 'Empty-title feed'},
+    ]
+    with pytest.raises(SourceManagerServiceError, match='invalid_payload'):
+        SourceManagerServiceClient._validate(response, 'batch-actual-wire', sources)
+
+
 @pytest.mark.parametrize('results', [
     [],
     [{'source_id': 10, 'type': 'rss', 'outcome': 'success', 'rss_articles': []},

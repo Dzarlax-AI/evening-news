@@ -118,3 +118,17 @@ func TestRSSSourceRejectsUnsafeFinalURL(t *testing.T) {
 		t.Fatalf("unsafe final URL outcome: %+v", got)
 	}
 }
+
+func TestRSSSourceResolvesRelativeArticlesAgainstRedirectedFeedURL(t *testing.T) {
+	feed := []byte(`<rss version="2.0"><channel><item><title>Redirected</title><link>stories/one.html</link></item></channel></rss>`)
+	source := RSSSource{
+		Admit: func(context.Context, string) error { return nil },
+		Fetch: func(context.Context, string, transport.Options) (transport.Document, error) {
+			return transport.Document{HTML: feed, URL: "https://publisher.example/redirected/feed.xml"}, nil
+		},
+	}
+	got := source.FetchFeed(context.Background(), "https://publisher.example/original.xml", "fixture", 0)
+	if got.Outcome != "success" || len(got.Articles) != 1 || got.Articles[0].URL != "https://publisher.example/redirected/stories/one.html" {
+		t.Fatalf("redirect-relative article URL was not resolved against final feed URL: %+v", got)
+	}
+}

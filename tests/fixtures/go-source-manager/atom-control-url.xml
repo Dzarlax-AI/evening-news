@@ -1,0 +1,7 @@
+<?xml version="1.0" encoding="utf-8"?>
+<feed xmlns="http://www.w3.org/2005/Atom">
+  <title>Control URL fixture</title>
+  <id>urn:feed:control</id>
+  <updated>2026-10-23T00:00:00Z</updated>
+  <entry><title>Control character</title><id>urn:control:1</id><link href="https://publisher.example/bad&#10;target"/></entry>
+</feed>

@@ -74,7 +74,7 @@ func (s RSSSource) FetchFeed(ctx context.Context, sourceURL, sourceName string, 
 	if now == nil {
 		now = time.Now
 	}
-	articles, err := extractor.ParseRSSSource(ctx, string(doc.HTML), sourceURL, sourceName, limit, now())
+	articles, err := extractor.ParseRSSSource(ctx, string(doc.HTML), finalURL, sourceName, limit, now())
 	if err != nil {
 		if errors.Is(err, extractor.ErrRSSResourceLimit) {
 			return rssFailure(out, "resource_limit", false)

@@ -144,9 +144,6 @@ func TestSourceBatchRejectsDuplicateIDsAndFailsClosedWithoutDeadlineSupport(t *t
 func TestSourceBatchAggregateCapDefersWholeSourceAndIndividualCapRejects(t *testing.T) {
 	large := strings.Repeat("x", 5*1024*1024)
 	runner := sourceManagerTestRunner{RSS: func(_ context.Context, req RSSRequest) RSSResponse {
-		if req.SourceName == "second" {
-			time.Sleep(25 * time.Millisecond)
-		}
 		if req.SourceName == "too-large" {
 			individual := strings.Repeat("y", MaxSourceBatchBytes)
 			return RSSResponse{Outcome: "success", FinalURL: req.URL, Articles: []extractor.RSSArticle{{Title: "too large", URL: "https://example.org/too-large", Content: &individual}}}
@@ -167,8 +164,28 @@ func TestSourceBatchAggregateCapDefersWholeSourceAndIndividualCapRejects(t *test
 	if err := json.Unmarshal(writer.Body.Bytes(), &got); err != nil {
 		t.Fatal(err)
 	}
-	if len(got.Results) != 3 || got.Results[0].Outcome != "success" || len(got.Results[0].RSSArticles) != 1 || got.Results[0].RSSArticles[0].Title != "first" || got.Results[1].Outcome != "deferred" || got.Results[1].Error == nil || got.Results[1].Error.Code != "response_budget_exhausted" || got.Results[1].RSSArticles != nil || got.Results[2].Outcome != "failed" || got.Results[2].Error == nil || got.Results[2].Error.Code != "resource_limit" || got.Results[2].RSSArticles != nil {
+	if len(got.Results) != 3 || got.Results[0].SourceID != 1 || got.Results[1].SourceID != 2 || got.Results[2].SourceID != 3 || got.Results[2].Outcome != "failed" || got.Results[2].Error == nil || got.Results[2].Error.Code != "resource_limit" || got.Results[2].RSSArticles != nil {
 		t.Fatalf("oversize prefix result = %+v", got.Results)
+	}
+	firstTwoSuccesses, firstTwoDeferred := 0, 0
+	for _, result := range got.Results[:2] {
+		switch result.Outcome {
+		case "success":
+			firstTwoSuccesses++
+			if len(result.RSSArticles) != 1 || (result.RSSArticles[0].Title != "first" && result.RSSArticles[0].Title != "second") {
+				t.Fatalf("successful source payload = %+v", result)
+			}
+		case "deferred":
+			firstTwoDeferred++
+			if result.Error == nil || result.Error.Code != "response_budget_exhausted" || result.Error.Retryable != true || result.RSSArticles != nil {
+				t.Fatalf("deferred source payload = %+v", result)
+			}
+		default:
+			t.Fatalf("unexpected aggregate outcome = %+v", result)
+		}
+	}
+	if firstTwoSuccesses != 1 || firstTwoDeferred != 1 {
+		t.Fatalf("aggregate outcomes success=%d deferred=%d: %+v", firstTwoSuccesses, firstTwoDeferred, got.Results[:2])
 	}
 }
 

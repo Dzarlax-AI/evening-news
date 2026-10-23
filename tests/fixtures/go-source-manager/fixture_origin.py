@@ -10,9 +10,11 @@ import ssl
 def rss_document(edition: str) -> bytes:
     entries = []
     for number in (1, 2):
+        title = (f"Новости: выпуск два — история {number}" if edition == "two"
+                 else f"Fixture RSS {edition} story {number}")
         entries.append(
             f"""<item>
-<title>Fixture RSS {edition} story {number}</title>
+<title>{title}</title>
 <link>http://rss.fixture.test/story/{edition}/{number}</link>
 <guid>fixture-{edition}-{number}</guid>
 <pubDate>Thu, 22 Oct 2026 10:0{number}:00 GMT</pubDate>
@@ -20,14 +22,16 @@ def rss_document(edition: str) -> bytes:
 <content:encoded><![CDATA[Fixture article body for edition {edition}, story {number}.]]></content:encoded>
 </item>"""
         )
-    return (
-        "<?xml version='1.0' encoding='UTF-8'?>"
+    encoding = "windows-1251" if edition == "two" else "UTF-8"
+    document = (
+        f"<?xml version='1.0' encoding='{encoding}'?>"
         "<rss version='2.0' xmlns:content='http://purl.org/rss/1.0/modules/content/'>"
         "<channel><title>Fixture feed</title><link>http://rss.fixture.test/</link>"
         "<description>Local acceptance fixture</description>"
         + "".join(entries)
         + "</channel></rss>"
-    ).encode()
+    )
+    return document.encode("cp1251" if edition == "two" else "utf-8")
 
 
 PAGE_MONITOR_HTML = b"""<!doctype html><html><body>
@@ -56,7 +60,8 @@ class Handler(BaseHTTPRequestHandler):
             if edition not in {"one", "two"}:
                 self._reply(400, b"bad request", "text/plain; charset=utf-8")
                 return
-            self._reply(200, rss_document(edition), "application/rss+xml; charset=utf-8")
+            content_type = "application/rss+xml" if edition == "two" else "application/rss+xml; charset=utf-8"
+            self._reply(200, rss_document(edition), content_type)
         elif parsed.path == "/news":
             self._reply(200, PAGE_MONITOR_HTML, "text/html; charset=utf-8")
         elif parsed.path == "/s/fixture_channel":

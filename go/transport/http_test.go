@@ -248,6 +248,26 @@ func TestHTTPCharset(t *testing.T) {
 	}
 }
 
+func TestRSSXMLDeclarationCharsetDecodesTitleExactlyWithoutHTTPCharset(t *testing.T) {
+	title := "Новости на русском"
+	feed := `<?xml version="1.0" encoding="windows-1251"?><rss version="2.0"><channel><title>Fixture</title><item><title>` + title + `</title><link>https://publisher.example/story</link></item></channel></rss>`
+	wire, err := charmap.Windows1251.NewEncoder().Bytes([]byte(feed))
+	if err != nil {
+		t.Fatal(err)
+	}
+	decoded, encoding, err := decodeRSSCharset(wire, "application/rss+xml", MaxPageBytes)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if encoding != "windows-1251" {
+		t.Fatalf("encoding = %q, want XML declaration charset windows-1251", encoding)
+	}
+	articles, err := extractor.ParseRSSSource(context.Background(), string(decoded), "https://publisher.example/feed.xml", "Fixture", 0, time.Time{})
+	if err != nil || len(articles) != 1 || articles[0].Title != title {
+		t.Fatalf("decoded RSS title was not preserved exactly: articles=%+v err=%v", articles, err)
+	}
+}
+
 func TestHTTPRedirectsAndLoopbackAdmission(t *testing.T) {
 	var calls atomic.Int32
 	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {

@@ -8,8 +8,10 @@ import (
 	"io"
 	"net/url"
 	"sort"
+	"strconv"
 	"strings"
 	"time"
+	"unicode"
 
 	"github.com/PuerkitoBio/goquery"
 	"github.com/itlightning/dateparse"
@@ -57,8 +59,12 @@ func ParseRSSSource(ctx context.Context, xmlText string, sourceURL, sourceName s
 	if now.IsZero() {
 		now = time.Now()
 	}
-	_ = sourceURL // feedparser does not resolve relative article links against the feed URL.
-	entryMetadata, err := scanRSSXML(xmlText)
+	xmlText = normalizeRSSXMLDeclaration(xmlText)
+	feedURL := safeRSSHTTPURL(sourceURL, "")
+	if feedURL == "" {
+		return nil, ErrInvalidRSSInput
+	}
+	entryMetadata, err := scanRSSXML(xmlText, feedURL)
 	if err != nil {
 		return nil, ErrInvalidRSSFeed
 	}
@@ -92,6 +98,18 @@ func ParseRSSSource(ctx context.Context, xmlText string, sourceURL, sourceName s
 		articleURL := entry.Link
 		if resolved := meta.links[entry.Link]; resolved != "" {
 			articleURL = resolved
+		} else if meta.linkCount == 1 && meta.singleLink != "" {
+			// gofeed can omit the host while resolving a lone relative Atom link;
+			// use its only declared alternate when there is no ambiguity.
+			articleURL = meta.singleLink
+		}
+		entryBase := meta.entryBase
+		if entryBase == "" {
+			entryBase = feedURL
+		}
+		articleURL = safeRSSHTTPURL(articleURL, entryBase)
+		if articleURL == "" {
+			continue
 		}
 		article := RSSArticle{
 			Title:       entry.Title,
@@ -113,7 +131,7 @@ func ParseRSSSource(ctx context.Context, xmlText string, sourceURL, sourceName s
 		} else if entry.Description != "" {
 			article.Summary = stringPointer(sanitizeRSSHTML(entry.Description, meta.descriptionBase))
 		}
-		if image := rssImage(entry); image != "" {
+		if image := rssImage(entry, meta, feedURL); image != "" {
 			article.ImageURL = stringPointer(image)
 		}
 		articles = append(articles, article)
@@ -122,10 +140,13 @@ func ParseRSSSource(ctx context.Context, xmlText string, sourceURL, sourceName s
 }
 
 type rssEntryMetadata struct {
+	entryBase       string
+	singleLink      string
+	linkCount       int
+	links           map[string]string
 	titleSeen       bool
 	contentBase     string
 	descriptionBase string
-	links           map[string]string
 }
 
 type rssXMLFrame struct {
@@ -135,9 +156,9 @@ type rssXMLFrame struct {
 
 // gofeed's pull parser accepts some mismatched closing tags. feedparser marks
 // those documents bozo and the Python source rejects them. This strict token
-// pass also records Atom xml:base data needed to match feedparser's resolved
-// entry links; gofeed still translates the feed once for its typed fields.
-func scanRSSXML(xmlText string) ([]rssEntryMetadata, error) {
+// pass also records Atom xml:base data for canonical entry links; gofeed still
+// translates the feed once for its typed fields.
+func scanRSSXML(xmlText, feedURL string) ([]rssEntryMetadata, error) {
 	decoder := xml.NewDecoder(strings.NewReader(xmlText))
 	decoder.Strict = true
 	stack := make([]rssXMLFrame, 0, 16)
@@ -164,19 +185,19 @@ func scanRSSXML(xmlText string) ([]rssEntryMetadata, error) {
 				}
 				rootSeen = true
 			}
-			base := ""
+			base := feedURL
 			if len(stack) > 0 {
 				base = stack[len(stack)-1].base
 			}
 			for _, attr := range value.Attr {
-				if attr.Name.Space == "http://www.w3.org/XML/1998/namespace" && attr.Name.Local == "base" {
+				if (attr.Name.Space == "xml" || attr.Name.Space == "http://www.w3.org/XML/1998/namespace") && attr.Name.Local == "base" {
 					base = resolveRSSURI(base, strings.TrimSpace(attr.Value))
 					break
 				}
 			}
 			localName := strings.ToLower(value.Name.Local)
 			if activeEntry < 0 && (localName == "entry" || localName == "item") {
-				entries = append(entries, rssEntryMetadata{contentBase: base, descriptionBase: base, links: map[string]string{}})
+				entries = append(entries, rssEntryMetadata{entryBase: base, contentBase: base, descriptionBase: base, links: map[string]string{}})
 				activeEntry = len(entries) - 1
 			}
 			if activeEntry >= 0 {
@@ -199,7 +220,11 @@ func scanRSSXML(xmlText string) ([]rssEntryMetadata, error) {
 						}
 					}
 					if href != "" && (rel == "" || rel == "alternate") {
-						meta.links[href] = resolveRSSURI(base, href)
+						resolved := resolveRSSURI(base, href)
+						meta.linkCount++
+						meta.singleLink = resolved
+						meta.links[href] = resolved
+						meta.links[resolved] = resolved
 					}
 				}
 			}
@@ -240,6 +265,61 @@ func resolveRSSURI(base, reference string) string {
 		return rel.String()
 	}
 	return parsedBase.ResolveReference(rel).String()
+}
+
+// Network decoding produces UTF-8 bytes. Update a bounded XML declaration so
+// both XML parsers interpret those bytes as UTF-8 instead of decoding again.
+func normalizeRSSXMLDeclaration(xmlText string) string {
+	start := 0
+	if strings.HasPrefix(xmlText, "\xef\xbb\xbf") {
+		start = len("\xef\xbb\xbf")
+	}
+	end := strings.Index(xmlText[start:], "?>")
+	if end < 0 || end > 256 {
+		return xmlText
+	}
+	end += start + 2
+	declaration := xmlText[start:end]
+	if !strings.HasPrefix(strings.ToLower(declaration), "<?xml") {
+		return xmlText
+	}
+	if len(declaration) <= len("<?xml") || (!isXMLSpace(declaration[len("<?xml")]) && declaration[len("<?xml")] != '?') {
+		return xmlText
+	}
+	lower := strings.ToLower(declaration)
+	index := strings.Index(lower, "encoding")
+	if index < 0 || (index > 0 && !isXMLSpace(declaration[index-1])) {
+		return xmlText
+	}
+	index += len("encoding")
+	if index >= len(declaration) || (!isXMLSpace(declaration[index]) && declaration[index] != '=') {
+		return xmlText
+	}
+	for index < len(declaration) && isXMLSpace(declaration[index]) {
+		index++
+	}
+	if index >= len(declaration) || declaration[index] != '=' {
+		return xmlText
+	}
+	index++
+	for index < len(declaration) && isXMLSpace(declaration[index]) {
+		index++
+	}
+	if index >= len(declaration) || (declaration[index] != '\'' && declaration[index] != '"') {
+		return xmlText
+	}
+	quote := declaration[index]
+	valueStart := index + 1
+	valueEnd := strings.IndexByte(declaration[valueStart:], quote)
+	if valueEnd < 0 || valueEnd > 40 {
+		return xmlText
+	}
+	valueEnd += valueStart
+	return xmlText[:start+valueStart] + "UTF-8" + xmlText[start+valueEnd:]
+}
+
+func isXMLSpace(value byte) bool {
+	return value == ' ' || value == '\t' || value == '\r' || value == '\n'
 }
 
 var rssHTMLAllowedTags = map[string]bool{
@@ -296,8 +376,13 @@ func renderRSSHTML(out *strings.Builder, node *nethtml.Node, base string) {
 			if !rssHTMLAttributeAllowed(name) {
 				continue
 			}
-			if name == "href" || name == "src" {
+			if name == "href" {
 				value = safeRSSHTMLURI(resolveRSSURI(base, strings.TrimSpace(value)))
+			} else if name == "src" {
+				value = safeRSSHTTPURL(value, base)
+				if value == "" {
+					continue
+				}
 			}
 			out.WriteByte(' ')
 			out.WriteString(name)
@@ -341,6 +426,59 @@ func safeRSSHTMLURI(value string) string {
 		return value
 	}
 	return ""
+}
+
+// safeRSSHTTPURL intentionally applies stricter filtering than feedparser's
+// parity model: downstream templates emit article and image URLs into href/src
+// attributes, so unsafe or ambiguous values are skipped instead of preserved.
+func safeRSSHTTPURL(raw, base string) string {
+	if raw == "" || len(raw) > 8192 {
+		return ""
+	}
+	if hasUnsafeRSSURLChar(raw) {
+		return ""
+	}
+	parsed, err := url.Parse(raw)
+	if err != nil {
+		return ""
+	}
+	if !parsed.IsAbs() {
+		if base == "" {
+			return ""
+		}
+		parsedBase, err := url.Parse(base)
+		if err != nil || !parsedBase.IsAbs() {
+			return ""
+		}
+		parsed = parsedBase.ResolveReference(parsed)
+	}
+	parsed.Scheme = strings.ToLower(parsed.Scheme)
+	if (parsed.Scheme != "http" && parsed.Scheme != "https") || parsed.Hostname() == "" || parsed.User != nil || parsed.Opaque != "" {
+		return ""
+	}
+	if strings.HasSuffix(parsed.Host, ":") {
+		return ""
+	}
+	if port := parsed.Port(); port != "" {
+		portNumber, err := strconv.Atoi(port)
+		if err != nil || portNumber < 0 || portNumber > 65535 {
+			return ""
+		}
+	}
+	resolved := parsed.String()
+	if len(resolved) == 0 || len(resolved) > 8192 {
+		return ""
+	}
+	return resolved
+}
+
+func hasUnsafeRSSURLChar(value string) bool {
+	for _, r := range value {
+		if unicode.IsControl(r) || unicode.IsSpace(r) || r == '"' || r == '\'' || r == '<' || r == '>' || r == '`' {
+			return true
+		}
+	}
+	return false
 }
 
 func stringPointer(value string) *string { return &value }
@@ -416,28 +554,37 @@ func parseRSSDate(value string) (time.Time, bool) {
 	return parsed, true
 }
 
-func rssImage(entry *gofeed.Item) string {
+func rssImage(entry *gofeed.Item, meta rssEntryMetadata, feedURL string) string {
+	entryBase := meta.entryBase
+	if entryBase == "" {
+		entryBase = feedURL
+	}
 	for _, enclosure := range entry.Enclosures {
 		if enclosure != nil && strings.HasPrefix(strings.ToLower(enclosure.Type), "image/") && enclosure.URL != "" {
-			return enclosure.URL
+			if imageURL := safeRSSHTTPURL(enclosure.URL, entryBase); imageURL != "" {
+				return imageURL
+			}
 		}
 	}
 	for _, extName := range []string{"media", "media:content", "media_content"} {
 		for _, media := range entry.Extensions[extName]["content"] {
 			imageURL := media.Attrs["url"]
 			if imageURL != "" && (media.Attrs["medium"] == "image" || strings.HasPrefix(strings.ToLower(media.Attrs["type"]), "image/") || looksImage(imageURL)) {
-				return imageURL
+				if imageURL = safeRSSHTTPURL(imageURL, entryBase); imageURL != "" {
+					return imageURL
+				}
 			}
 		}
 	}
 	for _, extName := range []string{"media", "media:thumbnail", "media_thumbnail"} {
 		for _, thumbnail := range entry.Extensions[extName]["thumbnail"] {
-			if imageURL := thumbnail.Attrs["url"]; imageURL != "" {
+			if imageURL := safeRSSHTTPURL(thumbnail.Attrs["url"], entryBase); imageURL != "" {
 				return imageURL
 			}
 		}
 	}
-	for _, htmlBlob := range []string{entry.Content, entry.Description} {
+	for _, candidate := range []struct{ html, base string }{{entry.Content, meta.contentBase}, {entry.Description, meta.descriptionBase}} {
+		htmlBlob := candidate.html
 		if htmlBlob == "" || !strings.Contains(strings.ToLower(htmlBlob), "<img") {
 			continue
 		}
@@ -449,9 +596,12 @@ func rssImage(entry *gofeed.Item) string {
 		if !exists || !looksImage(imageURL) {
 			continue
 		}
-		parsed, err := url.Parse(imageURL)
-		if err == nil && (parsed.Scheme == "http" || parsed.Scheme == "https") && parsed.Host != "" {
-			return imageURL
+		imageBase := candidate.base
+		if imageBase == "" {
+			imageBase = entryBase
+		}
+		if safeURL := safeRSSHTTPURL(imageURL, imageBase); safeURL != "" {
+			return safeURL
 		}
 	}
 	return ""
