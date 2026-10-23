@@ -456,8 +456,6 @@ async def update_schedule_setting(
             body = _service_resource_body(request, current)
             resource = await client.put_schedule(current["schedule_key"], body)
             setting = _service_schedule_to_config(resource)
-            rows = await _service_settings_snapshot(client)
-            setting = next((row for row in rows if row["task_name"] == task_name), setting)
             return {"success": True, "message": "Schedule updated successfully", "setting": setting}
         except HTTPException:
             raise

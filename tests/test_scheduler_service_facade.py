@@ -112,8 +112,10 @@ class FakeScheduler:
         self.resources = []
         self.put_calls = []
         self.deleted = []
+        self.list_calls = 0
 
     async def list_schedules(self):
+        self.list_calls += 1
         return list(self.resources)
 
     async def put_schedule(self, key, body):
@@ -390,6 +392,56 @@ def test_service_create_success_does_not_depend_on_post_create_status_read(monke
         assert result["success"] is True
         assert result["setting"]["schedule_key"] == "news:news_digest"
         assert len(client.put_calls) == 1
+
+    asyncio.run(run())
+
+
+def test_service_update_success_does_not_depend_on_post_update_status_read(monkeypatch):
+    client = FakeScheduler()
+    asyncio.run(client.put_schedule("news:news_digest", {
+        "expected_revision": 0,
+        "enabled": True,
+        "calendar": {"type": "daily", "timezone": "Europe/Belgrade", "hour": 18, "minute": 30},
+        "target_alias": "news-worker",
+        "operation": "news_digest",
+        "payload": {"send_telegram": True},
+    }))
+    client.put_calls.clear()
+    monkeypatch.setattr(settings, "schedule_dispatch_mode", "service")
+    monkeypatch.setattr(module, "_scheduler_client", lambda: client)
+
+    class StatusStoreUnavailable:
+        def __init__(self):
+            self.calls = 0
+
+        async def execute_read(self, _operation):
+            self.calls += 1
+            raise RuntimeError("fixture status-store failure")
+
+    status_store = StatusStoreUnavailable()
+    monkeypatch.setattr(module, "get_database_queue", lambda: status_store)
+
+    async def run():
+        result = await module.update_schedule_setting(
+            "news_digest",
+            module.ScheduleUpdateRequest(enabled=False, task_config={"send_telegram": False}),
+            None,
+        )
+        assert result["success"] is True
+        assert result["setting"]["schedule_revision"] == 2
+        assert result["setting"]["enabled"] is False
+        assert result["setting"]["next_run"] is None
+        assert client.put_calls == [("news:news_digest", {
+            "expected_revision": 1,
+            "enabled": False,
+            "calendar": {"type": "daily", "timezone": "Europe/Belgrade", "hour": 18, "minute": 30},
+            "target_alias": "news-worker",
+            "operation": "news_digest",
+            "payload": {"send_telegram": False},
+        })]
+        assert client.list_calls == 1  # Pre-update lookup only; no post-PUT listing.
+        assert status_store.calls == 0  # The remote PUT response is the update result.
+        assert client.resources[0]["revision"] == 2  # PUT committed despite the unavailable status store.
 
     asyncio.run(run())
 
