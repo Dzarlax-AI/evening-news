@@ -11,6 +11,7 @@ import (
 	"strings"
 	"sync"
 	"sync/atomic"
+	"syscall"
 	"time"
 
 	"github.com/Dzarlax-AI/evening-news/go/extractor"
@@ -240,6 +241,59 @@ func (w *NativeBrowser) reportDiagnostic(stage string, err error) {
 	}
 }
 
+const nativeDiscoveryAttempts = 3
+
+func nativeBrowserEndpoint(ctx context.Context, endpoint string) (string, error) {
+	return nativeBrowserEndpointWithResolver(ctx, endpoint, net.DefaultResolver)
+}
+
+func nativeBrowserEndpointWithResolver(ctx context.Context, endpoint string, resolver publicResolver) (string, error) {
+	return retryBrowserDiscovery(ctx, func(ctx context.Context) (string, error) {
+		return configuredBrowserEndpointWithResolver(ctx, endpoint, resolver)
+	})
+}
+
+// retryBrowserDiscovery retries only transient TCP resets during the bounded
+// read-only discovery GET. Every attempt and the backoff share the original
+// context; callers retain control of the overall readiness or render budget.
+func retryBrowserDiscovery(ctx context.Context, discover func(context.Context) (string, error)) (string, error) {
+	for attempt := 1; attempt <= nativeDiscoveryAttempts; attempt++ {
+		if err := ctx.Err(); err != nil {
+			return "", err
+		}
+		endpoint, err := discover(ctx)
+		if err == nil || !transientBrowserDiscoveryError(err) || attempt == nativeDiscoveryAttempts {
+			return endpoint, err
+		}
+		timer := time.NewTimer(20 * time.Millisecond)
+		select {
+		case <-ctx.Done():
+			if !timer.Stop() {
+				select {
+				case <-timer.C:
+				default:
+				}
+			}
+			return "", ctx.Err()
+		case <-timer.C:
+		}
+	}
+	return "", errors.New("browser_discovery_attempts_exhausted")
+}
+
+func transientBrowserDiscoveryError(err error) bool {
+	if errors.Is(err, context.Canceled) || errors.Is(err, context.DeadlineExceeded) ||
+		errors.Is(err, ErrNativeOwnershipLost) || errors.Is(err, ErrNativePolicy) || errors.Is(err, ErrNativeUnsupported) {
+		return false
+	}
+	var dnsErr *net.DNSError
+	if errors.As(err, &dnsErr) {
+		return false
+	}
+	return errors.Is(err, io.EOF) || errors.Is(err, io.ErrUnexpectedEOF) ||
+		errors.Is(err, syscall.ECONNRESET) || errors.Is(err, syscall.EPIPE)
+}
+
 // CheckReady revalidates discovery without allocating targets or probing an
 // active job. A previously verified generation may recover after a transient
 // discovery failure, but only while that exact generation remains current.
@@ -258,7 +312,7 @@ func (w *NativeBrowser) CheckReady(ctx context.Context) bool {
 	w.mu.Unlock()
 	ctx, cancel := context.WithTimeout(ctx, 500*time.Millisecond)
 	defer cancel()
-	ws, err := configuredBrowserEndpoint(ctx, w.cfg.Endpoint)
+	ws, err := nativeBrowserEndpoint(ctx, w.cfg.Endpoint)
 	if err != nil {
 		w.unavailable()
 		w.reportDiagnostic("discovery", err)
@@ -500,7 +554,7 @@ type nativeResources struct {
 }
 
 func (w *NativeBrowser) open(ctx context.Context) (res *nativeResources, err error) {
-	ws, err := configuredBrowserEndpoint(ctx, w.cfg.Endpoint)
+	ws, err := nativeBrowserEndpoint(ctx, w.cfg.Endpoint)
 	if err != nil {
 		w.unavailable()
 		w.reportDiagnostic("discovery", err)
@@ -688,7 +742,7 @@ func (w *NativeBrowser) verifyCrashRecovery(generation string) error {
 	}
 	ctx, cancel := context.WithTimeout(context.Background(), 500*time.Millisecond)
 	defer cancel()
-	current, err := configuredBrowserEndpoint(ctx, w.cfg.Endpoint)
+	current, err := nativeBrowserEndpoint(ctx, w.cfg.Endpoint)
 	if err != nil || current != generation {
 		return errors.Join(ErrNativeOwnershipLost, err)
 	}
@@ -710,7 +764,7 @@ func (w *NativeBrowser) verifyCrashRecovery(generation string) error {
 	if err != nil {
 		return errors.Join(ErrNativeOwnershipLost, err)
 	}
-	current, err = configuredBrowserEndpoint(ctx, w.cfg.Endpoint)
+	current, err = nativeBrowserEndpoint(ctx, w.cfg.Endpoint)
 	if err != nil || current != generation {
 		return errors.Join(ErrNativeOwnershipLost, err)
 	}
