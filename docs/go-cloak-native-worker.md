@@ -55,8 +55,23 @@ remain HTTP-only even when the native backend is configured.
 | `EXTRACTOR_NATIVE_PROXY_URL` | Trusted private CONNECT gateway, without URL credentials |
 | `EXTRACTOR_NATIVE_PROXY_TOKEN` | Gateway token; server configuration only |
 | `EXTRACTOR_NATIVE_NETWORK_ISOLATED=true` | Explicit attestation after independently establishing the network boundary; this flag does not create firewall rules |
-| `EXTRACTOR_BROWSER_CONCURRENT=1` | Current supported native concurrency |
+| `EXTRACTOR_BROWSER_CONCURRENT=1` | Default native render limit; supported values are 1 and 2. Two renders require isolated acceptance before deployment. |
 | `EXTRACTOR_NATIVE_READY_SELECTOR` | Optional bounded server readiness condition; fixed to the fixture marker in matched benchmark runs |
+
+Native render admission is shared by article extraction, Telegram browser fallback,
+and Page Monitor. It starts only when a render is needed; native SourceManager
+jobs do not hold a browser lane during HTTP work. Up to eight renders can wait
+for a slot, bounded by their original caller contexts. The navigation timeout
+starts after admission, while the source/RPC deadline continues to bound the
+whole operation. A slot remains occupied through owned-resource cleanup.
+Excess waiters receive `native_browser_busy`; normal slot contention waits.
+
+Each active operation has its own CDP connection, disposable context, target,
+and cancellation. Shutdown cancels all owned operations; generation/ownership
+loss taints the worker and wakes waiters. The worker never globally closes or
+restarts the externally managed shared browser. Legacy backend source scheduling
+is unchanged. Production configuration remains at one render until a separate
+rollout decision.
 
 Startup runs an owned-resource capability probe. Health checks additionally
 verify discovery/generation with a maximum 500-ms budget and allocate no targets.

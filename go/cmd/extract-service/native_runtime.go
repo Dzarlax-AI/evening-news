@@ -35,11 +35,11 @@ func configuredNativeBrowser(httpOnly bool, endpoint string, workers int) (*tran
 	if len(selector) > 2048 {
 		return nil, errors.New("native readiness selector exceeds limit")
 	}
-	if workers != 1 {
-		return nil, errors.New("native backend currently requires browser concurrency one")
+	if workers < 1 || workers > 2 {
+		return nil, errors.New("native backend supports browser concurrency one or two")
 	}
 	return transport.NewNativeBrowser(transport.NativeBrowserConfig{Endpoint: endpoint, ProxyURL: proxy, ProxyToken: token,
-		NetworkIsolationVerified: isolation == "true", Diagnostic: diagnostic})
+		MaxConcurrent: workers, MaxWaiters: 8, NetworkIsolationVerified: isolation == "true", Diagnostic: diagnostic})
 }
 
 func nativeDiagnosticsEnabled(mode, selector string) bool {

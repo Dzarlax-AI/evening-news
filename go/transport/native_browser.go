@@ -36,6 +36,8 @@ type NativeBrowserConfig struct {
 	Endpoint                 string
 	ProxyURL                 string
 	ProxyToken               string
+	MaxConcurrent            int
+	MaxWaiters               int
 	NetworkIsolationVerified bool
 	Diagnostic               func(stage, reason string)
 }
@@ -103,15 +105,21 @@ func (r *nativeEventRPCs) join() []nativeEventRPCResult {
 	}
 }
 
-// NativeBrowser owns only disposable resources on a dedicated external browser.
+// NativeBrowser uses a shared externally managed browser and owns only its
+// disposable contexts and targets.
 // Readiness starts false and ownership loss permanently taints this generation.
 // It never launches, restarts or globally closes the browser process.
 type NativeBrowser struct {
 	cfg                    NativeBrowserConfig
 	mu                     sync.Mutex
 	ready, tainted, closed bool
-	active                 bool
-	cancel                 context.CancelFunc
+	operations             map[uint64]context.CancelCauseFunc
+	nextOperation          uint64
+	waiters                chan struct{}
+	slots                  chan struct{}
+	stopped                chan struct{}
+	stoppedClosed          bool
+	probing                bool
 	idle                   chan struct{}
 	generation             string
 	fatal                  chan error
@@ -130,9 +138,23 @@ func NewNativeBrowser(cfg NativeBrowserConfig) (*NativeBrowser, error) {
 		return nil, errors.New("native_browser_invalid_proxy_configuration")
 	}
 	cfg.ProxyURL = strings.TrimRight(cfg.ProxyURL, "/")
+	if cfg.MaxConcurrent == 0 {
+		cfg.MaxConcurrent = 1
+	}
+	if cfg.MaxConcurrent < 1 || cfg.MaxConcurrent > 2 {
+		return nil, errors.New("native_browser_invalid_concurrency")
+	}
+	if cfg.MaxWaiters == 0 {
+		cfg.MaxWaiters = 8
+	}
+	if cfg.MaxWaiters < 1 || cfg.MaxWaiters > 8 {
+		return nil, errors.New("native_browser_invalid_waiters")
+	}
 	idle := make(chan struct{})
 	close(idle)
-	return &NativeBrowser{cfg: cfg, idle: idle, fatal: make(chan error, 1)}, nil
+	return &NativeBrowser{cfg: cfg, idle: idle, fatal: make(chan error, 1),
+		operations: make(map[uint64]context.CancelCauseFunc), slots: make(chan struct{}, cfg.MaxConcurrent),
+		waiters: make(chan struct{}, cfg.MaxWaiters), stopped: make(chan struct{})}, nil
 }
 
 // Fatal reports the one-way transition to a permanently tainted browser worker.
@@ -211,7 +233,7 @@ func (w *NativeBrowser) CheckReady(ctx context.Context) bool {
 		w.mu.Unlock()
 		return false
 	}
-	if w.active {
+	if len(w.operations) > 0 {
 		ready := w.ready
 		w.mu.Unlock()
 		return ready
@@ -229,16 +251,12 @@ func (w *NativeBrowser) CheckReady(ctx context.Context) bool {
 	w.mu.Lock()
 	if generation == "" || ws != generation {
 		w.taintLocked()
-		cancelJob := w.cancel
 		w.mu.Unlock()
 		w.reportDiagnostic("discovery", ErrNativeOwnershipLost)
-		if cancelJob != nil {
-			cancelJob()
-		}
 		return false
 	}
 	ready := !w.tainted && !w.closed && w.generation == generation &&
-		(!w.active || w.ready)
+		(len(w.operations) == 0 || w.ready)
 	if ready {
 		w.ready = true
 	}
@@ -246,30 +264,132 @@ func (w *NativeBrowser) CheckReady(ctx context.Context) bool {
 	return ready
 }
 
+// begin waits for one bounded render slot using the caller's original context.
+// The caller applies any navigation timeout only after this returns.
 func (w *NativeBrowser) begin(ctx context.Context, probe bool) (context.Context, func(), error) {
+	if err := ctx.Err(); err != nil {
+		return nil, nil, err
+	}
 	w.mu.Lock()
-	defer w.mu.Unlock()
-	if w.tainted {
-		return nil, nil, ErrNativeOwnershipLost
+	if probe {
+		if w.ready || w.probing || len(w.operations) != 0 {
+			w.mu.Unlock()
+			return nil, nil, ErrNativeBusy
+		}
+		w.probing = true
 	}
-	if w.closed || (!probe && !w.ready) {
-		return nil, nil, ErrNativeNotReady
+	if err := w.admissionErrorLocked(probe); err != nil {
+		if probe {
+			w.probing = false
+		}
+		w.mu.Unlock()
+		return nil, nil, err
 	}
-	if w.active {
-		return nil, nil, ErrNativeBusy
-	}
-	ctx, cancel := context.WithCancel(ctx)
-	w.active = true
-	w.cancel = cancel
-	w.idle = make(chan struct{})
-	return ctx, func() {
-		cancel()
+	select {
+	case w.slots <- struct{}{}:
+		w.mu.Unlock()
+	default:
+		select {
+		case w.waiters <- struct{}{}:
+			w.mu.Unlock()
+		case <-ctx.Done():
+			if probe {
+				w.probing = false
+			}
+			w.mu.Unlock()
+			return nil, nil, ctx.Err()
+		default:
+			if probe {
+				w.probing = false
+			}
+			w.mu.Unlock()
+			return nil, nil, ErrNativeBusy
+		}
+		select {
+		case w.slots <- struct{}{}:
+			<-w.waiters
+		case <-ctx.Done():
+			<-w.waiters
+			if probe {
+				w.mu.Lock()
+				w.probing = false
+				w.mu.Unlock()
+			}
+			return nil, nil, ctx.Err()
+		case <-w.stopped:
+			<-w.waiters
+			w.mu.Lock()
+			err := w.admissionErrorLocked(probe)
+			if probe {
+				w.probing = false
+			}
+			w.mu.Unlock()
+			if err == nil {
+				err = ErrNativeNotReady
+			}
+			return nil, nil, err
+		}
+		if err := ctx.Err(); err != nil {
+			if probe {
+				w.mu.Lock()
+				w.probing = false
+				w.mu.Unlock()
+			}
+			<-w.slots
+			return nil, nil, err
+		}
 		w.mu.Lock()
-		w.active = false
-		w.cancel = nil
-		close(w.idle)
+		if err := w.admissionErrorLocked(probe); err != nil {
+			if probe {
+				w.probing = false
+			}
+			w.mu.Unlock()
+			<-w.slots
+			return nil, nil, err
+		}
+		w.mu.Unlock()
+	}
+	ctx, cancel := context.WithCancelCause(ctx)
+	w.mu.Lock()
+	if err := w.admissionErrorLocked(probe); err != nil {
+		if probe {
+			w.probing = false
+		}
+		w.mu.Unlock()
+		cancel(context.Canceled)
+		<-w.slots
+		return nil, nil, err
+	}
+	w.nextOperation++
+	op := w.nextOperation
+	if len(w.operations) == 0 {
+		w.idle = make(chan struct{})
+	}
+	w.operations[op] = cancel
+	w.mu.Unlock()
+	return ctx, func() {
+		cancel(context.Canceled)
+		w.mu.Lock()
+		delete(w.operations, op)
+		<-w.slots
+		if probe {
+			w.probing = false
+		}
+		if len(w.operations) == 0 {
+			close(w.idle)
+		}
 		w.mu.Unlock()
 	}, nil
+}
+
+func (w *NativeBrowser) admissionErrorLocked(probe bool) error {
+	if w.tainted {
+		return ErrNativeOwnershipLost
+	}
+	if w.closed || (!probe && !w.ready) {
+		return ErrNativeNotReady
+	}
+	return nil
 }
 
 func (w *NativeBrowser) taintLocked() {
@@ -278,6 +398,10 @@ func (w *NativeBrowser) taintLocked() {
 		return
 	}
 	w.tainted = true
+	w.stopAdmissionLocked()
+	for _, cancel := range w.operations {
+		cancel(ErrNativeOwnershipLost)
+	}
 	w.fatal <- ErrNativeWorkerFatal
 	close(w.fatal)
 }
@@ -326,16 +450,28 @@ func (w *NativeBrowser) Close(ctx context.Context) error {
 	w.mu.Lock()
 	w.closed = true
 	w.ready = false
-	cancel, idle := w.cancel, w.idle
+	w.stopAdmissionLocked()
+	cancels := make([]context.CancelCauseFunc, 0, len(w.operations))
+	for _, cancel := range w.operations {
+		cancels = append(cancels, cancel)
+	}
+	idle := w.idle
 	w.mu.Unlock()
-	if cancel != nil {
-		cancel()
+	for _, cancel := range cancels {
+		cancel(context.Canceled)
 	}
 	select {
 	case <-idle:
 		return nil
 	case <-ctx.Done():
 		return ctx.Err()
+	}
+}
+
+func (w *NativeBrowser) stopAdmissionLocked() {
+	if !w.stoppedClosed {
+		close(w.stopped)
+		w.stoppedClosed = true
 	}
 }
 
@@ -529,7 +665,7 @@ func (r *nativeResources) crashIntegrityError() error {
 // already verified browser generation. It is called only after owned cleanup.
 func (w *NativeBrowser) verifyCrashRecovery(generation string) error {
 	w.mu.Lock()
-	eligible := !w.closed && !w.tainted && w.active && w.generation == generation
+	eligible := !w.closed && !w.tainted && len(w.operations) > 0 && w.generation == generation
 	w.mu.Unlock()
 	if !eligible {
 		return ErrNativeOwnershipLost
@@ -564,7 +700,7 @@ func (w *NativeBrowser) verifyCrashRecovery(generation string) error {
 	}
 	w.mu.Lock()
 	defer w.mu.Unlock()
-	if w.closed || w.tainted || !w.active || w.generation != generation {
+	if w.closed || w.tainted || len(w.operations) == 0 || w.generation != generation {
 		return ErrNativeOwnershipLost
 	}
 	w.ready = true
@@ -755,22 +891,23 @@ func (w *NativeBrowser) Fetch(ctx context.Context, raw string, opts NativeBrowse
 					return
 				}
 			case <-client.eventFailure:
+				cause := client.eventError()
+				stop(cause)
 				w.taint()
-				stop(client.eventError())
 				return
 			case <-client.done:
-				w.taint()
 				stop(errors.Join(ErrNativeOwnershipLost, errNativeClientDisconnected))
+				w.taint()
 				return
 			case message := <-client.events:
 				method := string(message.Method)
 				if detached, malformed := detachedOwnedSession(message, session); malformed {
-					w.taint()
 					stop(errors.Join(ErrNativeOwnershipLost, ErrNativePolicy, errNativeMalformedDetach))
+					w.taint()
 					return
 				} else if detached {
-					w.taint()
 					stop(errors.Join(ErrNativeOwnershipLost, errNativeOwnedDetach))
+					w.taint()
 					return
 				}
 				if terminalPending && (method == "Fetch.authRequired" || method == "Fetch.requestPaused") {
@@ -1075,8 +1212,8 @@ func (w *NativeBrowser) Fetch(ctx context.Context, raw string, opts NativeBrowse
 		value := evaluated.Result.Value
 		if value.Ready {
 			if cause := client.eventError(); cause != nil {
-				w.taint()
 				stop(cause)
+				w.taint()
 				return doc, cause
 			}
 			if value.TooLarge || int64(len(value.HTML)) > domLimit || int64(value.Bytes) > domLimit {

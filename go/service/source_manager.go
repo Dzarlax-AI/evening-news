@@ -217,7 +217,11 @@ func (s *Server) runSourceBatch(ctx context.Context, req SourceCollectRequest) S
 			budget = time.Duration(desc.PerSourceBudgetMS) * time.Millisecond
 		}
 		resp.Results[i] = deferredSourceResult(result)
-		job := pipeline.SourceJob{SourceID: desc.SourceID, Budget: budget, Browser: sourceUsesBrowser(desc), Run: s.sourceRunner(desc, result)}
+		// NativeBrowser owns the single render admission gate. Holding this
+		// source-level lane across Telegram HTTP/fallback or a whole Page Monitor
+		// job would serialize work before it reaches that gate.
+		browserLane := sourceUsesBrowser(desc) && !s.cfg.NativeBrowser
+		job := pipeline.SourceJob{SourceID: desc.SourceID, Budget: budget, Browser: browserLane, Run: s.sourceRunner(desc, result)}
 		jobs = append(jobs, job)
 		jobResultIndexes = append(jobResultIndexes, i)
 	}
