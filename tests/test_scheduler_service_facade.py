@@ -14,13 +14,31 @@ from sqlalchemy import text
 from sqlalchemy.ext.asyncio import AsyncSession, create_async_engine
 from sqlalchemy.orm import sessionmaker
 
-# Security module import validates that at least one local admin credential is
-# configured; this fixed test-only value is never used for network access.
-os.environ.setdefault("ADMIN_PASSWORD", "fixture-only")
+# Security validates configuration while the API module is imported. Import it
+# under a temporary test-only credential so collection is independent of a
+# developer's .env or CI variables, then restore the caller's environment.
+_previous_admin_password = os.environ.get("ADMIN_PASSWORD")
+os.environ["ADMIN_PASSWORD"] = "scheduler-facade-test-only"
+_settings_previous_admin_password = None
+_settings_admin_password_was_patched = False
+try:
+    from news_aggregator.config import settings
 
-from news_aggregator.config import settings
-
-module = import_module("news_aggregator.api.scheduler_router")
+    if not (settings.admin_password or settings.jwt_secret):
+        _settings_previous_admin_password = settings.admin_password
+        settings.admin_password = "scheduler-facade-test-only"
+        _settings_admin_password_was_patched = True
+    try:
+        module = import_module("news_aggregator.api.scheduler_router")
+    finally:
+        if _settings_admin_password_was_patched:
+            settings.admin_password = _settings_previous_admin_password
+finally:
+    if _previous_admin_password is None:
+        os.environ.pop("ADMIN_PASSWORD", None)
+    else:
+        os.environ["ADMIN_PASSWORD"] = _previous_admin_password
+assert os.environ.get("ADMIN_PASSWORD") == _previous_admin_password
 
 
 async def _asgi_get(app, path, authorization):

@@ -2,6 +2,7 @@ name: Standalone Go scheduler
 
 on:
   push:
+    branches: [main]
     paths:
       - 'go-scheduler/**'
       - 'news_aggregator/**'
@@ -77,6 +78,8 @@ jobs:
         run: |
           SCHEDULER_FIXTURE_BUILD_ID=$(python -c "import runpy; ns=runpy.run_path('scripts/run_go_scheduler_fixture_gate.py'); print(ns['DockerGate'].scheduler_source_hash(None))")
           docker build --build-arg SCHEDULER_BUILD_ID="$SCHEDULER_FIXTURE_BUILD_ID" -t evening-news-scheduler:fixture go-scheduler
+      - name: Fetch isolated PostgreSQL fixture image
+        run: docker pull postgres:16-alpine
       - name: Verify isolated service integration
         run: >-
           python scripts/run_go_scheduler_fixture_gate.py
