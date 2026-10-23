@@ -6,7 +6,14 @@ render when HTTP fails in an eligible way or contains no posts. It uses the
 existing browser and disposable owned contexts. Auth, policy, resource-limit,
 rate-limit, cancellation and deadline failures do not trigger blind retries.
 
-Python source orchestration remains in place. Set `TELEGRAM_SOURCE_MODE=go` to
+Python retains source configuration, enrichment, and persistence. With
+`SOURCE_MANAGER_MODE=go`, runtime batch dispatch also runs in Go; Telegram HTTP
+fetches overlap within the source worker pool and reserve no native browser slot.
+Only eligible browser fallback enters the render gate shared with article
+extraction and Page Monitor. Production uses two render slots, while the default
+is one; see the [source collection guide](go-source-manager.md).
+
+Set `TELEGRAM_SOURCE_MODE=go` to
 route Telegram sources through this endpoint; the default is `python`. The Go
 mode requires `EXTRACTION_SERVICE_URL` and `EXTRACTION_SERVICE_TOKEN` and does not
 fall back to Python scraping. Article extraction settings remain independent.

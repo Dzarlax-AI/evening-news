@@ -2,7 +2,7 @@
 
 `SOURCE_MANAGER_MODE=go` moves runtime source dispatch and RSS/Atom fetching into the existing private Go extractor service. Python still reads source configuration, manages Page Monitor state and optional selector learning, enriches Telegram links, deduplicates articles, and writes PostgreSQL. The scheduler, AI processing, admin CRUD, and digest delivery stay in Python.
 
-This mode is opt-in and has not been deployed by this change. Existing deployment overlays do not enable it.
+Production uses this mode as of October 23, 2026. The repository default and deployment templates remain conservative; deployment must explicitly select Go and matching app/worker images.
 
 ## Configuration
 
@@ -20,7 +20,7 @@ The default is `SOURCE_MANAGER_MODE=python`. Go mode rejects missing credentials
 
 `POST /v1/sources/collect` uses the existing private bearer authentication and contract version `1`. Each request includes a request ID, a batch budget, and up to eight descriptors with unique positive numeric `source_id` values. Results retain every input ID in input order, including failures and deferrals. Equal source names remain distinct through persistence.
 
-The manager runs up to five source operations concurrently and serializes browser-capable Telegram/Page Monitor jobs. Queued jobs do not spend their per-source operation budget before dispatch. A batch takes one shared admission slot; typed runners execute directly without recursively acquiring that slot. Cancellation and drain propagate to active work.
+The manager runs up to five source operations concurrently. With the native browser backend, Telegram HTTP work and Page Monitor source jobs do not hold a coarse browser lane. Only actual renders acquire the native gate shared with article extraction: production uses two active renders and at most eight waiting operations, while the default remains one active render. Each admitted render owns its context, target, cancellation, and cleanup. The legacy browser backend retains source-job serialization. Queued source jobs do not spend their per-source operation budget before dispatch; render admission waits remain bounded by the original caller deadline. A batch takes one shared API admission slot; typed runners execute directly without recursively acquiring that slot. Cancellation and drain propagate to active work.
 
 Request and response bodies are limited to 8 MiB. RSS wire and decoded bodies are limited to 5 MiB; guarded transport enforces public destinations, redirect validation, pinned DNS resolution, and a maximum 60-second RSS transport timeout. A feed without a caller limit may return at most 1,000 entries; exceeding that cap produces an explicit resource error.
 
@@ -61,4 +61,4 @@ The gate uses an internal Docker network, a fixture-only TLS certificate, a loop
 
 ## Rollback boundary
 
-Before any future production enablement, validate approved real sources, matching immutable app/worker images, and normal collection/persistence behavior. Switching collection back to `SOURCE_MANAGER_MODE=python` is a configuration rollback with an app restart. Preserve saved articles and deduplication state. This feature does not change the shared browser or its other clients.
+For subsequent releases, validate approved real sources, matching immutable app/worker images, and normal collection/persistence behavior. Switching collection back to `SOURCE_MANAGER_MODE=python` is a configuration rollback with an app restart. Preserve saved articles and deduplication state. This feature does not change the shared browser or its other clients.

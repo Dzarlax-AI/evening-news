@@ -73,8 +73,9 @@ Each active operation has its own CDP connection, disposable context, target,
 and cancellation. Shutdown cancels all owned operations; generation/ownership
 loss taints the worker and wakes waiters. The worker never globally closes or
 restarts the externally managed shared browser. Legacy backend source scheduling
-is unchanged. Production configuration remains at one render until a separate
-rollout decision.
+is unchanged. The October 23, 2026 rollout explicitly configured production for
+two renders; the repository default remains one. PR #17 updated only the News app
+and extractor, preserving the browser and its other clients.
 
 The isolated concurrency gate is `scripts/native_cloak_concurrency_gate.py`.
 It takes prebuilt Linux/amd64 worker and egress binaries, uses the pinned Cloak

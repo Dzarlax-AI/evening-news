@@ -22,83 +22,81 @@ Everything runs on a schedule you control, or you can trigger any step manually 
 
 ## Architecture
 
-Python remains the application and orchestration layer: it owns scheduling, AI processing, selector memory, database writes, and digest delivery. The private Go extractor service handles article extraction, Telegram, and Page Monitor. Opt-in `SOURCE_MANAGER_MODE=go` also moves RSS/Atom collection and runtime source dispatch into that service; Python retains source configuration and persistence. Each mode defaults to Python, and Go routes require the private service URL and bearer token. See the [Go source collection guide](docs/go-source-manager.md) for the batch contract, limits, and local fixture checks.
+The deployed application uses Python for scheduling, source configuration, PostgreSQL persistence, selector memory, AI processing, and digest delivery. A private Go service handles SourceManager dispatch, RSS/Atom collection, Telegram channel capture/parsing, Page Monitor capture/parsing, and article extraction. Python calls its authenticated API and saves the results; the Go service does not own the database or send digests.
 
-The production Compose profile selects Go for article extraction, Telegram, and Page Monitor. Go browser requests use the shared Cloak browser through the private control network and egress gateway. The Python app retains its browser pool for paths that remain in Python mode. See the [Page Monitor guide](docs/go-page-monitor.md), [Telegram guide](docs/go-telegram-source.md), and [production deployment handoff](deploy/news-extractor/HANDOFF.md).
+Source collection runs up to five jobs concurrently. Telegram HTTP fetches do not reserve a browser slot. Article rendering, Telegram browser fallback, and Page Monitor rendering share one bounded native admission gate: **two active renders in the current production deployment**, with at most eight waiting operations. Each render owns a disposable browser context and target. Waiting respects the caller's deadline; admission-time expiry remains retryable busy rather than consuming an article attempt.
 
 ```mermaid
 flowchart TD
     subgraph sources["Sources"]
         RSS[RSS / Atom feeds]
-        TGS[Telegram channels]
-        WEB[Custom pages<br/>Page Monitor]
+        TGS[Public Telegram channels]
+        WEB[Custom pages]
     end
 
     subgraph app["Python application"]
         Scheduler[Scheduler]
-        SourceManager[Python source manager]
-        Memory[Page Monitor selector memory]
+        SourceClient[Source configuration + Go API client]
+        Memory[Page Monitor state + selector learning]
         DB[(PostgreSQL)]
-        Filter[Content quality and deduplication]
-        Proc[Article processor]
-        AI1[Google Gemini<br/>summarize + categorize]
-        DGen[Daily summary generator]
-        AI2[Google Gemini<br/>per-category summary]
-        UI[FastAPI admin and public site]
-        TGBot[Telegram digest publisher]
+        Proc[Quality checks + article processing]
+        AI[Google Gemini]
+        Digest[Daily summaries + digest delivery]
+        UI[FastAPI admin + public site]
     end
 
-    subgraph go["Private Go extractor service"]
-        GoCollect[Optional source manager + RSS collector]
+    subgraph go["Private Go service — no database"]
+        GoCollect[SourceManager<br/>up to 5 source jobs]
+        GoRSS[Guarded RSS / Atom collection]
+        GoTelegram[Telegram HTTP + parsing]
+        GoPage[Page Monitor capture + parsing]
         GoArticle[Article extraction]
-        GoTelegram[Telegram source route]
-        GoPage[Page Monitor source route]
+        Admission[Native render admission<br/>production: 2 active, up to 8 waiting]
     end
 
     subgraph browser["Shared browser infrastructure"]
-        Cloak[Cloak browser]
-        Egress[HTTP/S egress gateway]
+        Cloak[One Cloak browser<br/>owned context + target per render]
+        Egress[Private HTTP/S egress gateway]
     end
 
     Channel[Your Telegram channel]
-    WebOrigins[Public websites]
+    Origins[Public websites]
 
-    RSS --> SourceManager
-    TGS --> SourceManager
-    WEB --> SourceManager
-    Scheduler --> SourceManager
-    SourceManager <--> Memory
-    SourceManager <-->|SOURCE_MANAGER_MODE=go| GoCollect
+    Scheduler --> SourceClient
+    SourceClient <--> Memory
+    SourceClient <-->|private authenticated API| GoCollect
+    RSS --> GoRSS
+    TGS --> GoTelegram
+    WEB --> GoPage
+    GoCollect --> GoRSS
     GoCollect --> GoTelegram
     GoCollect --> GoPage
-    GoCollect -->|guarded RSS HTTP| WebOrigins
-    SourceManager <-->|private API when Go mode is enabled| GoTelegram
-    SourceManager <-->|private API when Go mode is enabled| GoPage
-    Proc <-->|article extraction when Go mode is enabled| GoArticle
-    GoArticle -->|CDP control| Cloak
-    GoTelegram -->|CDP control when needed| Cloak
-    GoPage -->|CDP control when needed| Cloak
-    GoArticle -->|guarded HTTP| WebOrigins
-    GoTelegram -->|guarded HTTP| WebOrigins
-    GoPage -->|guarded HTTP| WebOrigins
+    GoRSS -->|guarded HTTP| Origins
+    GoTelegram -->|guarded HTTP first| Origins
+    GoPage -->|guarded HTTP when configured| Origins
+    SourceClient -->|save collected articles| DB
+    DB --> Proc
+    Proc <-->|private authenticated API| GoArticle
+    GoArticle -->|guarded HTTP| Origins
+    GoArticle -->|when rendering is needed| Admission
+    GoTelegram -->|eligible browser fallback| Admission
+    GoPage -->|when rendering is configured| Admission
+    Admission -->|CDP control| Cloak
     Cloak -->|browser HTTP/S| Egress
-    Egress --> WebOrigins
-    SourceManager --> DB
-    GoTelegram -->|posts| SourceManager
-    GoPage -->|items| SourceManager
-    DB --> Filter
-    Filter -->|passes| Proc
-    Proc <--> AI1
-    Proc --> DB
-    DB --> DGen
-    DGen <--> AI2
-    DGen --> DB
-    TGBot --> Channel
+    Egress --> Origins
+    Proc <--> AI
+    Proc -->|save processed articles| DB
+    Scheduler --> Digest
+    DB --> Digest
+    Digest <--> AI
+    Digest -->|save summaries| DB
+    Digest --> Channel
     DB --> UI
-    UI --> TGBot
 ```
 
-The diagram shows current source routes and the opt-in Go collection path. The production overlay does not enable `SOURCE_MANAGER_MODE=go`. Settings default to Python: `EXTRACTION_SERVICE_MODE=python`, `TELEGRAM_SOURCE_MODE=python`, and `PAGE_MONITOR_SOURCE_MODE=python`. The production overlays are merged with the existing infrastructure and News Compose projects, not run as a standalone stack; see the [deployment handoff](deploy/news-extractor/HANDOFF.md).
+This diagram describes the deployed Go routes as of October 23, 2026. Scheduling and persistence remain in Python. Repository routing defaults remain Python, and native render concurrency defaults to one; the deployed configuration explicitly selects all four Go modes and `EXTRACTOR_BROWSER_CONCURRENT=2`. These are configuration choices, not changed defaults for a new installation.
+
+See the [source collection guide](docs/go-source-manager.md), [Telegram guide](docs/go-telegram-source.md), [Page Monitor guide](docs/go-page-monitor.md), [native worker guide](docs/go-cloak-native-worker.md), and [deployment handoff](deploy/news-extractor/HANDOFF.md) for contracts, limits, and deployment boundaries.
 
 ---
 
@@ -132,7 +130,7 @@ Design follows the [dzarlax.dev](https://dzarlax.dev) brand system: warm ivory b
 
 ## Sources
 
-**RSS / Atom** — feed URLs collected by Python by default, or by the guarded Go collector with `SOURCE_MANAGER_MODE=go`. When the feed provides only a snippet, the full article is fetched automatically using the article extraction pipeline below.
+**RSS / Atom** — feed URLs collected by the guarded Go collector in production with `SOURCE_MANAGER_MODE=go`; the repository default remains Python. When the feed provides only a snippet, the full article is fetched automatically using the article extraction pipeline below.
 
 **Telegram** — public channels via web preview. The parser strips UI chrome (forwarded headers, reactions, buttons) and follows external links to fetch full article text. The production profile routes collection and parsing through Go; Python remains the default mode.
 
@@ -208,7 +206,7 @@ This mounts local application code into the container so changes take effect wit
 
 ### Production topology
 
-Production combines the existing News Compose project with [`compose.native.yml`](deploy/news-extractor/compose.native.yml) and the infrastructure overlay [`compose.shared-browser.yml`](deploy/news-extractor/compose.shared-browser.yml). The News overlay configures the private Go service, selects Go for article extraction, Telegram, and Page Monitor, and connects the app and worker to the shared Cloak browser through private control and egress networks. Follow the [deployment handoff](deploy/news-extractor/HANDOFF.md) for the actual merge order and runtime checks; these overlay files are not standalone Compose projects.
+Production runs the Python app, private Go extractor service, and egress gateway alongside the externally managed shared Cloak browser. The deployed News Compose configuration uses matching immutable app/worker images, all four Go routing modes, and two native render slots. [`compose.native.yml`](deploy/news-extractor/compose.native.yml) and [`compose.shared-browser.yml`](deploy/news-extractor/compose.shared-browser.yml) are deployment templates; their conservative defaults do not fully describe the current deployed configuration. Follow the [deployment handoff](deploy/news-extractor/HANDOFF.md) for merge order and runtime checks; these overlay files are not standalone Compose projects.
 
 ---
 
@@ -237,7 +235,7 @@ JWT_SECRET=your_jwt_secret
 
 Everything else has sensible defaults. Full reference is in `docker-compose.example.yml`.
 
-The source routing settings default to Python. Set `EXTRACTION_SERVICE_MODE=go`, `TELEGRAM_SOURCE_MODE=go`, or `PAGE_MONITOR_SOURCE_MODE=go` only when the private Go service URL and bearer token are configured. The production Compose overlay sets all three to Go and disables article-extraction fallback. The Go Telegram and Page Monitor clients do not silently retry through Python. `SOURCE_MANAGER_MODE=go` additionally selects Go batch dispatch and RSS collection, requires both source modes to be Go, and remains opt-in; see the [source collection guide](docs/go-source-manager.md).
+Routing defaults remain Python. The deployed configuration explicitly sets `SOURCE_MANAGER_MODE=go`, `EXTRACTION_SERVICE_MODE=go`, `TELEGRAM_SOURCE_MODE=go`, and `PAGE_MONITOR_SOURCE_MODE=go`, with the private service URL and bearer token configured. Go SourceManager requires both source modes to be Go. Article-extraction Python fallback is disabled, and Go source clients do not silently fall back to Python. `EXTRACTOR_BROWSER_CONCURRENT` supports one or two native renders: its default is one, while the deployed value is two. See the [source collection guide](docs/go-source-manager.md) and [native worker guide](docs/go-cloak-native-worker.md).
 
 ---
 

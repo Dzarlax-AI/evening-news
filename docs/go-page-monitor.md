@@ -34,9 +34,13 @@ and parsing share a source deadline with time reserved for returning captured
 items. Resource limits do not trigger learning. Publication dates become naive
 UTC before reaching the existing ORM.
 
-SourceManager queues Go-backed Page Monitor and Telegram sources within each
-fetch batch because they share the worker's admission slot. Queue time precedes
-the per-source operation timeout. RSS and Python-mode sources remain concurrent.
+Native Go SourceManager runs source jobs concurrently; only actual browser
+renders wait for the gate shared with article extraction and Telegram fallback.
+Production uses two active renders with at most eight waiters; the default is
+one render. Admission waiting respects the caller's overall deadline and keeps
+retryable busy separate from an active-render timeout. The legacy browser
+backend retains the source-job browser lane. See the
+[source collection guide](go-source-manager.md) for batch scheduling.
 
 The shared oracle in `tests/fixtures/page-monitor/list-parity.json` checks the
 actual Python and Go parsers with a frozen clock. Unsupported configured CSS
