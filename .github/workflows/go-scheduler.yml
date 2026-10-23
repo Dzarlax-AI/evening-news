@@ -1,0 +1,92 @@
+name: Standalone Go scheduler
+
+on:
+  push:
+    paths:
+      - 'go-scheduler/**'
+      - 'news_aggregator/**'
+      - 'web/**'
+      - 'tests/**'
+      - 'docker/**'
+      - 'scripts/run_go_scheduler_fixture_gate.py'
+      - 'scripts/scheduler_bridge.py'
+      - '.github/workflows/go-scheduler.yml'
+  pull_request:
+    paths:
+      - 'go-scheduler/**'
+      - 'news_aggregator/**'
+      - 'web/**'
+      - 'tests/**'
+      - 'docker/**'
+      - 'scripts/run_go_scheduler_fixture_gate.py'
+      - 'scripts/scheduler_bridge.py'
+      - '.github/workflows/go-scheduler.yml'
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  scheduler-tests:
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    services:
+      postgres:
+        image: postgres:16-alpine
+        env:
+          POSTGRES_USER: fixture_admin
+          POSTGRES_PASSWORD: fixture-only
+          POSTGRES_DB: scheduler_tests
+        ports:
+          - 5432:5432
+        options: >-
+          --health-cmd "pg_isready -h 127.0.0.1 -U fixture_admin -d scheduler_tests"
+          --health-interval 5s
+          --health-timeout 5s
+          --health-retries 10
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-go@v5
+        with:
+          go-version-file: go-scheduler/go.mod
+          cache-dependency-path: go-scheduler/go.sum
+      - name: Unit, race, PostgreSQL, and static checks
+        working-directory: go-scheduler
+        env:
+          SCHEDULER_TEST_DATABASE_URL: postgres://fixture_admin:fixture-only@127.0.0.1:5432/scheduler_tests
+        run: |
+          go test -race ./...
+          go vet ./...
+      - name: Compile Linux amd64 and macOS ARM64
+        working-directory: go-scheduler
+        run: |
+          GOOS=linux GOARCH=amd64 CGO_ENABLED=0 go build -o /tmp/scheduler-linux-amd64 ./cmd/scheduler
+          GOOS=darwin GOARCH=arm64 CGO_ENABLED=0 go build -o /tmp/scheduler-darwin-arm64 ./cmd/scheduler
+
+  scheduler-fixture:
+    runs-on: ubuntu-latest
+    timeout-minutes: 20
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: '3.12'
+      - name: Build local application fixture image
+        run: docker build -f docker/Dockerfile -t evening-news-scheduler-app:fixture .
+      - name: Build local scheduler fixture image
+        run: |
+          SCHEDULER_FIXTURE_BUILD_ID=$(python -c "import runpy; ns=runpy.run_path('scripts/run_go_scheduler_fixture_gate.py'); print(ns['DockerGate'].scheduler_source_hash(None))")
+          docker build --build-arg SCHEDULER_BUILD_ID="$SCHEDULER_FIXTURE_BUILD_ID" -t evening-news-scheduler:fixture go-scheduler
+      - name: Verify isolated service integration
+        run: >-
+          python scripts/run_go_scheduler_fixture_gate.py
+          --app-image evening-news-scheduler-app:fixture
+          --scheduler-image evening-news-scheduler:fixture
+          --output-dir artifacts/go-scheduler-fixture
+      - name: Save acceptance evidence
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: standalone-go-scheduler-fixture
+          path: artifacts/go-scheduler-fixture/
+          if-no-files-found: ignore

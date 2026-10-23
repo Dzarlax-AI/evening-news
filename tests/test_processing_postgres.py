@@ -18,6 +18,7 @@ from news_aggregator.orchestrator import NewsOrchestrator
 from news_aggregator.processing.processing_outcome import ProcessingOutcome
 from news_aggregator.services.database_queue import DatabaseQueueManager
 from news_aggregator.services.source_manager import SourceManager
+from news_aggregator.sources.base import Article as FetchedArticle
 
 
 def local_test_url():
@@ -97,8 +98,12 @@ async def test_source_manager_id_mapping_persists_same_named_sources_separately(
             await db.flush()
             assert first.id != second.id
             raw = {
-                first.id: [SimpleNamespace(title='Story A', url='https://example.test/story-a')],
-                second.id: [SimpleNamespace(title='Story B', url='https://example.test/story-b')],
+                first.id: [FetchedArticle(
+                    title='Story A', url='https://example.test/story-a', content='First source story',
+                )],
+                second.id: [FetchedArticle(
+                    title='Story B', url='https://example.test/story-b', content='Second source story',
+                )],
             }
             saved = await manager.save_fetched_articles_with_sources(
                 raw, {first.id: first, second.id: second}, db)

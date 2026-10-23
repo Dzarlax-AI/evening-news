@@ -24,7 +24,9 @@ Everything runs on a schedule you control, or you can trigger any step manually 
 
 The deployed application uses Python for scheduling, source configuration, PostgreSQL persistence, selector memory, AI processing, and digest delivery. A private Go service handles SourceManager dispatch, RSS/Atom collection, Telegram channel capture/parsing, Page Monitor capture/parsing, and article extraction. Python calls its authenticated API and saves the results; the Go service does not own the database or send digests.
 
-An optional [separate Python background worker](docs/background-worker.md) moves scheduling and processing out of the web process. With `BACKGROUND_EXECUTION_MODE=worker`, web submits durable PostgreSQL jobs and reports their status; `python -m news_aggregator.worker` executes them under a singleton database lease. The default remains `embedded`. This optional mode has not been deployed.
+An optional [separate Python background worker](docs/background-worker.md) moves scheduling and processing out of the web process. With `BACKGROUND_EXECUTION_MODE=worker`, web submits durable PostgreSQL jobs and reports their status; `python -m news_aggregator.worker` executes them under a singleton database lease. The default remains `embedded`; the production deployment uses separate web and worker processes.
+
+An additional [standalone Go scheduler](docs/go-scheduler.md) provides reusable scheduling with its own PostgreSQL schema and a versioned HTTP command/receipt contract. In `SCHEDULE_DISPATCH_MODE=service`, the News adapter accepts scheduled commands into the existing durable queue; Python remains the execution worker. The scheduler is independently packaged and does not depend on article, AI, or delivery models. This scheduler integration has not been deployed.
 
 Source collection runs up to five jobs concurrently. Telegram HTTP fetches do not reserve a browser slot. Article rendering, Telegram browser fallback, and Page Monitor rendering share one bounded native admission gate: **two active renders in the current production deployment**, with at most eight waiting operations. Each render owns a disposable browser context and target. Waiting respects the caller's deadline; admission-time expiry remains retryable busy rather than consuming an article attempt.
 
@@ -36,18 +38,26 @@ flowchart TD
         WEB[Custom pages]
     end
 
-    subgraph app["Python application"]
-        Scheduler[Scheduler]
+    subgraph app["Python web + execution worker"]
+        Scheduler[Python scheduler — current deployment]
+        Adapter[Scheduled command adapter]
+        Jobs[Durable News jobs]
         SourceClient[Source configuration + Go API client]
         Memory[Page Monitor state + selector learning]
-        DB[(PostgreSQL)]
+        DB[(News PostgreSQL schema)]
         Proc[Quality checks + article processing]
         AI[Google Gemini]
         Digest[Daily summaries + digest delivery]
         UI[FastAPI admin + public site]
     end
 
-    subgraph go["Private Go service — no database"]
+    subgraph scheduling["Standalone Go scheduler — optional service"]
+        GoScheduler[Calendar + command dispatch]
+        ScheduleDB[(Scheduler-owned PostgreSQL schema)]
+        GoScheduler <--> ScheduleDB
+    end
+
+    subgraph go["Private Go collection service — no database"]
         GoCollect[SourceManager<br/>up to 5 source jobs]
         GoRSS[Guarded RSS / Atom collection]
         GoTelegram[Telegram HTTP + parsing]
@@ -64,7 +74,11 @@ flowchart TD
     Channel[Your Telegram channel]
     Origins[Public websites]
 
-    Scheduler --> SourceClient
+    UI -->|manual commands| Jobs
+    GoScheduler -->|private authenticated command + receipt| Adapter
+    Adapter --> Jobs
+    Jobs --> SourceClient
+    Scheduler --> Jobs
     SourceClient <--> Memory
     SourceClient <-->|private authenticated API| GoCollect
     RSS --> GoRSS
@@ -88,7 +102,7 @@ flowchart TD
     Egress --> Origins
     Proc <--> AI
     Proc -->|save processed articles| DB
-    Scheduler --> Digest
+    Jobs --> Digest
     DB --> Digest
     Digest <--> AI
     Digest -->|save summaries| DB
@@ -96,7 +110,7 @@ flowchart TD
     DB --> UI
 ```
 
-This diagram describes the deployed Go routes as of October 23, 2026. Scheduling and persistence remain in Python. Repository routing defaults remain Python, and native render concurrency defaults to one; the deployed configuration explicitly selects all four Go modes and `EXTRACTOR_BROWSER_CONCURRENT=2`. These are configuration choices, not changed defaults for a new installation.
+This diagram describes the deployed Go routes as of October 23, 2026. The production scheduler and domain persistence remain in Python; the standalone scheduler integration is available as a separate, undeployed service. Repository routing defaults remain Python, and native render concurrency defaults to one; the deployed configuration explicitly selects all four Go modes and `EXTRACTOR_BROWSER_CONCURRENT=2`. These are configuration choices, not changed defaults for a new installation.
 
 See the [source collection guide](docs/go-source-manager.md), [Telegram guide](docs/go-telegram-source.md), [Page Monitor guide](docs/go-page-monitor.md), [native worker guide](docs/go-cloak-native-worker.md), and [deployment handoff](deploy/news-extractor/HANDOFF.md) for contracts, limits, and deployment boundaries.
 

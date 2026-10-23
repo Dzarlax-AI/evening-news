@@ -1,0 +1,878 @@
+openapi: 3.1.0
+info:
+  title: Standalone Go Scheduler API
+  version: '1.0.0'
+  description: >-
+    Static description of the scheduler HTTP API. The service stores generic
+    schedules and delivery occurrences in its configured PostgreSQL schema;
+    consumer operations and payload fields remain opaque to the scheduler.
+servers:
+  - url: /
+security: []
+tags:
+  - name: Health
+  - name: Scheduler
+paths:
+  /healthz:
+    get:
+      tags: [Health]
+      operationId: liveness
+      summary: Process liveness
+      responses:
+        '200':
+          description: Process can serve requests.
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/HealthStatus'
+  /readyz:
+    get:
+      tags: [Health]
+      operationId: readiness
+      summary: Database and scheduler-loop readiness
+      responses:
+        '200':
+          description: Database is reachable and scheduler loop is fresh.
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ReadyStatus'
+        '503':
+          description: Database unavailable or scheduler loop is stale.
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/NotReadyStatus'
+  /version:
+    get:
+      tags: [Health]
+      operationId: version
+      summary: Build metadata
+      responses:
+        '200':
+          description: Non-secret build metadata.
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/Version'
+  /v1/schedules:
+    get:
+      tags: [Scheduler]
+      operationId: listSchedules
+      summary: List schedules
+      security:
+        - SchedulerBearer: []
+      parameters:
+        - $ref: '#/components/parameters/Limit'
+        - $ref: '#/components/parameters/Cursor'
+      responses:
+        '200':
+          description: A bounded page ordered by schedule key.
+          content:
+            application/json:
+              schema:
+                type: object
+                additionalProperties: false
+                required: [schedules, next_cursor]
+                properties:
+                  schedules:
+                    type: array
+                    items:
+                      $ref: '#/components/schemas/Schedule'
+                  next_cursor:
+                    $ref: '#/components/schemas/NullableCursor'
+        '400':
+          $ref: '#/components/responses/InvalidRequest'
+        '401':
+          $ref: '#/components/responses/Unauthorized'
+        '405':
+          $ref: '#/components/responses/MethodNotAllowed'
+        '503':
+          $ref: '#/components/responses/Unavailable'
+  /v1/schedules/{schedule_key}:
+    parameters:
+      - name: schedule_key
+        in: path
+        required: true
+        description: Stable key matching the schedule-key syntax.
+        schema:
+          $ref: '#/components/schemas/ScheduleKey'
+    get:
+      tags: [Scheduler]
+      operationId: getSchedule
+      summary: Get a schedule
+      security:
+        - SchedulerBearer: []
+      responses:
+        '200':
+          description: Schedule resource.
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/Schedule'
+        '401':
+          $ref: '#/components/responses/Unauthorized'
+        '404':
+          $ref: '#/components/responses/ScheduleNotFound'
+        '405':
+          $ref: '#/components/responses/MethodNotAllowed'
+        '503':
+          $ref: '#/components/responses/Unavailable'
+    put:
+      tags: [Scheduler]
+      operationId: putSchedule
+      summary: Create or replace a schedule using optimistic revision control
+      description: >-
+        Use expected_revision 0 to create a missing key. For an existing key,
+        expected_revision must equal its current revision. This is a full
+        replacement of enabled, calendar, target alias, operation, and payload.
+      security:
+        - SchedulerBearer: []
+      requestBody:
+        required: true
+        description: UTF-8 JSON body limited to 16 KiB.
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/PutScheduleRequest'
+      responses:
+        '200':
+          description: Existing schedule updated.
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/Schedule'
+        '201':
+          description: Schedule created at revision 1.
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/Schedule'
+        '400':
+          $ref: '#/components/responses/InvalidRequest'
+        '401':
+          $ref: '#/components/responses/Unauthorized'
+        '405':
+          $ref: '#/components/responses/MethodNotAllowed'
+        '409':
+          $ref: '#/components/responses/RevisionConflict'
+        '422':
+          $ref: '#/components/responses/InvalidSchedule'
+        '503':
+          $ref: '#/components/responses/Unavailable'
+    delete:
+      tags: [Scheduler]
+      operationId: deleteSchedule
+      summary: Delete a schedule configuration
+      description: Existing occurrences are retained.
+      security:
+        - SchedulerBearer: []
+      requestBody:
+        required: true
+        description: UTF-8 JSON body limited to 16 KiB.
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/DeleteScheduleRequest'
+      responses:
+        '204':
+          description: Schedule deleted; response has no body.
+        '400':
+          $ref: '#/components/responses/InvalidRequest'
+        '401':
+          $ref: '#/components/responses/Unauthorized'
+        '404':
+          $ref: '#/components/responses/ScheduleNotFound'
+        '405':
+          $ref: '#/components/responses/MethodNotAllowed'
+        '409':
+          $ref: '#/components/responses/RevisionConflict'
+        '503':
+          $ref: '#/components/responses/Unavailable'
+  /v1/control:
+    put:
+      tags: [Scheduler]
+      operationId: setControl
+      summary: Pause or resume scheduler generation and dispatch
+      description: >-
+        The update is conditional on the current control revision. A successful
+        pause commit prevents new occurrence generation and dispatch claims;
+        requests claimed before that commit may still finish.
+      security:
+        - SchedulerBearer: []
+      requestBody:
+        required: true
+        description: UTF-8 JSON body limited to 16 KiB.
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/SetControlRequest'
+      responses:
+        '200':
+          description: Current control state.
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/Control'
+        '400':
+          $ref: '#/components/responses/InvalidRequest'
+        '401':
+          $ref: '#/components/responses/Unauthorized'
+        '405':
+          $ref: '#/components/responses/MethodNotAllowed'
+        '409':
+          $ref: '#/components/responses/RevisionConflict'
+        '503':
+          $ref: '#/components/responses/Unavailable'
+  /v1/status:
+    get:
+      tags: [Scheduler]
+      operationId: getStatus
+      summary: Read scheduler operational state
+      security:
+        - SchedulerBearer: []
+      responses:
+        '200':
+          description: Scheduler control, loop timestamps, and non-accepted outbox count.
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/Status'
+        '401':
+          $ref: '#/components/responses/Unauthorized'
+        '405':
+          $ref: '#/components/responses/MethodNotAllowed'
+        '503':
+          $ref: '#/components/responses/Unavailable'
+  /v1/import:
+    post:
+      tags: [Scheduler]
+      operationId: importSchedules
+      summary: Atomically import a bounded batch of schedules
+      description: >-
+        Available only while globally paused and at the supplied control
+        revision. The batch must contain 1–100 unique schedule keys. Identical
+        existing configuration including next_due_at is unchanged; any conflict
+        rejects the whole batch.
+      security:
+        - SchedulerBearer: []
+      requestBody:
+        required: true
+        description: UTF-8 JSON body limited to 512 KiB.
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/ImportRequest'
+      responses:
+        '200':
+          description: Created and unchanged keys, sorted independently.
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ImportResult'
+        '400':
+          $ref: '#/components/responses/InvalidRequest'
+        '401':
+          $ref: '#/components/responses/Unauthorized'
+        '405':
+          $ref: '#/components/responses/MethodNotAllowed'
+        '409':
+          description: Scheduler must be paused, control revision is stale, or import conflicts.
+          content:
+            application/json:
+              schema:
+                oneOf:
+                  - $ref: '#/components/schemas/RevisionConflictError'
+                  - $ref: '#/components/schemas/ImportRequiresPauseError'
+                  - $ref: '#/components/schemas/ImportConflictError'
+        '422':
+          $ref: '#/components/responses/InvalidSchedule'
+        '503':
+          $ref: '#/components/responses/Unavailable'
+  /v1/occurrences:
+    get:
+      tags: [Scheduler]
+      operationId: listOccurrences
+      summary: List bounded delivery occurrence inventory
+      security:
+        - SchedulerBearer: []
+      parameters:
+        - $ref: '#/components/parameters/Limit'
+        - $ref: '#/components/parameters/Cursor'
+        - name: schedule_key
+          in: query
+          required: false
+          schema:
+            $ref: '#/components/schemas/ScheduleKey'
+      responses:
+        '200':
+          description: Occurrence records ordered by creation time and UUID; secrets and payloads are omitted.
+          content:
+            application/json:
+              schema:
+                type: object
+                additionalProperties: false
+                required: [occurrences, next_cursor]
+                properties:
+                  occurrences:
+                    type: array
+                    items:
+                      $ref: '#/components/schemas/Occurrence'
+                  next_cursor:
+                    $ref: '#/components/schemas/NullableCursor'
+        '400':
+          $ref: '#/components/responses/InvalidRequest'
+        '401':
+          $ref: '#/components/responses/Unauthorized'
+        '404':
+          $ref: '#/components/responses/ScheduleNotFound'
+        '405':
+          $ref: '#/components/responses/MethodNotAllowed'
+        '503':
+          $ref: '#/components/responses/Unavailable'
+  /v1/occurrences/{occurrence_id}/retry:
+    post:
+      tags: [Scheduler]
+      operationId: retryOccurrence
+      summary: Retry a blocked delivery occurrence
+      description: >-
+        An empty object is required. A blocked occurrence becomes pending with
+        the same envelope; pending and leased are no-ops. Accepted occurrences
+        cannot be replayed.
+      security:
+        - SchedulerBearer: []
+      parameters:
+        - name: occurrence_id
+          in: path
+          required: true
+          schema:
+            $ref: '#/components/schemas/UUID'
+      requestBody:
+        required: true
+        description: UTF-8 JSON body limited to 16 KiB; body must be exactly `{}`.
+        content:
+          application/json:
+            schema:
+              type: object
+              maxProperties: 0
+              additionalProperties: false
+      responses:
+        '200':
+          description: Occurrence current state after the retry action.
+          content:
+            application/json:
+              schema:
+                type: object
+                additionalProperties: false
+                required: [occurrence_id, status]
+                properties:
+                  occurrence_id:
+                    $ref: '#/components/schemas/UUID'
+                  status:
+                    enum: [pending, leased]
+        '400':
+          $ref: '#/components/responses/InvalidRequest'
+        '401':
+          $ref: '#/components/responses/Unauthorized'
+        '404':
+          $ref: '#/components/responses/OccurrenceNotFound'
+        '405':
+          $ref: '#/components/responses/MethodNotAllowed'
+        '409':
+          $ref: '#/components/responses/OccurrenceNotRetryable'
+        '503':
+          $ref: '#/components/responses/Unavailable'
+
+components:
+  securitySchemes:
+    SchedulerBearer:
+      type: http
+      scheme: bearer
+      bearerFormat: SCHEDULER_API_TOKEN
+  parameters:
+    Limit:
+      name: limit
+      in: query
+      required: false
+      description: Page size; defaults to 100.
+      schema:
+        type: integer
+        minimum: 1
+        maximum: 100
+        default: 100
+    Cursor:
+      name: cursor
+      in: query
+      required: false
+      description: Opaque URL-safe page cursor.
+      schema:
+        type: string
+  responses:
+    InvalidRequest:
+      description: Malformed JSON, unknown fields, invalid pagination, or oversized body.
+      content:
+        application/json:
+          schema:
+            $ref: '#/components/schemas/APIError'
+    Unauthorized:
+      description: Missing or invalid scheduler API bearer token.
+      content:
+        application/json:
+          schema:
+            $ref: '#/components/schemas/APIError'
+    MethodNotAllowed:
+      description: Method is not supported for this route.
+      content:
+        application/json:
+          schema:
+            $ref: '#/components/schemas/APIError'
+    ScheduleNotFound:
+      description: Schedule key does not exist.
+      content:
+        application/json:
+          schema:
+            $ref: '#/components/schemas/APIError'
+    OccurrenceNotFound:
+      description: Occurrence identifier does not exist.
+      content:
+        application/json:
+          schema:
+            $ref: '#/components/schemas/APIError'
+    RevisionConflict:
+      description: Expected revision does not match current state.
+      content:
+        application/json:
+          schema:
+            $ref: '#/components/schemas/RevisionConflictError'
+    InvalidSchedule:
+      description: Schedule key, calendar, payload, operation, or target alias is invalid.
+      content:
+        application/json:
+          schema:
+            $ref: '#/components/schemas/APIError'
+    OccurrenceNotRetryable:
+      description: Accepted occurrence cannot be explicitly replayed.
+      content:
+        application/json:
+          schema:
+            $ref: '#/components/schemas/OccurrenceNotRetryableError'
+    Unavailable:
+      description: Database or service temporarily unavailable. Retry-After may be present when known.
+      headers:
+        Retry-After:
+          schema:
+            type: string
+          description: Optional retry delay when known.
+      content:
+        application/json:
+          schema:
+            $ref: '#/components/schemas/APIError'
+  schemas:
+    APIError:
+      type: object
+      additionalProperties: false
+      required: [error]
+      properties:
+        error:
+          type: object
+          additionalProperties: false
+          required: [code, message]
+          properties:
+            code:
+              type: string
+            message:
+              type: string
+    RevisionConflictError:
+      type: object
+      additionalProperties: false
+      required: [error]
+      properties:
+        error:
+          type: object
+          additionalProperties: false
+          required: [code, message]
+          properties:
+            code:
+              const: revision_conflict
+            message:
+              type: string
+        current_revision:
+          type: integer
+          format: int64
+          minimum: 0
+    ImportRequiresPauseError:
+      type: object
+      additionalProperties: false
+      required: [error]
+      properties:
+        error:
+          type: object
+          additionalProperties: false
+          required: [code, message]
+          properties:
+            code:
+              const: import_requires_pause
+            message:
+              type: string
+    ImportConflictError:
+      type: object
+      additionalProperties: false
+      required: [error]
+      properties:
+        error:
+          type: object
+          additionalProperties: false
+          required: [code, message]
+          properties:
+            code:
+              const: import_conflict
+            message:
+              type: string
+    OccurrenceNotRetryableError:
+      type: object
+      additionalProperties: false
+      required: [error]
+      properties:
+        error:
+          type: object
+          additionalProperties: false
+          required: [code, message]
+          properties:
+            code:
+              const: occurrence_not_retryable
+            message:
+              type: string
+    HealthStatus:
+      type: object
+      additionalProperties: false
+      required: [status]
+      properties:
+        status:
+          const: ok
+    ReadyStatus:
+      type: object
+      additionalProperties: false
+      required: [status]
+      properties:
+        status:
+          const: ready
+    NotReadyStatus:
+      type: object
+      additionalProperties: false
+      required: [status]
+      properties:
+        status:
+          const: not_ready
+    Version:
+      type: object
+      additionalProperties: false
+      required: [version, build_id]
+      properties:
+        version:
+          const: '1'
+        build_id:
+          type: string
+    ScheduleKey:
+      type: string
+      pattern: '^[a-z0-9][a-z0-9._:-]{0,127}$'
+    Operation:
+      type: string
+      pattern: '^[A-Za-z0-9][A-Za-z0-9._:-]{0,127}$'
+    TargetAlias:
+      type: string
+      pattern: '^[a-z0-9][a-z0-9-]{0,62}$'
+      description: Must name an alias configured at scheduler startup.
+    UUID:
+      type: string
+      format: uuid
+      pattern: '^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$'
+    UTCTimestamp:
+      type: string
+      format: date-time
+      pattern: '^\d{4}-\d{2}-\d{2}T\d{2}:\d{2}:\d{2}(\.\d{1,6})?Z$'
+      description: RFC 3339 UTC timestamp; fractional seconds are optional and limited to six digits.
+    NullableTimestamp:
+      oneOf:
+        - $ref: '#/components/schemas/UTCTimestamp'
+        - type: 'null'
+    NullableCursor:
+      oneOf:
+        - type: string
+        - type: 'null'
+    JSONPayload:
+      type: object
+      description: Arbitrary consumer-owned JSON object, compact UTF-8 encoding at most 4096 bytes.
+      additionalProperties: true
+    Calendar:
+      oneOf:
+        - $ref: '#/components/schemas/DailyCalendar'
+        - $ref: '#/components/schemas/WeeklyCalendar'
+        - $ref: '#/components/schemas/HourlyCalendar'
+        - $ref: '#/components/schemas/IntervalCalendar'
+      description: IANA timezone calendar; only the fields applicable to its type are allowed.
+    DailyCalendar:
+      type: object
+      additionalProperties: false
+      required: [type, timezone, hour, minute]
+      properties:
+        type:
+          const: daily
+        timezone:
+          type: string
+          description: IANA time zone database name.
+        hour:
+          type: integer
+          minimum: 0
+          maximum: 23
+        minute:
+          type: integer
+          minimum: 0
+          maximum: 59
+        weekdays:
+          $ref: '#/components/schemas/Weekdays'
+    WeeklyCalendar:
+      type: object
+      additionalProperties: false
+      required: [type, timezone, hour, minute, weekdays]
+      properties:
+        type:
+          const: weekly
+        timezone:
+          type: string
+          description: IANA time zone database name.
+        hour:
+          type: integer
+          minimum: 0
+          maximum: 23
+        minute:
+          type: integer
+          minimum: 0
+          maximum: 59
+        weekdays:
+          $ref: '#/components/schemas/WeeklyDays'
+    HourlyCalendar:
+      type: object
+      additionalProperties: false
+      required: [type, timezone, minute]
+      properties:
+        type:
+          const: hourly
+        timezone:
+          type: string
+          description: IANA time zone database name.
+        minute:
+          type: integer
+          minimum: 0
+          maximum: 59
+        weekdays:
+          $ref: '#/components/schemas/Weekdays'
+    IntervalCalendar:
+      type: object
+      additionalProperties: false
+      required: [type, timezone, interval_minutes]
+      properties:
+        type:
+          const: interval
+        timezone:
+          type: string
+          description: IANA time zone database name.
+        interval_minutes:
+          type: integer
+          minimum: 1
+          maximum: 1440
+    Weekdays:
+      type: array
+      uniqueItems: true
+      items:
+        type: integer
+        minimum: 1
+        maximum: 7
+      description: Optional ascending unique ISO weekdays, where Monday=1 and Sunday=7.
+    WeeklyDays:
+      type: array
+      minItems: 1
+      uniqueItems: true
+      items:
+        type: integer
+        minimum: 1
+        maximum: 7
+      description: Ascending unique ISO weekdays, where Monday=1 and Sunday=7.
+    Schedule:
+      type: object
+      additionalProperties: false
+      required: [schedule_key, revision, enabled, calendar, target_alias, operation, payload, next_due_at, created_at, updated_at]
+      properties:
+        schedule_key:
+          $ref: '#/components/schemas/ScheduleKey'
+        revision:
+          type: integer
+          format: int64
+          minimum: 1
+        enabled:
+          type: boolean
+        calendar:
+          $ref: '#/components/schemas/Calendar'
+        target_alias:
+          $ref: '#/components/schemas/TargetAlias'
+        operation:
+          $ref: '#/components/schemas/Operation'
+        payload:
+          $ref: '#/components/schemas/JSONPayload'
+        next_due_at:
+          $ref: '#/components/schemas/NullableTimestamp'
+        created_at:
+          $ref: '#/components/schemas/UTCTimestamp'
+        updated_at:
+          $ref: '#/components/schemas/UTCTimestamp'
+    PutScheduleRequest:
+      type: object
+      additionalProperties: false
+      required: [expected_revision, enabled, calendar, target_alias, operation, payload]
+      properties:
+        expected_revision:
+          type: integer
+          format: int64
+          minimum: 0
+          description: 0 creates only a missing key; updates require the current revision.
+        enabled:
+          type: boolean
+        calendar:
+          $ref: '#/components/schemas/Calendar'
+        target_alias:
+          $ref: '#/components/schemas/TargetAlias'
+        operation:
+          $ref: '#/components/schemas/Operation'
+        payload:
+          $ref: '#/components/schemas/JSONPayload'
+    DeleteScheduleRequest:
+      type: object
+      additionalProperties: false
+      required: [expected_revision]
+      properties:
+        expected_revision:
+          type: integer
+          format: int64
+          minimum: 1
+    Control:
+      type: object
+      additionalProperties: false
+      required: [revision, paused, updated_at]
+      properties:
+        revision:
+          type: integer
+          format: int64
+          minimum: 0
+        paused:
+          type: boolean
+        updated_at:
+          $ref: '#/components/schemas/UTCTimestamp'
+    SetControlRequest:
+      type: object
+      additionalProperties: false
+      required: [expected_revision, paused]
+      properties:
+        expected_revision:
+          type: integer
+          format: int64
+          minimum: 0
+        paused:
+          type: boolean
+    Status:
+      type: object
+      additionalProperties: false
+      required: [paused, control_revision, last_tick_at, last_dispatch_at, pending_outbox]
+      properties:
+        paused:
+          type: boolean
+        control_revision:
+          type: integer
+          format: int64
+          minimum: 0
+        last_tick_at:
+          $ref: '#/components/schemas/NullableTimestamp'
+        last_dispatch_at:
+          $ref: '#/components/schemas/NullableTimestamp'
+        pending_outbox:
+          type: integer
+          format: int64
+          minimum: 0
+    ImportRequest:
+      type: object
+      additionalProperties: false
+      required: [expected_control_revision, items]
+      properties:
+        expected_control_revision:
+          type: integer
+          format: int64
+          minimum: 0
+        items:
+          type: array
+          minItems: 1
+          maxItems: 100
+          description: Items must have unique schedule_key values.
+          items:
+            $ref: '#/components/schemas/ImportItem'
+    ImportItem:
+      type: object
+      additionalProperties: false
+      required: [schedule_key, enabled, calendar, target_alias, operation, payload, next_due_at]
+      properties:
+        schedule_key:
+          $ref: '#/components/schemas/ScheduleKey'
+        enabled:
+          type: boolean
+        calendar:
+          $ref: '#/components/schemas/Calendar'
+        target_alias:
+          $ref: '#/components/schemas/TargetAlias'
+        operation:
+          $ref: '#/components/schemas/Operation'
+        payload:
+          $ref: '#/components/schemas/JSONPayload'
+        next_due_at:
+          $ref: '#/components/schemas/NullableTimestamp'
+    ImportResult:
+      type: object
+      additionalProperties: false
+      required: [control_revision, created, unchanged]
+      properties:
+        control_revision:
+          type: integer
+          format: int64
+          minimum: 0
+        created:
+          type: array
+          items:
+            $ref: '#/components/schemas/ScheduleKey'
+        unchanged:
+          type: array
+          items:
+            $ref: '#/components/schemas/ScheduleKey'
+    Occurrence:
+      type: object
+      additionalProperties: false
+      required: [occurrence_id, schedule_key, schedule_revision, scheduled_for, status, attempts, created_at, updated_at, job_id]
+      properties:
+        occurrence_id:
+          $ref: '#/components/schemas/UUID'
+        schedule_key:
+          $ref: '#/components/schemas/ScheduleKey'
+        schedule_revision:
+          type: integer
+          format: int64
+          minimum: 1
+        scheduled_for:
+          $ref: '#/components/schemas/UTCTimestamp'
+        status:
+          enum: [pending, leased, blocked, accepted]
+        attempts:
+          type: integer
+          minimum: 0
+        created_at:
+          $ref: '#/components/schemas/UTCTimestamp'
+        updated_at:
+          $ref: '#/components/schemas/UTCTimestamp'
+        job_id:
+          oneOf:
+            - $ref: '#/components/schemas/UUID'
+            - type: 'null'

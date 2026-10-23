@@ -36,6 +36,7 @@ async def pg_worker_jobs():
         raise RuntimeError("These tests require a loopback-only PostgreSQL test DB")
     from sqlalchemy.ext.asyncio import create_async_engine
     from news_aggregator.migrations.background_jobs import BackgroundJobsMigration
+    from news_aggregator.migrations.scheduled_job_metadata import ScheduledJobMetadataMigration
     schema = "test_worker_" + uuid.uuid4().hex
     admin = create_async_engine(url)
     engine = create_async_engine(url, connect_args={"server_settings": {"search_path": schema}})
@@ -45,6 +46,7 @@ async def pg_worker_jobs():
             await connection.execute(text(f'CREATE SCHEMA "{schema}"'))
         async with factory() as session:
             await BackgroundJobsMigration().execute(session)
+            await ScheduledJobMetadataMigration().execute(session)
         async with engine.begin() as connection:
             await connection.run_sync(lambda sync: ScheduleSettings.__table__.create(sync, checkfirst=True))
         yield engine, factory, admin, schema

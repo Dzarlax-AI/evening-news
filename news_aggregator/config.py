@@ -76,6 +76,19 @@ class Settings(BaseSettings):
     jwt_secret: Optional[str] = Field(default=None, alias="JWT_SECRET")
     trust_forward_auth: bool = Field(default=False, alias="TRUST_FORWARD_AUTH")
     scheduler_enabled: bool = Field(default=True, alias="SCHEDULER_ENABLED")
+    schedule_dispatch_mode: Literal["python", "service"] = Field(
+        default="python", alias="SCHEDULE_DISPATCH_MODE"
+    )
+    scheduler_api_url: Optional[str] = Field(default=None, alias="SCHEDULER_API_URL")
+    scheduler_api_token: Optional[SecretStr] = Field(default=None, repr=False, alias="SCHEDULER_API_TOKEN")
+    scheduler_api_allow_http: bool = Field(default=False, alias="SCHEDULER_API_ALLOW_HTTP")
+    scheduled_jobs_token: Optional[SecretStr] = Field(default=None, repr=False, alias="SCHEDULED_JOBS_TOKEN")
+    scheduled_jobs_receipt_limit: int = Field(
+        default=100_000, ge=1, le=100_000, alias="SCHEDULED_JOBS_RECEIPT_LIMIT"
+    )
+    scheduler_http_timeout_seconds: float = Field(
+        default=5.0, gt=0, le=30, allow_inf_nan=False, alias="SCHEDULER_HTTP_TIMEOUT_SECONDS"
+    )
     background_execution_mode: Literal["embedded", "worker"] = Field(
         default="embedded", alias="BACKGROUND_EXECUTION_MODE"
     )

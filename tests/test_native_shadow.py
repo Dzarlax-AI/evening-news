@@ -295,6 +295,9 @@ async def test_readiness_requires_no_fixture_selector(monkeypatch):
 @pytest.mark.asyncio
 async def test_b_uses_public_policy_generic_readiness_and_python_metadata(monkeypatch):
     seen = {}
+    inherited_database_env = {
+        name: os.environ.get(name) for name in ("DATABASE_URL", "TEST_DATABASE_URL")
+    }
 
     async def page(_pool, _parser, url, _proxy, _token, **kwargs):
         seen.update(kwargs)
@@ -306,7 +309,19 @@ async def test_b_uses_public_policy_generic_readiness_and_python_metadata(monkey
                                  '<body><article><p>Article body</p></article></body></html>'}
 
     monkeypatch.setattr(shadow.bench, "_run_native_policy_page", page)
-    result = await shadow._run_b("https://news.example.com/story", "http://gateway:8080", "long-secret")
+    # _run_b deliberately scrubs DB URLs before launching its isolated
+    # subprocess. Restore the parent test process environment even though the
+    # mocked native path does not need a subprocess, so later PostgreSQL tests
+    # in this pytest process still see their configured fixture DSN.
+    with monkeypatch.context() as scoped_env:
+        for name, value in inherited_database_env.items():
+            if value is not None:
+                scoped_env.setenv(name, value)
+        result = await shadow._run_b(
+            "https://news.example.com/story", "http://gateway:8080", "long-secret"
+        )
+    for name, value in inherited_database_env.items():
+        assert os.environ.get(name) == value
     assert seen["url_policy"]("https://news.example.com/img.jpg?size=2")
     assert not seen["url_policy"]("https://localhost/admin")
     assert "data-ready" not in seen["ready_expression"]

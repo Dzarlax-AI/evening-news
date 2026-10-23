@@ -20,7 +20,7 @@ from sqlalchemy.ext.asyncio import AsyncConnection, AsyncSession
 from ..database import engine as default_engine
 from ..models import (
     Article, BackgroundJob, BackgroundJobIdempotencyKey, BackgroundWorkerStatus,
-    ScheduleSettings,
+    ScheduleSettings, SchedulerOccurrenceReceipt,
 )
 
 MAX_PENDING_JOBS = 32
@@ -28,6 +28,7 @@ MAX_SELECTED_IDS = 100
 MAX_PAYLOAD_BYTES = 4096
 MAX_RESULT_BYTES = 4096
 MAX_IDEMPOTENCY_ALIASES_PER_JOB = 32
+MAX_SCHEDULER_OCCURRENCE_RECEIPTS = 100_000
 HEARTBEAT_INTERVAL_SECONDS = 5
 HEARTBEAT_STALE_SECONDS = 20
 ALLOWED_KINDS = frozenset({
@@ -44,6 +45,22 @@ IDEMPOTENCY_KEY_RE = re.compile(r"^[A-Za-z0-9][A-Za-z0-9._:+-]{0,199}$")
 def _utcnow_naive() -> datetime:
     """Match this project's existing timestamp columns, which are naive UTC."""
     return datetime.now(timezone.utc).replace(tzinfo=None)
+
+
+async def lock_job_producers(session: AsyncSession) -> None:
+    """Serialize queue producers before inspecting receipts or the pending cap."""
+    await session.execute(text("""
+        SELECT pg_advisory_xact_lock(hashtext(current_database()),
+                                     hashtext(current_schema()) # 1145132610)
+    """))
+
+
+async def is_worker_available(session: AsyncSession, now: Optional[datetime] = None) -> bool:
+    """Require a fresh fenced worker heartbeat before accepting scheduler work."""
+    status = await session.get(BackgroundWorkerStatus, 1)
+    now = now or _utcnow_naive()
+    return bool(status and status.status == "running" and status.heartbeat_at
+                and now - status.heartbeat_at <= timedelta(seconds=HEARTBEAT_STALE_SECONDS))
 
 
 def job_may_deliver(kind: str, payload: Optional[Dict[str, Any]]) -> bool:
@@ -114,11 +131,11 @@ def validate_payload(kind: str, payload: Dict[str, Any]) -> Dict[str, Any]:
         raise ValueError("job payload must be an object")
 
     allowed = {
-        "news_processing": {"schedule_id", "scheduled_for"},
-        "news_digest": {"schedule_id", "scheduled_for", "run_processing", "send_telegram"},
-        "telegram_digest": {"schedule_id", "scheduled_for"},
-        "backup": {"schedule_id", "scheduled_for"},
-        "reprocess_failed": {"schedule_id", "scheduled_for", "limit", "dry_run"},
+        "news_processing": {"schedule_id", "scheduled_for", "timeout_seconds"},
+        "news_digest": {"schedule_id", "scheduled_for", "run_processing", "send_telegram", "timeout_seconds"},
+        "telegram_digest": {"schedule_id", "scheduled_for", "timeout_seconds"},
+        "backup": {"schedule_id", "scheduled_for", "timeout_seconds"},
+        "reprocess_failed": {"schedule_id", "scheduled_for", "limit", "dry_run", "timeout_seconds"},
         "article_reprocess": {"article_ids", "force", "reextract_media"},
         "summaries_generate": set(),
         "source_test": {"source_id"},
@@ -143,6 +160,12 @@ def validate_payload(kind: str, payload: Dict[str, Any]) -> Dict[str, Any]:
         if parsed_due.isoformat() != scheduled_for:
             raise ValueError("scheduled_for must be a canonical ISO timestamp")
         normalized.update(schedule_id=schedule_id, scheduled_for=scheduled_for)
+
+    if "timeout_seconds" in payload:
+        value = payload["timeout_seconds"]
+        if isinstance(value, bool) or not isinstance(value, int) or not 1 <= value <= 24 * 60 * 60:
+            raise ValueError("timeout_seconds must be an integer from 1 to 86400")
+        normalized["timeout_seconds"] = value
 
     if kind == "news_digest":
         for key in ("run_processing", "send_telegram"):
@@ -240,6 +263,8 @@ async def enqueue_job_in_session(
     idempotency_key: str,
     *,
     coalesce_active: bool = True,
+    schedule_metadata: Optional[Dict[str, Any]] = None,
+    return_created: bool = False,
 ) -> BackgroundJob:
     """Accept a job in the caller's transaction (used for atomic scheduler state)."""
     normalized = validate_payload(kind, payload)
@@ -251,13 +276,31 @@ async def enqueue_job_in_session(
     canonical = json.dumps(normalized, separators=(",", ":"), sort_keys=True)
     coalesce_key = hashlib.sha256((kind + "\0" + canonical).encode()).hexdigest() if coalesce_active else None
 
+    schedule_key = schedule_revision = occurrence_id = scheduled_for = None
+    if schedule_metadata is not None:
+        if (not isinstance(schedule_metadata, dict)
+                or set(schedule_metadata) != {"schedule_key", "schedule_revision", "occurrence_id", "scheduled_for"}):
+            raise ValueError("invalid scheduled job metadata")
+        schedule_key = schedule_metadata["schedule_key"]
+        schedule_revision = schedule_metadata["schedule_revision"]
+        occurrence_id = schedule_metadata["occurrence_id"]
+        scheduled_for = schedule_metadata["scheduled_for"]
+        if (not isinstance(schedule_key, str) or not re.fullmatch(r"[a-z0-9][a-z0-9._:-]{0,127}", schedule_key)
+                or type(schedule_revision) is not int or schedule_revision < 1
+                or not isinstance(occurrence_id, uuid.UUID)
+                or not isinstance(scheduled_for, datetime) or scheduled_for.tzinfo is not None):
+            raise ValueError("invalid scheduled job metadata")
+    metadata_tuple = (schedule_key, schedule_revision, occurrence_id, scheduled_for)
+
+    def matches(existing):
+        return (existing.kind == kind and existing.payload == normalized
+                and (existing.schedule_key, existing.schedule_revision,
+                     existing.occurrence_id, existing.scheduled_for) == metadata_tuple)
+
     # Serialize all producers in this schema so the queued cap is safe under
     # concurrent web requests and schedulers. This transaction-level lock does
     # not conflict with the long-lived worker ownership lock.
-    await session.execute(text("""
-        SELECT pg_advisory_xact_lock(hashtext(current_database()),
-                                     hashtext(current_schema()) # 1145132610)
-    """))
+    await lock_job_producers(session)
     existing = await session.scalar(select(BackgroundJob)
         .join(BackgroundJobIdempotencyKey,
               BackgroundJobIdempotencyKey.job_id == BackgroundJob.id)
@@ -268,11 +311,21 @@ async def enqueue_job_in_session(
         existing = await session.scalar(select(BackgroundJob).where(
             BackgroundJob.idempotency_key == stored_key).with_for_update())
     if existing is not None:
-        if existing.kind != kind or existing.payload != normalized:
+        if not matches(existing):
             raise IdempotencyConflict("idempotency key was already used for a different job")
         if await session.get(BackgroundJobIdempotencyKey, stored_key) is None:
             session.add(BackgroundJobIdempotencyKey(key=stored_key, job_id=existing.id))
-        return existing
+        return (existing, False) if return_created else existing
+
+    if occurrence_id is not None:
+        existing = await session.scalar(select(BackgroundJob).where(
+            BackgroundJob.occurrence_id == occurrence_id).with_for_update())
+        if existing is not None:
+            if not matches(existing):
+                raise IdempotencyConflict("occurrence id was already used for different content")
+            session.add(BackgroundJobIdempotencyKey(key=stored_key, job_id=existing.id))
+            await session.flush()
+            return (existing, False) if return_created else existing
 
     if coalesce_key:
         existing = await session.scalar(select(BackgroundJob).where(
@@ -280,7 +333,7 @@ async def enqueue_job_in_session(
             BackgroundJob.state.in_(("queued", "running", "interrupted"))).with_for_update())
         if existing is not None:
             # Hash equality is not treated as semantic authority.
-            if existing.kind == kind and existing.payload == normalized:
+            if matches(existing):
                 aliases = await session.scalar(select(func.count()).select_from(
                     BackgroundJobIdempotencyKey
                 ).where(BackgroundJobIdempotencyKey.job_id == existing.id))
@@ -288,7 +341,7 @@ async def enqueue_job_in_session(
                     raise QueueFull("background job idempotency alias limit reached")
                 session.add(BackgroundJobIdempotencyKey(key=stored_key, job_id=existing.id))
                 await session.flush()
-                return existing
+                return (existing, False) if return_created else existing
             raise IdempotencyConflict("active job key collision")
 
     pending = await session.scalar(select(func.count()).select_from(BackgroundJob).where(
@@ -297,12 +350,14 @@ async def enqueue_job_in_session(
         raise QueueFull("background queue is full")
 
     job = BackgroundJob(kind=kind, payload=normalized, idempotency_key=stored_key,
-                        coalesce_key=coalesce_key, state="queued")
+                        coalesce_key=coalesce_key, state="queued",
+                        schedule_key=schedule_key, schedule_revision=schedule_revision,
+                        occurrence_id=occurrence_id, scheduled_for=scheduled_for)
     session.add(job)
     await session.flush()
     session.add(BackgroundJobIdempotencyKey(key=stored_key, job_id=job.id))
     await session.flush()
-    return job
+    return (job, True) if return_created else job
 
 
 async def enqueue_job(kind: str, payload: Dict[str, Any], idempotency_key: str,
