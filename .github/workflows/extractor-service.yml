@@ -197,7 +197,7 @@ jobs:
         run: docker compose --env-file /dev/null -f docker-compose.extractor-test.yml down
 
   publish:
-    needs: verify
+    needs: [verify, native-cloak-concurrency]
     if: ${{ github.event_name == 'workflow_dispatch' && inputs.publish && github.ref == format('refs/heads/{0}', github.event.repository.default_branch) }}
     runs-on: ubuntu-latest
     timeout-minutes: 15
@@ -235,3 +235,42 @@ jobs:
         with:
           name: extractor-image-reference
           path: extractor-image.txt
+
+  native-cloak-concurrency:
+    runs-on: ubuntu-latest
+    timeout-minutes: 12
+    permissions:
+      contents: read
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-go@v5
+        with:
+          go-version-file: go/go.mod
+          cache-dependency-path: go/go.sum
+      - uses: actions/setup-python@v5
+        with:
+          python-version: '3.12'
+      - name: Build candidate binaries for the isolated native gate
+        run: |
+          CGO_ENABLED=0 GOOS=linux GOARCH=amd64 go build -C go -o /tmp/concurrency-extract-service ./cmd/extract-service
+          CGO_ENABLED=0 GOOS=linux GOARCH=amd64 go build -C go -o /tmp/concurrency-extract-egress ./cmd/extract-egress
+      - name: Fetch test runtime images without publishing candidates
+        run: |
+          docker pull --platform linux/amd64 cloakhq/cloakbrowser:0.5.2@sha256:2c0d257802f54c4f86c9ccae336864baf63e118612732127cb96df35756a57a4
+          docker pull --platform linux/amd64 python:3.12-alpine
+          docker pull --platform linux/amd64 alpine:3.21
+      - name: Compare one and two Cloak tabs with an independent CDP peer
+        run: |
+          native_gate_status=0
+          sudo env "PATH=$PATH" python scripts/native_cloak_concurrency_gate.py --worker-binary /tmp/concurrency-extract-service --egress-binary /tmp/concurrency-extract-egress --output artifacts/native-cloak-concurrency.json || native_gate_status=$?
+          if [ -f artifacts/native-cloak-concurrency.json ]; then
+            sudo chown "$(id -u):$(id -g)" artifacts/native-cloak-concurrency.json
+          fi
+          exit "$native_gate_status"
+      - name: Preserve native concurrency evidence
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: native-cloak-concurrency-evidence
+          path: artifacts/native-cloak-concurrency.json
+          if-no-files-found: warn

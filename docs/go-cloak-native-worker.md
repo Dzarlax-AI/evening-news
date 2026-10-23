@@ -55,8 +55,59 @@ remain HTTP-only even when the native backend is configured.
 | `EXTRACTOR_NATIVE_PROXY_URL` | Trusted private CONNECT gateway, without URL credentials |
 | `EXTRACTOR_NATIVE_PROXY_TOKEN` | Gateway token; server configuration only |
 | `EXTRACTOR_NATIVE_NETWORK_ISOLATED=true` | Explicit attestation after independently establishing the network boundary; this flag does not create firewall rules |
-| `EXTRACTOR_BROWSER_CONCURRENT=1` | Current supported native concurrency |
+| `EXTRACTOR_BROWSER_CONCURRENT=1` | Default native render limit; supported values are 1 and 2. Two renders require isolated acceptance before deployment. |
 | `EXTRACTOR_NATIVE_READY_SELECTOR` | Optional bounded server readiness condition; fixed to the fixture marker in matched benchmark runs |
+
+Native render admission is shared by article extraction, Telegram browser fallback,
+and Page Monitor. It starts only when a render is needed; native SourceManager
+jobs do not hold a browser lane during HTTP work. Up to eight renders can wait
+for a slot, bounded by their original caller contexts. The navigation timeout
+starts after admission, while the source/RPC deadline continues to bound the
+whole operation. A slot remains occupied through owned-resource cleanup.
+Excess waiters receive `native_browser_busy`; normal slot contention waits.
+A deadline that expires before render admission also returns retryable
+`native_browser_busy`, preserving the application's attempt refund. Deadlines
+after admission remain render timeouts; external cancellation stays canceled.
+
+Each active operation has its own CDP connection, disposable context, target,
+and cancellation. Shutdown cancels all owned operations; generation/ownership
+loss taints the worker and wakes waiters. The worker never globally closes or
+restarts the externally managed shared browser. Legacy backend source scheduling
+is unchanged. Production configuration remains at one render until a separate
+rollout decision.
+
+The isolated concurrency gate is `scripts/native_cloak_concurrency_gate.py`.
+It takes prebuilt Linux/amd64 worker and egress binaries, uses the pinned Cloak
+image and cached helper images, and creates only internal, owned Docker networks.
+An independent CDP peer holds a disposable context while News runs its one/two
+render profiles, cancellation and rejection checks. This models shared-browser
+coexistence; it does not exercise the real Readeck application or prove the
+production firewall policy. Reports distinguish ARM64 emulation from native
+Linux, and browser peak memory is cumulative across both profiles.
+
+On Linux CI the gate runs as root so its private `0700` bind-mounted fixture
+files are accessible to root-owned containers with all capabilities dropped.
+The report is returned to the CI user before artifact upload. Container memory
+caps and private file permissions remain unchanged.
+
+Native discovery requests explicitly close their HTTP connection. Read-only
+`/json/version` discovery and the initial CDP WebSocket handshake can retry
+transient EOF/reset/broken-pipe errors at most three times with 20-ms backoff,
+within the original caller context. This handles short relay connection-capacity
+collisions without changing the relay limit. DNS, HTTP/upgrade rejection, policy,
+ownership, cancellation, and deadline errors are not retried. No CDP command,
+context/target allocation, navigation, or article RPC is replayed.
+
+Native Linux/amd64 synthetic acceptance passed twice on code revision
+`920149d` (Actions runs `39967254841` and `39967260396`). Both confirmed one/two
+active origins, a waiting third render, cancellation without losing the sibling
+or independent CDP peer, upstream 503 classification, and owned cleanup. Browser
+cgroup peaks were 342–346 MiB, including the peer and both profiles; worker peaks
+were 15.4–15.7 MiB. No OOM/kill or restarts occurred, under unchanged 768/256-MiB
+caps. Each run recovered two transient relay capacity rejections during setup;
+all relay connections closed. These fixture measurements are not production
+sizing or a full Readeck user-path test. Local amd64 Cloak emulation on ARM64 did
+not complete peer setup; native Linux acceptance is reported separately.
 
 Startup runs an owned-resource capability probe. Health checks additionally
 verify discovery/generation with a maximum 500-ms budget and allocate no targets.

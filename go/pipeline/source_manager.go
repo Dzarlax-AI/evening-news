@@ -2,6 +2,7 @@ package pipeline
 
 import (
 	"context"
+	"errors"
 	"time"
 )
 
@@ -111,7 +112,8 @@ func (m SourceManager) Collect(ctx context.Context, jobs []SourceJob) []SourceJo
 					result = job.Run(jobCtx)
 					result.SourceID = job.SourceID
 				}()
-				if jobCtx.Err() != nil && result.Outcome != "success" && result.Outcome != "partial" {
+				admissionBusy := errors.Is(jobCtx.Err(), context.DeadlineExceeded) && result.Error == "native_browser_busy" && result.Retryable
+				if jobCtx.Err() != nil && result.Outcome != "success" && result.Outcome != "partial" && !admissionBusy {
 					result.Outcome = "failed"
 					if jobCtx.Err() == context.DeadlineExceeded {
 						result.Error = "deadline_exceeded"

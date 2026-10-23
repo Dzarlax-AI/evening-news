@@ -3,10 +3,15 @@ package transport
 import (
 	"context"
 	"errors"
+	"fmt"
+	"io"
+	"net"
 	"net/http"
 	"net/http/httptest"
+	"net/netip"
 	"strings"
 	"sync/atomic"
+	"syscall"
 	"testing"
 	"time"
 )
@@ -16,6 +21,177 @@ func TestPublicBrowserRejectsInvalidMinimumSettle(t *testing.T) {
 		_, err := BrowserFetchPublic(context.Background(), "", "https://example.com/", BrowserOptions{MinSettle: duration})
 		if err == nil || !strings.Contains(err.Error(), "invalid_timeout") {
 			t.Errorf("MinSettle=%s error=%v", duration, err)
+		}
+	}
+}
+
+func TestBrowserDiscoveryClosesConnectionAfterResponse(t *testing.T) {
+	closed := make(chan struct{}, 2)
+	server := httptest.NewUnstartedServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if !r.Close {
+			t.Error("discovery request did not ask the server to close the relay connection")
+		}
+		w.Header().Set("Content-Type", "application/json")
+		_, _ = io.WriteString(w, `{"webSocketDebuggerUrl":"ws://ignored.example/devtools/browser/test"}`)
+	}))
+	server.Config.ConnState = func(_ net.Conn, state http.ConnState) {
+		if state == http.StateClosed {
+			select {
+			case closed <- struct{}{}:
+			default:
+			}
+		}
+	}
+	server.Start()
+	defer server.Close()
+
+	ctx, cancel := context.WithTimeout(context.Background(), time.Second)
+	defer cancel()
+	endpoint, err := configuredBrowserEndpointWithResolver(ctx, server.URL, fixedResolver{[]netip.Addr{netip.MustParseAddr("127.0.0.1")}})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !strings.HasSuffix(endpoint, "/devtools/browser/test") {
+		t.Fatalf("discovered websocket endpoint changed: %s", endpoint)
+	}
+	select {
+	case <-closed:
+	case <-time.After(time.Second):
+		t.Fatal("discovery relay connection remained open after the response body was consumed")
+	}
+}
+
+func TestNativeBrowserDiscoveryRetriesTransientSocketCloses(t *testing.T) {
+	var requests atomic.Int32
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if requests.Add(1) <= 2 {
+			conn, _, err := w.(http.Hijacker).Hijack()
+			if err != nil {
+				t.Errorf("hijack discovery connection: %v", err)
+				return
+			}
+			_ = conn.Close()
+			return
+		}
+		w.Header().Set("Content-Type", "application/json")
+		_, _ = io.WriteString(w, `{"webSocketDebuggerUrl":"ws://ignored.example/devtools/browser/test"}`)
+	}))
+	defer server.Close()
+	ctx, cancel := context.WithTimeout(context.Background(), time.Second)
+	defer cancel()
+	endpoint, err := nativeBrowserEndpointWithResolver(ctx, server.URL, fixedResolver{[]netip.Addr{netip.MustParseAddr("127.0.0.1")}})
+	if err != nil || !strings.HasSuffix(endpoint, "/devtools/browser/test") {
+		t.Fatalf("discovery did not recover after transient socket closes: endpoint=%q err=%v", endpoint, err)
+	}
+	if got := requests.Load(); got != 3 {
+		t.Fatalf("discovery GET count=%d, want two failed GETs and one successful GET", got)
+	}
+}
+
+func TestNativeBrowserDiscoveryBoundsRepeatedSocketCloses(t *testing.T) {
+	var requests atomic.Int32
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		requests.Add(1)
+		conn, _, err := w.(http.Hijacker).Hijack()
+		if err != nil {
+			t.Errorf("hijack discovery connection: %v", err)
+			return
+		}
+		_ = conn.Close()
+	}))
+	defer server.Close()
+	ctx, cancel := context.WithTimeout(context.Background(), time.Second)
+	defer cancel()
+	_, err := nativeBrowserEndpointWithResolver(ctx, server.URL, fixedResolver{[]netip.Addr{netip.MustParseAddr("127.0.0.1")}})
+	if err == nil {
+		t.Fatal("discovery succeeded despite every connection closing")
+	}
+	if got := requests.Load(); got != nativeBrowserSetupAttempts {
+		t.Fatalf("discovery GET count=%d, want bounded maximum %d", got, nativeBrowserSetupAttempts)
+	}
+}
+
+func TestNativeBrowserDiscoveryStopsOnNonTransientResponse(t *testing.T) {
+	for _, tc := range []struct {
+		name   string
+		status int
+		body   string
+	}{
+		{name: "http status", status: http.StatusServiceUnavailable, body: `{}`},
+		{name: "malformed json", status: http.StatusOK, body: `{"webSocketDebuggerUrl":`},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			var requests atomic.Int32
+			server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+				requests.Add(1)
+				w.WriteHeader(tc.status)
+				_, _ = io.WriteString(w, tc.body)
+			}))
+			defer server.Close()
+			ctx, cancel := context.WithTimeout(context.Background(), time.Second)
+			defer cancel()
+			_, err := nativeBrowserEndpointWithResolver(ctx, server.URL, fixedResolver{[]netip.Addr{netip.MustParseAddr("127.0.0.1")}})
+			if err == nil || requests.Load() != 1 {
+				t.Fatalf("non-transient discovery response retried: requests=%d err=%v", requests.Load(), err)
+			}
+		})
+	}
+}
+
+func TestNativeBrowserDiscoveryBackoffUsesOriginalContext(t *testing.T) {
+	t.Run("cancel", func(t *testing.T) {
+		ctx, cancel := context.WithCancel(context.Background())
+		attempted := make(chan struct{})
+		var attempts atomic.Int32
+		type result struct {
+			err error
+		}
+		done := make(chan result, 1)
+		go func() {
+			_, err := retryNativeBrowserSetup(ctx, func(context.Context) (string, error) {
+				attempts.Add(1)
+				close(attempted)
+				return "", io.EOF
+			})
+			done <- result{err: err}
+		}()
+		<-attempted
+		cancel()
+		err := (<-done).err
+		if !errors.Is(err, context.Canceled) || attempts.Load() != 1 {
+			t.Fatalf("cancellation did not interrupt backoff: attempts=%d err=%v", attempts.Load(), err)
+		}
+	})
+	t.Run("deadline", func(t *testing.T) {
+		ctx, cancel := context.WithTimeout(context.Background(), time.Millisecond)
+		defer cancel()
+		var attempts atomic.Int32
+		_, err := retryNativeBrowserSetup(ctx, func(context.Context) (string, error) {
+			attempts.Add(1)
+			return "", io.EOF
+		})
+		if !errors.Is(err, context.DeadlineExceeded) || attempts.Load() > 1 {
+			t.Fatalf("deadline did not bound retry attempts: attempts=%d err=%v", attempts.Load(), err)
+		}
+	})
+}
+
+func TestTransientBrowserDiscoveryErrorClassification(t *testing.T) {
+	for _, err := range []error{io.EOF, io.ErrUnexpectedEOF, fmt.Errorf("dial: %w", syscall.ECONNRESET), fmt.Errorf("write: %w", syscall.EPIPE)} {
+		if !transientBrowserConnectionError(err) {
+			t.Errorf("transient discovery error was not retried: %v", err)
+		}
+	}
+	for _, err := range []error{
+		context.DeadlineExceeded,
+		&net.DNSError{Err: "DNS transport reset", UnwrapErr: syscall.ECONNRESET},
+		errors.Join(ErrNativeOwnershipLost, io.EOF),
+		errors.Join(ErrNativePolicy, io.EOF),
+		errors.New("browser_discovery_status"),
+		errors.New("invalid character 'x' looking for beginning of value"),
+	} {
+		if transientBrowserConnectionError(err) {
+			t.Errorf("non-transient discovery error was retried: %v", err)
 		}
 	}
 }

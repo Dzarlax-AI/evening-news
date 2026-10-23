@@ -10,6 +10,7 @@ import (
 	"os"
 	"strings"
 	"sync"
+	"sync/atomic"
 	"testing"
 	"time"
 
@@ -51,14 +52,18 @@ type nativeFixture struct {
 	lateAppendAfter                                                                                                    time.Duration
 	evaluationStarted                                                                                                  time.Time
 	targetCrashed                                                                                                      bool
+	foreignDetachOnNavigate                                                                                            bool
 	changeGenerationOnCrash, disconnectOnCrash, unavailableOnCrash, foreignTargetCrash, hangStopLoading, detachOnCrash bool
 	navigated                                                                                                          chan struct{}
+	navigateStarts                                                                                                     chan struct{}
+	navigateDelay                                                                                                      time.Duration
+	resourceIDs                                                                                                        atomic.Uint64
 	server                                                                                                             *httptest.Server
 }
 
 func newNativeFixture(t *testing.T) *nativeFixture {
 	t.Helper()
-	f := &nativeFixture{contexts: map[string]bool{}, targets: map[string]bool{"foreign-sentinel": true}, status: 200, navigated: make(chan struct{}), discoveryID: "native"}
+	f := &nativeFixture{contexts: map[string]bool{}, targets: map[string]bool{"foreign-sentinel": true}, status: 200, navigated: make(chan struct{}), navigateStarts: make(chan struct{}, 16), discoveryID: "native"}
 	f.server = httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		if r.URL.Path == "/json/version" {
 			f.mu.Lock()
@@ -88,7 +93,8 @@ func newNativeFixture(t *testing.T) *nativeFixture {
 			data, e := json.Marshal(v)
 			return e == nil && wsutil.WriteServerMessage(conn, ws.OpText, data) == nil
 		}
-		contextID, targetID, sessionID := "owned-context", "owned-target", "owned-session"
+		id := f.resourceIDs.Add(1)
+		contextID, targetID, sessionID := fmt.Sprintf("owned-context-%d", id), fmt.Sprintf("owned-target-%d", id), "owned-session"
 		emittedRequests := 0
 		emitPaused := func(id string) bool {
 			requestURL := f.requestURL
@@ -185,6 +191,11 @@ func newNativeFixture(t *testing.T) *nativeFixture {
 				}
 				result["targetInfos"] = infos
 			case "Page.navigate":
+				responseDelay = f.navigateDelay
+				select {
+				case f.navigateStarts <- struct{}{}:
+				default:
+				}
 				result["frameId"] = "main-frame"
 				if f.navigateDownload {
 					result["isDownload"] = true
@@ -216,6 +227,13 @@ func newNativeFixture(t *testing.T) *nativeFixture {
 				if !write(event) {
 					f.mu.Unlock()
 					return
+				}
+				if f.foreignDetachOnNavigate {
+					if !write(map[string]any{"method": "Target.detachedFromTarget", "sessionId": "foreign-session", "params": map[string]string{"sessionId": sessionID}}) {
+						f.mu.Unlock()
+						return
+					}
+					f.foreignDetachOnNavigate = false
 				}
 				if event["method"] == "Inspector.targetCrashed" && f.foreignTargetCrash {
 					if !write(map[string]any{"method": "Network.responseReceived", "sessionId": sessionID, "params": map[string]any{"requestId": "main-request", "frameId": "main-frame", "type": "Document", "response": map[string]any{"status": f.status, "headers": map[string]string{}}}}) {
@@ -1204,9 +1222,13 @@ func TestNativeBusyAndCloseDrainOwnedJob(t *testing.T) {
 	case <-time.After(2 * time.Second):
 		t.Fatal("job did not navigate")
 	}
-	if _, err := w.Fetch(context.Background(), "https://origin.example/second", NativeBrowserOptions{}); !errors.Is(err, ErrNativeBusy) {
-		t.Fatalf("unbounded native admission: %v", err)
-	}
+	waitCtx, cancelWait := context.WithCancel(context.Background())
+	defer cancelWait()
+	queued := make(chan error, 1)
+	go func() {
+		_, err := w.Fetch(waitCtx, "https://origin.example/second", NativeBrowserOptions{})
+		queued <- err
+	}()
 	ctx, cancel := context.WithTimeout(context.Background(), 3*time.Second)
 	defer cancel()
 	if err := w.Close(ctx); err != nil {
@@ -1215,6 +1237,9 @@ func TestNativeBusyAndCloseDrainOwnedJob(t *testing.T) {
 	if err := <-finished; !errors.Is(err, context.Canceled) {
 		t.Fatalf("drain did not cancel owned job: %v", err)
 	}
+	if err := <-queued; !errors.Is(err, ErrNativeNotReady) {
+		t.Fatalf("queued operation did not stop on close: %v", err)
+	}
 	if w.Ready() {
 		t.Fatal("drained worker ready")
 	}
@@ -1222,6 +1247,386 @@ func TestNativeBusyAndCloseDrainOwnedJob(t *testing.T) {
 	defer f.mu.Unlock()
 	if len(f.contexts) != 0 || len(f.targets) != 1 || !f.targets["foreign-sentinel"] {
 		t.Fatalf("drain did not clean only owned resources: %v %v", f.contexts, f.targets)
+	}
+}
+
+func TestNativeBrowserConcurrentRendersUseIndependentTargets(t *testing.T) {
+	f := newNativeFixture(t)
+	w, err := NewNativeBrowser(NativeBrowserConfig{Endpoint: f.server.URL, ProxyURL: "http://gateway.test:3128", ProxyToken: "sixteen-byte-token", NetworkIsolationVerified: true, MaxConcurrent: 2, MaxWaiters: 1})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := w.Probe(context.Background()); err != nil {
+		t.Fatal(err)
+	}
+	f.mu.Lock()
+	f.navigateDelay = 150 * time.Millisecond
+	f.mu.Unlock()
+	results := make(chan error, 3)
+	for _, raw := range []string{"https://origin.example/one", "https://origin.example/two"} {
+		go func(raw string) {
+			_, err := w.Fetch(context.Background(), raw, NativeBrowserOptions{BrowserOptions: BrowserOptions{Timeout: 3 * time.Second}})
+			results <- err
+		}(raw)
+	}
+	for range 2 {
+		select {
+		case <-f.navigateStarts:
+		case <-time.After(time.Second):
+			t.Fatal("two render operations did not reach navigation concurrently")
+		}
+	}
+	if len(w.slots) != 2 {
+		t.Fatalf("native render slots active=%d, want 2", len(w.slots))
+	}
+	go func() {
+		_, err := w.Fetch(context.Background(), "https://origin.example/three", NativeBrowserOptions{BrowserOptions: BrowserOptions{Timeout: 3 * time.Second}})
+		results <- err
+	}()
+	deadline := time.Now().Add(time.Second)
+	for {
+		w.mu.Lock()
+		waiters := len(w.waiters)
+		w.mu.Unlock()
+		if waiters == 1 {
+			break
+		}
+		if time.Now().After(deadline) {
+			t.Fatal("third operation did not wait for native render admission")
+		}
+		time.Sleep(time.Millisecond)
+	}
+	for range 2 {
+		if err := <-results; err != nil {
+			t.Fatalf("parallel render failed: %v", err)
+		}
+	}
+	select {
+	case <-f.navigateStarts:
+	case <-time.After(time.Second):
+		t.Fatal("third operation did not run after a slot became available")
+	}
+	if err := <-results; err != nil {
+		t.Fatalf("queued third render failed: %v", err)
+	}
+	if !w.Ready() {
+		t.Fatal("one operation tainted readiness after sibling success")
+	}
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	if len(f.contexts) != 0 || len(f.targets) != 1 || !f.targets["foreign-sentinel"] {
+		t.Fatalf("parallel cleanup leaked or touched a foreign target: %v %v", f.contexts, f.targets)
+	}
+}
+
+func TestNativeBrowserWaiterIsBoundedAndCancelable(t *testing.T) {
+	f := newNativeFixture(t)
+	w, err := NewNativeBrowser(NativeBrowserConfig{Endpoint: f.server.URL, ProxyURL: "http://gateway.test:3128", ProxyToken: "sixteen-byte-token", NetworkIsolationVerified: true, MaxConcurrent: 1, MaxWaiters: 1})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := w.Probe(context.Background()); err != nil {
+		t.Fatal(err)
+	}
+	f.mu.Lock()
+	f.navigateDelay = 250 * time.Millisecond
+	f.mu.Unlock()
+	active := make(chan error, 1)
+	go func() {
+		_, err := w.Fetch(context.Background(), "https://origin.example/active", NativeBrowserOptions{})
+		active <- err
+	}()
+	select {
+	case <-f.navigateStarts:
+	case <-time.After(time.Second):
+		t.Fatal("active render did not start")
+	}
+	waitCtx, cancelWait := context.WithCancel(context.Background())
+	queued := make(chan error, 1)
+	go func() {
+		_, err := w.Fetch(waitCtx, "https://origin.example/queued", NativeBrowserOptions{})
+		queued <- err
+	}()
+	deadline := time.Now().Add(time.Second)
+	for {
+		w.mu.Lock()
+		waiters := len(w.waiters)
+		w.mu.Unlock()
+		if waiters == 1 {
+			break
+		}
+		if time.Now().After(deadline) {
+			t.Fatal("second operation did not enter bounded wait queue")
+		}
+		time.Sleep(time.Millisecond)
+	}
+	if _, err := w.Fetch(context.Background(), "https://origin.example/rejected", NativeBrowserOptions{}); !errors.Is(err, ErrNativeBusy) {
+		t.Fatalf("waiter cap did not reject excess caller: %v", err)
+	}
+	cancelWait()
+	if err := <-queued; !errors.Is(err, context.Canceled) {
+		t.Fatalf("queued render ignored cancellation: %v", err)
+	}
+	if err := <-active; err != nil {
+		t.Fatalf("active render was affected by sibling cancellation: %v", err)
+	}
+	if !w.Ready() {
+		t.Fatal("canceling a waiter tainted the browser generation")
+	}
+}
+
+func TestNativeBrowserAdmissionDeadlineDoesNotCreateTarget(t *testing.T) {
+	f := newNativeFixture(t)
+	w, err := NewNativeBrowser(NativeBrowserConfig{Endpoint: f.server.URL, ProxyURL: "http://gateway.test:3128", ProxyToken: "sixteen-byte-token", NetworkIsolationVerified: true, MaxConcurrent: 1, MaxWaiters: 1})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := w.Probe(context.Background()); err != nil {
+		t.Fatal(err)
+	}
+	f.mu.Lock()
+	f.navigateDelay = 200 * time.Millisecond
+	f.mu.Unlock()
+	active := make(chan error, 1)
+	go func() {
+		_, err := w.Fetch(context.Background(), "https://origin.example/active", NativeBrowserOptions{BrowserOptions: BrowserOptions{Timeout: time.Second}})
+		active <- err
+	}()
+	select {
+	case <-f.navigateStarts:
+	case <-time.After(time.Second):
+		t.Fatal("active render did not reach navigation")
+	}
+	waitCtx, cancel := context.WithTimeout(context.Background(), 20*time.Millisecond)
+	defer cancel()
+	_, err = w.Fetch(waitCtx, "https://origin.example/waiting", NativeBrowserOptions{BrowserOptions: BrowserOptions{Timeout: time.Second}})
+	if !errors.Is(err, ErrNativeBusy) || !errors.Is(err, ErrNativeAdmissionDeadline) || errors.Is(err, context.DeadlineExceeded) {
+		t.Fatalf("admission-only deadline was not retryable busy: %v", err)
+	}
+	if err := <-active; err != nil {
+		t.Fatalf("active render was affected by sibling admission timeout: %v", err)
+	}
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	createContexts := 0
+	for _, method := range f.methods {
+		if method == "Target.createBrowserContext" {
+			createContexts++
+		}
+	}
+	if createContexts != 2 { // one startup probe and one actual render
+		t.Fatalf("waiter created a browser context before admission: create contexts=%d methods=%v", createContexts, f.methods)
+	}
+	if len(f.contexts) != 0 || len(f.targets) != 1 || !f.targets["foreign-sentinel"] {
+		t.Fatalf("admission timeout leaked a resource or changed a foreign target: %v %v", f.contexts, f.targets)
+	}
+}
+
+func TestNativeBrowserGenerationTaintCancelsEveryActiveOperation(t *testing.T) {
+	f := newNativeFixture(t)
+	w, err := NewNativeBrowser(NativeBrowserConfig{Endpoint: f.server.URL, ProxyURL: "http://gateway.test:3128", ProxyToken: "sixteen-byte-token", NetworkIsolationVerified: true, MaxConcurrent: 2})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := w.Probe(context.Background()); err != nil {
+		t.Fatal(err)
+	}
+	f.mu.Lock()
+	f.empty = true
+	f.navigateDelay = time.Second
+	f.contexts["foreign-context"] = true
+	f.mu.Unlock()
+	results := make(chan error, 3)
+	for _, raw := range []string{"https://origin.example/one", "https://origin.example/two"} {
+		go func(raw string) {
+			_, err := w.Fetch(context.Background(), raw, NativeBrowserOptions{})
+			results <- err
+		}(raw)
+	}
+	for range 2 {
+		select {
+		case <-f.navigateStarts:
+		case <-time.After(time.Second):
+			t.Fatal("both operations did not become active")
+		}
+	}
+	go func() {
+		_, err := w.Fetch(context.Background(), "https://origin.example/waiting", NativeBrowserOptions{})
+		results <- err
+	}()
+	deadline := time.Now().Add(time.Second)
+	for {
+		w.mu.Lock()
+		waiters := len(w.waiters)
+		w.mu.Unlock()
+		if waiters == 1 {
+			break
+		}
+		if time.Now().After(deadline) {
+			t.Fatal("waiting operation did not enter admission queue")
+		}
+		time.Sleep(time.Millisecond)
+	}
+	f.mu.Lock()
+	f.contextsDelay = time.Second
+	f.mu.Unlock()
+	w.taint()
+	select {
+	case err := <-results:
+		if !errors.Is(err, ErrNativeOwnershipLost) {
+			t.Fatalf("admission waiter did not wake on generation loss: %v", err)
+		}
+	case <-time.After(500 * time.Millisecond):
+		t.Fatal("admission waiter remained blocked while active cleanup drained")
+	}
+	for i := 0; i < 2; i++ {
+		select {
+		case err := <-results:
+			if err == nil {
+				t.Fatal("generation loss did not cancel active render")
+			}
+		case <-time.After(3 * time.Second):
+			t.Fatal("active render did not drain after generation loss")
+		}
+	}
+	if w.Ready() || len(w.operations) != 0 || len(w.slots) != 0 {
+		t.Fatal("generation taint left active operations or slots")
+	}
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	if len(f.contexts) != 1 || !f.contexts["foreign-context"] || len(f.targets) != 1 || !f.targets["foreign-sentinel"] {
+		t.Fatalf("generation taint leaked owned resources or harmed foreign target: %v %v", f.contexts, f.targets)
+	}
+}
+
+func TestNativeBrowserIgnoresSiblingSessionDetach(t *testing.T) {
+	f := newNativeFixture(t)
+	f.foreignDetachOnNavigate = true
+	w := f.worker(t)
+	if err := w.Probe(context.Background()); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := w.Fetch(context.Background(), "https://origin.example/", NativeBrowserOptions{}); err != nil || !w.Ready() {
+		t.Fatalf("foreign session detach tainted owned render: err=%v ready=%v", err, w.Ready())
+	}
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	if len(f.contexts) != 0 || len(f.targets) != 1 || !f.targets["foreign-sentinel"] {
+		t.Fatalf("sibling detach leaked resources or touched foreign target: %v %v", f.contexts, f.targets)
+	}
+}
+
+func TestNativeBrowserDialRetriesOnlyInitialHandshake(t *testing.T) {
+	var requests atomic.Int32
+	var textCommands atomic.Int32
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		attempt := requests.Add(1)
+		if attempt <= 2 {
+			conn, _, err := w.(http.Hijacker).Hijack()
+			if err != nil {
+				t.Errorf("hijack handshake %d: %v", attempt, err)
+				return
+			}
+			_ = conn.Close()
+			return
+		}
+		conn, _, _, err := ws.UpgradeHTTP(r, w)
+		if err != nil {
+			t.Errorf("upgrade handshake: %v", err)
+			return
+		}
+		defer conn.Close()
+		for {
+			_, opcode, err := wsutil.ReadClientData(conn)
+			if err != nil {
+				return
+			}
+			if opcode == ws.OpText {
+				textCommands.Add(1)
+			}
+		}
+	}))
+	defer server.Close()
+	ctx, cancel := context.WithTimeout(context.Background(), time.Second)
+	defer cancel()
+	client, err := dialNativeBrowser(ctx, "ws"+strings.TrimPrefix(server.URL, "http"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	client.close()
+	if got := requests.Load(); got != 3 {
+		t.Fatalf("websocket handshake attempts=%d, want two resets then success", got)
+	}
+	if got := textCommands.Load(); got != 0 {
+		t.Fatalf("initial dial replayed %d CDP commands", got)
+	}
+}
+
+func TestNativeBrowserDialCapsInitialHandshakeRetries(t *testing.T) {
+	var requests atomic.Int32
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		requests.Add(1)
+		conn, _, err := w.(http.Hijacker).Hijack()
+		if err != nil {
+			t.Errorf("hijack handshake: %v", err)
+			return
+		}
+		_ = conn.Close()
+	}))
+	defer server.Close()
+	ctx, cancel := context.WithTimeout(context.Background(), time.Second)
+	defer cancel()
+	_, err := dialNativeBrowser(ctx, "ws"+strings.TrimPrefix(server.URL, "http"))
+	if err == nil {
+		t.Fatal("dial succeeded despite every handshake connection closing")
+	}
+	if got := requests.Load(); got != nativeBrowserSetupAttempts {
+		t.Fatalf("websocket handshake attempts=%d, want bounded maximum %d", got, nativeBrowserSetupAttempts)
+	}
+}
+
+func TestNativeBrowserDialDoesNotRetryUpgradeRejection(t *testing.T) {
+	var requests atomic.Int32
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
+		requests.Add(1)
+		http.Error(w, "upgrade rejected", http.StatusForbidden)
+	}))
+	defer server.Close()
+	ctx, cancel := context.WithTimeout(context.Background(), time.Second)
+	defer cancel()
+	_, err := dialNativeBrowser(ctx, "ws"+strings.TrimPrefix(server.URL, "http"))
+	if err == nil || requests.Load() != 1 {
+		t.Fatalf("HTTP websocket rejection retried: requests=%d err=%v", requests.Load(), err)
+	}
+}
+
+func TestNativeBrowserDialCancellationStopsHandshakeBackoff(t *testing.T) {
+	var requests atomic.Int32
+	firstClosed := make(chan struct{})
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		requests.Add(1)
+		conn, _, err := w.(http.Hijacker).Hijack()
+		if err != nil {
+			t.Errorf("hijack handshake: %v", err)
+			return
+		}
+		_ = conn.Close()
+		close(firstClosed)
+	}))
+	defer server.Close()
+	ctx, cancel := context.WithCancel(context.Background())
+	done := make(chan error, 1)
+	go func() {
+		client, err := dialNativeBrowser(ctx, "ws"+strings.TrimPrefix(server.URL, "http"))
+		if client != nil {
+			client.close()
+		}
+		done <- err
+	}()
+	<-firstClosed
+	cancel()
+	if err := <-done; !errors.Is(err, context.Canceled) || requests.Load() != 1 {
+		t.Fatalf("handshake retry ignored cancellation: requests=%d err=%v", requests.Load(), err)
 	}
 }
 
@@ -1442,7 +1847,7 @@ func TestNativeCheckReadyPreservesHealthyActiveWorkerButDoesNotRecoverDuringJob(
 	f.mu.Unlock()
 
 	w.mu.Lock()
-	w.active = true
+	w.operations[0] = func(error) {}
 	w.mu.Unlock()
 	started := time.Now()
 	if !w.CheckReady(context.Background()) || !w.Ready() {
@@ -1459,7 +1864,7 @@ func TestNativeCheckReadyPreservesHealthyActiveWorkerButDoesNotRecoverDuringJob(
 		t.Fatal("active worker recovered after readiness had been cleared")
 	}
 	w.mu.Lock()
-	w.active = false
+	delete(w.operations, 0)
 	w.mu.Unlock()
 	f.mu.Lock()
 	f.discoveryDelay = 0

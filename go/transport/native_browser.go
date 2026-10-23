@@ -11,6 +11,7 @@ import (
 	"strings"
 	"sync"
 	"sync/atomic"
+	"syscall"
 	"time"
 
 	"github.com/Dzarlax-AI/evening-news/go/extractor"
@@ -18,16 +19,32 @@ import (
 )
 
 var (
-	ErrNativeNotReady           = errors.New("native_browser_not_ready")
-	ErrNativeBusy               = errors.New("native_browser_busy")
-	ErrNativePolicy             = errors.New("native_browser_policy_denied")
-	ErrNativeUnsupported        = errors.New("native_browser_unsupported")
-	ErrNativeTargetCrashed      = errors.New("native_browser_target_crashed")
-	ErrNativeWorkerFatal        = errors.New("native_browser_worker_fatal")
-	errNativeClientDisconnected = errors.New("native_browser_client_disconnected")
-	errNativeMalformedDetach    = errors.New("native_browser_malformed_detach")
-	errNativeOwnedDetach        = errors.New("native_browser_owned_detach")
+	ErrNativeNotReady                 = errors.New("native_browser_not_ready")
+	ErrNativeBusy                     = errors.New("native_browser_busy")
+	ErrNativeAdmissionDeadline  error = nativeAdmissionDeadlineError{}
+	ErrNativePolicy                   = errors.New("native_browser_policy_denied")
+	ErrNativeUnsupported              = errors.New("native_browser_unsupported")
+	ErrNativeTargetCrashed            = errors.New("native_browser_target_crashed")
+	ErrNativeWorkerFatal              = errors.New("native_browser_worker_fatal")
+	errNativeClientDisconnected       = errors.New("native_browser_client_disconnected")
+	errNativeMalformedDetach          = errors.New("native_browser_malformed_detach")
+	errNativeOwnedDetach              = errors.New("native_browser_owned_detach")
 )
+
+// nativeAdmissionDeadlineError reports that a request's budget expired while
+// waiting for render admission. It matches ErrNativeBusy but deliberately does
+// not match context.DeadlineExceeded: navigation never started in this case.
+type nativeAdmissionDeadlineError struct{}
+
+func (nativeAdmissionDeadlineError) Error() string        { return ErrNativeBusy.Error() }
+func (nativeAdmissionDeadlineError) Is(target error) bool { return target == ErrNativeBusy }
+
+func nativeAdmissionWaitError(err error) error {
+	if errors.Is(err, context.DeadlineExceeded) {
+		return ErrNativeAdmissionDeadline
+	}
+	return err
+}
 
 // NativeBrowserConfig is server configuration, never part of an article payload.
 // NetworkIsolationVerified attests an independently verified network namespace:
@@ -36,6 +53,8 @@ type NativeBrowserConfig struct {
 	Endpoint                 string
 	ProxyURL                 string
 	ProxyToken               string
+	MaxConcurrent            int
+	MaxWaiters               int
 	NetworkIsolationVerified bool
 	Diagnostic               func(stage, reason string)
 }
@@ -103,15 +122,21 @@ func (r *nativeEventRPCs) join() []nativeEventRPCResult {
 	}
 }
 
-// NativeBrowser owns only disposable resources on a dedicated external browser.
+// NativeBrowser uses a shared externally managed browser and owns only its
+// disposable contexts and targets.
 // Readiness starts false and ownership loss permanently taints this generation.
 // It never launches, restarts or globally closes the browser process.
 type NativeBrowser struct {
 	cfg                    NativeBrowserConfig
 	mu                     sync.Mutex
 	ready, tainted, closed bool
-	active                 bool
-	cancel                 context.CancelFunc
+	operations             map[uint64]context.CancelCauseFunc
+	nextOperation          uint64
+	waiters                chan struct{}
+	slots                  chan struct{}
+	stopped                chan struct{}
+	stoppedClosed          bool
+	probing                bool
 	idle                   chan struct{}
 	generation             string
 	fatal                  chan error
@@ -130,9 +155,23 @@ func NewNativeBrowser(cfg NativeBrowserConfig) (*NativeBrowser, error) {
 		return nil, errors.New("native_browser_invalid_proxy_configuration")
 	}
 	cfg.ProxyURL = strings.TrimRight(cfg.ProxyURL, "/")
+	if cfg.MaxConcurrent == 0 {
+		cfg.MaxConcurrent = 1
+	}
+	if cfg.MaxConcurrent < 1 || cfg.MaxConcurrent > 2 {
+		return nil, errors.New("native_browser_invalid_concurrency")
+	}
+	if cfg.MaxWaiters == 0 {
+		cfg.MaxWaiters = 8
+	}
+	if cfg.MaxWaiters < 1 || cfg.MaxWaiters > 8 {
+		return nil, errors.New("native_browser_invalid_waiters")
+	}
 	idle := make(chan struct{})
 	close(idle)
-	return &NativeBrowser{cfg: cfg, idle: idle, fatal: make(chan error, 1)}, nil
+	return &NativeBrowser{cfg: cfg, idle: idle, fatal: make(chan error, 1),
+		operations: make(map[uint64]context.CancelCauseFunc), slots: make(chan struct{}, cfg.MaxConcurrent),
+		waiters: make(chan struct{}, cfg.MaxWaiters), stopped: make(chan struct{})}, nil
 }
 
 // Fatal reports the one-way transition to a permanently tainted browser worker.
@@ -202,6 +241,67 @@ func (w *NativeBrowser) reportDiagnostic(stage string, err error) {
 	}
 }
 
+const nativeBrowserSetupAttempts = 3
+
+func nativeBrowserEndpoint(ctx context.Context, endpoint string) (string, error) {
+	return nativeBrowserEndpointWithResolver(ctx, endpoint, net.DefaultResolver)
+}
+
+func nativeBrowserEndpointWithResolver(ctx context.Context, endpoint string, resolver publicResolver) (string, error) {
+	return retryNativeBrowserSetup(ctx, func(ctx context.Context) (string, error) {
+		return configuredBrowserEndpointWithResolver(ctx, endpoint, resolver)
+	})
+}
+
+func dialNativeBrowser(ctx context.Context, endpoint string) (*browserCDP, error) {
+	return retryNativeBrowserSetup(ctx, func(ctx context.Context) (*browserCDP, error) {
+		return dialBrowser(ctx, endpoint)
+	})
+}
+
+// retryNativeBrowserSetup covers only read-only discovery and the initial
+// websocket handshake, both of which precede resource allocation and commands.
+// The retryable error set excludes policy, ownership, HTTP upgrade, and DNS
+// failures. Each attempt and its backoff use the caller's original context.
+func retryNativeBrowserSetup[T any](ctx context.Context, connect func(context.Context) (T, error)) (T, error) {
+	var zero T
+	for attempt := 1; attempt <= nativeBrowserSetupAttempts; attempt++ {
+		if err := ctx.Err(); err != nil {
+			return zero, err
+		}
+		value, err := connect(ctx)
+		if err == nil || !transientBrowserConnectionError(err) || attempt == nativeBrowserSetupAttempts {
+			return value, err
+		}
+		timer := time.NewTimer(20 * time.Millisecond)
+		select {
+		case <-ctx.Done():
+			if !timer.Stop() {
+				select {
+				case <-timer.C:
+				default:
+				}
+			}
+			return zero, ctx.Err()
+		case <-timer.C:
+		}
+	}
+	return zero, errors.New("native_browser_setup_attempts_exhausted")
+}
+
+func transientBrowserConnectionError(err error) bool {
+	if errors.Is(err, context.Canceled) || errors.Is(err, context.DeadlineExceeded) ||
+		errors.Is(err, ErrNativeOwnershipLost) || errors.Is(err, ErrNativePolicy) || errors.Is(err, ErrNativeUnsupported) {
+		return false
+	}
+	var dnsErr *net.DNSError
+	if errors.As(err, &dnsErr) {
+		return false
+	}
+	return errors.Is(err, io.EOF) || errors.Is(err, io.ErrUnexpectedEOF) ||
+		errors.Is(err, syscall.ECONNRESET) || errors.Is(err, syscall.EPIPE)
+}
+
 // CheckReady revalidates discovery without allocating targets or probing an
 // active job. A previously verified generation may recover after a transient
 // discovery failure, but only while that exact generation remains current.
@@ -211,7 +311,7 @@ func (w *NativeBrowser) CheckReady(ctx context.Context) bool {
 		w.mu.Unlock()
 		return false
 	}
-	if w.active {
+	if len(w.operations) > 0 {
 		ready := w.ready
 		w.mu.Unlock()
 		return ready
@@ -220,7 +320,7 @@ func (w *NativeBrowser) CheckReady(ctx context.Context) bool {
 	w.mu.Unlock()
 	ctx, cancel := context.WithTimeout(ctx, 500*time.Millisecond)
 	defer cancel()
-	ws, err := configuredBrowserEndpoint(ctx, w.cfg.Endpoint)
+	ws, err := nativeBrowserEndpoint(ctx, w.cfg.Endpoint)
 	if err != nil {
 		w.unavailable()
 		w.reportDiagnostic("discovery", err)
@@ -229,16 +329,12 @@ func (w *NativeBrowser) CheckReady(ctx context.Context) bool {
 	w.mu.Lock()
 	if generation == "" || ws != generation {
 		w.taintLocked()
-		cancelJob := w.cancel
 		w.mu.Unlock()
 		w.reportDiagnostic("discovery", ErrNativeOwnershipLost)
-		if cancelJob != nil {
-			cancelJob()
-		}
 		return false
 	}
 	ready := !w.tainted && !w.closed && w.generation == generation &&
-		(!w.active || w.ready)
+		(len(w.operations) == 0 || w.ready)
 	if ready {
 		w.ready = true
 	}
@@ -246,30 +342,132 @@ func (w *NativeBrowser) CheckReady(ctx context.Context) bool {
 	return ready
 }
 
+// begin waits for one bounded render slot using the caller's original context.
+// The caller applies any navigation timeout only after this returns.
 func (w *NativeBrowser) begin(ctx context.Context, probe bool) (context.Context, func(), error) {
+	if err := ctx.Err(); err != nil {
+		return nil, nil, nativeAdmissionWaitError(err)
+	}
 	w.mu.Lock()
-	defer w.mu.Unlock()
-	if w.tainted {
-		return nil, nil, ErrNativeOwnershipLost
+	if probe {
+		if w.ready || w.probing || len(w.operations) != 0 {
+			w.mu.Unlock()
+			return nil, nil, ErrNativeBusy
+		}
+		w.probing = true
 	}
-	if w.closed || (!probe && !w.ready) {
-		return nil, nil, ErrNativeNotReady
+	if err := w.admissionErrorLocked(probe); err != nil {
+		if probe {
+			w.probing = false
+		}
+		w.mu.Unlock()
+		return nil, nil, err
 	}
-	if w.active {
-		return nil, nil, ErrNativeBusy
-	}
-	ctx, cancel := context.WithCancel(ctx)
-	w.active = true
-	w.cancel = cancel
-	w.idle = make(chan struct{})
-	return ctx, func() {
-		cancel()
+	select {
+	case w.slots <- struct{}{}:
+		w.mu.Unlock()
+	default:
+		select {
+		case w.waiters <- struct{}{}:
+			w.mu.Unlock()
+		case <-ctx.Done():
+			if probe {
+				w.probing = false
+			}
+			w.mu.Unlock()
+			return nil, nil, nativeAdmissionWaitError(ctx.Err())
+		default:
+			if probe {
+				w.probing = false
+			}
+			w.mu.Unlock()
+			return nil, nil, ErrNativeBusy
+		}
+		select {
+		case w.slots <- struct{}{}:
+			<-w.waiters
+		case <-ctx.Done():
+			<-w.waiters
+			if probe {
+				w.mu.Lock()
+				w.probing = false
+				w.mu.Unlock()
+			}
+			return nil, nil, nativeAdmissionWaitError(ctx.Err())
+		case <-w.stopped:
+			<-w.waiters
+			w.mu.Lock()
+			err := w.admissionErrorLocked(probe)
+			if probe {
+				w.probing = false
+			}
+			w.mu.Unlock()
+			if err == nil {
+				err = ErrNativeNotReady
+			}
+			return nil, nil, err
+		}
+		if err := ctx.Err(); err != nil {
+			if probe {
+				w.mu.Lock()
+				w.probing = false
+				w.mu.Unlock()
+			}
+			<-w.slots
+			return nil, nil, nativeAdmissionWaitError(err)
+		}
 		w.mu.Lock()
-		w.active = false
-		w.cancel = nil
-		close(w.idle)
+		if err := w.admissionErrorLocked(probe); err != nil {
+			if probe {
+				w.probing = false
+			}
+			w.mu.Unlock()
+			<-w.slots
+			return nil, nil, err
+		}
+		w.mu.Unlock()
+	}
+	ctx, cancel := context.WithCancelCause(ctx)
+	w.mu.Lock()
+	if err := w.admissionErrorLocked(probe); err != nil {
+		if probe {
+			w.probing = false
+		}
+		w.mu.Unlock()
+		cancel(context.Canceled)
+		<-w.slots
+		return nil, nil, err
+	}
+	w.nextOperation++
+	op := w.nextOperation
+	if len(w.operations) == 0 {
+		w.idle = make(chan struct{})
+	}
+	w.operations[op] = cancel
+	w.mu.Unlock()
+	return ctx, func() {
+		cancel(context.Canceled)
+		w.mu.Lock()
+		delete(w.operations, op)
+		<-w.slots
+		if probe {
+			w.probing = false
+		}
+		if len(w.operations) == 0 {
+			close(w.idle)
+		}
 		w.mu.Unlock()
 	}, nil
+}
+
+func (w *NativeBrowser) admissionErrorLocked(probe bool) error {
+	if w.tainted {
+		return ErrNativeOwnershipLost
+	}
+	if w.closed || (!probe && !w.ready) {
+		return ErrNativeNotReady
+	}
+	return nil
 }
 
 func (w *NativeBrowser) taintLocked() {
@@ -278,6 +476,10 @@ func (w *NativeBrowser) taintLocked() {
 		return
 	}
 	w.tainted = true
+	w.stopAdmissionLocked()
+	for _, cancel := range w.operations {
+		cancel(ErrNativeOwnershipLost)
+	}
 	w.fatal <- ErrNativeWorkerFatal
 	close(w.fatal)
 }
@@ -326,16 +528,28 @@ func (w *NativeBrowser) Close(ctx context.Context) error {
 	w.mu.Lock()
 	w.closed = true
 	w.ready = false
-	cancel, idle := w.cancel, w.idle
+	w.stopAdmissionLocked()
+	cancels := make([]context.CancelCauseFunc, 0, len(w.operations))
+	for _, cancel := range w.operations {
+		cancels = append(cancels, cancel)
+	}
+	idle := w.idle
 	w.mu.Unlock()
-	if cancel != nil {
-		cancel()
+	for _, cancel := range cancels {
+		cancel(context.Canceled)
 	}
 	select {
 	case <-idle:
 		return nil
 	case <-ctx.Done():
 		return ctx.Err()
+	}
+}
+
+func (w *NativeBrowser) stopAdmissionLocked() {
+	if !w.stoppedClosed {
+		close(w.stopped)
+		w.stoppedClosed = true
 	}
 }
 
@@ -348,7 +562,7 @@ type nativeResources struct {
 }
 
 func (w *NativeBrowser) open(ctx context.Context) (res *nativeResources, err error) {
-	ws, err := configuredBrowserEndpoint(ctx, w.cfg.Endpoint)
+	ws, err := nativeBrowserEndpoint(ctx, w.cfg.Endpoint)
 	if err != nil {
 		w.unavailable()
 		w.reportDiagnostic("discovery", err)
@@ -362,7 +576,7 @@ func (w *NativeBrowser) open(ctx context.Context) (res *nativeResources, err err
 		w.reportDiagnostic("discovery", ErrNativeOwnershipLost)
 		return nil, ErrNativeOwnershipLost
 	}
-	client, err := dialBrowser(ctx, ws)
+	client, err := dialNativeBrowser(ctx, ws)
 	if err != nil {
 		w.unavailable()
 		w.reportDiagnostic("websocket", err)
@@ -529,18 +743,18 @@ func (r *nativeResources) crashIntegrityError() error {
 // already verified browser generation. It is called only after owned cleanup.
 func (w *NativeBrowser) verifyCrashRecovery(generation string) error {
 	w.mu.Lock()
-	eligible := !w.closed && !w.tainted && w.active && w.generation == generation
+	eligible := !w.closed && !w.tainted && len(w.operations) > 0 && w.generation == generation
 	w.mu.Unlock()
 	if !eligible {
 		return ErrNativeOwnershipLost
 	}
 	ctx, cancel := context.WithTimeout(context.Background(), 500*time.Millisecond)
 	defer cancel()
-	current, err := configuredBrowserEndpoint(ctx, w.cfg.Endpoint)
+	current, err := nativeBrowserEndpoint(ctx, w.cfg.Endpoint)
 	if err != nil || current != generation {
 		return errors.Join(ErrNativeOwnershipLost, err)
 	}
-	client, err := dialBrowser(ctx, current)
+	client, err := dialNativeBrowser(ctx, current)
 	if err != nil {
 		return errors.Join(ErrNativeOwnershipLost, err)
 	}
@@ -558,13 +772,13 @@ func (w *NativeBrowser) verifyCrashRecovery(generation string) error {
 	if err != nil {
 		return errors.Join(ErrNativeOwnershipLost, err)
 	}
-	current, err = configuredBrowserEndpoint(ctx, w.cfg.Endpoint)
+	current, err = nativeBrowserEndpoint(ctx, w.cfg.Endpoint)
 	if err != nil || current != generation {
 		return errors.Join(ErrNativeOwnershipLost, err)
 	}
 	w.mu.Lock()
 	defer w.mu.Unlock()
-	if w.closed || w.tainted || !w.active || w.generation != generation {
+	if w.closed || w.tainted || len(w.operations) == 0 || w.generation != generation {
 		return ErrNativeOwnershipLost
 	}
 	w.ready = true
@@ -755,22 +969,23 @@ func (w *NativeBrowser) Fetch(ctx context.Context, raw string, opts NativeBrowse
 					return
 				}
 			case <-client.eventFailure:
+				cause := client.eventError()
+				stop(cause)
 				w.taint()
-				stop(client.eventError())
 				return
 			case <-client.done:
-				w.taint()
 				stop(errors.Join(ErrNativeOwnershipLost, errNativeClientDisconnected))
+				w.taint()
 				return
 			case message := <-client.events:
 				method := string(message.Method)
 				if detached, malformed := detachedOwnedSession(message, session); malformed {
-					w.taint()
 					stop(errors.Join(ErrNativeOwnershipLost, ErrNativePolicy, errNativeMalformedDetach))
+					w.taint()
 					return
 				} else if detached {
-					w.taint()
 					stop(errors.Join(ErrNativeOwnershipLost, errNativeOwnedDetach))
+					w.taint()
 					return
 				}
 				if terminalPending && (method == "Fetch.authRequired" || method == "Fetch.requestPaused") {
@@ -1075,8 +1290,8 @@ func (w *NativeBrowser) Fetch(ctx context.Context, raw string, opts NativeBrowse
 		value := evaluated.Result.Value
 		if value.Ready {
 			if cause := client.eventError(); cause != nil {
-				w.taint()
 				stop(cause)
+				w.taint()
 				return doc, cause
 			}
 			if value.TooLarge || int64(len(value.HTML)) > domLimit || int64(value.Bytes) > domLimit {

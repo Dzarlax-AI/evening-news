@@ -93,7 +93,7 @@ func (s TelegramSource) FetchChannel(ctx context.Context, channelURL, sourceName
 	}
 	page, renderErr := s.Render(ctx, channelURL, transport.BrowserOptions{Timeout: 30 * time.Second, MaxWireBytes: transport.MaxPageBytes, MaxDOMBytes: transport.MaxPageBytes}, TelegramNativeReadySelector)
 	if renderErr != nil {
-		if ctx.Err() != nil {
+		if ctx.Err() != nil && !errors.Is(renderErr, transport.ErrNativeAdmissionDeadline) {
 			renderErr = ctx.Err()
 		}
 		code, retryable := telegramNativeError(renderErr)

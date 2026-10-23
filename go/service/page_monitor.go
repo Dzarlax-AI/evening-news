@@ -87,6 +87,9 @@ func (s *Server) extractPageMonitor(w http.ResponseWriter, r *http.Request) {
 		code := "cancelled"
 		if errors.Is(ctx.Err(), context.DeadlineExceeded) {
 			code = "deadline_exceeded"
+			if s.cfg.NativeBrowser && req.Operation == "fetch" && boolValue(req.UseBrowser, true) && validPageMonitorAdmissionBusy(resp) {
+				code = "native_browser_busy"
+			}
 		}
 		resp.StudyHTML = ""
 		resp.StudyHTMLOmitted = resp.NeedsSelectorStudy
@@ -98,7 +101,7 @@ func (s *Server) extractPageMonitor(w http.ResponseWriter, r *http.Request) {
 		} else {
 			resp.Outcome = "failed"
 		}
-		resp.Error = &Failure{Code: code, Retryable: code == "deadline_exceeded"}
+		resp.Error = &Failure{Code: code, Retryable: code == "deadline_exceeded" || code == "native_browser_busy"}
 	}
 	resp.ContractVersion = ContractVersion
 	resp.BuildVersion = s.cfg.BuildVersion
@@ -125,6 +128,11 @@ func (s *Server) extractPageMonitor(w http.ResponseWriter, r *http.Request) {
 	s.methods["page_monitor_"+req.Operation]++
 	s.mu.Unlock()
 	s.writePageMonitor(w, http.StatusOK, resp)
+}
+
+func validPageMonitorAdmissionBusy(resp PageMonitorResponse) bool {
+	return resp.Outcome == "failed" && len(resp.Items) == 0 && resp.Error != nil &&
+		resp.Error.Code == "native_browser_busy" && resp.Error.Retryable
 }
 
 func boolValue(value *bool, defaultValue bool) bool {

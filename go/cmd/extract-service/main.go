@@ -129,14 +129,14 @@ func run() error {
 	pageMonitorSource := pipeline.PageMonitorSource{Fetch: transport.FetchPublic, Admit: transport.AdmitPublicURL}
 	pageMonitorSource.Render = func(ctx context.Context, raw string, opts transport.BrowserOptions, selector string, settle time.Duration) (transport.RenderedDocument, error) {
 		opts.MinSettle = settle
+		if native != nil {
+			return native.Fetch(ctx, raw, transport.NativeBrowserOptions{BrowserOptions: opts, ReadySelector: selector})
+		}
 		select {
 		case browserSlots <- struct{}{}:
 			defer func() { <-browserSlots }()
 		default:
 			return transport.RenderedDocument{}, errors.New("browser_busy")
-		}
-		if native != nil {
-			return native.Fetch(ctx, raw, transport.NativeBrowserOptions{BrowserOptions: opts, ReadySelector: selector})
 		}
 		return transport.BrowserFetchPublic(ctx, endpoint, raw, opts)
 	}

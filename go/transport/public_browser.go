@@ -373,6 +373,9 @@ func configuredBrowserEndpointWithResolver(ctx context.Context, endpoint string,
 	if err != nil {
 		return "", err
 	}
+	// Discovery is a short control-plane request against a capacity-limited
+	// browser relay. Do not keep its connection alive after reading the body.
+	req.Close = true
 	req.Host = address
 	dialer := &net.Dialer{Timeout: 3 * time.Second}
 	tr := &http.Transport{Proxy: nil, DialContext: func(ctx context.Context, network, _ string) (net.Conn, error) {

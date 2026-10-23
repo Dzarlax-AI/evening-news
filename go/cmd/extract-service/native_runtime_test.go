@@ -39,8 +39,12 @@ func TestNativeBackendRequiresExplicitIsolationAndSelection(t *testing.T) {
 	if _, err := configuredNativeBrowser(true, "", 1); err == nil {
 		t.Fatal("native config allowed in HTTP-only mode")
 	}
-	if _, err := configuredNativeBrowser(false, "http://chrome:9222", 2); err == nil {
-		t.Fatal("unsupported concurrency accepted")
+	worker, err = configuredNativeBrowser(false, "http://chrome:9222", 2)
+	if err != nil || worker == nil {
+		t.Fatalf("two native render slots rejected: worker=%v err=%v", worker, err)
+	}
+	if _, err := configuredNativeBrowser(false, "http://chrome:9222", 3); err == nil {
+		t.Fatal("concurrency above two accepted")
 	}
 }
 

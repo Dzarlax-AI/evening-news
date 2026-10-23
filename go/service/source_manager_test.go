@@ -18,7 +18,8 @@ import (
 )
 
 type sourceManagerTestRunner struct {
-	RSS func(context.Context, RSSRequest) RSSResponse
+	RSS      func(context.Context, RSSRequest) RSSResponse
+	Telegram func(context.Context, TelegramRequest) TelegramResponse
 }
 
 func (r sourceManagerTestRunner) Run(context.Context, Request) Response {
@@ -30,7 +31,10 @@ func (r sourceManagerTestRunner) RunRSS(ctx context.Context, req RSSRequest) RSS
 	}
 	return RSSResponse{Outcome: "success", FinalURL: req.URL, Articles: []extractor.RSSArticle{}}
 }
-func (r sourceManagerTestRunner) RunTelegram(_ context.Context, req TelegramRequest) TelegramResponse {
+func (r sourceManagerTestRunner) RunTelegram(ctx context.Context, req TelegramRequest) TelegramResponse {
+	if r.Telegram != nil {
+		return r.Telegram(ctx, req)
+	}
 	return TelegramResponse{Outcome: "success", OriginalURL: req.ChannelURL, FinalURL: req.ChannelURL, Articles: []extractor.TelegramArticle{}}
 }
 func (r sourceManagerTestRunner) RunPageMonitor(_ context.Context, req PageMonitorRequest) PageMonitorResponse {
@@ -94,6 +98,89 @@ func TestSourceBatchCollectPreservesOrderAndIndependentOutcomes(t *testing.T) {
 	s.ServeHTTP(article, articleRequest)
 	if article.Code != http.StatusOK {
 		t.Fatalf("article request after batch = %d %s", article.Code, article.Body.String())
+	}
+}
+
+func TestNativeSourceBatchLetsTelegramHTTPJobsOverlap(t *testing.T) {
+	for _, tc := range []struct {
+		name, requestID string
+		native          bool
+		wantActive      int32
+	}{
+		{name: "native", requestID: "native-tg-parallel", native: true, wantActive: 5},
+		{name: "legacy", requestID: "legacy-tg-serialized", wantActive: 1},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			var active, maxActive atomic.Int32
+			started := make(chan struct{}, 5)
+			release := make(chan struct{})
+			runner := sourceManagerTestRunner{Telegram: func(ctx context.Context, req TelegramRequest) TelegramResponse {
+				current := active.Add(1)
+				defer active.Add(-1)
+				for prior := maxActive.Load(); current > prior && !maxActive.CompareAndSwap(prior, current); prior = maxActive.Load() {
+				}
+				started <- struct{}{}
+				select {
+				case <-release:
+				case <-ctx.Done():
+					return TelegramResponse{Outcome: "failed", Error: &Failure{Code: "cancelled"}}
+				}
+				return TelegramResponse{Outcome: "success", OriginalURL: req.ChannelURL, FinalURL: req.ChannelURL, Articles: []extractor.TelegramArticle{}}
+			}}
+			s, err := New(Config{Token: "0123456789abcdef", MaxConcurrent: 1, NativeBrowser: tc.native}, runner)
+			if err != nil {
+				t.Fatal(err)
+			}
+			done := make(chan *deadlineRecorder, 1)
+			go func() {
+				writer := &deadlineRecorder{ResponseRecorder: httptest.NewRecorder()}
+				var body strings.Builder
+				fmt.Fprintf(&body, `{"contract_version":"1","request_id":%q,"batch_budget_ms":3000,"sources":[`, tc.requestID)
+				for i := 1; i <= 5; i++ {
+					if i > 1 {
+						body.WriteByte(',')
+					}
+					fmt.Fprintf(&body, `{"source_id":%d,"type":"telegram","source_name":"channel-%d","url":"https://t.me/channel_%d"}`, i, i, i)
+				}
+				body.WriteString("]}")
+				sourceBatchPost(s, body.String(), writer)
+				done <- writer
+			}()
+			select {
+			case <-started:
+			case <-time.After(time.Second):
+				t.Fatal("no Telegram HTTP job started")
+			}
+			if tc.native {
+				for i := 1; i < 5; i++ {
+					select {
+					case <-started:
+					case <-time.After(time.Second):
+						close(release)
+						t.Fatalf("only %d Telegram HTTP jobs started before release", i)
+					}
+				}
+			} else {
+				select {
+				case <-started:
+					close(release)
+					t.Fatal("legacy browser source lane allowed a sibling to start")
+				case <-time.After(25 * time.Millisecond):
+				}
+			}
+			close(release)
+			select {
+			case writer := <-done:
+				if writer.Code != http.StatusOK {
+					t.Fatalf("source batch status=%d body=%s", writer.Code, writer.Body.String())
+				}
+			case <-time.After(time.Second):
+				t.Fatal("source batch did not finish after Telegram requests were released")
+			}
+			if maxActive.Load() != tc.wantActive {
+				t.Fatalf("Telegram HTTP concurrency=%d, want %d", maxActive.Load(), tc.wantActive)
+			}
+		})
 	}
 }
 
