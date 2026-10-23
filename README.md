@@ -22,11 +22,11 @@ Everything runs on a schedule you control, or you can trigger any step manually 
 
 ## Architecture
 
-The deployed application uses Python for scheduling, source configuration, PostgreSQL persistence, selector memory, AI processing, and digest delivery. A private Go service handles SourceManager dispatch, RSS/Atom collection, Telegram channel capture/parsing, Page Monitor capture/parsing, and article extraction. Python calls its authenticated API and saves the results; the Go service does not own the database or send digests.
+The deployed application uses the standalone Go scheduler for calendar timing and command dispatch. Python retains source configuration, News PostgreSQL persistence, selector memory, durable job execution, AI processing, and digest delivery. A separate private Go collection service handles SourceManager dispatch, RSS/Atom collection, Telegram channel capture/parsing, Page Monitor capture/parsing, and article extraction. Python calls its authenticated API and saves the results; the collection service does not own the database or send digests.
 
-An optional [separate Python background worker](docs/background-worker.md) moves scheduling and processing out of the web process. With `BACKGROUND_EXECUTION_MODE=worker`, web submits durable PostgreSQL jobs and reports their status; `python -m news_aggregator.worker` executes them under a singleton database lease. The default remains `embedded`; the production deployment uses separate web and worker processes.
+An optional [separate Python background worker](docs/background-worker.md) executes durable work outside the web process. With `BACKGROUND_EXECUTION_MODE=worker`, web submits PostgreSQL jobs and reports their status; `python -m news_aggregator.worker` executes them under a singleton database lease. The default remains `embedded`; the production deployment uses separate web and worker processes.
 
-An additional [standalone Go scheduler](docs/go-scheduler.md) provides reusable scheduling with its own PostgreSQL schema and a versioned HTTP command/receipt contract. In `SCHEDULE_DISPATCH_MODE=service`, the News adapter accepts scheduled commands into the existing durable queue; Python remains the execution worker. The scheduler is independently packaged and does not depend on article, AI, or delivery models. This scheduler integration has not been deployed.
+The [standalone Go scheduler](docs/go-scheduler.md) provides reusable scheduling with its own PostgreSQL schema and a versioned HTTP command/receipt contract. It is deployed separately from the News application. In `SCHEDULE_DISPATCH_MODE=service`, the News adapter accepts scheduled commands into the existing durable queue; Python remains the execution worker. The scheduler is independently packaged and does not depend on article, AI, or delivery models. Repository routing defaults remain Python.
 
 Source collection runs up to five jobs concurrently. Telegram HTTP fetches do not reserve a browser slot. Article rendering, Telegram browser fallback, and Page Monitor rendering share one bounded native admission gate: **two active renders in the current production deployment**, with at most eight waiting operations. Each render owns a disposable browser context and target. Waiting respects the caller's deadline; admission-time expiry remains retryable busy rather than consuming an article attempt.
 
@@ -39,7 +39,6 @@ flowchart TD
     end
 
     subgraph app["Python web + execution worker"]
-        Scheduler[Python scheduler — current deployment]
         Adapter[Scheduled command adapter]
         Jobs[Durable News jobs]
         SourceClient[Source configuration + Go API client]
@@ -51,7 +50,7 @@ flowchart TD
         UI[FastAPI admin + public site]
     end
 
-    subgraph scheduling["Standalone Go scheduler — optional service"]
+    subgraph scheduling["Standalone Go scheduler — production service"]
         GoScheduler[Calendar + command dispatch]
         ScheduleDB[(Scheduler-owned PostgreSQL schema)]
         GoScheduler <--> ScheduleDB
@@ -74,11 +73,11 @@ flowchart TD
     Channel[Your Telegram channel]
     Origins[Public websites]
 
+    UI -->|schedule CRUD / status| GoScheduler
     UI -->|manual commands| Jobs
     GoScheduler -->|private authenticated command + receipt| Adapter
     Adapter --> Jobs
     Jobs --> SourceClient
-    Scheduler --> Jobs
     SourceClient <--> Memory
     SourceClient <-->|private authenticated API| GoCollect
     RSS --> GoRSS
@@ -110,7 +109,7 @@ flowchart TD
     DB --> UI
 ```
 
-This diagram describes the deployed Go routes as of October 23, 2026. The production scheduler and domain persistence remain in Python; the standalone scheduler integration is available as a separate, undeployed service. Repository routing defaults remain Python, and native render concurrency defaults to one; the deployed configuration explicitly selects all four Go modes and `EXTRACTOR_BROWSER_CONCURRENT=2`. These are configuration choices, not changed defaults for a new installation.
+This diagram describes the deployed Go routes as of October 23, 2026. The standalone Go scheduler owns calendar timing and command dispatch; News persistence, job execution, article processing, and delivery remain in Python. Repository routing defaults remain Python, and native render concurrency defaults to one; the deployed configuration explicitly selects all four Go collection modes and `EXTRACTOR_BROWSER_CONCURRENT=2`. These are configuration choices, not changed defaults for a new installation. See the [scheduler release record](deploy/news-scheduler/RELEASE_2026-10-23.md) for deployment verification.
 
 See the [source collection guide](docs/go-source-manager.md), [Telegram guide](docs/go-telegram-source.md), [Page Monitor guide](docs/go-page-monitor.md), [native worker guide](docs/go-cloak-native-worker.md), and [deployment handoff](deploy/news-extractor/HANDOFF.md) for contracts, limits, and deployment boundaries.
 

@@ -6,10 +6,13 @@ It has no access to News articles, background jobs, Gemini, Telegram, or the
 browser. Its HTTP wire format is specified in the
 [versioned contract](go-scheduler-contract.md).
 
-This integration is being validated locally and in CI. It has not been deployed.
-The existing production scheduler remains in the Python execution worker.
+The service is deployed alongside the News app and worker. It owns scheduling
+and delivery state in a separate PostgreSQL database/schema; the Python worker
+continues to own durable job execution, persistence, article processing, and
+delivery. See the [dated production release record](../deploy/news-scheduler/RELEASE_2026-10-23.md)
+for image digests and acceptance evidence.
 
-## Verified image publication
+## Immutable image publication
 
 The `Standalone Go scheduler` GitHub Actions workflow publishes no image on PRs
 or ordinary pushes. To publish a release candidate after the change is on
@@ -32,7 +35,8 @@ rollback. The preflight uses the authenticated GHCR registry API and fails
 closed on authentication, transport, or ambiguous responses. It accepts an
 explicit missing-manifest response, and treats an unknown package as absent
 only after obtaining a repository-scoped GHCR token and rechecking it. CI
-publication does not deploy or change the existing Python scheduler.
+publication does not deploy the service. Production runs the image by digest;
+the deployed build ID and image digest are recorded in the release record.
 
 ## Ownership and execution
 
@@ -147,18 +151,13 @@ flight or undo an already accepted News job.
 
 ## Migration and rollback
 
-Keep the existing Python mode until the new service and adapter have passed the
-isolated acceptance gate. Export the existing News configuration and due times
-through the migration bridge; the scheduler must not connect directly to the
-News database. Enabled imports require a non-null due time; disabled imports require null.
-First import happens while the new service is paused, with stable
-`news:<legacy_id>` keys and exact UTC due times, including microseconds.
-
-A production cutover needs separate approval. Drain active scheduled work,
-pause dispatch, import and verify the snapshot, disable Python scheduling, and
-only then enable the scheduler service. Manual News jobs and the execution
-worker remain available. Do not run two active schedule sources during a
-migration or assume that changing a mode flag transfers persisted state.
+The deployed News app uses service dispatch while `SCHEDULER_ENABLED=false`,
+leaving schedule CRUD/status to the Go service without enabling the legacy
+Python loop. The standalone scheduler control is unpaused. The migration bridge
+imports News configuration and exact due instants; the scheduler does not
+connect directly to the News database. Enabled imports require a non-null due
+time; disabled imports require null. Stable keys use `news:<legacy_id>`, and
+imported UTC due times retain microseconds.
 
 For rollback, pause the scheduler and inventory pending/blocked/accepted
 occurrences and News jobs. The bridge rejects unpaused or changing control state
@@ -181,7 +180,7 @@ consumer. Real sites, AI providers, and Telegram are excluded.
 The scheduler health command is `scheduler healthcheck`. `/healthz` checks process
 liveness; `/readyz` additionally checks schema/DB readiness and loop freshness.
 An open port or a successful acceptance receipt alone is not execution acceptance.
-Local verification on October 23, 2026:
+Pre-release local verification on October 23, 2026:
 
 - Python regression suite against isolated PostgreSQL 16: 1,261 passed, five
   explicit real-browser/network checks skipped, and 22 subtests passed.
@@ -195,12 +194,17 @@ Local verification on October 23, 2026:
 - Independent review findings were corrected and reviewed again. PR/CI checks
   are recorded separately against the submitted commit.
 
-These checks use synthetic workloads. They do not establish production memory
-savings, throughput, public-route access policy, or production migration safety.
-The five skipped checks require a separate real-browser/network opt-in.
-The service has no production deployment manifest or approved cutover yet.
-Receipt storage is intentionally capped and has no automatic purge; monitor
-capacity before enabling a long-running deployment.
+The isolated acceptance checks use synthetic workloads. They do not establish
+production memory savings, throughput, public-route access policy, or production
+migration safety. The five skipped checks require a separate real-browser/network
+opt-in. Receipt storage is intentionally capped and has no automatic purge;
+monitor capacity during operation.
+
+Production deployment and first scheduled execution were verified on October 23,
+2026. The release record lists immutable app/scheduler digests, imported due-time
+verification, access checks, first natural delivery, and observed restart/OOM state.
+Those checks establish the recorded deployment path only; resource snapshots are
+point-in-time observations rather than peak measurements.
 
 Synthetic Docker resource snapshots (MiB; CPU percent in parentheses):
 
