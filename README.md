@@ -24,6 +24,8 @@ Everything runs on a schedule you control, or you can trigger any step manually 
 
 The deployed application uses Python for scheduling, source configuration, PostgreSQL persistence, selector memory, AI processing, and digest delivery. A private Go service handles SourceManager dispatch, RSS/Atom collection, Telegram channel capture/parsing, Page Monitor capture/parsing, and article extraction. Python calls its authenticated API and saves the results; the Go service does not own the database or send digests.
 
+An optional [separate Python background worker](docs/background-worker.md) moves scheduling and processing out of the web process. With `BACKGROUND_EXECUTION_MODE=worker`, web submits durable PostgreSQL jobs and reports their status; `python -m news_aggregator.worker` executes them under a singleton database lease. The default remains `embedded`. This optional mode has not been deployed.
+
 Source collection runs up to five jobs concurrently. Telegram HTTP fetches do not reserve a browser slot. Article rendering, Telegram browser fallback, and Page Monitor rendering share one bounded native admission gate: **two active renders in the current production deployment**, with at most eight waiting operations. Each render owns a disposable browser context and target. Waiting respects the caller's deadline; admission-time expiry remains retryable busy rather than consuming an article attempt.
 
 ```mermaid

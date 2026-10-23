@@ -12,6 +12,7 @@ from sqlalchemy.orm import selectinload
 
 from ..database import get_db
 from ..models import Article, Category, ArticleCategory, CategoryMapping
+from ..config import settings as app_settings
 
 logger = logging.getLogger(__name__)
 
@@ -552,6 +553,11 @@ async def analyze_categories_with_ai(
     Analyze uncategorized articles and suggest category mappings using AI.
     Provides confidence scores and reasoning for each suggestion.
     """
+    if app_settings.background_execution_mode == "worker":
+        raise HTTPException(
+            status_code=409,
+            detail="AI category analysis is unavailable in queue-only web mode",
+        )
     import time
     from ..services.ai_client import get_ai_client
     from ..services.prompts import NewsPrompts

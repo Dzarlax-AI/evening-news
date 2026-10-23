@@ -3,7 +3,7 @@ import logging
 
 from typing import Optional
 
-from fastapi import APIRouter, Depends, HTTPException
+from fastapi import APIRouter, Depends, HTTPException, Request
 from pydantic import BaseModel
 from sqlalchemy.ext.asyncio import AsyncSession
 from sqlalchemy import select, func, delete
@@ -87,13 +87,16 @@ async def create_source(
     try:
         logger.info(f"Creating source with data: {source_data}")
         source_manager = SourceManager()
+        from ..config import settings
+        worker_mode = settings.background_execution_mode == "worker"
         
         # Create source
         source = await source_manager.create_source(
             db,
             name=source_data.name,
             source_type=source_data.source_type,
-            url=source_data.url
+            url=source_data.url,
+            skip_connection_test=worker_mode,
         )
         
         # Set active status
@@ -117,6 +120,7 @@ async def create_source(
 @router.post("/{source_id}/test")
 async def test_source(
     source_id: int,
+    request: Request,
     db: AsyncSession = Depends(get_db)
     # TODO: Add admin auth when security is fixed
 ):
@@ -130,6 +134,12 @@ async def test_source(
         
         if not source:
             raise HTTPException(status_code=404, detail="Source not found")
+
+        from ..config import settings
+        if settings.background_execution_mode == "worker":
+            from .background_jobs_router import accepted_response, enqueue_from_request
+            accepted = await enqueue_from_request("source_test", {"source_id": source_id}, request)
+            return accepted_response(accepted)
         
         # Test source connection
         source_instance = await source_manager.get_source_instance(source)
@@ -143,6 +153,8 @@ async def test_source(
         
     except Exception as e:
         logger.info(f"Error testing source: {e}")
+        if isinstance(e, HTTPException):
+            raise
         return {
             "source_id": source_id,
             "success": False,

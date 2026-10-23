@@ -5,7 +5,7 @@ from datetime import datetime
 from pathlib import Path
 from typing import List
 
-from fastapi import APIRouter, Depends, HTTPException, UploadFile, File
+from fastapi import APIRouter, Depends, HTTPException, UploadFile, File, Request
 from fastapi.responses import FileResponse
 from pydantic import BaseModel
 from sqlalchemy.ext.asyncio import AsyncSession
@@ -94,8 +94,13 @@ async def download_backup(filename: str):
 
 
 @router.post("")
-async def create_backup(db: AsyncSession = Depends(get_db)):
+async def create_backup(request: Request, db: AsyncSession = Depends(get_db)):
     """Create a new backup."""
+    from ..config import settings
+    if settings.background_execution_mode == "worker":
+        from .background_jobs_router import accepted_response, enqueue_from_request
+        accepted = await enqueue_from_request("backup", {}, request)
+        return accepted_response(accepted)
     try:
         # Import backup service
         from ..services.backup_service import BackupService
@@ -114,8 +119,13 @@ async def create_backup(db: AsyncSession = Depends(get_db)):
 
 
 @router.post("/sync")
-async def create_sync_backup():
+async def create_sync_backup(request: Request):
     """Create a synchronous backup (for testing)."""
+    from ..config import settings
+    if settings.background_execution_mode == "worker":
+        from .background_jobs_router import accepted_response, enqueue_from_request
+        accepted = await enqueue_from_request("backup", {}, request)
+        return accepted_response(accepted)
     try:
         # Import backup service
         from ..services.backup_service import BackupService
@@ -136,6 +146,11 @@ async def create_sync_backup():
 @router.post("/restore")
 async def restore_backup(filename: str, db: AsyncSession = Depends(get_db)):
     """Restore from a backup file."""
+    if settings.background_execution_mode == "worker":
+        raise HTTPException(
+            status_code=409,
+            detail="Restore is disabled in worker mode; stop the worker and use offline maintenance.",
+        )
     try:
         backup_path = Path("backups") / filename
         
@@ -161,6 +176,11 @@ async def restore_backup(filename: str, db: AsyncSession = Depends(get_db)):
 @router.post("/upload")
 async def upload_backup(file: UploadFile = File(...)):
     """Upload a backup file."""
+    if settings.background_execution_mode == "worker":
+        raise HTTPException(
+            status_code=409,
+            detail="Backup uploads are disabled in worker mode because the web backup mount is read-only.",
+        )
     try:
         # Validate file type
         if not file.filename or not file.filename.endswith('.tar.gz'):
@@ -193,6 +213,11 @@ async def upload_backup(file: UploadFile = File(...)):
 @router.post("/cleanup")
 async def cleanup_old_backups(keep_count: int = 5):
     """Clean up old backup files, keeping only the most recent ones."""
+    if settings.background_execution_mode == "worker":
+        raise HTTPException(
+            status_code=409,
+            detail="Backup cleanup is disabled in worker mode because the web backup mount is read-only.",
+        )
     try:
         backup_dir = Path("backups")
         if not backup_dir.exists():

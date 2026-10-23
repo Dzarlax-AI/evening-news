@@ -4,7 +4,7 @@ import logging
 import asyncio
 from datetime import datetime
 
-from fastapi import APIRouter, BackgroundTasks, HTTPException
+from fastapi import APIRouter, BackgroundTasks, HTTPException, Request
 from pydantic import BaseModel, Field
 
 from ..orchestrator import (NewsOrchestrator, reserve_processing_cycle,
@@ -35,8 +35,12 @@ async def _run_processing_cycle(reservation):
             release_processing_cycle(reservation)
 
 @router.post("/run")
-async def trigger_processing(background_tasks: BackgroundTasks):
+async def trigger_processing(background_tasks: BackgroundTasks, request: Request = None):
     """Trigger news processing cycle in background."""
+    from .background_jobs_router import accepted_response, enqueue_from_request
+    accepted = await enqueue_from_request("news_processing", {}, request)
+    if accepted is not None:
+        return accepted_response(accepted)
     reservation = reserve_processing_cycle()
     if reservation is None:
         return {"success": False, "status": "busy", "message": "News processing is already running"}
@@ -62,6 +66,26 @@ async def trigger_processing(background_tasks: BackgroundTasks):
 @router.get("/status")  
 async def get_processing_status():
     """Get current processing status."""
+    from ..config import settings
+    if settings.background_execution_mode == "worker":
+        from sqlalchemy import select, func
+        from ..database import AsyncSessionLocal
+        from ..models import BackgroundJob
+        from ..services.background_jobs import read_worker_status
+        async with AsyncSessionLocal() as session:
+            worker = await read_worker_status(session)
+            queued = await session.scalar(select(func.count()).select_from(BackgroundJob).where(
+                BackgroundJob.state.in_(("queued", "interrupted"))))
+            active = await session.scalar(select(func.count()).select_from(BackgroundJob).where(
+                BackgroundJob.state == "running"))
+        return {
+            "busy": bool(active),
+            "is_running": bool(active),
+            "worker_available": bool(worker and worker["healthy"]),
+            "queued_jobs": int(queued or 0),
+            "active_jobs": int(active or 0),
+            "timestamp": datetime.utcnow().isoformat(),
+        }
     try:
         orchestrator = NewsOrchestrator()
         stats = orchestrator.get_queue_stats()
@@ -86,6 +110,14 @@ async def retry_selected_articles(request: SelectedRetryRequest):
     if reservation is None:
         raise HTTPException(status_code=409, detail="News processing is already running")
     try:
+        from ..config import settings
+        if settings.background_execution_mode == "worker":
+            from ..services.article_retry import reset_selected_articles
+            try:
+                count = await reset_selected_articles(request.article_ids, force=False)
+                return {"success": True, "articles_requeued": count}
+            except RuntimeError as exc:
+                raise HTTPException(status_code=409, detail=str(exc)) from exc
         count = await NewsOrchestrator().retry_selected_articles(request.article_ids, reservation=reservation)
         return {"success": True, "articles_requeued": count}
     except ValueError as exc:

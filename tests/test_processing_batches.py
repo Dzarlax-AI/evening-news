@@ -94,6 +94,30 @@ async def test_batches_are_bounded_stable_and_skip_completed_history(isolated):
 
 
 @pytest.mark.asyncio
+async def test_worker_resume_preserves_partial_stages_and_retries_force_when_no_stage_completed(isolated):
+    orchestrator, engine = isolated
+    add_articles(engine, 2)
+    with Session(engine) as db:
+        db.execute(update(Article).where(Article.id == 1).values(
+            processing_state="pending", summary_processed=True,
+            category_processed=False, ad_processed=False))
+        db.execute(update(Article).where(Article.id == 2).values(
+            processing_state="pending", summary_processed=False,
+            category_processed=False, ad_processed=False))
+        db.commit()
+    orchestrator.ai_processor.process_article_outcome = AsyncMock(return_value=ProcessingOutcome(
+        "completed", {"summary_processed": True, "category_processed": True, "ad_processed": True}))
+    await orchestrator._process_unprocessed_articles(
+        {"errors": []}, selected_ids=[1, 2], force_refresh=True,
+        preserve_completed_stages=True,
+    )
+    calls = orchestrator.ai_processor.process_article_outcome.await_args_list
+    assert [call.args[0]["id"] for call in calls] == [1, 2]
+    assert calls[0].kwargs == {}
+    assert calls[1].kwargs == {"force_refresh": True}
+
+
+@pytest.mark.asyncio
 async def test_failed_outcome_write_has_durable_budget_and_restart_deadline(isolated):
     orchestrator, engine = isolated
     add_articles(engine, 1)

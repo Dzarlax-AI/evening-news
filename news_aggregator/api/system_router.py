@@ -59,6 +59,15 @@ async def health_db():
 async def get_process_monitor_status():
     """Get process monitor status and running processes."""
     try:
+        from ..config import settings
+        if settings.background_execution_mode == "worker":
+            from ..database import AsyncSessionLocal
+            from ..services.background_jobs import read_worker_status
+            async with AsyncSessionLocal() as session:
+                worker = await read_worker_status(session)
+            return {"status": {"running": bool(worker and worker["healthy"]),
+                               "mode": "worker", "worker_available": bool(worker and worker["healthy"])},
+                    "timestamp": datetime.utcnow().isoformat()}
         from ..services.process_monitor import ProcessMonitor
         
         monitor = ProcessMonitor()
@@ -79,6 +88,9 @@ async def get_process_monitor_status():
 @router.post("/process-monitor/cleanup")
 async def cleanup_processes():
     """Manually trigger process cleanup."""
+    from ..config import settings
+    if settings.background_execution_mode == "worker":
+        raise HTTPException(status_code=409, detail="Process cleanup is owned by the background worker")
     try:
         from ..services.process_monitor import ProcessMonitor
         

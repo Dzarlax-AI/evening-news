@@ -758,19 +758,21 @@
 // Local API request function for dashboard
 async function apiRequest(url, options = {}) {
     try {
+        const onJobUpdate = options.onJobUpdate;
+        const requestOptions = {...options};
+        delete requestOptions.onJobUpdate;
         const response = await fetch(url, {
             headers: {
                 'Content-Type': 'application/json',
                 ...options.headers
             },
-            ...options
+            ...requestOptions
         });
-        
+        const data = await window.readApiResponse(response);
         if (!response.ok) {
-            throw new Error(`HTTP error! status: ${response.status}`);
+            throw new Error(data.detail || `HTTP error! status: ${response.status}`);
         }
-        
-        return await response.json();
+        return await window.resolveBackgroundResponse(response, data, onJobUpdate);
     } catch (error) {
         console.error('API request failed:', error);
         throw error;
@@ -1031,11 +1033,17 @@ async function runManualSync() {
         progressBar.style.width = '10%';
         
         const response = await apiRequest('/api/v1/process/run', {
-            method: 'POST'
+            method: 'POST',
+            onJobUpdate: job => {
+                messageEl.textContent = job.status === 'queued'
+                    ? (job.worker_available === false ? 'Задание в очереди. Рабочий процесс сейчас недоступен.' : 'Задание принято, ожидаем обработчик...')
+                    : job.status === 'interrupted' ? 'Задание ожидает восстановления обработчиком...' : 'Обработка выполняется...';
+                progressBar.style.width = job.status === 'queued' ? '20%' : '60%';
+            }
         });
         
         if (response.success) {
-            messageEl.textContent = 'Обработка запущена успешно!';
+            messageEl.textContent = response.status === 'queued' ? 'Задание принято и осталось в очереди.' : 'Обработка завершена.';
             progressBar.style.width = '100%';
             
             setTimeout(() => {
@@ -1050,9 +1058,9 @@ async function runManualSync() {
         
     } catch (error) {
         console.error('Error starting sync:', error);
-        messageEl.textContent = 'Ошибка запуска синхронизации';
+        messageEl.textContent = error.message || 'Ошибка запуска синхронизации';
         statusDiv.style.display = 'none';
-        showNotification('Ошибка запуска синхронизации', 'error');
+        showNotification(error.message || 'Ошибка запуска синхронизации', 'error');
     } finally {
         button.classList.remove('btn--loading');
         button.disabled = false;
@@ -1067,7 +1075,10 @@ async function sendTelegramDigest() {
     
     try {
         const response = await apiRequest('/api/v1/telegram/send-digest', {
-            method: 'POST'
+            method: 'POST',
+            onJobUpdate: job => showNotification(
+                job.status === 'queued' ? 'Дайджест поставлен в очередь' : 'Дайджест обрабатывается', 'info'
+            )
         });
         
         if (response.success) {
@@ -1078,7 +1089,7 @@ async function sendTelegramDigest() {
         
     } catch (error) {
         console.error('Error sending telegram digest:', error);
-        showNotification('Ошибка отправки в Telegram', 'error');
+        showNotification(error.message || 'Ошибка отправки в Telegram', 'error');
     } finally {
         button.classList.remove('btn--loading');
         button.disabled = false;
@@ -1093,7 +1104,10 @@ async function generateSummaries() {
     
     try {
         const response = await apiRequest('/api/v1/summaries/generate', {
-            method: 'POST'
+            method: 'POST',
+            onJobUpdate: job => showNotification(
+                job.status === 'queued' ? 'Генерация сводок поставлена в очередь' : 'Сводки генерируются', 'info'
+            )
         });
         
         if (response.success) {
@@ -1105,7 +1119,7 @@ async function generateSummaries() {
         
     } catch (error) {
         console.error('Error generating summaries:', error);
-        showNotification('Ошибка создания сводок', 'error');
+        showNotification(error.message || 'Ошибка создания сводок', 'error');
     } finally {
         button.classList.remove('btn--loading');
         button.disabled = false;

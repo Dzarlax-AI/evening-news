@@ -10,6 +10,7 @@ from sqlalchemy import select, update, delete
 
 from ..database import get_db
 from ..models import ScheduleSettings
+from ..config import settings
 
 
 router = APIRouter()
@@ -206,6 +207,10 @@ async def update_schedule_setting(
 
         if update_data:
             update_data['updated_at'] = datetime.utcnow()
+            if settings.background_execution_mode == "worker":
+                # Revoke schedule ownership from an already accepted run. The
+                # job may finish but must not overwrite the edited schedule.
+                update_data['is_running'] = False
 
             # Calculate next_run if schedule parameters changed
             if any(key in update_data for key in ['enabled', 'schedule_type', 'hour', 'minute', 'weekdays', 'timezone']):

@@ -2,11 +2,14 @@
 
 from datetime import datetime
 from typing import List, Optional
+import uuid
 
 from sqlalchemy import (
     Boolean, Column, DateTime, Date, Float, ForeignKey, Integer,
-    String, Text, JSON, DECIMAL, UniqueConstraint, Index, text
+    String, Text, JSON, DECIMAL, UniqueConstraint, Index, text, Uuid, CheckConstraint,
+    BigInteger, Identity
 )
+from sqlalchemy.dialects.postgresql import JSONB
 from sqlalchemy.orm import relationship
 from sqlalchemy.sql import func
 
@@ -210,6 +213,68 @@ class ProcessingStat(Base):
     api_calls_made = Column(Integer, default=0)
     errors_count = Column(Integer, default=0)
     processing_time_seconds = Column(Integer, default=0)
+
+
+class BackgroundJob(Base):
+    """Durable, content-free work accepted by the background worker."""
+    __tablename__ = "background_jobs"
+
+    id = Column(Uuid(as_uuid=True), primary_key=True, default=uuid.uuid4)
+    queue_position = Column(BigInteger, Identity(), nullable=False, unique=True)
+    kind = Column(String(40), nullable=False)
+    payload = Column(JSON().with_variant(JSONB, "postgresql"), nullable=False, default=dict)
+    idempotency_key = Column(String(200), nullable=False, unique=True)
+    coalesce_key = Column(String(64))
+    state = Column(String(24), nullable=False, server_default="queued")
+    created_at = Column(DateTime, nullable=False, server_default=func.timezone("UTC", func.now()))
+    started_at = Column(DateTime)
+    finished_at = Column(DateTime)
+    owner_generation = Column(Integer)
+    attempt_generation = Column(Integer, nullable=False, server_default="0")
+    initialized_at = Column(DateTime)
+    result = Column(JSON().with_variant(JSONB, "postgresql"))
+    error_code = Column(String(40))
+
+    __table_args__ = (
+        CheckConstraint("kind IN ('news_processing', 'news_digest', 'telegram_digest', 'backup', 'reprocess_failed', 'article_reprocess', 'summaries_generate', 'source_test')", name="ck_background_jobs_kind"),
+        CheckConstraint("state IN ('queued', 'running', 'succeeded', 'failed', 'interrupted', 'delivery_unknown')", name="ck_background_jobs_state"),
+        CheckConstraint("error_code IS NULL OR error_code IN ('worker_error', 'worker_interrupted', 'worker_recovery_exhausted', 'external_outcome_unknown', 'invalid_job', 'resource_limit', 'database_unavailable')", name="ck_background_jobs_error_code"),
+        CheckConstraint("jsonb_typeof(payload) = 'object'", name="ck_background_jobs_payload_object").ddl_if(dialect="postgresql"),
+        CheckConstraint("result IS NULL OR jsonb_typeof(result) = 'object'", name="ck_background_jobs_result_object").ddl_if(dialect="postgresql"),
+        Index("idx_background_jobs_queue", "created_at", "id", postgresql_where=text("state = 'queued'")),
+        Index("idx_background_jobs_active_coalesce", "coalesce_key", unique=True,
+              postgresql_where=text("state IN ('queued', 'running', 'interrupted') AND coalesce_key IS NOT NULL")),
+        Index("idx_background_jobs_status", "state", "created_at"),
+    )
+
+
+class BackgroundJobIdempotencyKey(Base):
+    """Durable request keys, including aliases coalesced to active work."""
+    __tablename__ = "background_job_idempotency_keys"
+
+    key = Column(String(200), primary_key=True)
+    job_id = Column(Uuid(as_uuid=True), ForeignKey("background_jobs.id", ondelete="CASCADE"), nullable=False)
+    created_at = Column(DateTime, nullable=False, server_default=func.timezone("UTC", func.now()))
+
+    __table_args__ = (
+        Index("idx_background_job_keys_job", "job_id"),
+    )
+
+
+class BackgroundWorkerStatus(Base):
+    """Singleton persisted worker lease and heartbeat."""
+    __tablename__ = "background_worker_status"
+
+    id = Column(Integer, primary_key=True, default=1)
+    generation = Column(Integer, nullable=False, server_default="0")
+    owner_id = Column(Uuid(as_uuid=True))
+    heartbeat_at = Column(DateTime)
+    status = Column(String(16), nullable=False, server_default="stopped")
+
+    __table_args__ = (
+        CheckConstraint("id = 1", name="ck_background_worker_singleton"),
+        CheckConstraint("status IN ('stopped', 'running')", name="ck_background_worker_status"),
+    )
 
 
 

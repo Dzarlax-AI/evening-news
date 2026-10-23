@@ -4,7 +4,7 @@ import logging
 from datetime import datetime
 from typing import Optional
 
-from fastapi import APIRouter, Depends, HTTPException
+from fastapi import APIRouter, Depends, HTTPException, Request
 from pydantic import BaseModel
 from sqlalchemy.ext.asyncio import AsyncSession
 from sqlalchemy import select, update
@@ -38,9 +38,21 @@ class ReprocessRequest(BaseModel):
 async def reprocess_article(
     article_id: int,
     request: ReprocessRequest,
-    db: AsyncSession = Depends(get_db)
+    db: AsyncSession = Depends(get_db),
+    http_request: Request = None,
 ):
     """Reprocess a single article with AI."""
+    from ..config import settings
+    if settings.background_execution_mode == "worker":
+        exists = await db.scalar(select(Article.id).where(Article.id == article_id))
+        if exists is None:
+            raise HTTPException(status_code=404, detail="Article not found")
+        from .background_jobs_router import accepted_response, enqueue_from_request
+        accepted = await enqueue_from_request("article_reprocess", {
+            "article_ids": [article_id], "force": request.force,
+            "reextract_media": request.reextract_media,
+        }, http_request)
+        return accepted_response(accepted)
     reservation = reserve_processing_cycle()
     if reservation is None:
         raise HTTPException(status_code=409, detail="News processing is already running")
