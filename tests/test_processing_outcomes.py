@@ -50,6 +50,111 @@ def test_retry_backoff_and_exhaustion_honor_retry_after():
     assert outcome_fields(outcome, 3, now)["next_attempt_at"] is None
 
 
+@pytest.mark.parametrize(('code', 'attempts'), [
+    ('busy', 1), ('busy', 2), ('busy', 3),
+    ('native_browser_busy', 1), ('native_browser_busy', 2), ('native_browser_busy', 3),
+])
+def test_local_admission_busy_refunds_claim_and_never_exhausts(code, attempts):
+    now = datetime(2026, 10, 15)
+    outcome = ProcessingOutcome('retry_wait', {'summary': 'Saved summary'}, code)
+
+    fields = outcome_fields(outcome, attempts, now, max_attempts=3,
+                            initial_seconds=30, later_seconds=120)
+
+    assert fields['processing_attempts'] == attempts - 1
+    assert fields['processing_state'] == 'retry_wait'
+    assert fields['processed'] is False
+    assert fields['next_attempt_at'] == now + timedelta(seconds=30)
+    assert fields['summary'] == 'Saved summary'
+
+
+@pytest.mark.parametrize('retry_after', [None, float('nan'), float('inf'), float('-inf'), -1, 'invalid'])
+def test_invalid_retry_after_does_not_break_durable_busy_schedule(retry_after):
+    now = datetime(2026, 10, 15)
+    fields = outcome_fields(ProcessingOutcome('retry_wait', error='busy', retry_after_seconds=retry_after),
+                            1, now, initial_seconds=30, later_seconds=120)
+
+    assert fields['processing_state'] == 'retry_wait'
+    assert fields['processing_attempts'] == 0
+    assert fields['next_attempt_at'] == now + timedelta(seconds=30)
+
+
+def test_extreme_finite_retry_after_stays_within_datetime_range():
+    fields = outcome_fields(ProcessingOutcome('retry_wait', error='busy', retry_after_seconds=1e300),
+                            1, datetime(2026, 10, 15), initial_seconds=30)
+
+    assert fields['next_attempt_at'] < datetime.max
+
+
+def test_non_busy_retry_still_exhausts_at_attempt_limit():
+    fields = outcome_fields(ProcessingOutcome('retry_wait', error='APIError'), 3, datetime(2026, 10, 15))
+
+    assert fields['processing_state'] == 'exhausted'
+    assert fields['processing_attempts'] == 3
+    assert fields['processed'] is True
+    assert fields['next_attempt_at'] is None
+
+
+def test_busy_with_zero_claim_count_never_goes_negative():
+    fields = outcome_fields(ProcessingOutcome('retry_wait', error='busy'), 0, datetime(2026, 10, 15),
+                            initial_seconds=30)
+
+    assert fields['processing_attempts'] == 0
+    assert fields['processing_state'] == 'retry_wait'
+    assert fields['processed'] is False
+
+
+@pytest.mark.parametrize('state', ['completed', 'rejected'])
+def test_busy_error_on_terminal_outcome_does_not_refund_attempts(state):
+    fields = outcome_fields(ProcessingOutcome(state, error='busy'), 2, datetime(2026, 10, 15))
+
+    assert fields['processing_attempts'] == 2
+    assert fields['processing_state'] == state
+
+
+@pytest.mark.parametrize('code', ['upstream_rate_limited', 'unavailable', 'native_browser_timeout'])
+def test_other_retryable_codes_do_not_refund_claim(code):
+    fields = outcome_fields(ProcessingOutcome('retry_wait', error=code), 2, datetime(2026, 10, 15),
+                            max_attempts=3)
+
+    assert fields['processing_attempts'] == 2
+    assert fields['processing_state'] == 'retry_wait'
+    assert fields['processed'] is False
+
+
+def test_near_limit_genuine_attempt_is_preserved_with_infinite_retry_after():
+    fields = outcome_fields(ProcessingOutcome('retry_wait', error='native_browser_timeout',
+                                               retry_after_seconds=float('inf')),
+                            2, datetime(2026, 10, 15), max_attempts=3)
+
+    assert fields['processing_attempts'] == 2
+    assert fields['processing_state'] == 'retry_wait'
+    assert fields['next_attempt_at'] == datetime(2026, 10, 15) + timedelta(hours=6)
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize(('code', 'level'), [('busy', 'WARNING'), ('native_browser_busy', 'WARNING'),
+                                             ('unexpected', 'ERROR')])
+async def test_summary_extraction_logs_local_busy_as_waiting_but_keeps_other_errors(caplog, code, level):
+    from news_aggregator.extraction.service_client import ExtractionServiceError
+    from news_aggregator.services.ai_client import AIClient
+
+    extractor_context = AsyncMock()
+    extractor_context.__aenter__.side_effect = ExtractionServiceError(code, True)
+    caplog.set_level('WARNING', logger='news_aggregator.services.ai_client')
+    with patch('news_aggregator.extraction.ContentExtractor', return_value=extractor_context):
+        result = await AIClient.__new__(AIClient).get_article_summary_with_metadata('https://example.org/article')
+
+    records = [record for record in caplog.records if record.name == 'news_aggregator.services.ai_client']
+    assert any(record.levelname == level for record in records)
+    if code in {'busy', 'native_browser_busy'}:
+        assert not any(record.levelname == 'ERROR' for record in records)
+        assert 'rescheduled' in records[-1].message
+    else:
+        assert any(record.levelname == 'ERROR' for record in records)
+    assert result['_processing_error'] == code
+
+
 @pytest.mark.asyncio
 async def test_missing_summary_is_retryable_and_not_advertising():
     result = await processor({"summary": None}).process_article_outcome(article(), {})

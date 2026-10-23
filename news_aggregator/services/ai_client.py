@@ -197,7 +197,10 @@ class AIClient:
         except ResourceLimitError:
             raise
         except Exception as e:
-            logger.error(f"  ❌ Error getting article summary with metadata: {e}")
+            if getattr(e, 'code', None) in {'busy', 'native_browser_busy'}:
+                logger.warning("  ⏳ Local extraction admission is busy; article processing will be rescheduled")
+            else:
+                logger.error(f"  ❌ Error getting article summary with metadata: {e}")
             return {
                 **extracted_fields,
                 '_processing_error': getattr(e, 'code', type(e).__name__),
