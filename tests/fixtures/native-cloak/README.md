@@ -18,9 +18,9 @@ python tests/fixtures/native-cloak/origin.py --host 127.0.0.1 --port 443 \
 
 Trust that certificate only in the test browser, for example with its exact
 SPKI trust exception. Do not add a test CA to production or disable all
-certificate verification. For B/C, the gateway needs its explicit test mode and
-an exact `native-fixture.test` РІвЂ вЂ™ fixture-IP allowlist. Origin credentials, production
-profiles and external network access are unnecessary.
+certificate verification. The Go egress gateway needs its explicit test mode
+and an exact `native-fixture.test` fixture-IP allowlist. Origin credentials,
+production profiles and external network access are unnecessary.
 
 Example single fresh C invocation, after the native service is ready:
 
@@ -34,16 +34,17 @@ python scripts/benchmark_native_cloak.py --variant C \
 
 Tokens come only from `EXTRACTOR_TEST_TOKEN` and `EGRESS_TOKEN`. The service's
 `EXTRACTOR_NATIVE_READY_SELECTOR` must exactly match the runner's fixture selector;
-the runner verifies its hash through health capabilities. A requires app/cloak
-cgroups; B adds gateway. Paths must identify distinct non-nested cgroups. Missing
+the runner verifies its hash through health capabilities. The Go controller and
+its gateway require distinct cgroups. Paths must identify distinct non-nested
+cgroups. Missing
 mandatory counters fail the run. Absent kernel `memory.peak` is reported as null,
 never zero; sampled maxima are labeled separately.
 
-Use fresh containers for three independent A/B/C repeats and alternate their
-order. One invocation contains repeated jobs, not independent browser startups.
-The load generator/origin is outside the controller comparison; whole-system
-rollout evidence must additionally include the remaining Python app. D currently
-has a narrower controller/client-plumbing scope, not full processing evidence.
+The active benchmark accepts only the Go controller (`--variant C`). Use fresh
+containers for independent repeats. One invocation contains repeated jobs, not
+independent browser startups. The load generator/origin is outside the
+controller measurement; these results do not establish whole-application
+resource savings.
 
 See [the approved plan](../../../docs/ai-plans/2026-10-16-go-cloak-native-worker.html)
 and [implementation evidence](../../../docs/go-cloak-native-worker.md).

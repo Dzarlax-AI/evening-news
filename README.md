@@ -24,11 +24,11 @@ Everything runs on a schedule you control, or you can trigger any step manually 
 
 The deployed application uses the standalone Go scheduler for calendar timing and command dispatch. Python retains source configuration, News PostgreSQL persistence, selector memory, durable job execution, AI processing, and digest delivery. A separate private Go collection service handles SourceManager dispatch, RSS/Atom collection, Telegram channel capture/parsing, Page Monitor capture/parsing, and article extraction. Python calls its authenticated API and saves the results; the collection service does not own the database or send digests.
 
-An optional [separate Python background worker](docs/background-worker.md) executes durable work outside the web process. With `BACKGROUND_EXECUTION_MODE=worker`, web submits PostgreSQL jobs and reports their status; `python -m news_aggregator.worker` executes them under a singleton database lease. The default remains `embedded`; the production deployment uses separate web and worker processes.
+The Python web app and [separate background worker](docs/background-worker.md) retain News PostgreSQL persistence, selector memory, durable job execution, AI processing, and digest delivery. Scheduled commands are accepted by the app into its durable job queue and executed by the worker. `BACKGROUND_EXECUTION_MODE=worker` is required for scheduled work; `embedded` remains available for manual execution paths.
 
-The [standalone Go scheduler](docs/go-scheduler.md) provides reusable scheduling with its own PostgreSQL schema and a versioned HTTP command/receipt contract. It is deployed separately from the News application. In `SCHEDULE_DISPATCH_MODE=service`, the News adapter accepts scheduled commands into the existing durable queue; Python remains the execution worker. The scheduler is independently packaged and does not depend on article, AI, or delivery models. Repository routing defaults remain Python.
+The [standalone Go scheduler](docs/go-scheduler.md) owns calendar timing and dispatch, with its own PostgreSQL schema and versioned HTTP command/receipt contract. It is deployed separately from the News application. The News API exposes schedule configuration through a thin authenticated Go-service facade, and the app accepts dispatched commands into its durable queue. The scheduler is independently packaged and does not depend on article, AI, or delivery models.
 
-Source collection runs up to five jobs concurrently. Telegram HTTP fetches do not reserve a browser slot. Article rendering, Telegram browser fallback, and Page Monitor rendering share one bounded native admission gate: **two active renders in the current production deployment**, with at most eight waiting operations. Each render owns a disposable browser context and target. Waiting respects the caller's deadline; admission-time expiry remains retryable busy rather than consuming an article attempt.
+The Go collection service owns RSS/Atom, Telegram, Page Monitor capture and parsing, and article extraction. The app retains source CRUD/configuration and source-specific durable state. Browser rendering is available only in the native Go deployment profile; the minimal local Compose example intentionally uses HTTP-only extraction and Page Monitor capture.
 
 ```mermaid
 flowchart TD
@@ -109,7 +109,7 @@ flowchart TD
     DB --> UI
 ```
 
-This diagram describes the deployed Go routes as of October 23, 2026. The standalone Go scheduler owns calendar timing and command dispatch; News persistence, job execution, article processing, and delivery remain in Python. Repository routing defaults remain Python, and native render concurrency defaults to one; the deployed configuration explicitly selects all four Go collection modes and `EXTRACTOR_BROWSER_CONCURRENT=2`. These are configuration choices, not changed defaults for a new installation. See the [scheduler release record](deploy/news-scheduler/RELEASE_2026-10-23.md) for deployment verification.
+This diagram shows the runtime ownership boundary: Go owns collection, extraction, scheduling, and dispatch; Python owns News persistence, durable work execution, article processing, and delivery. See the [scheduler release record](deploy/news-scheduler/RELEASE_2026-10-23.md) for deployment verification.
 
 See the [source collection guide](docs/go-source-manager.md), [Telegram guide](docs/go-telegram-source.md), [Page Monitor guide](docs/go-page-monitor.md), [native worker guide](docs/go-cloak-native-worker.md), and [deployment handoff](deploy/news-extractor/HANDOFF.md) for contracts, limits, and deployment boundaries.
 
@@ -145,17 +145,17 @@ Design follows the [dzarlax.dev](https://dzarlax.dev) brand system: warm ivory b
 
 ## Sources
 
-**RSS / Atom** — feed URLs collected by the guarded Go collector in production with `SOURCE_MANAGER_MODE=go`; the repository default remains Python. When the feed provides only a snippet, the full article is fetched automatically using the article extraction pipeline below.
+**RSS / Atom** — feed URLs are collected by the guarded Go collector. When the feed provides only a snippet, the full article is fetched automatically using the Go extraction service.
 
-**Telegram** — public channels via web preview. The parser strips UI chrome (forwarded headers, reactions, buttons) and follows external links to fetch full article text. The production profile routes collection and parsing through Go; Python remains the default mode.
+**Telegram** — public channels via the Go collector. It extracts messages and follows external links to fetch full article text. Explicit media refresh for a historical post retains a bounded Python compatibility helper.
 
-**Custom (Page Monitor)** — for sites without RSS. Point it at a URL and it finds new articles using CSS selectors. If selectors need learning, Python analyzes the captured page and saves learned selectors for the next fetch. The production profile sends page capture and parsing to Go while Python retains selector memory and optional AI learning. You can also provide your own selectors as a fixed override.
+**Custom (Page Monitor)** — for sites without RSS. Point it at a URL and it finds new articles using CSS selectors. The Go service captures and parses the page while Python retains selector memory, cursor/snapshot state, and optional AI learning. You can provide your own selectors as a fixed override. The minimal local Compose example supports HTTP pages; use the [native deployment guide](docs/go-cloak-native-worker.md) for JavaScript-rendered pages.
 
 ---
 
 ## Article extraction
 
-When a source yields a link rather than full text, the Python app sends it to the private Go extractor when `EXTRACTION_SERVICE_MODE=go`. The service applies its guarded extraction pipeline and, in the production profile, can use the shared Cloak browser for eligible pages. `EXTRACTION_SERVICE_PYTHON_FALLBACK` defaults to false; enabling a Python fallback is an explicit configuration choice. In Python mode, the existing Python extraction path remains in use.
+When a source yields a link rather than full text, the Python app sends it to the private Go extraction service. There is no Python extraction fallback. The HTTP-only local profile handles ordinary HTTP pages; JavaScript rendering requires the separately configured native Go browser deployment.
 
 ---
 
@@ -201,33 +201,33 @@ AI calls are the main operating cost. Several mechanisms keep them in check:
 
 ### With Docker (recommended)
 
-This standalone example is for local use. It starts the app with its own PostgreSQL and browser containers; it is separate from the production shared-browser topology.
+This standalone example is a minimal HTTP-only local stack. It starts the Go collector and scheduler, the News web app and worker, and separate PostgreSQL instances for News and scheduler data. It does not start a browser or render JavaScript pages.
 
-Configure the example's credentials before starting it.
+Set `DB_PASSWORD`, `SCHEDULER_DB_PASSWORD`, `GEMINI_API_KEY`, `TELEGRAM_TOKEN`, `TELEGRAM_CHAT_ID`, `ADMIN_PASSWORD`, `JWT_SECRET`, `SCHEDULER_API_TOKEN`, `SCHEDULED_JOBS_TOKEN`, and `EXTRACTION_SERVICE_TOKEN` in the shell or an ignored `.env` file before starting it. Use fixture credentials for local development. Set Page Monitor sources to HTTP mode (`use_browser=false`) in this profile. For JavaScript-rendered sources, follow the [native deployment guide](docs/go-cloak-native-worker.md).
 
 ```bash
-docker compose -f docker-compose.example.yml up -d
+docker compose -f docker-compose.example.yml up --build -d
 ```
 
 The app will be available at `http://localhost:8000`, with the admin panel at `/admin`.
 
 ### For local development
 
-```bash
-docker compose -f docker-compose.dev.yml up -d
-```
+This adds read-only source mounts and development settings to the complete example stack; it is an overlay and must be used with `docker-compose.example.yml`:
 
-This mounts local application code into the container so changes take effect without rebuilding. It expects a configured PostgreSQL endpoint; it does not start the production Go extractor or shared Cloak browser.
+```bash
+docker compose -f docker-compose.example.yml -f docker-compose.dev.yml up --build -d
+```
 
 ### Production topology
 
-Production runs the Python app, private Go extractor service, and egress gateway alongside the externally managed shared Cloak browser. The deployed News Compose configuration uses matching immutable app/worker images, all four Go routing modes, and two native render slots. [`compose.native.yml`](deploy/news-extractor/compose.native.yml) and [`compose.shared-browser.yml`](deploy/news-extractor/compose.shared-browser.yml) are deployment templates; their conservative defaults do not fully describe the current deployed configuration. Follow the [deployment handoff](deploy/news-extractor/HANDOFF.md) for merge order and runtime checks; these overlay files are not standalone Compose projects.
+Production runs the Python News app and durable worker with the private Go collector and standalone Go scheduler. Native browser rendering is an optional Go deployment profile that uses the approved browser and egress infrastructure. [`compose.native.yml`](deploy/news-extractor/compose.native.yml) and [`compose.shared-browser.yml`](deploy/news-extractor/compose.shared-browser.yml) are deployment templates, not standalone Compose projects.
 
 ---
 
 ## Configuration
 
-The only things you need to get started:
+The core app settings are:
 
 ```bash
 # Database (PostgreSQL)
@@ -248,9 +248,13 @@ ADMIN_PASSWORD=your_secure_password
 JWT_SECRET=your_jwt_secret
 ```
 
-Everything else has sensible defaults. Full reference is in `docker-compose.example.yml`.
+The Go collector and scheduler are also mandatory runtime services. Configure
+`EXTRACTION_SERVICE_URL` and `EXTRACTION_SERVICE_TOKEN`,
+`SCHEDULER_API_URL` and `SCHEDULER_API_TOKEN`, plus `SCHEDULED_JOBS_TOKEN` for
+the private News job receiver. The Compose example wires these service URLs
+and credentials; see `docker-compose.example.yml` for the complete reference.
 
-Routing defaults remain Python. The deployed configuration explicitly sets `SOURCE_MANAGER_MODE=go`, `EXTRACTION_SERVICE_MODE=go`, `TELEGRAM_SOURCE_MODE=go`, and `PAGE_MONITOR_SOURCE_MODE=go`, with the private service URL and bearer token configured. Go SourceManager requires both source modes to be Go. Article-extraction Python fallback is disabled, and Go source clients do not silently fall back to Python. `EXTRACTOR_BROWSER_CONCURRENT` supports one or two native renders: its default is one, while the deployed value is two. See the [source collection guide](docs/go-source-manager.md) and [native worker guide](docs/go-cloak-native-worker.md).
+Go is the only collection, scheduling, and extraction runtime. Startup requires authenticated Go service configuration. Deprecated Python/shadow/fallback mode settings are rejected when they request removed behavior; inert compatibility values do not restore legacy runtimes. See the [source collection guide](docs/go-source-manager.md), [scheduler guide](docs/go-scheduler.md), and [native worker guide](docs/go-cloak-native-worker.md).
 
 ---
 

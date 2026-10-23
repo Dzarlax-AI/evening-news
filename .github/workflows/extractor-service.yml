@@ -24,7 +24,6 @@ on:
       - 'tests/test_linux_vps_gate_harness.py'
       - 'tests/test_processing_batches.py'
       - 'tests/fixtures/**'
-      - 'scripts/benchmark_python_pipeline.py'
       - 'scripts/native_*.py'
       - 'scripts/run_native_*.py'
       - 'scripts/run_go_cloak_linux_gate.py'
@@ -59,7 +58,6 @@ on:
       - 'tests/test_linux_vps_gate_harness.py'
       - 'tests/test_processing_batches.py'
       - 'tests/fixtures/**'
-      - 'scripts/benchmark_python_pipeline.py'
       - 'scripts/native_*.py'
       - 'scripts/run_native_*.py'
       - 'scripts/run_go_cloak_linux_gate.py'
@@ -101,8 +99,12 @@ jobs:
       NO_BROWSER: '1'
       EXTRACTOR_TEST_TOKEN: isolated-ci-token
       EXTRACTOR_TEST_VERSION: ${{ github.sha }}
+      EXTRACTION_SERVICE_URL: http://extractor.invalid:8080
+      EXTRACTION_SERVICE_TOKEN: isolated-extraction-service-token
+      SCHEDULER_API_URL: https://scheduler.invalid
+      SCHEDULER_API_TOKEN: isolated-scheduler-api-token
+      SCHEDULED_JOBS_TOKEN: isolated-scheduled-jobs-token
       TEST_DATABASE_URL: postgresql+asyncpg://postgres:test-only@127.0.0.1:5432/evening_news_test
-      EXTRACTION_SERVICE_MODE: python
     steps:
       - uses: actions/checkout@v4
       - uses: actions/setup-go@v5

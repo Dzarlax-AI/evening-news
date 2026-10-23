@@ -43,9 +43,7 @@ def settings(**changes):
 
 
 @pytest.mark.asyncio
-async def test_go_mode_avoids_python_browser_and_parser_and_preserves_article(monkeypatch):
-    monkeypatch.setattr(module, 'BROWSER_AVAILABLE', True)
-    monkeypatch.setattr(module, 'get_http_client', lambda: pytest.fail('unexpected Python HTTP path'), raising=False)
+async def test_go_mode_normalizes_and_preserves_collected_article(monkeypatch):
     monkeypatch.setattr('news_aggregator.config.get_settings', lambda: settings())
 
     class Client:
@@ -61,8 +59,6 @@ async def test_go_mode_avoids_python_browser_and_parser_and_preserves_article(mo
             return {'outcome': 'success', 'articles': [go_article()]}
 
     monkeypatch.setattr('news_aggregator.telegram.service_client.TelegramServiceClient', Client)
-    monkeypatch.setattr(TelegramSource, '_fetch_with_browser', lambda *args: pytest.fail('Python browser called'))
-    monkeypatch.setattr(TelegramSource, '_fetch_with_http', lambda *args: pytest.fail('Python HTTP called'))
     result = [item async for item in source().fetch_articles()]
     assert len(result) == 1
     item = result[0]
@@ -207,11 +203,11 @@ async def test_enrichment_deadline_reserves_time_and_timeout_keeps_all_posts(mon
     assert result[0].content == result[1].content == 'Short post'
 
 
-def test_telegram_mode_config_defaults_to_python_and_validates_go_requirements():
+def test_telegram_mode_config_is_go_only_and_runtime_validation_is_separate():
     base = Settings(_env_file=None)
-    assert base.telegram_source_mode == 'python'
-    with pytest.raises(ValueError, match='TELEGRAM_SOURCE_MODE=go requires'):
-        Settings(_env_file=None, telegram_source_mode='go')
+    assert base.telegram_source_mode == 'go'
+    with pytest.raises(ValueError):
+        Settings(_env_file=None, telegram_source_mode='python')
     configured = Settings(_env_file=None, telegram_source_mode='go',
                           extraction_service_url='http://extractor:8080',
                           extraction_service_token='token')

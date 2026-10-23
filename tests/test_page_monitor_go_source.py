@@ -242,7 +242,7 @@ def test_empty_resource_continuation_keeps_hash_metadata_within_window_bound(mon
     assert len(monitor._go_previous_segments) == 100
 
 
-def test_failed_service_call_preserves_snapshot_and_does_not_open_python_browser(monkeypatch):
+def test_failed_service_call_preserves_snapshot_without_local_browser(monkeypatch):
     install_go_mode(monkeypatch)
     config = PageMonitorConfig('https://example.test/updates', 'Example', use_browser=True)
     monitor = PageMonitorSource(config)
@@ -257,9 +257,6 @@ def test_failed_service_call_preserves_snapshot_and_does_not_open_python_browser
             raise PageMonitorServiceError('unavailable', True)
 
     monkeypatch.setattr('news_aggregator.sources.page_monitor_service_client.PageMonitorServiceClient', FailedClient)
-    async def forbidden_browser():
-        raise AssertionError('Go mode must not acquire the Python browser')
-    monkeypatch.setattr('news_aggregator.core.browser_pool.get_browser', forbidden_browser)
     async def run():
         await monitor.__aenter__()
         assert monitor.browser is None

@@ -4,7 +4,6 @@ on:
   push:
     paths:
       - 'go/**'
-      - 'scripts/benchmark_python_pipeline.py'
       - 'scripts/compare_extraction_replays.py'
       - 'docs/extraction-review-decisions.json'
       - 'docs/extraction-golden-cases.json'
@@ -14,7 +13,6 @@ on:
   pull_request:
     paths:
       - 'go/**'
-      - 'scripts/benchmark_python_pipeline.py'
       - 'scripts/compare_extraction_replays.py'
       - 'docs/extraction-review-decisions.json'
       - 'docs/extraction-golden-cases.json'
@@ -42,9 +40,8 @@ jobs:
       - uses: actions/setup-python@v5
         with:
           python-version: '3.12'
-          cache: pip
-      - name: Install Python replay dependencies
-        run: python -m pip install -r requirements.txt
+      - name: Install replay checker test dependency
+        run: python -m pip install pytest
       - name: Go unit tests, race detector, and static checks
         working-directory: go
         run: |
@@ -52,20 +49,20 @@ jobs:
           go vet ./...
       - name: Python harness regression tests
         run: python -m pytest tests/test_extraction_replay.py -q
-      - name: Replay the same offline corpus in both implementations
+      - name: Replay the offline corpus with Go
         run: |
-          python scripts/benchmark_python_pipeline.py --corpus tests/fixtures/go-parity/manifest.json --cycles 6 --output artifacts/python-replay.jsonl
+          mkdir -p artifacts
           cd go
           go run ./cmd/extract-replay -corpus ../tests/fixtures/go-parity/manifest.json -cycles 6 -workers 2 -output ../artifacts/go-replay.jsonl
-      - name: Check source goldens and reviewed differences
+      - name: Check every Go replay against frozen source goldens
         run: |
-          python scripts/compare_extraction_replays.py --python artifacts/python-replay.jsonl --go artifacts/go-replay.jsonl --corpus tests/fixtures/go-parity/manifest.json --cycles 6 --decisions docs/extraction-review-decisions.json --golden docs/extraction-golden-cases.json --output artifacts/replay-comparison.json
+          python scripts/compare_extraction_replays.py --go artifacts/go-replay.jsonl --corpus tests/fixtures/go-parity/manifest.json --cycles 6 --golden docs/extraction-golden-cases.json --output artifacts/replay-comparison.json
       - name: Save replay evidence
         if: always()
         uses: actions/upload-artifact@v4
         with:
           name: extraction-component-replay
           path: |
-            artifacts/*replay.jsonl
+            artifacts/go-replay.jsonl
             artifacts/replay-comparison.json
           if-no-files-found: warn

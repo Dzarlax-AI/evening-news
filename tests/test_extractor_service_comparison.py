@@ -155,11 +155,9 @@ async def test_real_http_client_sends_capture_without_browser_and_report_is_reda
     assert len(requests) == 1
     assert report["case_ids"] == ["captured.article"]
     row = report["records"][0]
-    assert row["content_match"] is True
-    assert row["metadata_match"] == {field: True for field in compare.METADATA_FIELDS}
-    assert row["media_match"] is True
-    assert row["python_expected_match"] is True
-    assert row["service_expected_match"] is True
+    assert row["expected_match"] is True
+    assert row["state"] == "extracted"
+    assert row["content_chars"] == len("Captured article text with distinct details.")
     assert row["classification"] == "matched"
     assert row["mismatch"] is False
     for private in (secret_url, "fixture-query-secret", "Captured article text", "test-token-never-reported"):
@@ -167,24 +165,15 @@ async def test_real_http_client_sends_capture_without_browser_and_report_is_reda
 
 
 def test_same_rejected_outcome_is_explicit_and_not_an_improvement():
-    row = compare._comparison({"state": "failed", "content": "", "media": []},
-                              {"outcome": "rejected", "result": {"content": "", "media": []}})
-    assert row["known_rejected"] is True
-    row.update(python_expected_match=True, service_expected_match=True, mismatch=False)
-    assert compare._mismatch(row) is False
+    payload = {"outcome": "rejected", "result": {"state": "failed", "content": ""}}
+    assert compare._service_state(payload) == "failed"
+    assert compare._expected_matches({"state": "failed"}, payload["result"], "failed") is True
 
 
-def test_both_implementations_failing_successful_fixture_fails_expectations():
+def test_service_failure_cannot_satisfy_a_successful_fixture_expectation():
     expected = {"state": "extracted", "contains": ["required source sentence"]}
-    py_match = compare._expected_matches(expected, {"content": ""}, "failed")
-    go_match = compare._expected_matches(expected, {"content": ""}, "failed")
-    row = {"python_expected_match": py_match, "service_expected_match": go_match,
-           "python_state": "failed", "service_state": "failed", "known_rejected": False,
-           "content_match": True, "metadata_match": {field: True for field in compare.METADATA_FIELDS},
-           "media_match": True}
-    row["mismatch"] = compare._mismatch(row)
-    assert row["mismatch"] is True
-    assert compare._classify(row, expected) == "both_expectation_mismatch"
+    result = {"state": "failed", "content": ""}
+    assert compare._expected_matches(expected, result, result["state"]) is False
 
 
 @pytest.mark.parametrize(("expected", "result"), [

@@ -4,12 +4,14 @@ import os
 from typing import Optional, List, Dict, Any, Literal
 from datetime import datetime, timedelta
 
-from pydantic import Field, SecretStr, field_validator, model_validator
+from pydantic import ConfigDict, Field, SecretStr, model_validator
 from pydantic_settings import BaseSettings
 
 
 class Settings(BaseSettings):
     """Application settings."""
+
+    model_config = ConfigDict(env_file=".env", case_sensitive=False, hide_input_in_errors=True)
     
     # Database
     database_url: str = Field(default="postgresql+asyncpg://newsuser:newspass123@localhost:5432/newsdb")
@@ -31,38 +33,14 @@ class Settings(BaseSettings):
     ai_output_cost_per_1m: Optional[float] = Field(default=None, alias="AI_OUTPUT_COST_PER_1M")
     ai_cached_input_cost_per_1m: Optional[float] = Field(default=None, alias="AI_CACHED_INPUT_COST_PER_1M")
     
-    # Browser (Chrome CDP endpoint, e.g. ws://chrome:9222)
-    browser_ws_endpoint: Optional[str] = Field(default=None, alias="BROWSER_WS_ENDPOINT")
-    browser_proxy_enabled: bool = Field(default=False, alias="BROWSER_PROXY_ENABLED")
-    browser_proxy_url: Optional[str] = Field(default=None, repr=False, alias="BROWSER_PROXY_URL")
-    browser_proxy_token: Optional[SecretStr] = Field(default=None, repr=False, alias="BROWSER_PROXY_TOKEN")
-    browser_tab_acquire_timeout_seconds: float = Field(
-        default=120.0, gt=0, allow_inf_nan=False, alias="BROWSER_TAB_ACQUIRE_TIMEOUT_SECONDS"
-    )
-    browser_tab_create_timeout_seconds: float = Field(
-        default=30.0, gt=0, allow_inf_nan=False, alias="BROWSER_TAB_CREATE_TIMEOUT_SECONDS"
-    )
-    browser_tab_close_timeout_seconds: float = Field(
-        default=5.0, gt=0, allow_inf_nan=False, alias="BROWSER_TAB_CLOSE_TIMEOUT_SECONDS"
-    )
-    browser_operation_timeout_seconds: float = Field(
-        default=90.0, gt=0, allow_inf_nan=False, alias="BROWSER_OPERATION_TIMEOUT_SECONDS"
-    )
-    browser_failure_threshold: int = Field(
-        default=3, gt=0, alias="BROWSER_FAILURE_THRESHOLD"
-    )
-    browser_restart_marker_path: Optional[str] = Field(
-        default=None, alias="BROWSER_RESTART_MARKER_PATH"
-    )
-
     # Telegram
     telegram_token: Optional[SecretStr] = Field(default=None, alias="TELEGRAM_TOKEN")
     telegram_chat_id: Optional[str] = Field(default=None, alias="TELEGRAM_CHAT_ID")
     telegram_service_chat_id: Optional[str] = Field(default=None, alias="TELEGRAM_SERVICE_CHAT_ID")
     telegram_rich_messages_enabled: bool = Field(default=True, alias="TELEGRAM_RICH_MESSAGES_ENABLED")
-    source_manager_mode: Literal['python', 'go'] = Field(default='python', alias='SOURCE_MANAGER_MODE')
-    telegram_source_mode: Literal['python', 'go'] = Field(default='python', alias='TELEGRAM_SOURCE_MODE')
-    page_monitor_source_mode: Literal['python', 'go'] = Field(default='python', alias='PAGE_MONITOR_SOURCE_MODE')
+    source_manager_mode: Literal['go'] = Field(default='go', alias='SOURCE_MANAGER_MODE')
+    telegram_source_mode: Literal['go'] = Field(default='go', alias='TELEGRAM_SOURCE_MODE')
+    page_monitor_source_mode: Literal['go'] = Field(default='go', alias='PAGE_MONITOR_SOURCE_MODE')
     site_base_url: str = Field(default="https://news.dzarlax.dev", alias="SITE_BASE_URL")
     # Deprecated: accepted so older .env files do not break settings loading after Telegraph removal.
     telegraph_access_token: Optional[str] = Field(default=None, alias="TELEGRAPH_ACCESS_TOKEN")
@@ -76,8 +54,8 @@ class Settings(BaseSettings):
     jwt_secret: Optional[str] = Field(default=None, alias="JWT_SECRET")
     trust_forward_auth: bool = Field(default=False, alias="TRUST_FORWARD_AUTH")
     scheduler_enabled: bool = Field(default=True, alias="SCHEDULER_ENABLED")
-    schedule_dispatch_mode: Literal["python", "service"] = Field(
-        default="python", alias="SCHEDULE_DISPATCH_MODE"
+    schedule_dispatch_mode: Literal["service"] = Field(
+        default="service", alias="SCHEDULE_DISPATCH_MODE"
     )
     scheduler_api_url: Optional[str] = Field(default=None, alias="SCHEDULER_API_URL")
     scheduler_api_token: Optional[SecretStr] = Field(default=None, repr=False, alias="SCHEDULER_API_TOKEN")
@@ -113,7 +91,7 @@ class Settings(BaseSettings):
     extraction_http_max_bytes: int = Field(default=5 * 1024 * 1024, gt=0, alias="EXTRACTION_HTTP_MAX_BYTES")
     extraction_browser_max_bytes: int = Field(default=5 * 1024 * 1024, gt=0, alias="EXTRACTION_BROWSER_MAX_BYTES")
     extraction_text_max_chars: int = Field(default=100000, gt=0, alias="EXTRACTION_TEXT_MAX_CHARS")
-    extraction_service_mode: Literal['python', 'shadow', 'go'] = Field(default='python', alias='EXTRACTION_SERVICE_MODE')
+    extraction_service_mode: Literal['go'] = Field(default='go', alias='EXTRACTION_SERVICE_MODE')
     extraction_service_url: Optional[str] = Field(default=None, alias='EXTRACTION_SERVICE_URL')
     extraction_service_token: Optional[SecretStr] = Field(default=None, alias='EXTRACTION_SERVICE_TOKEN')
     extraction_service_native_browser: bool = Field(default=False, alias='EXTRACTION_SERVICE_NATIVE_BROWSER')
@@ -170,98 +148,43 @@ class Settings(BaseSettings):
     news_limit_newest_date: Optional[str] = Field(default=None, alias="NEWS_LIMIT_NEWEST_DATE")
 
 
-    class Config:
-        env_file = ".env"
-        case_sensitive = False
-
-    @field_validator("browser_restart_marker_path")
-    @classmethod
-    def validate_browser_restart_marker_path(cls, value: Optional[str]) -> Optional[str]:
-        if value is None or not value.strip():
-            return None
-        normalized = value.strip()
-        if not os.path.isabs(normalized):
-            raise ValueError("BROWSER_RESTART_MARKER_PATH must be an absolute path")
-        return normalized
-
     @model_validator(mode="after")
-    def validate_extraction_native_browser(self):
-        if self.extraction_service_native_browser and (
-                self.extraction_service_mode != 'go' or self.extraction_service_python_fallback):
-            raise ValueError(
-                'EXTRACTION_SERVICE_NATIVE_BROWSER requires EXTRACTION_SERVICE_MODE=go '
-                'and EXTRACTION_SERVICE_PYTHON_FALLBACK=false'
-            )
+    def reject_python_fallback(self):
+        if self.extraction_service_python_fallback:
+            raise ValueError("EXTRACTION_SERVICE_PYTHON_FALLBACK=true is unsupported; Go owns extraction")
         return self
 
-    @model_validator(mode="after")
-    def validate_telegram_source_mode(self):
-        if self.telegram_source_mode == 'go' and (
-                not self.extraction_service_url or not self.extraction_service_token):
-            raise ValueError(
-                'TELEGRAM_SOURCE_MODE=go requires EXTRACTION_SERVICE_URL and EXTRACTION_SERVICE_TOKEN'
-            )
-        return self
-
-    @model_validator(mode="after")
-    def validate_page_monitor_source_mode(self):
-        if self.page_monitor_source_mode == 'go':
-            from urllib.parse import urlsplit
-            if not self.extraction_service_url or not self.extraction_service_token:
-                raise ValueError(
-                    'PAGE_MONITOR_SOURCE_MODE=go requires EXTRACTION_SERVICE_URL and EXTRACTION_SERVICE_TOKEN'
-                )
-            try:
-                parsed = urlsplit(self.extraction_service_url)
-            except ValueError as exc:
-                raise ValueError('EXTRACTION_SERVICE_URL must be a valid http(s) URL') from exc
-            if (parsed.scheme not in {'http', 'https'} or not parsed.hostname or parsed.username
-                    or parsed.password or parsed.query or parsed.fragment):
-                raise ValueError('EXTRACTION_SERVICE_URL must be a valid http(s) URL')
-        return self
-
-    @model_validator(mode="after")
-    def validate_source_manager_mode(self):
-        if self.source_manager_mode == 'go':
-            if self.telegram_source_mode != 'go' or self.page_monitor_source_mode != 'go':
-                raise ValueError(
-                    'SOURCE_MANAGER_MODE=go requires TELEGRAM_SOURCE_MODE=go and '
-                    'PAGE_MONITOR_SOURCE_MODE=go'
-                )
-            if not self.extraction_service_url or not self.extraction_service_token:
-                raise ValueError(
-                    'SOURCE_MANAGER_MODE=go requires EXTRACTION_SERVICE_URL and EXTRACTION_SERVICE_TOKEN'
-                )
-        return self
-
-    @model_validator(mode="after")
-    def validate_browser_proxy(self):
+    def validate_runtime_services(self):
+        """Validate required private service configuration at application startup."""
         from urllib.parse import urlsplit
 
-        url = self.browser_proxy_url
-        token = self.browser_proxy_token.get_secret_value() if self.browser_proxy_token else None
-        if not self.browser_proxy_enabled:
-            if url is not None or token is not None:
-                raise ValueError("BROWSER_PROXY_URL and BROWSER_PROXY_TOKEN require BROWSER_PROXY_ENABLED")
-            return self
-        if not url or not token:
-            raise ValueError("BROWSER_PROXY_ENABLED requires BROWSER_PROXY_URL and BROWSER_PROXY_TOKEN")
-        try:
-            parsed = urlsplit(url)
-            port = parsed.port
-        except ValueError as exc:
-            raise ValueError("BROWSER_PROXY_URL must be an http URL with an explicit port") from exc
-        if (
-            parsed.scheme != "http" or not parsed.hostname or port is None or not 1 <= port <= 65535
-            or parsed.username is not None or parsed.password is not None
-            or parsed.path != "" or parsed.query or parsed.fragment
-            or "?" in url or "#" in url or any(char.isspace() for char in url)
-        ):
-            raise ValueError("BROWSER_PROXY_URL must be an http URL with explicit port and no credentials or path")
-        if not 16 <= len(token) <= 4096:
-            raise ValueError("BROWSER_PROXY_TOKEN must contain 16 to 4096 characters")
-        return self
-    
+        required = (
+            ("EXTRACTION_SERVICE_URL", self.extraction_service_url, self.extraction_service_token,
+             {"http", "https"}),
+            ("SCHEDULER_API_URL", self.scheduler_api_url, self.scheduler_api_token,
+             {"http", "https"} if self.scheduler_api_allow_http else {"https"}),
+        )
+        for label, url, secret, schemes in required:
+            token = secret.get_secret_value() if secret else None
+            if not url or not token:
+                raise RuntimeError(f"{label} and its matching service token are required at startup")
+            try:
+                parsed = urlsplit(url)
+                _ = parsed.port
+            except ValueError:
+                raise RuntimeError(f"{label} must be a valid service URL") from None
+            if (parsed.scheme not in schemes or not parsed.hostname or parsed.username or parsed.password
+                    or parsed.query or parsed.fragment or any(ch.isspace() for ch in url)):
+                raise RuntimeError(f"{label} must be a valid service URL")
+            if not 16 <= len(token) <= 4096 or any(ord(ch) < 0x21 or ord(ch) > 0x7E for ch in token):
+                raise RuntimeError(f"{label} token must be a valid non-empty service token")
+        receiver_token = (self.scheduled_jobs_token.get_secret_value()
+                          if self.scheduled_jobs_token else None)
+        if not receiver_token or not 16 <= len(receiver_token) <= 4096 or any(
+                ord(ch) < 0x21 or ord(ch) > 0x7E for ch in receiver_token):
+            raise RuntimeError("SCHEDULED_JOBS_TOKEN must be configured with a valid service token")
+        return True
+
     def get_allowed_origins_list(self) -> List[str]:
         """Return allowed origins as list."""
         if not self.allowed_origins:

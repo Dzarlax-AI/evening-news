@@ -151,9 +151,10 @@ flight or undo an already accepted News job.
 
 ## Migration and rollback
 
-The deployed News app uses service dispatch while `SCHEDULER_ENABLED=false`,
-leaving schedule CRUD/status to the Go service without enabling the legacy
-Python loop. The standalone scheduler control is unpaused. The migration bridge
+The News app uses service dispatch while `SCHEDULER_ENABLED=false`; this
+deprecated setting is inert and does not control Go scheduling. Schedule
+CRUD/status and calendar dispatch belong to the standalone service. The Go
+scheduler control is unpaused. The migration bridge
 imports News configuration and exact due instants; the scheduler does not
 connect directly to the News database. Enabled imports require a non-null due
 time; disabled imports require null. Stable keys use `news:<legacy_id>`, and
@@ -165,8 +166,9 @@ and any active News dispatch lease before writing an inventory artifact.
 Expired leases remain visible with database-clock lease status. Occurrences and
 execution jobs belonging to deleted News schedules remain in inventory; their
 configuration is not recreated. Export current calendar configuration and next due
-times back through the bridge before resuming Python scheduling. Never restore
-an old configuration snapshot blindly, delete outbox entries, or discard jobs.
+times into an isolated inventory before restoring a previously approved
+Go-compatible release. There is no Python calendar runtime to resume. Never
+restore an old configuration snapshot blindly, delete outbox entries, or discard jobs.
 The shared collector, browser, egress gateway, and their clients are outside the
 scheduler rollout.
 

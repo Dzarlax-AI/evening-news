@@ -87,24 +87,8 @@ async def get_process_monitor_status():
 
 @router.post("/process-monitor/cleanup")
 async def cleanup_processes():
-    """Manually trigger process cleanup."""
-    from ..config import settings
-    if settings.background_execution_mode == "worker":
-        raise HTTPException(status_code=409, detail="Process cleanup is owned by the background worker")
-    try:
-        from ..services.process_monitor import ProcessMonitor
-        
-        monitor = ProcessMonitor()
-        result = await monitor.cleanup_zombie_processes()
-        
-        return {
-            "message": "Process cleanup completed",
-            "result": result,
-            "timestamp": datetime.utcnow().isoformat()
-        }
-        
-    except Exception as e:
-        raise HTTPException(status_code=500, detail=f"Cleanup failed: {str(e)}")
+    """Browser process cleanup is owned by the Go collector."""
+    raise HTTPException(status_code=409, detail="Process cleanup is owned by the Go collector")
 
 
 @router.post("/migrations/run")

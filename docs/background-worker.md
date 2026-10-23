@@ -1,15 +1,16 @@
 # Background worker
 
-The optional `BACKGROUND_EXECUTION_MODE=worker` mode separates the Python web
-process from background execution. The default remains `embedded`. This change
-has not been deployed: the existing production setup continues to run its
-embedded Python scheduler alongside the private Go collector/extractor.
+`BACKGROUND_EXECUTION_MODE=worker` separates the Python web process from
+background execution. The `embedded` mode remains available for manual
+operations. Scheduled commands require worker mode because calendar timing and
+dispatch belong to the standalone Go scheduler; the Python schedule loop has
+been removed.
 
 ## Responsibilities
 
 - Web: authenticated administration, source CRUD, public reads, durable job
   submission, and job status.
-- Python worker: scheduled jobs, collection through Go, article processing,
+- Python worker: accepted scheduled jobs, collection through Go, article processing,
   Gemini calls, summary generation, and the existing digest delivery.
 - Go service: source dispatch, RSS/Atom, Telegram and Page Monitor capture/parsing,
   and article extraction. Its native render limit is configured independently.
@@ -22,11 +23,11 @@ there is no new message broker or public worker execution port.
 
 Use matching application versions and the same database for web and worker.
 Select `BACKGROUND_EXECUTION_MODE=worker` explicitly in both processes. The
-existing Go routing settings and private service credentials remain required
-when those routes are enabled.
+required authenticated Go service URLs and tokens are validated at application
+startup.
 
-`SCHEDULER_ENABLED=false` disables scheduled dispatch in the worker while allowing
-manual jobs to run. `WORKER_POLL_INTERVAL_SECONDS` defaults to 1,
+`SCHEDULER_ENABLED` is a deprecated inert compatibility setting; it does not
+enable or disable Go scheduling. `WORKER_POLL_INTERVAL_SECONDS` defaults to 1,
 `WORKER_SHUTDOWN_DRAIN_SECONDS` to 20, and `WORKER_JOB_RETENTION_DAYS` to 7.
 The worker refuses to start unless worker mode is explicitly selected.
 
@@ -135,11 +136,11 @@ Loss of ownership stops claims and cancels active work. A second worker cannot
 start another scheduler or execute the same pipeline in parallel. Web restarts
 do not cancel accepted work.
 
-Startup also clears orphaned running flags left by the embedded scheduler while
-preserving configuration, enabled state, future run times, and active durable
-occurrences. Ambiguous orphaned digests are marked `delivery_unknown` and are
-advanced to a future occurrence. One invalid due schedule is isolated and marked
-failed without rolling back other valid schedules; a full queue remains retryable.
+Worker startup recovers interrupted durable jobs under its database lease,
+preserving accepted job identity and completed stages. Legacy numeric
+`schedule_id` payloads remain recoverable, and completing or recovering those
+legacy jobs may update `ScheduleSettings.next_run`. The worker does not calculate
+or mutate Go-owned calendar due times.
 
 Digest jobs can have an uncertain external outcome after a crash. Such jobs
 become `delivery_unknown` and are not resent automatically. An explicit user
@@ -150,28 +151,28 @@ Telegram sends or exactly-once external AI billing.
 
 Only the worker writes processing caches and domain statistics. Web status reads
 use persisted metadata rather than constructing an orchestrator. Backup downloads
-need access to the worker's backup files without creating a second writer.
-
-Mount `/app/data` writable only in the worker and mount its `/app/backups` output
-read-only in web for downloads. Keep process log directories separate. The
+need access to the worker's backup files. Mount `/app/data` writable only in the
+worker and share a persistent `/app/backups` volume between web and worker so
+both processes see the same archives. Worker-mode upload, cleanup, and restore
+API requests remain disabled; those maintenance actions require a stopped
+worker and an offline procedure. Keep process log directories separate. The
 worker's backup command uses its installed PostgreSQL client and does not require
 a Docker socket. Keep both application images at the same revision. Allow a
 container stop grace period longer than the configured shutdown drain.
 
 Backup creation is queued and backup downloads remain available. In worker mode,
-the web API rejects backup upload, cleanup, and restore with HTTP 409: these
-maintenance operations require a stopped worker and an offline procedure. A
-live restore must not race accepted jobs or replace their ownership metadata.
+the web API rejects backup upload, cleanup, and restore with HTTP 409. A live
+restore must not race accepted jobs or replace their ownership metadata.
 
 Measure web and worker idle/active memory separately and together. Separating
 Python processes adds independent interpreter and connection-pool overhead; it
 does not establish a memory reduction or higher throughput. Go/browser limits
 remain unchanged.
 
-Before returning to embedded execution, stop/drain the worker and inventory
-queued or interrupted jobs. Disabling worker mode does not migrate or delete
-accepted jobs. Retain the additive tables and saved articles. Never run embedded
-and worker schedulers against the same database concurrently.
+Before changing execution mode, stop/drain the worker and inventory queued or
+interrupted jobs. Disabling worker mode does not migrate or delete accepted
+jobs. Retain the additive tables and saved articles. Manual embedded operations
+must not substitute for the Go scheduler and worker.
 
 ## Validation status
 

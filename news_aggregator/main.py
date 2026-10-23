@@ -62,6 +62,7 @@ migration_manager.register_migration(ScheduledJobMetadataMigration())
 async def lifespan(app: FastAPI):
     """Application lifespan manager."""
     # Startup
+    settings.validate_runtime_services()
     if not settings.admin_password:
         raise RuntimeError("ADMIN_PASSWORD environment variable is required for secure startup.")
     # Record application start time for health endpoints
@@ -112,33 +113,8 @@ async def lifespan(app: FastAPI):
         logger.warning(f"⚠️ Category cache preload warning: {e}")
         # Don't prevent app startup
     
-    # Start task scheduler
-    if (settings.scheduler_enabled and not worker_mode
-            and settings.schedule_dispatch_mode == "python"):
-        from .services.scheduler import start_scheduler
-        try:
-            logger.info("🔄 Starting task scheduler...")
-            await start_scheduler()
-            logger.info("✅ Task scheduler started successfully")
-        except Exception as e:
-            logger.error(f"❌ Task scheduler startup error: {e}")
-            import traceback
-            traceback.print_exc()
-            # Don't prevent app startup on scheduler errors
-    elif not settings.scheduler_enabled:
-        logger.info("⏸️ Task scheduler disabled (SCHEDULER_ENABLED=false)")
-    elif settings.schedule_dispatch_mode == "service":
-        logger.info("⏸️ Python scheduler loop disabled (SCHEDULE_DISPATCH_MODE=service)")
-    
-    # Start process monitor for browser health checks
-    if not worker_mode:
-        from .services.process_monitor import start_process_monitor
-        try:
-            logger.info("🔍 Starting process monitor...")
-            await start_process_monitor()
-            logger.info("✅ Process monitor started successfully")
-        except Exception as e:
-            logger.error(f"❌ Process monitor startup error: {e}")
+    # Scheduling is owned by the Go scheduler service.
+
     # Start pool cleanup task to prevent connection leaks
     import asyncio
     async def pool_cleanup_task():
@@ -164,15 +140,6 @@ async def lifespan(app: FastAPI):
             await app.state.cleanup_task
         except asyncio.CancelledError:
             pass
-    
-    if not worker_mode:
-        from .services.scheduler import stop_scheduler
-        await stop_scheduler()
-    
-    # Stop process monitor
-    if not worker_mode:
-        from .services.process_monitor import stop_process_monitor
-        await stop_process_monitor()
     
     # Force cleanup ContentExtractor on shutdown
     if not worker_mode:

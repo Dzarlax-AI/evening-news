@@ -241,14 +241,178 @@ def test_collect_cancellation_propagates_without_retrying_or_falling_back():
     asyncio.run(run())
 
 
-def test_go_manager_mode_requires_both_typed_source_modes_and_private_service_config():
-    with pytest.raises(ValueError, match='SOURCE_MANAGER_MODE=go requires TELEGRAM_SOURCE_MODE=go'):
-        Settings(_env_file=None, source_manager_mode='go')
-    with pytest.raises(ValueError, match='TELEGRAM_SOURCE_MODE=go requires EXTRACTION_SERVICE_URL'):
-        Settings(_env_file=None, source_manager_mode='go', telegram_source_mode='go',
-                 page_monitor_source_mode='go')
+def test_go_modes_are_defaults_and_runtime_config_is_validated_at_startup():
+    from news_aggregator.config import Settings
+    from pydantic import ValidationError
+
+    defaults = Settings(_env_file=None)
+    assert defaults.source_manager_mode == 'go'
+    assert defaults.telegram_source_mode == 'go'
+    assert defaults.page_monitor_source_mode == 'go'
+    with pytest.raises(ValidationError):
+        Settings(_env_file=None, source_manager_mode='python')
     configured = Settings(
-        _env_file=None, source_manager_mode='go', telegram_source_mode='go',
-        page_monitor_source_mode='go', extraction_service_url='http://extractor:8080',
-        extraction_service_token=SecretStr('private-token'))
-    assert configured.source_manager_mode == 'go'
+        _env_file=None, EXTRACTION_SERVICE_URL='http://extractor:8080',
+        EXTRACTION_SERVICE_TOKEN='private-token-value',
+        SCHEDULER_API_URL='https://scheduler.example.test',
+        SCHEDULER_API_TOKEN='scheduler-token-value',
+        SCHEDULED_JOBS_TOKEN='receiver-token-value')
+    assert configured.validate_runtime_services() is True
+
+
+@pytest.mark.asyncio
+async def test_source_test_failure_and_preparation_failure_are_not_empty_feed_success(monkeypatch):
+    from types import SimpleNamespace
+
+    import news_aggregator.config as config
+    from news_aggregator.services.source_manager import SourceManager
+
+    settings = Settings(_env_file=None,
+                        EXTRACTION_SERVICE_URL="http://extractor:8080",
+                        EXTRACTION_SERVICE_TOKEN="private-token-value")
+    monkeypatch.setattr(config, "get_settings", lambda: settings)
+
+    class FailedClient:
+        def __init__(self, *_args):
+            pass
+
+        async def collect(self, *_args, **_kwargs):
+            raise SourceManagerServiceError("unavailable")
+
+    monkeypatch.setattr(
+        "news_aggregator.sources.source_manager_service_client.SourceManagerServiceClient",
+        FailedClient)
+    manager = SourceManager()
+    rss = SimpleNamespace(id=10, name="Feed", source_type="rss", url="https://feed.example/rss",
+                          enabled=True, config={})
+    assert await manager._fetch_from_go_source_manager([rss], 1, source_test=True) is False
+    assert await manager._fetch_from_go_source_manager(
+        [rss], 1, source_test=True, return_source_test_result=True) is None
+
+    telegram = SimpleNamespace(id=11, name="Channel", source_type="telegram", url="https://t.me/example",
+                               enabled=True, config={})
+
+    async def cannot_prepare(_source):
+        raise RuntimeError("fixture preparation failure")
+
+    monkeypatch.setattr(manager, "get_source_instance", cannot_prepare)
+    assert await manager._fetch_from_go_source_manager([telegram], 1, source_test=True) is False
+
+
+@pytest.mark.asyncio
+async def test_successful_empty_rss_collection_is_a_healthy_source_test(monkeypatch):
+    from types import SimpleNamespace
+
+    import news_aggregator.config as config
+    from news_aggregator.services.source_manager import SourceManager
+
+    settings = Settings(_env_file=None,
+                        EXTRACTION_SERVICE_URL="http://extractor:8080",
+                        EXTRACTION_SERVICE_TOKEN="private-token-value")
+    monkeypatch.setattr(config, "get_settings", lambda: settings)
+
+    class EmptyFeedClient:
+        def __init__(self, *_args):
+            pass
+
+        async def collect(self, *_args, **_kwargs):
+            return {"results": [{"source_id": 10, "type": "rss", "outcome": "success",
+                                  "rss_articles": []}]}
+
+    monkeypatch.setattr(
+        "news_aggregator.sources.source_manager_service_client.SourceManagerServiceClient",
+        EmptyFeedClient)
+    source = SimpleNamespace(id=10, name="Empty feed", source_type="rss",
+                             url="https://feed.example/rss", enabled=True, config={})
+    assert await SourceManager()._fetch_from_go_source_manager([source], 1, source_test=True) is True
+
+
+@pytest.mark.asyncio
+async def test_inline_connection_test_probes_disabled_source_without_enabling_it(monkeypatch):
+    from types import SimpleNamespace
+
+    import news_aggregator.config as config
+    from news_aggregator.services.source_manager import SourceManager
+
+    settings = Settings(_env_file=None,
+                        EXTRACTION_SERVICE_URL="http://extractor:8080",
+                        EXTRACTION_SERVICE_TOKEN="private-token-value")
+    monkeypatch.setattr(config, "get_settings", lambda: settings)
+    source = SimpleNamespace(
+        id=13, name="Disabled feed", source_type="rss", url="https://feed.example/rss",
+        enabled=False, config={}, last_success=None, error_count=3, last_error="old failure",
+    )
+    observed = {}
+
+    class SuccessfulClient:
+        def __init__(self, *_args):
+            pass
+
+        async def collect(self, sources, **_kwargs):
+            observed.setdefault("enabled", []).append(sources[0]["enabled"])
+            return {"results": [{"source_id": 13, "type": "rss", "outcome": "success",
+                                  "rss_articles": []}]}
+
+    monkeypatch.setattr(
+        "news_aggregator.sources.source_manager_service_client.SourceManagerServiceClient",
+        SuccessfulClient)
+    manager = SourceManager()
+    monkeypatch.setattr(manager, "get_source_by_id", lambda _db, _source_id: _source())
+
+    async def _source():
+        return source
+
+    class FakeSession:
+        async def commit(self):
+            pass
+
+    assert await manager.test_source_connection(FakeSession(), source.id) is True
+    assert await manager._fetch_from_go_source_manager([source], 1) == {13: []}
+    assert observed["enabled"] == [True, False]
+    assert source.enabled is False
+    assert source.error_count == 0
+    assert source.last_error is None
+
+
+@pytest.mark.asyncio
+async def test_page_monitor_source_test_uses_adapter_config_without_learning_or_state_updates(monkeypatch):
+    import news_aggregator.config as config
+    from news_aggregator.models import Source
+    from news_aggregator.services.source_manager import SourceManager
+
+    settings = Settings(_env_file=None,
+                        EXTRACTION_SERVICE_URL="http://extractor:8080",
+                        EXTRACTION_SERVICE_TOKEN="private-token-value")
+    monkeypatch.setattr(config, "get_settings", lambda: settings)
+    observed = {}
+
+    class SuccessfulClient:
+        def __init__(self, *_args):
+            pass
+
+        async def collect(self, sources, **_kwargs):
+            observed["sources"] = sources
+            return {"results": [{"source_id": 12, "type": "custom", "outcome": "success",
+                                  "page_monitor": {}}]}
+
+    monkeypatch.setattr(
+        "news_aggregator.sources.source_manager_service_client.SourceManagerServiceClient",
+        SuccessfulClient)
+    manager = SourceManager()
+    source = Source(id=12, name="Fixture monitor", source_type="custom",
+                    url="https://fixture.example/list", enabled=True, config={})
+    adapter = await manager.get_source_instance(source)
+    monitor = adapter.monitor
+    before = (monitor.last_snapshot, monitor.failure_count, dict(monitor.learned_selectors),
+              monitor._go_offset, dict(monitor._go_previous_segments))
+
+    async def forbidden_learning_preparation():
+        raise AssertionError("source-test must not run selector-learning preparation")
+
+    monkeypatch.setattr(adapter, "prepare_go_collection", forbidden_learning_preparation)
+    assert await manager._fetch_from_go_source_manager([source], 1, source_test=True) is True
+    after = (monitor.last_snapshot, monitor.failure_count, dict(monitor.learned_selectors),
+             monitor._go_offset, dict(monitor._go_previous_segments))
+    assert after == before
+    assert observed["sources"][0]["page_monitor"]["use_browser"] is True
+    assert observed["sources"][0]["page_monitor"]["article_selectors"]

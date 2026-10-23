@@ -1,4 +1,4 @@
-# Lightweight Python base — browser (Alpine Chrome) runs in a separate container
+# Python web/worker image; collection and browser operations are owned by Go.
 FROM python:3.12-slim
 
 # Build arguments for metadata
@@ -30,8 +30,7 @@ RUN apt-get update && apt-get install -y --no-install-recommends \
 COPY requirements.txt .
 
 # Install Python dependencies
-# Note: nodriver connects to a remote Chrome via CDP — no browser binaries here.
-# The browser runs in a separate container (Alpine Chrome, see docker-compose).
+# No browser automation or Python extraction engine is installed in this image.
 RUN pip install --no-cache-dir --prefer-binary -r requirements.txt
 
 # Create directories with proper permissions

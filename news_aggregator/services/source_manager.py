@@ -47,14 +47,11 @@ class SourceManager:
             await db.commit()
             await db.refresh(source)
             
-            # Worker-mode web requests save the source without network/browser work.
-            if not skip_connection_test:
-                source_instance = self._create_source_instance(source)
-                if not await source_instance.test_connection():
-                    source.enabled = False
-                    source.last_error = "Failed connection test"
-                    source.error_count = 1
-                    await db.commit()
+            if not skip_connection_test and not await self._probe_source(source):
+                source.enabled = False
+                source.last_error = "Go source connection test failed"
+                source.error_count = 1
+                await db.commit()
             
             return source
         
@@ -151,38 +148,38 @@ class SourceManager:
         return self._source_instances[source.id]
     
     async def test_source_connection(self, db: AsyncSession, source_id: int) -> bool:
-        """Test source connection."""
+        """Probe a source through Go without applying Telegram or Page Monitor results."""
         source = await self.get_source_by_id(db, source_id)
         if not source:
             return False
-        
+        # Release the read transaction before network admission can wait. Reload
+        # the row afterward so the operational test metadata is still persisted.
+        source_snapshot = self._source_test_snapshot(source)
+        await db.commit()
         try:
-            source_instance = await self.get_source_instance(source)
-            is_connected = await source_instance.test_connection()
-            
-            # Update source status
-            if is_connected:
+            connected = await self._fetch_from_go_source_manager(
+                [source_snapshot], 30, source_test=True)
+            source = await self.get_source_by_id(db, source_id)
+            if not source:
+                return connected
+            if connected:
                 source.last_success = datetime.utcnow()
                 source.error_count = 0
                 source.last_error = None
             else:
                 source.error_count += 1
-                source.last_error = "Connection test failed"
-            
-            try:
-                await db.commit()
-            except Exception as e:
-                await db.rollback()
-                raise SourceError(f"Failed to update source status {source_id}: {e}")
-            return is_connected
-        
-        except Exception as e:
+                source.last_error = "Go source connection test failed"
+            await db.commit()
+            return connected
+        except asyncio.CancelledError:
+            raise
+        except Exception as exc:
+            source = await self.get_source_by_id(db, source_id)
+            if not source:
+                return False
             source.error_count += 1
-            source.last_error = str(e)
-            try:
-                await db.commit()
-            except Exception:
-                await db.rollback()
+            source.last_error = type(exc).__name__
+            await db.commit()
             return False
     
     async def get_sources_from_db(self) -> List[Source]:
@@ -199,87 +196,31 @@ class SourceManager:
     async def fetch_from_all_sources_no_db(self, sources: List[Source],
                                            max_concurrent: int = 5,
                                            per_source_timeout: int = 120) -> Dict[str | int, List[Article]]:
-        """
-        Fetch source I/O without holding a database transaction.
-        Go-backed sources share a batch admission queue; other sources remain
-        concurrent. Each admitted fetch has its own operation timeout.
-        """
-        results = {}
+        """Collect every supported source through the Go source manager."""
+        return await self._fetch_from_go_source_manager(sources, per_source_timeout)
 
-        # Create semaphore to limit concurrent fetches
-        semaphore = asyncio.Semaphore(max_concurrent)
-        go_source_lock = asyncio.Lock()
+    async def _probe_source(self, source: Source) -> bool:
+        """Probe exactly one Go source without normalizing or persisting its payload."""
+        return await self._fetch_from_go_source_manager([source], 30, source_test=True)
 
-        from ..config import get_settings
-        source_settings = get_settings()
+    @staticmethod
+    def _source_test_snapshot(source):
+        """Copy the scalar source contract before a caller releases its DB read."""
+        from types import SimpleNamespace
 
-        if source_settings.source_manager_mode == 'go':
-            return await self._fetch_from_go_source_manager(sources, per_source_timeout)
+        return SimpleNamespace(
+            id=source.id, name=source.name, source_type=source.source_type,
+            url=source.url, enabled=source.enabled, config=source.config,
+        )
 
-        def is_go_backed_source(source: Source) -> bool:
-            source_type = getattr(source, 'source_type', None)
-            if source_type == SourceType.CUSTOM or source_type == SourceType.CUSTOM.value:
-                return source_settings.page_monitor_source_mode == 'go'
-            if source_type == SourceType.TELEGRAM or source_type == SourceType.TELEGRAM.value:
-                return source_settings.telegram_source_mode == 'go'
-            return False
+    async def _probe_source_result(self, source: Source):
+        """Return one successful Go result for an explicit, observational refresh action."""
+        return await self._fetch_from_go_source_manager(
+            [source], 30, source_test=True, return_source_test_result=True)
 
-        async def fetch_source_body(source: Source):
-            """Fetch articles from source without DB access or admission waits."""
-            try:
-                source_instance = await self.get_source_instance(source)
-                articles = []
-
-                async for article in source_instance.fetch_articles():
-                    articles.append(article)
-
-                logger.info(f"  ✅ Fetched {len(articles)} articles from {source.name}")
-                return source.name, articles
-            except Exception as e:
-                logger.warning(f"Error fetching from {source.name}: {e}")
-                return source.name, []
-
-        async def fetch_source_raw(source: Source):
-            """Apply the shared concurrency limit before starting a normal fetch."""
-            async with semaphore:
-                return await fetch_source_body(source)
-
-        async def fetch_with_timeout(source: Source):
-            """Serialize Go-backed clients, then apply the admitted operation timeout."""
-            try:
-                if is_go_backed_source(source):
-                    # Queue for both Go serialization and shared I/O capacity
-                    # before starting the source operation deadline.
-                    async with go_source_lock:
-                        async with semaphore:
-                            return await asyncio.wait_for(
-                                fetch_source_body(source), timeout=per_source_timeout
-                            )
-                return await asyncio.wait_for(
-                    fetch_source_raw(source),
-                    timeout=per_source_timeout
-                )
-            except asyncio.TimeoutError:
-                logger.error(f"  ⏰ Source '{source.name}' timed out after {per_source_timeout}s — skipping")
-                return source.name, []
-
-        # Keep ordinary source concurrency while queuing the shared Go path.
-        tasks = [fetch_with_timeout(source) for source in sources]
-        fetch_results = await asyncio.gather(*tasks, return_exceptions=True)
-
-        # Process results
-        for result in fetch_results:
-            if isinstance(result, Exception):
-                logger.error(f"Fetch task failed with exception: {result}")
-                continue
-
-            source_name, articles = result
-            results[source_name] = articles
-
-        logger.warning(f"[FETCH COMPLETE] All sources done. Total: {sum(len(a) for a in results.values())} articles from {len(results)} sources")
-        return results
-
-    async def _fetch_from_go_source_manager(self, sources: List[Source], total_timeout: int):
+    async def _fetch_from_go_source_manager(self, sources: List[Source], total_timeout: int,
+                                            *, source_test: bool = False,
+                                            return_source_test_result: bool = False):
         """Collect all source types in bounded Go batches and retain source IDs for persistence."""
         from ..config import get_settings
         from ..sources.source_manager_service_client import (
@@ -332,7 +273,10 @@ class SourceManager:
                 'type': source_type,
                 'source_name': source.name,
                 'url': source.url,
-                'enabled': bool(source.enabled),
+                # Explicit connection probes must be able to test a disabled
+                # source without changing its stored state. Collection passes
+                # preserve the persisted enabled flag.
+                'enabled': True if source_test else bool(source.enabled),
                 'per_source_budget_ms': per_source_budget_ms,
             }
             if source_type == 'rss':
@@ -362,8 +306,24 @@ class SourceManager:
                         logger.warning('Go SourceManager cannot prepare page monitor id=%s code=unsupported',
                                        source_id)
                         continue
-                    pm_config = await prepare()
-                    pm_limit = pm_config.pop('limit', None)
+                    if source_test:
+                        # The registry returns PageMonitorAdapter; its typed
+                        # extraction config lives on the wrapped monitor.
+                        monitor = getattr(instance, 'monitor', instance)
+                        typed_config = monitor.config
+                        pm_config = {
+                            'use_browser': typed_config.use_browser,
+                            'wait_for_js': typed_config.wait_for_js,
+                            'min_title_length': typed_config.min_title_length,
+                            'article_selectors': list(typed_config.article_selectors),
+                            'title_selectors': list(typed_config.title_selectors),
+                            'date_selectors': list(typed_config.date_selectors),
+                            'link_selectors': list(typed_config.link_selectors),
+                        }
+                        pm_limit = typed_config.max_articles_per_check
+                    else:
+                        pm_config = await prepare()
+                        pm_limit = pm_config.pop('limit', None)
                     if type(pm_limit) is int and pm_limit > 0:
                         descriptor['limit'] = min(pm_limit, 100)
                     descriptor['page_monitor'] = pm_config
@@ -394,6 +354,19 @@ class SourceManager:
             except Exception:
                 logger.warning('Go SourceManager batch failed code=unavailable sources=%d', len(batch))
                 continue
+
+            if source_test:
+                item = response['results'][0]
+                if item['outcome'] == 'deferred':
+                    error = item.get('error') or {}
+                    delay = error.get('retry_after_seconds', 0)
+                    if type(delay) is int and delay > 0 and loop.time() < deadline:
+                        await asyncio.sleep(min(float(delay), 5.0, deadline - loop.time()))
+                        pending.extend(batch)
+                        continue
+                if return_source_test_result:
+                    return item if item['outcome'] in {'success', 'partial'} else None
+                return item['outcome'] in {'success', 'partial'}
 
             deferred = []
             retry_after = 0.0
@@ -438,6 +411,12 @@ class SourceManager:
                 pending.extend(deferred)
         if pending:
             logger.warning('Go SourceManager pass ended with deferred source count=%d', len(pending))
+        if source_test:
+            # A connection test is successful only after an explicit successful
+            # Go result. The normal collection map is prefilled with empty lists
+            # for supported sources, so returning it here would turn failed,
+            # deferred, or unpreparable probes into truthy success.
+            return None if return_source_test_result else False
         return results
 
     async def _normalize_go_source_result(self, source, result, *, deadline):

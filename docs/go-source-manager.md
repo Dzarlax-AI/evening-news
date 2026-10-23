@@ -1,20 +1,17 @@
 # Go source collection
 
-`SOURCE_MANAGER_MODE=go` moves runtime source dispatch and RSS/Atom fetching into the existing private Go extractor service. Python still reads source configuration, manages Page Monitor state and optional selector learning, enriches Telegram links, deduplicates articles, and writes PostgreSQL. The scheduler, AI processing, admin CRUD, and digest delivery stay in Python.
+The private Go service owns runtime source dispatch, RSS/Atom fetching, Telegram capture/parsing, Page Monitor capture/parsing, and article extraction. Python retains source CRUD/configuration, Page Monitor durable state and optional selector learning, News persistence, AI processing, and digest delivery. Calendar scheduling and dispatch belong to the separate Go scheduler.
 
-Production uses this mode as of October 23, 2026. The repository default and deployment templates remain conservative; deployment must explicitly select Go and matching app/worker images.
+Go is the only source collection runtime. Configure matching app/worker images and the required Go service URLs and tokens at application startup.
 
 ## Configuration
 
 ```dotenv
-SOURCE_MANAGER_MODE=go
-TELEGRAM_SOURCE_MODE=go
-PAGE_MONITOR_SOURCE_MODE=go
 EXTRACTION_SERVICE_URL=http://news-extractor:8080
 EXTRACTION_SERVICE_TOKEN=<private-service-token>
 ```
 
-The default is `SOURCE_MANAGER_MODE=python`. Go mode rejects missing credentials and mixed Python Telegram/Page Monitor modes at startup. Use matching app and worker versions. Collection errors never trigger an automatic whole-batch fallback to Python.
+The app requires authenticated Go service configuration at startup. Deprecated source mode settings may be left at their accepted Go values for compatibility; explicit Python or shadow modes are rejected. Collection errors never trigger a whole-batch fallback to Python.
 
 ## Contract and limits
 
@@ -30,7 +27,7 @@ Outcomes are `success`, `partial`, `deferred`, `failed`, and `rejected`, with fi
 
 ## State and compatibility
 
-RSS parity is characterized against Python feedparser using the committed synthetic RSS/Atom corpus. It covers content versus summary, dates, author/GUID/tags, image priorities, relative links, HTML sanitization, missing fields, malformed input, cancellation, and size bounds. This is corpus-level evidence, not a claim of universal feedparser equivalence. Private feeds, unusual authentication, and real-world feed compatibility require a separately approved acceptance run. One intentional security difference is URL admission: relative article/media links resolve against the final feed URL or Atom XML base, and only bounded absolute HTTP(S) URLs without credentials, control characters, or attribute-injection characters are returned. Invalid article links are skipped individually; invalid images are dropped while preserving the article. Python independently validates these URL fields. The recorded feedparser baseline remains unchanged; the relative-image deviation is asserted explicitly.
+RSS parity is characterized against a frozen synthetic RSS/Atom corpus. It covers content versus summary, dates, author/GUID/tags, image priorities, relative links, HTML sanitization, missing fields, malformed input, cancellation, and size bounds. This is corpus-level evidence, not a claim of universal feed compatibility. Private feeds, unusual authentication, and real-world feed compatibility require a separately approved acceptance run. Relative article/media links resolve against the final feed URL or Atom XML base, and only bounded absolute HTTP(S) URLs without credentials or unsafe characters are returned. Invalid article links are skipped individually; invalid images are dropped while preserving the article.
 
 Page Monitor keeps Python snapshots, acknowledged hashes, partial offsets, and optional selector learning. Reparse uses the already captured HTML. Telegram linked-article enrichment happens after batch admission is released. Neither source collection nor AI runs inside the database write lock.
 
@@ -61,4 +58,4 @@ The gate uses an internal Docker network, a fixture-only TLS certificate, a loop
 
 ## Rollback boundary
 
-For subsequent releases, validate approved real sources, matching immutable app/worker images, and normal collection/persistence behavior. Switching collection back to `SOURCE_MANAGER_MODE=python` is a configuration rollback with an app restart. Preserve saved articles and deduplication state. This feature does not change the shared browser or its other clients.
+For subsequent releases, validate approved real sources, matching immutable app/worker images, and normal collection/persistence behavior. Roll back by restoring a previously approved app/worker image compatible with the Go service contract and the corresponding service image. There is no Python collection fallback or rollback mode. Preserve saved articles and deduplication state.

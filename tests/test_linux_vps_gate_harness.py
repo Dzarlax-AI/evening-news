@@ -18,11 +18,6 @@ class BoundedProfileTests(unittest.TestCase):
                      news_web_stopped=False, live_quality=False,
                      long_synthetic_soak=False, observe_resource_thresholds=False)
         gate.validate_worker_recovery_options(**valid)
-        gate.validate_worker_recovery_options(**dict(valid, go_worker_only=True))
-        with self.assertRaisesRegex(gate.GateError,
-                                   'go_worker_only_requires_worker_recovery_gate'):
-            gate.validate_worker_recovery_options(**dict(valid, enabled=False,
-                                                           go_worker_only=True))
         for field, value in (('runtime_only', False), ('short_window', False),
                              ('news_web_stopped', True), ('live_quality', True),
                              ('long_synthetic_soak', True),
@@ -33,15 +28,12 @@ class BoundedProfileTests(unittest.TestCase):
                     gate.GateError, 'worker_recovery_gate_profile_invalid'):
                 gate.validate_worker_recovery_options(**invalid)
 
-    def test_go_worker_only_is_forwarded_only_when_explicit(self):
+    def test_worker_recovery_stand_uses_go_only_contract(self):
         stage = Path('/private/stage')
-        default = gate.worker_recovery_stand_args(
+        args = gate.worker_recovery_stand_args(
             stage, 1234, 'linux-vps-gate=0123456789abcdef')
-        isolated = gate.worker_recovery_stand_args(
-            stage, 1234, 'linux-vps-gate=0123456789abcdef', go_worker_only=True)
-        self.assertNotIn('--go-worker-only', default)
-        self.assertIn('--worker-recovery-gate', default)
-        self.assertEqual(isolated, default + ['--go-worker-only'])
+        self.assertIn('--worker-recovery-gate', args)
+        self.assertNotIn('--go-worker-only', args)
 
     def test_only_marked_exact_owned_worker_exit_is_allowed_in_recovery_phase(self):
         with tempfile.TemporaryDirectory() as temp:

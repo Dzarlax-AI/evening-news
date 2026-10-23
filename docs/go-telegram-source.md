@@ -6,18 +6,21 @@ render when HTTP fails in an eligible way or contains no posts. It uses the
 existing browser and disposable owned contexts. Auth, policy, resource-limit,
 rate-limit, cancellation and deadline failures do not trigger blind retries.
 
-Python retains source configuration, enrichment, and persistence. With
-`SOURCE_MANAGER_MODE=go`, runtime batch dispatch also runs in Go; Telegram HTTP
-fetches overlap within the source worker pool and reserve no native browser slot.
-Only eligible browser fallback enters the render gate shared with article
-extraction and Page Monitor. Production uses two render slots, while the default
-is one; see the [source collection guide](go-source-manager.md).
+Go owns Telegram collection and parsing. Python retains source configuration,
+enrichment and persistence. Explicit admin media refresh is a narrow compatibility
+exception: Python fetches the exact historical post over bounded HTTPS and uses
+the retained media helper. It does not run source collection, article extraction,
+a browser, or a fallback. The Go channel API currently has no post-specific
+request; changing that API is outside this cleanup. Missing/failed captures
+preserve stored media. Telegram HTTP fetches overlap within the source
+worker pool and reserve no native browser slot. Only eligible browser fallback
+enters the render gate shared with article extraction and Page Monitor. See the
+[source collection guide](go-source-manager.md).
 
-Set `TELEGRAM_SOURCE_MODE=go` to
-route Telegram sources through this endpoint; the default is `python`. The Go
-mode requires `EXTRACTION_SERVICE_URL` and `EXTRACTION_SERVICE_TOKEN` and does not
-fall back to Python scraping. Article extraction settings remain independent.
-Delivery, Telegraph, AI, persistence and scheduling retain their existing owners.
+The application requires `EXTRACTION_SERVICE_URL` and
+`EXTRACTION_SERVICE_TOKEN` at startup and has no Python collection fallback.
+Delivery, AI, persistence and enrichment remain in Python; scheduling is owned
+by the Go scheduler service.
 
 ## Private wire contract
 
@@ -58,7 +61,7 @@ existing Go article API. It is sequential and bounded by the source deadline;
 an enrichment failure preserves the Telegram post. Content is replaced only
 when the extracted article is more than twice as long, matching the prior rule.
 
-## Pure parser and compatibility checks
+## Parser contract and checks
 
 `extractor.ParseTelegramChannel(html, pageURL, sourceName, limit, fallbackTime)`
 is the pure parser beneath this endpoint. It performs no network, browser,
@@ -67,24 +70,17 @@ and each post is limited to 100,000 characters. A zero fallback time is invalid;
 the parser never reads the wall clock. Valid prefixes accompany later explicit
 parser-limit errors. Missing messages return `ErrTelegramEmpty`.
 
-The shared synthetic fixtures and Python-generated snapshot live in
-`tests/fixtures/telegram/`. The Python test checks the snapshot against the real
-Python parser; Go independently checks the same fields. The Python oracle
-freezes the clock and stubs external enrichment. Only runtime-dependent hash
-suffixes in generated poll/contact/location fragments and equivalent UTC date
-serialization are normalized. Actual URLs, IDs and metadata are compared.
+The immutable synthetic JSON snapshot lives in `tests/fixtures/telegram/` and is
+checked by the Go extractor tests. It records reviewed parser output; the
+removed Python parser is not regenerated at test time. Go checks actual URLs,
+IDs, timestamps and metadata, with only documented runtime-dependent fragments
+normalized.
 
 ```sh
-NO_BROWSER=1 .venv/bin/python -m pytest tests/test_telegram_source_parity.py tests/test_telegram_service_client.py tests/test_telegram_go_source.py -q
+PYTHONPATH=. .venv/bin/python -m pytest tests/test_telegram_go_source.py tests/test_source_manager_service_client.py -q
 cd go
 go test -race ./extractor ./service ./pipeline ./cmd/extract-service
 go vet ./...
-```
-
-After intentional Python behavior changes, regenerate and review the snapshot:
-
-```sh
-PYTHONPATH=. .venv/bin/python tests/fixtures/telegram/export_baseline.py
 ```
 
 The production switch requires reviewed source, Linux CI, real-channel HTTP

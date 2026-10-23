@@ -17,7 +17,7 @@ Exit codes: 0 means all supplied assertions passed; 1 means one or more case ass
 
 ## Implemented replay behavior
 
-- Ordered learned CSS/browser, enhanced DOM selectors, Readeck readability, captured browser selectors/heuristics, JSON-LD, OG/meta and scored DOM fallback.
+- Ordered learned CSS/browser, enhanced DOM selectors, readability parsing, captured browser selectors/heuristics, JSON-LD, OG/meta and scored DOM fallback.
 - Reddit JSON with self/link/image distinctions, comment filtering, metadata and captured linked articles.
 - RSS/Atom first-entry (or `entry_index`) content/summary, metadata and image priorities.
 - Telegram message metadata before UI cleanup, text/meta fallback, captured external expansion, media families and avatar/emoji/reply exclusions.

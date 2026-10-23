@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""Bounded, opt-in A/B/C/D native-browser benchmark controller.
+"""Bounded, opt-in Go native-browser benchmark controller.
 
 The runner accepts only fixture route IDs from the checked-in corpus. It never
 fetches an arbitrary user supplied URL, and reports no URLs, response text, or
@@ -19,7 +19,6 @@ import re
 import statistics
 import sys
 import time
-from contextlib import asynccontextmanager
 from datetime import datetime, timezone
 from email.utils import parsedate_to_datetime
 from pathlib import Path
@@ -42,10 +41,6 @@ NETWORK_QUIET_MS = 250
 
 class BenchmarkError(RuntimeError):
     pass
-
-
-class FatalBenchmarkError(BenchmarkError):
-    """Ownership/capability loss makes further measurements invalid."""
 
 
 def _safe_readiness_snapshot(value: Any) -> dict[str, bool] | None:
@@ -291,8 +286,7 @@ def _safe_error(exc: Exception) -> str:
 
 
 def _safe_method(value: Any) -> str:
-    allowed = {"browser_rendering", "browser_heuristics", "readability", "enhanced_selectors",
-               "learned_pattern_browser_rendering", "learned_pattern", "none", "unknown"}
+    allowed = {"browser_rendering", "browser_heuristics", "readability", "none", "unknown"}
     return value if isinstance(value, str) and value in allowed else "other"
 
 
@@ -320,32 +314,6 @@ def _retry_after_seconds(value: Any) -> int | None:
         return None
 
 
-def _is_challenge_html(value: str) -> bool:
-    # Match go/transport.IsChallengePage exactly for the captured challenge fixture.
-    lowered = value.lower()
-    return ('id="challenge-form"' in lowered or "id='challenge-form'" in lowered
-            or 'id="cf-challenge-running"' in lowered or "id='cf-challenge-running'" in lowered
-            or ("<title>just a moment" in lowered and "cf_chl_" in lowered))
-
-
-def proxy_challenge_matches(source: Any, origin: str, proxy: str) -> bool:
-    source_value = getattr(source, "value", source)
-    parsed = urlsplit(proxy)
-    return source_value == "Proxy" and origin == f"{parsed.scheme}://{parsed.netloc}"
-
-
-def _record_request_event(state: dict[str, Any], event: Any) -> bool:
-    """Track a real CDP Network.requestWillBeSent without mixing frames and requests."""
-    from nodriver import cdp
-
-    state["request_count"] += 1
-    request_id = str(event.request_id)
-    state["requests"][request_id] = True
-    if event.type_ == cdp.network.ResourceType.DOCUMENT:
-        state["request_frames"][request_id] = str(event.frame_id or "")
-    return state["request_count"] > 128 or len(state["requests"]) > 128
-
-
 def _native_ready_gate(*, now: float, started: float, stable_since: float,
                        last_activity: float, active_requests: int, main_status: int) -> bool:
     """Match the elapsed-time and network conditions in Go NativeBrowser.Fetch."""
@@ -353,390 +321,6 @@ def _native_ready_gate(*, now: float, started: float, stable_since: float,
             and now - stable_since >= DOM_STABLE_MS / 1000
             and now - last_activity >= NETWORK_QUIET_MS / 1000
             and active_requests == 0 and main_status == 200)
-
-
-async def _run_python_case(variant: str, url: str, proxy: str | None,
-                           proxy_token: str | None) -> dict[str, Any]:
-    """Use the existing Python browser strategy for A and the isolated B adapter."""
-    if variant == "B" and (not proxy or not proxy_token or len(proxy_token) < 16):
-        raise BenchmarkError("variant_b_proxy_credentials_required")
-    os.environ.pop("DATABASE_URL", None)
-    os.environ.pop("TEST_DATABASE_URL", None)
-    import news_aggregator.extraction.extraction_strategies as strategies_module
-    from news_aggregator.extraction.extraction_strategies import ExtractionStrategies
-    from news_aggregator.extraction.extraction_utils import ExtractionUtils
-    from news_aggregator.extraction.html_processor import HTMLProcessor
-    from news_aggregator.extraction.date_extractor import DateExtractor
-    from news_aggregator.extraction.metadata_extractor import MetadataExtractor
-    import news_aggregator.core.browser_pool as pool
-
-    class FixedTracker:
-        def get_method_timeout(self, _domain, _method, default):
-            return min(5000, default)
-
-    async def fixed_tracker():
-        return FixedTracker()
-
-    old_tracker = strategies_module.get_stability_tracker
-    strategies_module.get_stability_tracker = fixed_tracker
-    try:
-        utils = ExtractionUtils()
-        html_processor = HTMLProcessor(utils)
-        strategy = ExtractionStrategies(utils, html_processor, DateExtractor(utils), MetadataExtractor(utils))
-        if variant == "B":
-            return await _run_native_policy_page(pool, strategy, url, proxy, proxy_token)
-        content, selector, rendered = await strategy._extract_with_browser_and_html(url)
-    finally:
-        strategies_module.get_stability_tracker = old_tracker
-    challenge = _is_challenge_html(rendered or "")
-    return {"outcome": "rejected" if challenge else "success" if content and content.strip() else "rejected",
-            "state": "extracted" if content and content.strip() else "failed",
-            "content_chars": len(content or ""), "html_bytes": len((rendered or "").encode("utf-8")),
-            "method": "browser_rendering" if content else "none",
-            "selector_present": bool(selector), "content": content or "",
-            "error": "native_browser_challenge" if challenge else None}
-
-
-def _fixture_https_url(raw: str) -> bool:
-    try:
-        u = urlsplit(raw)
-        return (u.scheme == "https" and u.hostname == "native-fixture.test"
-                and (u.port in {None, 443}) and not u.username and not u.password and not u.fragment)
-    except ValueError:
-        return False
-
-
-async def _run_native_policy_page(pool, strategy, url: str, proxy: str, token: str,
-                                  *, url_policy=None, ready_expression=None,
-                                  capture_raw=False) -> dict[str, Any]:
-    try:
-        async with asyncio.timeout(30):
-            return await _run_native_policy_page_inner(
-                pool, strategy, url, proxy, token, url_policy=url_policy,
-                ready_expression=ready_expression, capture_raw=capture_raw)
-    except TimeoutError:
-        raise BenchmarkError("benchmark_timeout") from None
-
-
-async def _run_native_policy_page_inner(pool, strategy, url: str, proxy: str, token: str,
-                                        *, url_policy=None, ready_expression=None,
-                                        capture_raw=False) -> dict[str, Any]:
-    """B: native Nodriver navigation under disposable-context policy, then Python parser only."""
-    from nodriver import cdp
-    from bs4 import BeautifulSoup
-    from news_aggregator.core.resource_limits import read_browser_html
-
-    url_policy = url_policy or _fixture_https_url
-    if not url_policy(url):
-        raise BenchmarkError("fixture_url_denied")
-    state: dict[str, Any] = {"error": None, "request_count": 0, "wire_bytes": 0,
-                             "main_frame": "", "requests": {}, "request_frames": {},
-                             "encoded": {}, "frames": set(),
-                             "authenticated": set(), "main_status": 0,
-                             "last_network_activity": time.monotonic()}
-
-    def fail(code: str):
-        if state["error"] is None:
-            state["error"] = code
-
-    async with _disposable_context_tab(pool, proxy, token)(url) as tab:
-        browser = tab.parent
-        context_id = tab.__dict__.get("_browser_pool_context_id")
-        if not context_id:
-            # The context ID is attached by the adapter before yield.
-            raise FatalBenchmarkError("browser_context_ownership_lost")
-
-        async def auth_required(event):
-            challenge = getattr(event, "auth_challenge", None)
-            source = getattr(getattr(challenge, "source", None), "value", getattr(challenge, "source", None))
-            origin = getattr(challenge, "origin", "")
-            if (proxy_challenge_matches(source, origin, proxy)
-                    and event.request_id not in state["authenticated"]):
-                state["authenticated"].add(event.request_id)
-                response = cdp.fetch.AuthChallengeResponse(
-                    response="ProvideCredentials", username="extractor", password=token)
-            else:
-                response = cdp.fetch.AuthChallengeResponse(response="CancelAuth")
-                fail("upstream_auth_required")
-            await tab.send(cdp.fetch.continue_with_auth(event.request_id, response))
-
-        async def request_paused(event):
-            if state["request_count"] > 128:
-                fail("resource_limit")
-                await tab.send(cdp.fetch.fail_request(event.request_id, cdp.network.ErrorReason.BLOCKED_BY_CLIENT))
-                return
-            request_id = event.request_id
-            resource_type = getattr(getattr(event, "resource_type", None), "value", getattr(event, "resource_type", None))
-            request_url = event.request.url
-            if resource_type == "WebSocket":
-                fail("native_browser_unsupported")
-                await tab.send(cdp.fetch.fail_request(request_id, cdp.network.ErrorReason.BLOCKED_BY_CLIENT))
-                return
-            if not url_policy(request_url):
-                fail("public_url_denied")
-                await tab.send(cdp.fetch.fail_request(request_id, cdp.network.ErrorReason.BLOCKED_BY_CLIENT))
-                return
-            await tab.send(cdp.fetch.continue_request(request_id))
-
-        async def request_will_be_sent(event):
-            if _record_request_event(state, event):
-                fail("resource_limit")
-
-        async def data_received(event):
-            request_id = str(event.request_id)
-            encoded = int(event.encoded_data_length or 0)
-            state["wire_bytes"] += encoded
-            state["encoded"][request_id] = state["encoded"].get(request_id, 0) + encoded
-            if state["wire_bytes"] > 5 * 1024 * 1024:
-                fail("resource_limit")
-
-        async def loading_finished(event):
-            request_id = str(event.request_id)
-            final_size = max(0, int(event.encoded_data_length or 0) - state["encoded"].pop(request_id, 0))
-            state["wire_bytes"] += final_size
-            state["requests"].pop(request_id, None)
-            state["request_frames"].pop(request_id, None)
-            if state["wire_bytes"] > 5 * 1024 * 1024:
-                fail("resource_limit")
-
-        async def loading_failed(event):
-            request_id = str(event.request_id)
-            state["requests"].pop(request_id, None)
-            state["request_frames"].pop(request_id, None)
-
-        async def response_received(event):
-            frame_id = str(event.frame_id or state["request_frames"].get(str(event.request_id), ""))
-            if event.type_ == cdp.network.ResourceType.DOCUMENT and frame_id == state["main_frame"]:
-                state["main_status"] = int(event.response.status)
-                if state["main_status"] == 429:
-                    headers = getattr(event.response, "headers", {}) or {}
-                    retry = next((value for key, value in headers.items()
-                                  if key.lower() == "retry-after"), None)
-                    state["retry_after_seconds"] = _retry_after_seconds(retry)
-                if state["main_status"] != 200:
-                    fail("native_browser_http_rejected")
-
-        async def frame_navigated(event):
-            frame = event.frame
-            if not getattr(frame, "parent_id", None):
-                state["main_frame"] = str(frame.id_)
-                state["frames"].add(str(frame.id_))
-                if len(state["frames"]) > 128:
-                    fail("resource_limit")
-
-        async def frame_attached(event):
-            if event.parent_frame_id and str(event.parent_frame_id) in state["frames"]:
-                state["frames"].add(str(event.frame_id))
-                if len(state["frames"]) > 128:
-                    fail("resource_limit")
-
-        async def window_open(_event):
-            fail("native_browser_unsupported")
-
-        async def child_target(_event):
-            fail("native_browser_unsupported")
-
-        async def websocket_created(_event):
-            fail("native_browser_unsupported")
-
-        async def download_begin(_event):
-            fail("native_browser_unsupported")
-
-        def guard(callback):
-            async def guarded(event):
-                state["last_network_activity"] = time.monotonic()
-                try:
-                    await callback(event)
-                except Exception:
-                    fail("native_browser_event_error")
-                    if isinstance(event, cdp.fetch.RequestPaused):
-                        try:
-                            await tab.send(cdp.fetch.fail_request(
-                                event.request_id, cdp.network.ErrorReason.BLOCKED_BY_CLIENT))
-                        except Exception:
-                            pass
-            return guarded
-
-        for event_type, callback in (
-            (cdp.fetch.AuthRequired, auth_required), (cdp.fetch.RequestPaused, request_paused),
-            (cdp.network.RequestWillBeSent, request_will_be_sent),
-            (cdp.network.DataReceived, data_received), (cdp.network.LoadingFinished, loading_finished),
-            (cdp.network.LoadingFailed, loading_failed), (cdp.network.ResponseReceived, response_received),
-            (cdp.page.FrameNavigated, frame_navigated), (cdp.page.FrameAttached, frame_attached),
-            (cdp.page.WindowOpen, window_open), (cdp.target.AttachedToTarget, child_target),
-            (cdp.network.WebSocketCreated, websocket_created),
-        ):
-            tab.add_handler(event_type, guard(callback))
-        browser.add_handler(cdp.browser.DownloadWillBegin, download_begin)
-        tab.__dict__["_benchmark_download_handler"] = download_begin
-        await pool.run_browser_operation(tab.send(cdp.page.enable()), "enable page domain", browser_session=tab)
-        await pool.run_browser_operation(tab.send(cdp.network.enable()), "enable network domain", browser_session=tab)
-        await pool.run_browser_operation(browser.send(cdp.browser.set_download_behavior(
-            behavior="deny", browser_context_id=context_id, events_enabled=True)),
-            "deny downloads", browser_session=browser)
-        await pool.run_browser_operation(tab.send(cdp.target.set_auto_attach(
-            auto_attach=True, wait_for_debugger_on_start=True, flatten=True)),
-            "attach child targets", browser_session=tab)
-        await pool.run_browser_operation(tab.send(cdp.fetch.enable(handle_auth_requests=True,
-            patterns=[cdp.fetch.RequestPattern(url_pattern="*", request_stage=cdp.fetch.RequestStage.REQUEST)])),
-            "enable request policy", browser_session=tab)
-        tree = await pool.run_browser_operation(tab.send(cdp.page.get_frame_tree()),
-            "get main frame", browser_session=tab)
-        state["main_frame"] = str(tree.frame.id_)
-        state["frames"].add(state["main_frame"])
-        navigation = await pool.run_browser_operation(tab.send(cdp.page.navigate(url)), "navigation",
-            timeout_seconds=30, browser_session=tab)
-        if navigation[2]:
-            fail("native_browser_navigation_failed")
-        if navigation[0]:
-            state["main_frame"] = str(navigation[0])
-        started = time.monotonic()
-        ready_deadline = time.monotonic() + 30
-        rendered = None
-        previous_html = None
-        stable_since = started
-        while time.monotonic() < ready_deadline:
-            if state["error"]:
-                break
-            ready = await pool.run_browser_operation(tab.evaluate(
-                ready_expression or
-                "document.body && document.readyState === 'complete' && "
-                "document.querySelector('[data-ready=true]') && document.body.innerText.trim() ? 1 : 0"),
-                "fixture readiness", timeout_seconds=max(.1, ready_deadline-time.monotonic()), browser_session=tab)
-            if ready:
-                candidate = await read_browser_html(tab, timeout_seconds=5)
-                now = time.monotonic()
-                if candidate != previous_html:
-                    previous_html = candidate
-                    stable_since = now
-                if _native_ready_gate(now=now, started=started, stable_since=stable_since,
-                                      last_activity=state["last_network_activity"],
-                                      active_requests=len(state["requests"]),
-                                      main_status=state["main_status"]):
-                    rendered = candidate
-                    break
-            await asyncio.sleep(.05)
-        if not rendered and state["error"] is None:
-            state["error"] = "native_browser_timeout"
-        if state["error"]:
-            error = state["error"]
-            return {"outcome": "rejected", "state": "failed", "content_chars": 0,
-                    "html_bytes": 0, "method": "none", "selector_present": False,
-                    "content": "", "error": error,
-                    **({"upstream_status": state["main_status"],
-                        "retry_after_seconds": state.get("retry_after_seconds")}
-                       if capture_raw else {})}
-        if capture_raw:
-            state["final_url"] = await pool.run_browser_operation(
-                tab.evaluate("location.href"), "read final URL", timeout_seconds=2,
-                browser_session=tab)
-
-    final_url = state.get("final_url") or url
-    if capture_raw and not url_policy(final_url):
-        return {"outcome": "rejected", "state": "failed", "content_chars": 0,
-                "html_bytes": 0, "method": "none", "selector_present": False,
-                "content": "", "error": "public_url_denied", "upstream_status": state["main_status"]}
-    soup = BeautifulSoup(rendered, "html.parser")
-    content, selector = strategy.html_processor.extract_by_enhanced_selectors(soup)
-    if not content:
-        content = strategy.html_processor.extract_by_enhanced_heuristics(soup)
-    challenge = _is_challenge_html(rendered or "")
-    return {"outcome": "rejected" if challenge else "success" if content and content.strip() else "rejected",
-            "state": "extracted" if content and content.strip() else "failed",
-            "content_chars": len(content or ""), "html_bytes": len((rendered or "").encode()),
-            "method": "browser_rendering" if content else "none", "selector_present": bool(selector),
-            "content": content or "", "error": "native_browser_challenge" if challenge else None,
-            **({"rendered_html": rendered, "final_url": final_url, "upstream_status": state["main_status"]}
-               if capture_raw else {})}
-
-
-def _disposable_context_tab(pool, proxy: str, token: str):
-    @asynccontextmanager
-    async def context_tab(_url: str):
-        from nodriver import cdp
-
-        settings = __import__("news_aggregator.config", fromlist=["settings"]).settings
-        await asyncio.wait_for(pool._tab_semaphore.acquire(), timeout=settings.browser_tab_acquire_timeout_seconds)
-        lease = None
-        acquired = True
-        browser = None
-        context_id = None
-        tab = None
-        try:
-            lease = await pool._acquire_browser_tab_usage()
-            browser = await pool.get_browser()
-            try:
-                context_id = await asyncio.wait_for(browser.send(cdp.target.create_browser_context(
-                    dispose_on_detach=True, proxy_server=proxy, proxy_bypass_list="<-loopback>")), timeout=5)
-            except Exception:
-                # The command may have created a context before its response was lost.
-                raise FatalBenchmarkError("browser_context_ownership_lost") from None
-            target_id = await asyncio.wait_for(browser.send(cdp.target.create_target(
-                "about:blank", browser_context_id=context_id)), timeout=5)
-            await asyncio.wait_for(browser.update_targets(), timeout=5)
-            tab = next((item for item in browser.targets
-                        if str(item.target.target_id) == str(target_id)), None)
-            if tab is None:
-                raise FatalBenchmarkError("browser_context_ownership_lost")
-            await asyncio.wait_for(tab.attach(), timeout=5)
-            pool._register_tab(browser, tab)
-            tab.__dict__["_browser_pool_context_id"] = context_id
-            yield tab
-        finally:
-            try:
-                if tab is not None and context_id is not None and browser is not None:
-                    await pool._await_shielded(_dispose_context_and_retire(pool, browser, context_id, tab))
-                elif context_id is not None and browser is not None:
-                    try:
-                        await asyncio.wait_for(browser.send(cdp.target.dispose_browser_context(context_id)), timeout=3)
-                    except Exception:
-                        raise FatalBenchmarkError("browser_context_ownership_lost") from None
-                    raise FatalBenchmarkError("browser_context_ownership_lost")
-                elif tab is not None:
-                    # Context creation failed before a context ID was returned; retire local transport only.
-                    await pool._await_shielded(_retire_context_tab_transport(pool, browser, tab))
-            finally:
-                if acquired:
-                    pool._tab_semaphore.release()
-                if lease is not None:
-                    await pool._release_browser_tab_usage(lease)
-    return context_tab
-
-
-async def _retire_context_tab_transport(pool, browser, tab) -> None:
-    """Retire this Tab's local transport/registries without issuing CDP target commands."""
-    try:
-        await pool._close_transport(tab)
-    finally:
-        state = getattr(browser, "__dict__", {}) if browser is not None else {}
-        state.get("_browser_pool_tabs", {}).pop(id(tab), None)
-        targets = state.get("_targets", [])
-        if isinstance(targets, list):
-            targets[:] = [target for target in targets if target is not tab]
-        pool._managed_connections.pop(id(tab), None)
-
-
-async def _dispose_context_and_retire(pool, browser, context_id, tab) -> None:
-    """Stop navigation, atomically dispose its context, then retire only local ownership."""
-    from nodriver import cdp
-
-    dispose_error = None
-    download_handler = tab.__dict__.pop("_benchmark_download_handler", None)
-    if download_handler is not None:
-        browser.remove_handler(cdp.browser.DownloadWillBegin, download_handler)
-    try:
-        await asyncio.wait_for(tab.send(cdp.page.stop_loading()), timeout=3)
-    except Exception:
-        # Context disposal is still required to release this owned browser context.
-        pass
-    try:
-        await asyncio.wait_for(browser.send(cdp.target.dispose_browser_context(context_id)), timeout=3)
-    except Exception as exc:
-        dispose_error = exc
-    finally:
-        await _retire_context_tab_transport(pool, browser, tab)
-    if dispose_error is not None:
-        raise FatalBenchmarkError("browser_context_ownership_lost") from None
 
 
 async def _run_service_case(url: str, endpoint: str, token: str) -> dict[str, Any]:
@@ -869,8 +453,8 @@ async def run(args: argparse.Namespace) -> dict[str, Any]:
     origin = validate_origin(args.origin)
     corpus, corpus_digest = load_corpus(Path(args.corpus))
     cgroups = parse_cgroups(args.cgroup)
-    required = {"A": {"app", "cloak"}, "B": {"app", "cloak", "gateway"},
-                "C": {"worker", "cloak", "gateway"}, "D": {"app", "worker", "cloak", "gateway"}}[args.variant]
+    required = {"C": {"worker", "cloak", "gateway"},
+                "D": {"app", "worker", "cloak", "gateway"}}[args.variant]
     if not required.issubset(cgroups):
         raise BenchmarkError("required_cgroups_missing")
     cases = corpus["cases"]
@@ -880,19 +464,12 @@ async def run(args: argparse.Namespace) -> dict[str, Any]:
             raise BenchmarkError("unknown_case_id")
         cases = [c for c in cases if c["id"] in selected]
     token = os.environ.get(args.token_env) if args.token_env else None
-    proxy_token = os.environ.get(args.proxy_token_env) if args.proxy_token_env else None
-    if args.variant in {"C", "D"} and not token:
+    if not token:
         raise BenchmarkError("service_token_missing")
-    if args.variant == "B" and not proxy_token:
-        raise BenchmarkError("proxy_token_missing")
-    native_capabilities = None
-    if args.variant in {"C", "D"}:
-        args.endpoint = _validate_internal_endpoint(args.endpoint, "endpoint_required")
-        if args.native_ready_selector != READY_SELECTOR:
-            raise BenchmarkError("native_ready_selector_mismatch")
-        native_capabilities = await _probe_native_capabilities(args.endpoint)
-    if args.variant == "B":
-        args.proxy = _validate_internal_endpoint(args.proxy, "proxy_required")
+    args.endpoint = _validate_internal_endpoint(args.endpoint, "endpoint_required")
+    if args.native_ready_selector != READY_SELECTOR:
+        raise BenchmarkError("native_ready_selector_mismatch")
+    native_capabilities = await _probe_native_capabilities(args.endpoint)
     sampler = Sampler(cgroups)
     await sampler.start()
     timings = []
@@ -903,15 +480,10 @@ async def run(args: argparse.Namespace) -> dict[str, Any]:
         warmup_start = time.perf_counter()
         warmup_url = origin + cases[0]["path"]
         try:
-            if args.variant in {"A", "B"}:
-                warmup_result = await _run_python_case(args.variant, warmup_url, args.proxy, proxy_token)
-            else:
-                warmup_result = await _run_service_case(warmup_url, args.endpoint, token)
+            warmup_result = await _run_service_case(warmup_url, args.endpoint, token)
             warmup.update({"outcome": warmup_result["outcome"], "state": _safe_state(warmup_result["state"]),
                            "method": _safe_method(warmup_result["method"])})
         except Exception as exc:
-            if isinstance(exc, FatalBenchmarkError):
-                raise
             warmup.update({"outcome": "failed", "state": "failed", "method": "none",
                            "error": _safe_error(exc)})
         warmup["duration_ms"] = round((time.perf_counter() - warmup_start) * 1000, 2)
@@ -920,13 +492,8 @@ async def run(args: argparse.Namespace) -> dict[str, Any]:
                 start = time.perf_counter()
                 url = origin + case["path"]
                 try:
-                    if args.variant in {"A", "B"}:
-                        result = await _run_python_case(args.variant, url, args.proxy, proxy_token)
-                    else:
-                        result = await _run_service_case(url, args.endpoint, token)
+                    result = await _run_service_case(url, args.endpoint, token)
                 except Exception as exc:
-                    if isinstance(exc, FatalBenchmarkError):
-                        raise
                     result = {"outcome": "failed", "state": "failed", "content_chars": 0,
                               "html_bytes": None, "method": "none", "selector_present": False,
                               "content": "", "error": _safe_error(exc)}
@@ -957,17 +524,14 @@ async def run(args: argparse.Namespace) -> dict[str, Any]:
     return {"schema_version": 1, "variant": args.variant,
             "measurement_scope": ("controller_and_native_service_client; full_application_processing_not_measured"
                                   if args.variant == "D" else "variant_controller_and_measured_cgroups"),
-            "readiness_profile": ({"policy": "production_python_body_text_with_fixed_db_free_timeout"}
-                                  if args.variant == "A" else {
-                                      "policy": "native_fixture_selector_and_network_gate",
+            "readiness_profile": {"policy": "native_fixture_selector_and_network_gate",
                                       "selector": READY_SELECTOR,
                                       "minimum_navigation_ms": MIN_NAVIGATION_MS,
                                       "dom_stable_ms": DOM_STABLE_MS,
                                       "network_quiet_ms": NETWORK_QUIET_MS,
                                       "active_requests": 0,
                                       "main_document_status": 200,
-                                      "go_profile_basis": "checked_in_source_not_live_attestation",
-                                  }),
+                                      "go_profile_basis": "checked_in_source_not_live_attestation"},
             "corpus_sha256": corpus_digest,
             "case_ids": [c["id"] for c in cases], "cycles": args.cycles,
             "repeat_scope": "single_invocation; independent comparisons require fresh invocations",
@@ -984,7 +548,7 @@ async def run(args: argparse.Namespace) -> dict[str, Any]:
 
 def build_parser() -> argparse.ArgumentParser:
     parser = argparse.ArgumentParser(description=__doc__)
-    parser.add_argument("--variant", choices=("A", "B", "C", "D"), required=True)
+    parser.add_argument("--variant", choices=("C", "D"), required=True)
     parser.add_argument("--corpus", default=str(DEFAULT_CORPUS))
     parser.add_argument("--origin", default="https://native-fixture.test")
     parser.add_argument("--output", required=True)
@@ -996,8 +560,6 @@ def build_parser() -> argparse.ArgumentParser:
     parser.add_argument("--native-ready-selector", default=READY_SELECTOR,
                         help="must match the native extractor service's configured fixture readiness selector")
     parser.add_argument("--token-env", default="EXTRACTOR_TEST_TOKEN", help="name of environment variable containing API token")
-    parser.add_argument("--proxy", help="controlled CONNECT gateway address")
-    parser.add_argument("--proxy-token-env", default="EGRESS_TOKEN", help="name of environment variable containing gateway credential")
     parser.add_argument("--serve-fixtures", action="store_true", help="run the fixed HTTPS fixture origin")
     parser.add_argument("--fixture-host", default="127.0.0.1")
     parser.add_argument("--fixture-port", type=int, default=443)

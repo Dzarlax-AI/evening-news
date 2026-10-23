@@ -559,7 +559,7 @@ class BackgroundWorkerLease:
     @staticmethod
     def _next_schedule_occurrence(schedule, config, now):
         """Compute a future occurrence without replaying an ambiguous digest."""
-        from .scheduler import calculate_next_run
+        from .schedule_calendar import calculate_next_run
 
         interval = config.get("interval_minutes", 30)
         if isinstance(interval, bool) or not isinstance(interval, int):

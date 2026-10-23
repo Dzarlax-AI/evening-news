@@ -155,7 +155,7 @@ async def test_429_skips_host_without_retry_and_ledger_prevents_duplicate(tmp_pa
     monkeypatch.setattr(shadow, "NAVIGATION_INTERVAL_SECONDS", 0)
     monkeypatch.setenv("SERVICE_TOKEN", "token-longer-than-sixteen")
     args = argparse.Namespace(variant="C", corpus=str(corpus), output_dir=str(output), case=[],
-                              cgroup=_cgroups(tmp_path / "metrics"), endpoint_c="http://news-native-shadow-service:8080",
+                                  cgroup=_cgroups(tmp_path / "metrics"), endpoint_c="http://127.0.0.1:8080",
                               proxy_b=None, token_env="SERVICE_TOKEN", proxy_token_env="PROXY_TOKEN")
     report = await shadow.run(args)
     assert report["status"] == "complete"
@@ -187,7 +187,7 @@ async def test_fatal_error_keeps_partial_case_and_attempt_ledger(tmp_path, monke
     monkeypatch.setenv("SERVICE_TOKEN", "token-longer-than-sixteen")
     args = argparse.Namespace(variant="C", corpus=str(corpus), output_dir=str(output), case=[],
                               cgroup=_cgroups(tmp_path / "metrics"),
-                              endpoint_c="http://news-native-shadow-service:8080", proxy_b=None,
+                              endpoint_c="http://127.0.0.1:8080", proxy_b=None,
                               token_env="SERVICE_TOKEN", proxy_token_env="PROXY_TOKEN")
     report = await shadow.run(args)
     assert report["status"] == "incomplete"
@@ -201,68 +201,10 @@ async def test_fatal_error_keeps_partial_case_and_attempt_ledger(tmp_path, monke
         await shadow.run(args)
 
 
-def _b_args(tmp_path, monkeypatch):
-    corpus = _corpus(tmp_path / "corpus.json", [_case(1)])
-    monkeypatch.setenv("BROWSER_WS_ENDPOINT", "http://172.20.0.2:9222")
-    monkeypatch.setenv("PROXY_TOKEN", "proxy-token-longer-than-sixteen")
-    return argparse.Namespace(variant="B", corpus=str(corpus), output_dir=str(tmp_path / "output"),
-                              case=[], cgroup=_cgroups(tmp_path / "metrics"), endpoint_c=None,
-                              proxy_b="http://gateway:8081", token_env="SERVICE_TOKEN",
-                              proxy_token_env="PROXY_TOKEN")
-
-
-@pytest.mark.asyncio
-@pytest.mark.parametrize("change_at,expected_rows", [(2, 0), (3, 1)])
-async def test_b_discovery_change_stops_before_or_after_job(tmp_path, monkeypatch, change_at, expected_rows):
-    args = _b_args(tmp_path, monkeypatch)
-    probes = []
-    calls = []
-
-    async def discovery(_endpoint):
-        probes.append(True)
-        return "identity-b" if len(probes) >= change_at else "identity-a"
-
-    async def extraction(_url, _proxy, _token):
-        calls.append(True)
-        return {"outcome": "success", "state": "extracted", "content": "Article body",
-                "method": "browser_rendering"}
-
-    monkeypatch.setattr(shadow, "_probe_browser_discovery", discovery)
-    monkeypatch.setattr(shadow, "_run_b", extraction)
-    report = await shadow.run(args)
-    assert report["status"] == "incomplete"
-    assert report["fatal_error"] == "browser_generation_changed"
-    assert len(report["rows"]) == expected_rows
-    assert len(calls) == expected_rows
-
-
-@pytest.mark.asyncio
-@pytest.mark.parametrize("failure", [shadow.BrowserUnavailableError("lost"), ConnectionError("lost"), OSError("lost")])
-async def test_b_transport_failure_is_fatal_with_partial_capture(tmp_path, monkeypatch, failure):
-    args = _b_args(tmp_path, monkeypatch)
-
-    async def discovery(_endpoint):
-        return "identity-a"
-
-    async def extraction(_url, _proxy, _token):
-        raise failure
-
-    monkeypatch.setattr(shadow, "_probe_browser_discovery", discovery)
-    monkeypatch.setattr(shadow, "_run_b", extraction)
-    report = await shadow.run(args)
-    assert report["status"] == "incomplete"
-    assert report["fatal_error"] == "browser_transport_unavailable"
-    assert report["rows"][0]["error"] == "browser_transport_unavailable"
-    assert (Path(args.output_dir) / "raw-B-case-0001.json").exists()
-
-
-def test_b_discovery_endpoint_must_be_numeric_private(monkeypatch):
-    monkeypatch.setenv("BROWSER_WS_ENDPOINT", "http://browser.example.com:9222")
-    with pytest.raises(shadow.ShadowError, match="invalid_browser_discovery_endpoint"):
-        shadow._browser_discovery_endpoint()
-    monkeypatch.setenv("BROWSER_WS_ENDPOINT", "http://8.8.8.8:9222")
-    with pytest.raises(shadow.ShadowError, match="invalid_browser_discovery_endpoint"):
-        shadow._browser_discovery_endpoint()
+def test_python_observer_variant_is_not_available():
+    with pytest.raises(SystemExit):
+        shadow.build_parser().parse_args(["--variant", "B", "--corpus", "corpus.json",
+                                           "--output-dir", "output"])
 
 
 @pytest.mark.asyncio
@@ -293,44 +235,6 @@ async def test_readiness_requires_no_fixture_selector(monkeypatch):
 
 
 @pytest.mark.asyncio
-async def test_b_uses_public_policy_generic_readiness_and_python_metadata(monkeypatch):
-    seen = {}
-    inherited_database_env = {
-        name: os.environ.get(name) for name in ("DATABASE_URL", "TEST_DATABASE_URL")
-    }
-
-    async def page(_pool, _parser, url, _proxy, _token, **kwargs):
-        seen.update(kwargs)
-        assert url == "https://news.example.com/story"
-        return {"outcome": "success", "state": "extracted", "method": "browser_rendering",
-                "content": "Article body", "final_url": url,
-                "rendered_html": '<html><head><meta property="og:title" content="Current story">'
-                                 '<meta property="og:image" content="/cover.jpg"></head>'
-                                 '<body><article><p>Article body</p></article></body></html>'}
-
-    monkeypatch.setattr(shadow.bench, "_run_native_policy_page", page)
-    # _run_b deliberately scrubs DB URLs before launching its isolated
-    # subprocess. Restore the parent test process environment even though the
-    # mocked native path does not need a subprocess, so later PostgreSQL tests
-    # in this pytest process still see their configured fixture DSN.
-    with monkeypatch.context() as scoped_env:
-        for name, value in inherited_database_env.items():
-            if value is not None:
-                scoped_env.setenv(name, value)
-        result = await shadow._run_b(
-            "https://news.example.com/story", "http://gateway:8080", "long-secret"
-        )
-    for name, value in inherited_database_env.items():
-        assert os.environ.get(name) == value
-    assert seen["url_policy"]("https://news.example.com/img.jpg?size=2")
-    assert not seen["url_policy"]("https://localhost/admin")
-    assert "data-ready" not in seen["ready_expression"]
-    assert seen["capture_raw"] is True
-    assert result["title"] == "Current story"
-    assert result["image_url"] == "https://news.example.com/cover.jpg"
-
-
-@pytest.mark.asyncio
 async def test_c_client_deadline_stops_variant_before_another_dispatch(monkeypatch):
     from news_aggregator.extraction.service_client import ExtractionServiceClient, ExtractionServiceError
 
@@ -357,7 +261,7 @@ async def test_c_outer_deadline_records_partial_case_and_stops(tmp_path,monkeypa
     monkeypatch.setattr(shadow,'MAX_JOB_SECONDS',.01)
     monkeypatch.setenv('SERVICE_TOKEN','token-longer-than-sixteen')
     args=argparse.Namespace(variant='C',corpus=str(corpus),output_dir=str(tmp_path/'output'),case=[],
-        cgroup=_cgroups(tmp_path/'metrics'),endpoint_c='http://news-native-shadow-service:8080',
+            cgroup=_cgroups(tmp_path/'metrics'),endpoint_c='http://127.0.0.1:8080',
         proxy_b=None,token_env='SERVICE_TOKEN',proxy_token_env='PROXY_TOKEN')
     report=await shadow.run(args)
     assert len(calls)==1

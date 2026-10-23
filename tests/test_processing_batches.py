@@ -396,7 +396,8 @@ async def test_manual_reservation_prevents_duplicate_background_requests(monkeyp
 
 @pytest.mark.asyncio
 async def test_real_batch_database_failure_aborts_combined_digest_before_delivery(isolated):
-    from news_aggregator.services.scheduler import TaskScheduler
+    from types import SimpleNamespace
+    from news_aggregator.services.background_execution import execute_job
     orchestrator, engine = isolated
     add_articles(engine, 1)
     orchestrator.db_queue_manager.fail_save = True
@@ -405,10 +406,8 @@ async def test_real_batch_database_failure_aborts_combined_digest_before_deliver
         fetch_from_all_sources_no_db=AsyncMock(return_value={}),
         save_fetched_articles_with_sources=AsyncMock(return_value={}))
     orchestrator.send_telegram_digest = AsyncMock(return_value={'success': True})
-    scheduler = TaskScheduler.__new__(TaskScheduler)
-    scheduler.orchestrator = orchestrator
-    with pytest.raises(RuntimeError, match='Error in full processing cycle'):
-        await scheduler._run_news_digest_cycle({})
+    with pytest.raises(RuntimeError, match='processing cycle failed'):
+        await execute_job(SimpleNamespace(kind="news_digest", payload={}), orchestrator)
     orchestrator.send_telegram_digest.assert_not_awaited()
     with Session(engine) as db:
         article = db.get(Article, 1)
