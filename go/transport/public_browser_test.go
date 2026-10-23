@@ -3,8 +3,11 @@ package transport
 import (
 	"context"
 	"errors"
+	"io"
+	"net"
 	"net/http"
 	"net/http/httptest"
+	"net/netip"
 	"strings"
 	"sync/atomic"
 	"testing"
@@ -17,6 +20,42 @@ func TestPublicBrowserRejectsInvalidMinimumSettle(t *testing.T) {
 		if err == nil || !strings.Contains(err.Error(), "invalid_timeout") {
 			t.Errorf("MinSettle=%s error=%v", duration, err)
 		}
+	}
+}
+
+func TestBrowserDiscoveryClosesConnectionAfterResponse(t *testing.T) {
+	closed := make(chan struct{}, 2)
+	server := httptest.NewUnstartedServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if !r.Close {
+			t.Error("discovery request did not ask the server to close the relay connection")
+		}
+		w.Header().Set("Content-Type", "application/json")
+		_, _ = io.WriteString(w, `{"webSocketDebuggerUrl":"ws://ignored.example/devtools/browser/test"}`)
+	}))
+	server.Config.ConnState = func(_ net.Conn, state http.ConnState) {
+		if state == http.StateClosed {
+			select {
+			case closed <- struct{}{}:
+			default:
+			}
+		}
+	}
+	server.Start()
+	defer server.Close()
+
+	ctx, cancel := context.WithTimeout(context.Background(), time.Second)
+	defer cancel()
+	endpoint, err := configuredBrowserEndpointWithResolver(ctx, server.URL, fixedResolver{[]netip.Addr{netip.MustParseAddr("127.0.0.1")}})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !strings.HasSuffix(endpoint, "/devtools/browser/test") {
+		t.Fatalf("discovered websocket endpoint changed: %s", endpoint)
+	}
+	select {
+	case <-closed:
+	case <-time.After(time.Second):
+		t.Fatal("discovery relay connection remained open after the response body was consumed")
 	}
 }
 
