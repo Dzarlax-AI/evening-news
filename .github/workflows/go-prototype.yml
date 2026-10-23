@@ -51,6 +51,7 @@ jobs:
         run: python -m pytest tests/test_extraction_replay.py -q
       - name: Replay the offline corpus with Go
         run: |
+          mkdir -p artifacts
           cd go
           go run ./cmd/extract-replay -corpus ../tests/fixtures/go-parity/manifest.json -cycles 6 -workers 2 -output ../artifacts/go-replay.jsonl
       - name: Check every Go replay against frozen source goldens

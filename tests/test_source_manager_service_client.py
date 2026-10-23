@@ -328,6 +328,53 @@ async def test_successful_empty_rss_collection_is_a_healthy_source_test(monkeypa
 
 
 @pytest.mark.asyncio
+async def test_inline_connection_test_probes_disabled_source_without_enabling_it(monkeypatch):
+    from types import SimpleNamespace
+
+    import news_aggregator.config as config
+    from news_aggregator.services.source_manager import SourceManager
+
+    settings = Settings(_env_file=None,
+                        EXTRACTION_SERVICE_URL="http://extractor:8080",
+                        EXTRACTION_SERVICE_TOKEN="private-token-value")
+    monkeypatch.setattr(config, "get_settings", lambda: settings)
+    source = SimpleNamespace(
+        id=13, name="Disabled feed", source_type="rss", url="https://feed.example/rss",
+        enabled=False, config={}, last_success=None, error_count=3, last_error="old failure",
+    )
+    observed = {}
+
+    class SuccessfulClient:
+        def __init__(self, *_args):
+            pass
+
+        async def collect(self, sources, **_kwargs):
+            observed.setdefault("enabled", []).append(sources[0]["enabled"])
+            return {"results": [{"source_id": 13, "type": "rss", "outcome": "success",
+                                  "rss_articles": []}]}
+
+    monkeypatch.setattr(
+        "news_aggregator.sources.source_manager_service_client.SourceManagerServiceClient",
+        SuccessfulClient)
+    manager = SourceManager()
+    monkeypatch.setattr(manager, "get_source_by_id", lambda _db, _source_id: _source())
+
+    async def _source():
+        return source
+
+    class FakeSession:
+        async def commit(self):
+            pass
+
+    assert await manager.test_source_connection(FakeSession(), source.id) is True
+    assert await manager._fetch_from_go_source_manager([source], 1) == {13: []}
+    assert observed["enabled"] == [True, False]
+    assert source.enabled is False
+    assert source.error_count == 0
+    assert source.last_error is None
+
+
+@pytest.mark.asyncio
 async def test_page_monitor_source_test_uses_adapter_config_without_learning_or_state_updates(monkeypatch):
     import news_aggregator.config as config
     from news_aggregator.models import Source

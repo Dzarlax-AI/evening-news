@@ -147,7 +147,7 @@ Design follows the [dzarlax.dev](https://dzarlax.dev) brand system: warm ivory b
 
 **RSS / Atom** — feed URLs are collected by the guarded Go collector. When the feed provides only a snippet, the full article is fetched automatically using the Go extraction service.
 
-**Telegram** — public channels via the Go collector. It extracts messages and follows external links to fetch full article text.
+**Telegram** — public channels via the Go collector. It extracts messages and follows external links to fetch full article text. Explicit media refresh for a historical post retains a bounded Python compatibility helper.
 
 **Custom (Page Monitor)** — for sites without RSS. Point it at a URL and it finds new articles using CSS selectors. The Go service captures and parses the page while Python retains selector memory, cursor/snapshot state, and optional AI learning. You can provide your own selectors as a fixed override. The minimal local Compose example supports HTTP pages; use the [native deployment guide](docs/go-cloak-native-worker.md) for JavaScript-rendered pages.
 

@@ -68,15 +68,17 @@ async def reprocess_article(
         if not article:
             raise HTTPException(status_code=404, detail="Article not found")
         
-        if request.reextract_media and article.source and article.source.source_type == 'telegram':
+        needs_media_refresh = bool(request.reextract_media and article.source
+                                   and article.source.source_type == 'telegram')
+        # Release the request read before post HTTP or AI work.
+        await db.rollback()
+        if needs_media_refresh:
             try:
                 from ..services.article_media_reextract import reextract_article_media
                 await reextract_article_media(article_id)
             except Exception:
-                logger.warning('Go Telegram media refresh did not complete (article_id=%s)', article_id)
+                logger.warning('Telegram media refresh did not complete (article_id=%s)', article_id)
 
-        # Release the request's read transaction before any AI work.
-        await db.rollback()
         orchestrator = NewsOrchestrator()
         stats = await orchestrator.process_selected_articles(
             [article_id], reservation=reservation, force=request.force)

@@ -60,7 +60,14 @@ def test_removed_python_and_shadow_modes_fail_clearly(name, value):
 
 
 def test_runtime_missing_config_is_reported_without_secrets():
-    settings = Settings(_env_file=None)
+    settings = Settings(
+        _env_file=None,
+        EXTRACTION_SERVICE_URL=None,
+        EXTRACTION_SERVICE_TOKEN=None,
+        SCHEDULER_API_URL=None,
+        SCHEDULER_API_TOKEN=None,
+        SCHEDULED_JOBS_TOKEN=None,
+    )
     with pytest.raises(RuntimeError) as error:
         settings.validate_runtime_services()
     assert "EXTRACTION_SERVICE_URL" in str(error.value)

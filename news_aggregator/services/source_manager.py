@@ -273,7 +273,10 @@ class SourceManager:
                 'type': source_type,
                 'source_name': source.name,
                 'url': source.url,
-                'enabled': bool(source.enabled),
+                # Explicit connection probes must be able to test a disabled
+                # source without changing its stored state. Collection passes
+                # preserve the persisted enabled flag.
+                'enabled': True if source_test else bool(source.enabled),
                 'per_source_budget_ms': per_source_budget_ms,
             }
             if source_type == 'rss':

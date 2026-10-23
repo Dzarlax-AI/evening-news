@@ -7,7 +7,12 @@ existing browser and disposable owned contexts. Auth, policy, resource-limit,
 rate-limit, cancellation and deadline failures do not trigger blind retries.
 
 Go owns Telegram collection and parsing. Python retains source configuration,
-enrichment and persistence. Telegram HTTP fetches overlap within the source
+enrichment and persistence. Explicit admin media refresh is a narrow compatibility
+exception: Python fetches the exact historical post over bounded HTTPS and uses
+the retained media helper. It does not run source collection, article extraction,
+a browser, or a fallback. The Go channel API currently has no post-specific
+request; changing that API is outside this cleanup. Missing/failed captures
+preserve stored media. Telegram HTTP fetches overlap within the source
 worker pool and reserve no native browser slot. Only eligible browser fallback
 enters the render gate shared with article extraction and Page Monitor. See the
 [source collection guide](go-source-manager.md).
