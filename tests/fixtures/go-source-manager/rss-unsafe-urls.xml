@@ -1,0 +1,22 @@
+<?xml version="1.0" encoding="utf-8"?>
+<rss version="2.0" xmlns:media="http://search.yahoo.com/mrss/" xml:base="https://publisher.example/base/">
+  <channel>
+    <title>Unsafe URL fixture</title>
+    <item><title>JavaScript link</title><link>javascript:alert(1)</link></item>
+    <item><title>Quote handler</title><link>https://publisher.example/&quot; onmouseover=alert(1)</link></item>
+    <item><title>Angle injection</title><link>https://publisher.example/&lt;img src=x&gt;</link></item>
+    <item><title>Control character</title><link>https://publisher.example/bad&#10;target</link></item>
+    <item><title>Backtick injection</title><link>https://publisher.example/`onmouseover=alert(1)</link></item>
+    <item xml:base="../items/">
+      <title>Unsafe image keeps article</title>
+      <link>story-one.html</link>
+      <enclosure url="javascript:alert(2)" type="image/png"/>
+      <media:thumbnail url="data:image/png;base64,AAAA"/>
+    </item>
+    <item xml:base="../items/">
+      <title>Safe relative image</title>
+      <link>story-two.html</link>
+      <enclosure url="../images/safe.jpg" type="image/jpeg"/>
+    </item>
+  </channel>
+</rss>

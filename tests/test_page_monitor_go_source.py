@@ -270,6 +270,40 @@ def test_failed_service_call_preserves_snapshot_and_does_not_open_python_browser
     assert monitor.failure_count == 1
 
 
+def test_prepare_carries_exact_offset_and_finalize_delivers_captured_prefix_after_deadline(monkeypatch):
+    install_go_mode(monkeypatch)
+    config = PageMonitorConfig('https://example.test/updates', 'Example', max_articles_per_check=5)
+    monitor = PageMonitorSource(config)
+    monitor._go_scan_active = True
+    monitor._go_offset = 2
+    monitor._go_scan_segments = {0: 'a' * 32, 1: 'b' * 32}
+    monitor._go_scan_acknowledged = {0: 'a' * 32, 1: 'b' * 32}
+    monkeypatch.setattr(monitor, '_load_learned_structure', lambda: asyncio.sleep(0))
+
+    class CapturedOnlyClient:
+        def __init__(self, *args, **kwargs):
+            pass
+
+        async def fetch(self, *args, **kwargs):
+            raise AssertionError('captured Page Monitor results must not fetch the page again')
+
+        async def parse(self, *args, **kwargs):
+            raise AssertionError('expired deadlines suppress optional reparsing')
+
+    monkeypatch.setattr('news_aggregator.sources.page_monitor_service_client.PageMonitorServiceClient',
+                        CapturedOnlyClient)
+
+    async def run():
+        prepared = await monitor.prepare_go_collection()
+        assert prepared['limit'] == 5 and prepared['offset'] == 2
+        captured = response(config, ['Story three'])
+        articles = await monitor.finalize_go_collection(captured, deadline=asyncio.get_running_loop().time() - 1)
+        assert [article.title for article in articles] == ['Story three']
+
+    asyncio.run(run())
+    assert monitor.failure_count == 0
+
+
 def test_go_service_timeouts_respect_configured_wait_timeout_and_preserve_flags(monkeypatch):
     install_go_mode(monkeypatch)
     config = PageMonitorConfig('https://example.test/updates', 'Example', use_browser=False,

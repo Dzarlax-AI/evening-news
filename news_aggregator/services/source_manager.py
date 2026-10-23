@@ -2,6 +2,8 @@ import logging
 """Source manager for handling multiple news sources."""
 
 import asyncio
+import math
+import time
 from datetime import datetime, timedelta
 from typing import List, Dict, Any, Optional
 
@@ -194,7 +196,7 @@ class SourceManager:
 
     async def fetch_from_all_sources_no_db(self, sources: List[Source],
                                            max_concurrent: int = 5,
-                                           per_source_timeout: int = 120) -> Dict[str, List[Article]]:
+                                           per_source_timeout: int = 120) -> Dict[str | int, List[Article]]:
         """
         Fetch source I/O without holding a database transaction.
         Go-backed sources share a batch admission queue; other sources remain
@@ -208,6 +210,9 @@ class SourceManager:
 
         from ..config import get_settings
         source_settings = get_settings()
+
+        if source_settings.source_manager_mode == 'go':
+            return await self._fetch_from_go_source_manager(sources, per_source_timeout)
 
         def is_go_backed_source(source: Source) -> bool:
             source_type = getattr(source, 'source_type', None)
@@ -271,6 +276,187 @@ class SourceManager:
 
         logger.warning(f"[FETCH COMPLETE] All sources done. Total: {sum(len(a) for a in results.values())} articles from {len(results)} sources")
         return results
+
+    async def _fetch_from_go_source_manager(self, sources: List[Source], total_timeout: int):
+        """Collect all source types in bounded Go batches and retain source IDs for persistence."""
+        from ..config import get_settings
+        from ..sources.source_manager_service_client import (
+            SourceManagerServiceClient, SourceManagerServiceError,
+        )
+
+        if (isinstance(total_timeout, bool) or not isinstance(total_timeout, (int, float))
+                or not math.isfinite(total_timeout) or total_timeout <= 0):
+            raise SourceManagerServiceError('invalid_request')
+        per_source_budget_ms = min(120_000, max(1, int(float(total_timeout) * 1000)))
+        settings = get_settings()
+        input_ids = []
+        for source in sources:
+            source_id = getattr(source, 'id', None)
+            if type(source_id) is not int or source_id <= 0 or source_id in input_ids:
+                raise SourceManagerServiceError('invalid_request')
+            input_ids.append(source_id)
+
+        def normalized_type(source):
+            source_type = getattr(source, 'source_type', None)
+            return source_type.value if isinstance(source_type, SourceType) else source_type
+
+        # Keep a stable empty entry for every supported source even if adapter
+        # preparation, collection, normalization, or the pass deadline fails.
+        results: Dict[int, List[Article]] = {
+            source_id: [] for source_id, source in zip(input_ids, sources)
+            if normalized_type(source) in {'rss', 'telegram', 'custom'}
+        }
+        batch_count = max(1, (len(sources) + 7) // 8)
+        postprocess_reserve = min(30.0, float(total_timeout)) * min(8, len(sources))
+        overall_budget = min(600.0, max(0.01, float(total_timeout)) * batch_count
+                             + postprocess_reserve)
+        loop = asyncio.get_running_loop()
+        deadline = loop.time() + overall_budget
+        client = SourceManagerServiceClient(
+            settings.extraction_service_url,
+            settings.extraction_service_token.get_secret_value(),
+        )
+        by_id = dict(zip(input_ids, sources))
+        descriptors = {}
+
+        for source_id, source in by_id.items():
+            source_type = normalized_type(source)
+            if source_type not in {'rss', 'telegram', 'custom'}:
+                logger.warning('Go SourceManager skipped unsupported source type id=%s', source_id)
+                continue
+            source_config = source.config or {}
+            descriptor = {
+                'source_id': source_id,
+                'type': source_type,
+                'source_name': source.name,
+                'url': source.url,
+                'enabled': bool(source.enabled),
+                'per_source_budget_ms': per_source_budget_ms,
+            }
+            if source_type == 'rss':
+                rss_limit = source_config.get('limit')
+                if type(rss_limit) is int and rss_limit > 0:
+                    descriptor['limit'] = rss_limit
+            elif source_type == 'telegram':
+                try:
+                    instance = await self.get_source_instance(source)
+                    tg_limit = source_config.get('limit')
+                    # Match Python Telegram's existing upper bound before its
+                    # typed config validator; malformed and nonpositive values
+                    # still reach the validator unchanged and are rejected.
+                    config_limit = min(tg_limit, 100) if type(tg_limit) is int and tg_limit > 0 else tg_limit
+                    descriptor['telegram'] = instance.go_collection_config(config_limit)
+                    if type(tg_limit) is int:
+                        descriptor['limit'] = min(tg_limit, 100)
+                except Exception:
+                    logger.warning('Go SourceManager cannot prepare Telegram source id=%s code=preparation_failed',
+                                   source_id)
+                    continue
+            else:
+                try:
+                    instance = await self.get_source_instance(source)
+                    prepare = getattr(instance, 'prepare_go_collection', None)
+                    if prepare is None:
+                        logger.warning('Go SourceManager cannot prepare page monitor id=%s code=unsupported',
+                                       source_id)
+                        continue
+                    pm_config = await prepare()
+                    pm_limit = pm_config.pop('limit', None)
+                    if type(pm_limit) is int and pm_limit > 0:
+                        descriptor['limit'] = min(pm_limit, 100)
+                    descriptor['page_monitor'] = pm_config
+                except Exception:
+                    logger.warning('Go SourceManager cannot prepare page monitor id=%s code=preparation_failed',
+                                   source_id)
+                    continue
+            descriptors[source_id] = descriptor
+
+        pending = list(descriptors.values())
+        deferred_retries: Dict[int, int] = {}
+        while pending and loop.time() < deadline:
+            batch = pending[:8]
+            pending = pending[8:]
+            remaining = max(0.001, deadline - loop.time())
+            try:
+                response = await client.collect(batch, timeout_seconds=min(120.0, remaining))
+            except (SourceManagerServiceError, ValueError) as exc:
+                code = exc.code if isinstance(exc, SourceManagerServiceError) else 'invalid_configuration'
+                logger.warning('Go SourceManager batch failed code=%s sources=%d', code, len(batch))
+                continue
+            except asyncio.CancelledError:
+                raise
+            except Exception:
+                logger.warning('Go SourceManager batch failed code=unavailable sources=%d', len(batch))
+                continue
+
+            deferred = []
+            retry_after = 0.0
+            for item in response['results']:
+                source_id = item['source_id']
+                source = by_id[source_id]
+                if item['outcome'] == 'rejected':
+                    logger.warning('Go SourceManager rejected source id=%s', source_id)
+                    continue
+                if item['outcome'] == 'failed':
+                    error = item.get('error') or {}
+                    logger.warning('Go SourceManager source failed id=%s code=%s',
+                                   source_id, error.get('code', 'failed'))
+                    continue
+                # Consume any typed prefix before scheduling deferred work. The Go
+                # contract correlates this payload with the same source ID.
+                try:
+                    articles = await self._normalize_go_source_result(
+                        source, item, deadline=deadline)
+                    payload_key = {'rss': 'rss_articles', 'telegram': 'telegram',
+                                   'custom': 'page_monitor'}[item['type']]
+                    if articles or item['outcome'] in {'success', 'partial'} or payload_key in item:
+                        results[source_id] = results.get(source_id, []) + articles
+                except asyncio.CancelledError:
+                    raise
+                except Exception:
+                    logger.warning('Go SourceManager normalization failed id=%s code=normalization_failed',
+                                   source_id)
+                if item['outcome'] == 'deferred':
+                    retries = deferred_retries.get(source_id, 0)
+                    if retries < 8:
+                        deferred_retries[source_id] = retries + 1
+                        deferred.append(descriptors[source_id])
+                        error = item.get('error') or {}
+                        delay = error.get('retry_after_seconds', 0)
+                        if type(delay) is int and delay > 0:
+                            retry_after = max(retry_after, min(float(delay), 5.0))
+            if deferred and loop.time() < deadline:
+                # Retry only a few times, with bounded Retry-After where supplied.
+                # This keeps instant deferred responses from creating a tight loop.
+                await asyncio.sleep(min(max(0.25, retry_after), max(0.0, deadline - loop.time())))
+                pending.extend(deferred)
+        if pending:
+            logger.warning('Go SourceManager pass ended with deferred source count=%d', len(pending))
+        return results
+
+    async def _normalize_go_source_result(self, source, result, *, deadline):
+        source_type = getattr(source, 'source_type', None)
+        source_type = source_type.value if isinstance(source_type, SourceType) else source_type
+        if source_type == 'rss':
+            from ..sources.rss_source import RSSSource
+            return [RSSSource.article_from_go(item) for item in (result.get('rss_articles') or [])]
+        instance = await self.get_source_instance(source)
+        if source_type == 'telegram':
+            from ..config import get_settings
+            response = result.get('telegram')
+            if response is None:
+                return []
+            remaining = max(0.0, deadline - asyncio.get_running_loop().time())
+            # The source helper runs only after the manager call has returned, so
+            # optional linked-article enrichment cannot retain a Go batch slot.
+            return [article async for article in instance.consume_go_collection(
+                response, settings=get_settings(), deadline=time.monotonic() + remaining)]
+        response = result.get('page_monitor')
+        if response is None:
+            return []
+        remaining = max(0.0, deadline - asyncio.get_running_loop().time())
+        return await instance.finalize_go_collection(
+            response, deadline=asyncio.get_running_loop().time() + remaining)
 
     @staticmethod
     def _collect_candidate_urls(article) -> List[str]:
@@ -356,8 +542,8 @@ class SourceManager:
         if title:
             seen_titles.add(title)
 
-    async def save_fetched_articles_with_sources(self, raw_articles: Dict[str, List[Article]],
-                                                  source_map: Dict[str, Source], db: AsyncSession) -> Dict[str, List[Article]]:
+    async def save_fetched_articles_with_sources(self, raw_articles: Dict[str | int, List[Article]],
+                                                  source_map: Dict[str | int, Source], db: AsyncSession) -> Dict[str | int, List[Article]]:
         """
         Save fetched articles to database using provided source mapping.
         This is pure DB writes, no HTTP fetching.
@@ -366,13 +552,13 @@ class SourceManager:
 
         # Debug logs removed after verification
 
-        for source_name, articles in raw_articles.items():
+        for source_key, articles in raw_articles.items():
             try:
 
-                source = source_map.get(source_name)
+                source = source_map.get(source_key)
                 if not source:
-                    logger.info(f"Source '{source_name}' not found in source_map — skipping")
-                    results[source_name] = []
+                    logger.info(f"Source '{source_key}' not found in source_map — skipping")
+                    results[source_key] = []
                     continue
 
                 source.last_fetch = datetime.utcnow()
@@ -432,11 +618,11 @@ class SourceManager:
                     saved_articles.append(db_article)
                     self._record_in_seen_sets(urls, normalized_title, seen_urls, seen_titles)
 
-                results[source_name] = saved_articles
+                results[source_key] = saved_articles
 
             except Exception as e:
-                logger.info(f"Error saving articles for {source_name}: {e}")
-                results[source_name] = []
+                logger.info(f"Error saving articles for {source_key}: {e}")
+                results[source_key] = []
 
         return results
 

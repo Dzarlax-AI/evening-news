@@ -1,0 +1,142 @@
+{
+  "rss-semantics.xml": {
+    "bozo": false,
+    "articles": [
+      {
+        "title": "Новости: café",
+        "url": "https://publisher.example/story/1",
+        "content": "Полный <em>текст</em> &amp; details",
+        "summary": null,
+        "image_url": "https://publisher.example/cover.jpg",
+        "published_at": "2002-10-02T11:00:00Z",
+        "source_type": "rss",
+        "source_name": "Fixture RSS",
+        "raw_data": {
+          "guid": "urn:story:1",
+          "author": "Иван Иванов",
+          "tags": [
+            "World",
+            "Serbia"
+          ]
+        }
+      },
+      {
+        "title": "Updated date fallback",
+        "url": "https://publisher.example/story/2",
+        "content": null,
+        "summary": null,
+        "image_url": "https://publisher.example/content.webp",
+        "published_at": "2021-04-05T06:07:08Z",
+        "source_type": "rss",
+        "source_name": "Fixture RSS",
+        "raw_data": {
+          "guid": "urn:story:2",
+          "author": "",
+          "tags": []
+        }
+      },
+      {
+        "title": "HTML image fallback",
+        "url": "https://publisher.example/story/3",
+        "content": null,
+        "summary": "<p>Summary<img src=\"https://publisher.example/inline.png?size=large\" /></p>",
+        "image_url": "https://publisher.example/inline.png?size=large",
+        "published_at": "2026-10-23T11:12:13Z",
+        "source_type": "rss",
+        "source_name": "Fixture RSS",
+        "raw_data": {
+          "guid": "https://publisher.example/story/3",
+          "author": "",
+          "tags": []
+        }
+      },
+      {
+        "title": "Created date fallback",
+        "url": "https://publisher.example/story/4",
+        "content": null,
+        "summary": null,
+        "image_url": null,
+        "published_at": "2017-09-07T10:00:00Z",
+        "source_type": "rss",
+        "source_name": "Fixture RSS",
+        "raw_data": {
+          "guid": "urn:story:4",
+          "author": "",
+          "tags": []
+        }
+      }
+    ]
+  },
+  "atom-semantics.xml": {
+    "bozo": false,
+    "articles": [
+      {
+        "title": "Атомная статья",
+        "url": "https://publisher.example/atom/1",
+        "content": "Полный <strong>текст</strong>",
+        "summary": null,
+        "image_url": "https://publisher.example/atom-thumb.png",
+        "published_at": "2022-02-02T00:00:00Z",
+        "source_type": "rss",
+        "source_name": "Fixture RSS",
+        "raw_data": {
+          "guid": "urn:atom:1",
+          "author": "Редакция",
+          "tags": [
+            "Технологии"
+          ]
+        }
+      },
+      {
+        "title": "No title",
+        "url": "https://publisher.example/atom/2",
+        "content": null,
+        "summary": "Summary only",
+        "image_url": null,
+        "published_at": "2022-02-02T00:00:00Z",
+        "source_type": "rss",
+        "source_name": "Fixture RSS",
+        "raw_data": {
+          "guid": "urn:atom:2",
+          "author": "",
+          "tags": []
+        }
+      }
+    ]
+  },
+  "atom-base-sanitize.xml": {
+    "bozo": false,
+    "articles": [
+      {
+        "title": "",
+        "url": "https://publisher.example/stories/article.html",
+        "content": null,
+        "summary": "<p>Safe <a href=\"\">link</a><img src=\"https://publisher.example/images/cover.jpg\" /></p>",
+        "image_url": "../images/thumb.jpg",
+        "published_at": "2026-10-23T11:12:13Z",
+        "source_type": "rss",
+        "source_name": "Fixture RSS",
+        "raw_data": {
+          "guid": "urn:base:1",
+          "author": "",
+          "tags": []
+        }
+      },
+      {
+        "title": "No title",
+        "url": "https://publisher.example/base/second.html",
+        "content": null,
+        "summary": "Missing title",
+        "image_url": null,
+        "published_at": "2026-10-23T11:12:13Z",
+        "source_type": "rss",
+        "source_name": "Fixture RSS",
+        "raw_data": {
+          "guid": "urn:base:2",
+          "author": "",
+          "tags": []
+        }
+      }
+    ]
+  }
+}

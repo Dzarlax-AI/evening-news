@@ -59,6 +59,12 @@ class PageMonitorAdapter(BaseSource):
             # Yield each article as an async generator
             for article in articles:
                 yield article
+
+    async def prepare_go_collection(self):
+        return await self.monitor.prepare_go_collection()
+
+    async def finalize_go_collection(self, result, limit=None, deadline=None):
+        return await self.monitor.finalize_go_collection(result, limit=limit, deadline=deadline)
     
     async def test_connection(self) -> bool:
         """Test connection using the underlying PageMonitorSource."""

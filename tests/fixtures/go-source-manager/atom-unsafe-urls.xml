@@ -1,0 +1,22 @@
+<?xml version="1.0" encoding="utf-8"?>
+<feed xmlns="http://www.w3.org/2005/Atom" xmlns:media="http://search.yahoo.com/mrss/" xml:base="https://publisher.example/atom/base/">
+  <title>Unsafe Atom URL fixture</title>
+  <id>urn:feed:unsafe</id>
+  <updated>2026-10-23T00:00:00Z</updated>
+  <entry><title>JavaScript link</title><id>urn:unsafe:1</id><link href="javascript:alert(1)"/></entry>
+  <entry><title>Quote handler</title><id>urn:unsafe:2</id><link href="https://publisher.example/&quot; onload=alert(1)"/></entry>
+  <entry><title>Angle injection</title><id>urn:unsafe:3</id><link href="https://publisher.example/&lt;svg onload=x&gt;"/></entry>
+  <entry><title>Backtick injection</title><id>urn:unsafe:4</id><link href="https://publisher.example/`onload=alert(1)"/></entry>
+  <entry xml:base="../stories/">
+    <title>Unsafe image keeps Atom article</title>
+    <id>urn:safe:1</id>
+    <link href="relative.html"/>
+    <media:thumbnail url="javascript:alert(2)"/>
+  </entry>
+  <entry xml:base="../stories/">
+    <title>Safe Atom relative URLs</title>
+    <id>urn:safe:2</id>
+    <link href="second.html"/>
+    <media:thumbnail url="../images/atom-safe.jpg"/>
+  </entry>
+</feed>

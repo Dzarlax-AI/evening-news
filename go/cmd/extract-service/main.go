@@ -124,6 +124,7 @@ func run() error {
 		out := requestEngine.Extract(ctx, pipeline.Request{Input: in, ChromeEndpoint: endpoint})
 		return toServiceResponse(out)
 	})
+	rssSource := pipeline.RSSSource{Admit: transport.AdmitPublicURL, Fetch: transport.FetchPublicRSS}
 	telegramSource := pipeline.TelegramSource{Fetch: transport.FetchPublic}
 	pageMonitorSource := pipeline.PageMonitorSource{Fetch: transport.FetchPublic, Admit: transport.AdmitPublicURL}
 	pageMonitorSource.Render = func(ctx context.Context, raw string, opts transport.BrowserOptions, selector string, settle time.Duration) (transport.RenderedDocument, error) {
@@ -144,7 +145,7 @@ func run() error {
 			return native.Fetch(ctx, raw, transport.NativeBrowserOptions{BrowserOptions: opts, ReadySelector: selector})
 		}
 	}
-	runner := runtimeRunner{article: articleRunner, telegram: telegramSource, pageMonitor: pageMonitorSource}
+	runner := runtimeRunner{article: articleRunner, rss: rssSource, telegram: telegramSource, pageMonitor: pageMonitorSource}
 	var ready func() bool
 	if native != nil {
 		ready = nativeReady
@@ -190,12 +191,18 @@ func run() error {
 
 type runtimeRunner struct {
 	article     service.Runner
+	rss         pipeline.RSSSource
 	telegram    pipeline.TelegramSource
 	pageMonitor pipeline.PageMonitorSource
 }
 
 func (r runtimeRunner) Run(ctx context.Context, req service.Request) service.Response {
 	return r.article.Run(ctx, req)
+}
+
+func (r runtimeRunner) RunRSS(ctx context.Context, req service.RSSRequest) service.RSSResponse {
+	out := r.rss.FetchFeed(ctx, req.URL, req.SourceName, req.Limit)
+	return service.RSSResponse{Articles: out.Articles, FinalURL: out.FinalURL, Outcome: out.Outcome, Error: out.Error, Retryable: out.Retryable, RetryAfterSeconds: out.RetryAfterSeconds}
 }
 
 func (r runtimeRunner) RunTelegram(ctx context.Context, req service.TelegramRequest) service.TelegramResponse {

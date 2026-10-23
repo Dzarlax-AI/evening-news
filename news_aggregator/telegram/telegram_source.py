@@ -195,7 +195,15 @@ class TelegramSource(BaseSource):
             logger.warning('Telegram Go source failed code=unavailable')
             raise SourceError('telegram_service_unavailable') from None
 
-        articles = [self._article_from_go(item) for item in response['articles']]
+        async for article in self.consume_go_collection(response, settings=settings, deadline=deadline):
+            yield article
+
+    async def consume_go_collection(self, response, *, settings=None, deadline=None):
+        """Normalize a captured Go Telegram payload and enrich links without refetching the channel."""
+        from ..config import get_settings
+        settings = settings or get_settings()
+        deadline = deadline or (time.monotonic() + min(settings.extraction_service_total_budget_seconds, 120.0))
+        articles = [self._article_from_go(item) for item in response.get('articles', [])]
         if response['outcome'] == 'partial':
             logger.warning('Telegram Go source returned partial articles count=%d code=%s',
                            len(articles), response['error']['code'])
@@ -214,6 +222,15 @@ class TelegramSource(BaseSource):
             error = response.get('error') or {'code': response['outcome']}
             logger.warning('Telegram Go source returned no articles code=%s', error['code'])
             raise SourceError(f"telegram_service_{error['code']}")
+
+    @staticmethod
+    def go_collection_config(limit=None):
+        """Return the narrow Telegram config accepted by the Go SourceManager DTO."""
+        if limit is None:
+            return {}
+        if type(limit) is not int or not 1 <= limit <= 100:
+            raise SourceError('invalid_telegram_limit')
+        return {'limit': limit}
 
     @staticmethod
     def _article_from_go(data: Dict[str, Any]) -> Article:

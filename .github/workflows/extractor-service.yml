@@ -16,6 +16,8 @@ on:
       - 'tests/test_telegram*'
       - 'tests/test_page_monitor*'
       - 'tests/test_source_manager*'
+      - 'tests/test_public_feed_template_security.py'
+      - 'web/templates/public/_feed_core.html'
       - 'tests/test_browser*'
       - 'tests/test_native*'
       - 'tests/test_shadow_cdp_relay*'
@@ -26,6 +28,7 @@ on:
       - 'scripts/native_*.py'
       - 'scripts/run_native_*.py'
       - 'scripts/run_go_cloak_linux_gate.py'
+      - 'scripts/run_source_manager_fixture_gate.py'
       - 'scripts/shadow_cdp_relay.py'
       - 'scripts/smoke_extractor_service.py'
       - 'scripts/compare_extractor_service.py'
@@ -48,6 +51,8 @@ on:
       - 'tests/test_telegram*'
       - 'tests/test_page_monitor*'
       - 'tests/test_source_manager*'
+      - 'tests/test_public_feed_template_security.py'
+      - 'web/templates/public/_feed_core.html'
       - 'tests/test_browser*'
       - 'tests/test_native*'
       - 'tests/test_shadow_cdp_relay*'
@@ -58,6 +63,7 @@ on:
       - 'scripts/native_*.py'
       - 'scripts/run_native_*.py'
       - 'scripts/run_go_cloak_linux_gate.py'
+      - 'scripts/run_source_manager_fixture_gate.py'
       - 'scripts/shadow_cdp_relay.py'
       - 'scripts/smoke_extractor_service.py'
       - 'scripts/compare_extractor_service.py'
@@ -107,6 +113,9 @@ jobs:
         with:
           python-version: '3.12'
           cache: pip
+      - uses: actions/setup-node@v4
+        with:
+          node-version: '22'
       - run: python -m pip install -r requirements.txt
       - name: Test Go contracts and lifecycle
         working-directory: go
@@ -116,6 +125,17 @@ jobs:
           go mod verify
       - name: Test Python service integration
         run: python -m pytest tests -q
+      - name: Test source collection against isolated Linux fixture origins
+        run: |
+          CGO_ENABLED=0 GOOS=linux GOARCH=amd64 go build -C go -o /tmp/source-manager-extract-service ./cmd/extract-service
+          python scripts/run_source_manager_fixture_gate.py --binary /tmp/source-manager-extract-service --report artifacts/source-manager-fixture-report.json
+      - name: Preserve source collection fixture evidence
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: source-manager-fixture-evidence
+          path: artifacts/source-manager-fixture-report.json
+          if-no-files-found: ignore
       - name: Build independent image and start isolated service
         run: docker compose --env-file /dev/null -f docker-compose.extractor-test.yml up -d --build --wait
       - name: Smoke API through the Python client

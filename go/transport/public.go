@@ -220,6 +220,10 @@ func publicGet(ctx context.Context, raw string, opts Options) (publicResponse, e
 }
 
 func publicGetMode(ctx context.Context, raw string, opts Options, followRedirects bool) (publicResponse, error) {
+	return publicGetModeWithTimeout(ctx, raw, opts, followRedirects, 30*time.Second)
+}
+
+func publicGetModeWithTimeout(ctx context.Context, raw string, opts Options, followRedirects bool, maxTimeout time.Duration) (publicResponse, error) {
 	var out publicResponse
 	if opts.Client != nil {
 		return out, errors.New("public_custom_client_denied")
@@ -239,7 +243,7 @@ func publicGetMode(ctx context.Context, raw string, opts Options, followRedirect
 	if timeout == 0 {
 		timeout = 15 * time.Second
 	}
-	if timeout < 0 || timeout > 30*time.Second {
+	if err := validatePublicTimeout(timeout, maxTimeout); err != nil {
 		return out, errors.New("public_invalid_timeout")
 	}
 	ctx, cancel := context.WithTimeout(ctx, timeout)
@@ -332,12 +336,23 @@ func publicDecode(wire []byte, encoding string, outputLimit int64) ([]byte, erro
 // FetchPublic fetches public HTTP(S) content with independently bounded wire,
 // decompressed and UTF-8 output and a validated, pinned destination socket.
 func FetchPublic(ctx context.Context, raw string, opts Options) (Document, error) {
-	r, err := publicGet(ctx, raw, opts)
+	return fetchPublicWithTimeout(ctx, raw, opts, 30*time.Second, decodeCharset)
+}
+
+// FetchPublicRSS is the RSS collector's public HTTP path. It keeps the same
+// DNS pinning, redirect checks, request headers, and wire/decode bounds as
+// FetchPublic while allowing the RSS plan's longer 60-second source timeout.
+func FetchPublicRSS(ctx context.Context, raw string, opts Options) (Document, error) {
+	return fetchPublicWithTimeout(ctx, raw, opts, 60*time.Second, decodeRSSCharset)
+}
+
+func fetchPublicWithTimeout(ctx context.Context, raw string, opts Options, maxTimeout time.Duration, decode func([]byte, string, int64) ([]byte, string, error)) (Document, error) {
+	r, err := publicGetModeWithTimeout(ctx, raw, opts, true, maxTimeout)
 	if err != nil {
 		return Document{}, err
 	}
 	limit, _ := pageLimit(opts.MaxDecodedBytes)
-	body, encoding, err := decodeCharset(r.body, r.header.Get("Content-Type"), limit)
+	body, encoding, err := decode(r.body, r.header.Get("Content-Type"), limit)
 	if err != nil {
 		return Document{}, err
 	}
@@ -345,4 +360,11 @@ func FetchPublic(ctx context.Context, raw string, opts Options) (Document, error
 		return Document{}, &PublicChallengeError{}
 	}
 	return Document{HTML: body, StatusCode: r.status, Encoding: encoding, URL: r.url}, nil
+}
+
+func validatePublicTimeout(timeout, maxTimeout time.Duration) error {
+	if timeout < 0 || maxTimeout <= 0 || timeout > maxTimeout {
+		return errors.New("public_invalid_timeout")
+	}
+	return nil
 }

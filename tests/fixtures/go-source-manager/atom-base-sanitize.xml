@@ -1,0 +1,18 @@
+<?xml version="1.0" encoding="utf-8"?>
+<feed xmlns="http://www.w3.org/2005/Atom" xmlns:media="http://search.yahoo.com/mrss/" xml:base="https://publisher.example/base/">
+  <title>Base and sanitization fixture</title>
+  <id>urn:feed:base</id>
+  <updated>2023-03-03T00:00:00Z</updated>
+  <entry xml:base="../stories/">
+    <title></title>
+    <id>urn:base:1</id>
+    <link href="article.html"/>
+    <summary type="html"><![CDATA[<p onclick="steal()">Safe <script>alert(1)</script><a href="javascript:alert(2)">link</a><img src="../images/cover.jpg"></p>]]></summary>
+    <media:thumbnail url="../images/thumb.jpg"/>
+  </entry>
+  <entry>
+    <id>urn:base:2</id>
+    <link href="second.html"/>
+    <summary>Missing title</summary>
+  </entry>
+</feed>

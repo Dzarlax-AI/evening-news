@@ -239,3 +239,74 @@ func decodeCharset(body []byte, contentType string, limit int64) ([]byte, string
 	decoded, err := readBounded(transform.NewReader(bytes.NewReader(body), enc.NewDecoder()), limit, extractor.ErrOutputLimit)
 	return decoded, name, err
 }
+
+// decodeRSSCharset gives an XML declaration precedence over heuristic HTML
+// detection when the server omitted a charset from Content-Type.
+func decodeRSSCharset(body []byte, contentType string, limit int64) ([]byte, string, error) {
+	_, params, _ := mime.ParseMediaType(contentType)
+	if params["charset"] != "" {
+		return decodeCharset(body, contentType, limit)
+	}
+	if label := xmlDeclaredCharset(body); label != "" {
+		if enc, name := charset.Lookup(label); enc != nil {
+			if !strings.EqualFold(name, "utf-8") || utf8.Valid(body) {
+				decoded, err := readBounded(transform.NewReader(bytes.NewReader(body), enc.NewDecoder()), limit, extractor.ErrOutputLimit)
+				return decoded, name, err
+			}
+		}
+	}
+	return decodeCharset(body, contentType, limit)
+}
+
+func xmlDeclaredCharset(body []byte) string {
+	if bytes.HasPrefix(body, []byte{0xef, 0xbb, 0xbf}) {
+		body = body[3:]
+	}
+	if len(body) > 256 {
+		body = body[:256]
+	}
+	end := bytes.Index(body, []byte("?>"))
+	if end < 0 {
+		return ""
+	}
+	declaration := string(body[:end])
+	if !strings.HasPrefix(strings.ToLower(declaration), "<?xml") {
+		return ""
+	}
+	if len(declaration) <= len("<?xml") || (!isXMLSpaceByte(declaration[len("<?xml")]) && declaration[len("<?xml")] != '?') {
+		return ""
+	}
+	lower := strings.ToLower(declaration)
+	index := strings.Index(lower, "encoding")
+	if index < 0 || (index > 0 && !isXMLSpaceByte(declaration[index-1])) {
+		return ""
+	}
+	index += len("encoding")
+	if index >= len(declaration) || (!isXMLSpaceByte(declaration[index]) && declaration[index] != '=') {
+		return ""
+	}
+	for index < len(declaration) && isXMLSpaceByte(declaration[index]) {
+		index++
+	}
+	if index >= len(declaration) || declaration[index] != '=' {
+		return ""
+	}
+	index++
+	for index < len(declaration) && isXMLSpaceByte(declaration[index]) {
+		index++
+	}
+	if index >= len(declaration) || (declaration[index] != '\'' && declaration[index] != '"') {
+		return ""
+	}
+	quote := declaration[index]
+	start := index + 1
+	length := bytes.IndexByte([]byte(declaration[start:]), quote)
+	if length <= 0 || length > 40 {
+		return ""
+	}
+	return declaration[start : start+length]
+}
+
+func isXMLSpaceByte(value byte) bool {
+	return value == ' ' || value == '\t' || value == '\r' || value == '\n'
+}

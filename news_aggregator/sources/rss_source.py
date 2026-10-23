@@ -94,6 +94,30 @@ class RSSSource(BaseSource):
         
         except Exception as e:
             raise SourceError(f"Error parsing RSS entry: {e}")
+
+    @staticmethod
+    def article_from_go(data) -> Article:
+        """Convert the Go RSS DTO while preserving nullable fields and Python DB dates."""
+        published_at = data.get('published_at')
+        if published_at is not None:
+            if not isinstance(published_at, str):
+                raise SourceError('invalid_rss_published_at')
+            try:
+                published_at = datetime.fromisoformat(published_at.replace('Z', '+00:00'))
+            except ValueError:
+                raise SourceError('invalid_rss_published_at') from None
+            if published_at.tzinfo is not None:
+                published_at = published_at.astimezone(pytz.UTC).replace(tzinfo=None)
+        raw_data = data.get('raw_data')
+        if not isinstance(raw_data, dict):
+            raise SourceError('invalid_rss_raw_data')
+        return Article(
+            title=data['title'], url=data['url'], content=data.get('content'),
+            summary=data.get('summary'), image_url=data.get('image_url'),
+            published_at=published_at, source_type=data.get('source_type', SourceType.RSS),
+            source_name=data.get('source_name', ''),
+            raw_data={key: raw_data.get(key) for key in ('guid', 'author', 'tags')},
+        )
     
     def _extract_entry_image(self, entry) -> Optional[str]:
         """Extract image URL from RSS entry, trying multiple common locations."""

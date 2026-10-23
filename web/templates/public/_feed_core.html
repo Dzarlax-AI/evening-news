@@ -38,7 +38,15 @@
   };
 
   // Helpers
-  function escapeHtml(text){ if(!text) return ''; const d=document.createElement('div'); d.textContent=text; return d.innerHTML; }
+  function escapeHtml(text){ if(!text) return ''; return String(text).replace(/&/g,'&amp;').replace(/</g,'&lt;').replace(/>/g,'&gt;').replace(/"/g,'&quot;').replace(/'/g,'&#39;'); }
+  function safeHttpUrl(value){
+    if(typeof value!=='string' || !value || value.length>8192 || /[\u0000-\u0020\u007f-\u009f"'<>`]/.test(value)) return '';
+    try {
+      const url = new URL(value, location.href);
+      if((url.protocol!=='http:' && url.protocol!=='https:') || !url.hostname || url.username || url.password || /^https?:\/\/[^/?#]*@/i.test(url.href)) return '';
+      return url.href.length<=8192 ? url.href : '';
+    } catch { return ''; }
+  }
   function formatDate(s){ if(!s) return 'Неизвестно'; const d=new Date(s); const now=new Date(); const dh=Math.floor((now-d)/36e5); if(dh<1) return 'Только что'; if(dh<24) return dh+' ч. назад'; const dd=Math.floor(dh/24); if(dd<7) return dd+' дн. назад'; return d.toLocaleDateString('ru-RU'); }
   
   function isLightColor(hexColor) {
@@ -80,7 +88,8 @@
     const categoryInfo = categoryConfig[category]||categoryConfig['other']||{name:category};
     
     // Use images from backend API (no need to extract on frontend)
-    const img = article.primary_image || article.image_url || extractImageFromContent(article.summary || '');
+    const img = safeHttpUrl(article.primary_image || article.image_url || extractImageFromContent(article.summary || ''));
+    const articleUrl = safeHttpUrl(article.url);
     const summary = cleanHtmlSummary(article.summary||'');
     const highPrio = (currentPage===0 && renderedImageCount<3);
     const categoriesBadges = categories.slice(0,3).map(c=>{
@@ -88,12 +97,13 @@
       const config = categoryConfig[categoryKey] || {name: c.display_name || c.name, color: c.color || '#6c757d'};
       const bgColor = c.color || config.color || '#6c757d';
       const textColor = isLightColor(bgColor) ? '#000000' : '#ffffff';
-      return `<div class="category-badge" style="background: ${bgColor}; color: ${textColor}; border: 1px solid ${bgColor};">${escapeHtml(c.display_name||c.name)}</div>`;
+      return `<div class="category-badge" style="background: ${escapeHtml(bgColor)}; color: ${textColor}; border: 1px solid ${escapeHtml(bgColor)};">${escapeHtml(c.display_name||c.name)}</div>`;
     }).join('');
     const ad = article.is_advertisement ? `<div class="ad-badge" title="Реклама">AD</div>` : '';
-    const imgBlock = img? `<div class="news-list-image"><img src="${img}" alt="${escapeHtml(article.title)}" loading="lazy" ${highPrio?'fetchpriority="high"':''} decoding="async"></div>`: '';
-    const actionsBlock = `<div class="news-list-actions"><button class="btn-read-more" onclick="openArticleModal(${article.id})">Читать</button><a href="${article.url}" target="_blank" rel="noopener" class="btn-original">Оригинал</a></div>`;
-    return `<article class="news-list-item" data-category="${category}" onclick="openArticleModal(${article.id})">${imgBlock}<div class="news-list-content"><div class="news-list-badges">${categoriesBadges}${ad}</div><h2 class="news-list-title">${escapeHtml(article.title)}</h2>${summary?`<p class="news-list-summary">${escapeHtml(summary)}</p>`:''}<div class="news-list-meta"><span class="news-list-source">${escapeHtml(article.source_name||'')}</span><span class="news-list-date">${formatDate(article.published_at)}</span></div>${actionsBlock}</div></article>`;
+    const imgBlock = img? `<div class="news-list-image"><img src="${escapeHtml(img)}" alt="${escapeHtml(article.title)}" loading="lazy" ${highPrio?'fetchpriority="high"':''} decoding="async"></div>`: '';
+    const originalLink = articleUrl ? `<a href="${escapeHtml(articleUrl)}" target="_blank" rel="noopener" class="btn-original">Оригинал</a>` : '';
+    const actionsBlock = `<div class="news-list-actions"><button class="btn-read-more" onclick="openArticleModal(${article.id})">Читать</button>${originalLink}</div>`;
+    return `<article class="news-list-item" data-category="${escapeHtml(category)}" onclick="openArticleModal(${article.id})">${imgBlock}<div class="news-list-content"><div class="news-list-badges">${categoriesBadges}${ad}</div><h2 class="news-list-title">${escapeHtml(article.title)}</h2>${summary?`<p class="news-list-summary">${escapeHtml(summary)}</p>`:''}<div class="news-list-meta"><span class="news-list-source">${escapeHtml(article.source_name||'')}</span><span class="news-list-date">${formatDate(article.published_at)}</span></div>${actionsBlock}</div></article>`;
   }
 
   // Load category configuration from API (with caching)

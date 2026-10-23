@@ -76,6 +76,44 @@ async def test_telegram_go_adapter_timestamp_round_trips_as_naive_utc():
 
 
 @pytest.mark.asyncio
+async def test_source_manager_id_mapping_persists_same_named_sources_separately():
+    url = local_test_url()
+    schema = 'test_source_id_mapping_' + uuid.uuid4().hex
+    admin = create_async_engine(url)
+    engine = create_async_engine(url, connect_args={'server_settings': {'search_path': schema}})
+    factory = sessionmaker(engine, class_=AsyncSession, expire_on_commit=False)
+    try:
+        async with admin.begin() as connection:
+            await connection.execute(text(f'CREATE SCHEMA {schema}'))
+        async with engine.begin() as connection:
+            await connection.run_sync(Source.__table__.create)
+            await connection.run_sync(Article.__table__.create)
+
+        manager = SourceManager()
+        async with factory() as db:
+            first = Source(name='Same name', source_type='rss', url='https://example.test/feed-a')
+            second = Source(name='Same name', source_type='rss', url='https://example.test/feed-b')
+            db.add_all([first, second])
+            await db.flush()
+            assert first.id != second.id
+            raw = {
+                first.id: [SimpleNamespace(title='Story A', url='https://example.test/story-a')],
+                second.id: [SimpleNamespace(title='Story B', url='https://example.test/story-b')],
+            }
+            saved = await manager.save_fetched_articles_with_sources(
+                raw, {first.id: first, second.id: second}, db)
+            await db.commit()
+            rows = (await db.execute(select(Article.source_id, Article.title).order_by(Article.source_id))).all()
+            assert rows == [(first.id, 'Story A'), (second.id, 'Story B')]
+            assert len(saved[first.id]) == len(saved[second.id]) == 1
+    finally:
+        await engine.dispose()
+        async with admin.begin() as connection:
+            await connection.execute(text(f'DROP SCHEMA IF EXISTS {schema} CASCADE'))
+        await admin.dispose()
+
+
+@pytest.mark.asyncio
 async def test_postgres_legacy_backfill_is_idempotent_and_preserves_retry_budget():
     url = local_test_url()
     schema = 'test_processing_' + uuid.uuid4().hex
