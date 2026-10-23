@@ -48,7 +48,12 @@ from .migrations.background_jobs import (
     BackgroundJobsMigration,
     ensure_background_jobs_migration,
 )
+from .migrations.scheduled_job_metadata import (
+    ScheduledJobMetadataMigration,
+    ensure_scheduled_job_metadata_migration,
+)
 migration_manager.register_migration(BackgroundJobsMigration())
+migration_manager.register_migration(ScheduledJobMetadataMigration())
 
 
 
@@ -71,6 +76,7 @@ async def lifespan(app: FastAPI):
         ensure_scheduler_outcome_migration(migration_results)
         ensure_article_processing_migration(migration_results)
         ensure_background_jobs_migration(migration_results)
+        ensure_scheduled_job_metadata_migration(migration_results)
         
         if migration_results['migrations_run']:
             logger.info(f"✅ Applied {len(migration_results['migrations_run'])} migrations")
@@ -107,7 +113,8 @@ async def lifespan(app: FastAPI):
         # Don't prevent app startup
     
     # Start task scheduler
-    if settings.scheduler_enabled and not worker_mode:
+    if (settings.scheduler_enabled and not worker_mode
+            and settings.schedule_dispatch_mode == "python"):
         from .services.scheduler import start_scheduler
         try:
             logger.info("🔄 Starting task scheduler...")
@@ -118,8 +125,10 @@ async def lifespan(app: FastAPI):
             import traceback
             traceback.print_exc()
             # Don't prevent app startup on scheduler errors
-    else:
+    elif not settings.scheduler_enabled:
         logger.info("⏸️ Task scheduler disabled (SCHEDULER_ENABLED=false)")
+    elif settings.schedule_dispatch_mode == "service":
+        logger.info("⏸️ Python scheduler loop disabled (SCHEDULE_DISPATCH_MODE=service)")
     
     # Start process monitor for browser health checks
     if not worker_mode:
@@ -226,6 +235,11 @@ templates.env.globals["config"] = settings
 # API routes - New modular architecture
 from .api import router as api_router
 app.include_router(api_router, prefix="/api/v1")
+# Internal scheduler ingestion uses its own bearer token, outside the admin
+# dependency applied to the public API router. The outer proxy policy remains
+# responsible for its normal external-path protection.
+from .api.scheduled_jobs_router import router as scheduled_jobs_router
+app.include_router(scheduled_jobs_router, prefix="/api/v1")
 
 # Auth routes (optional - only if JWT is available)
 try:

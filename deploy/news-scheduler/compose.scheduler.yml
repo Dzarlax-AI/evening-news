@@ -1,0 +1,62 @@
+# Merge after the canonical News Compose and the already-approved News overlays.
+# This is a private, paused-by-default scheduler installation; it does not
+# replace the News image, publish a port, or add a public router.
+services:
+  app:
+    env_file:
+      - ${NEWS_SCHEDULER_DIR:?Set NEWS_SCHEDULER_DIR to the private scheduler config directory}/scheduler-client.env
+    environment:
+      BACKGROUND_EXECUTION_MODE: worker
+      SCHEDULE_DISPATCH_MODE: python
+      SCHEDULER_API_URL: http://scheduler:8080
+      SCHEDULER_API_ALLOW_HTTP: "true"
+    networks:
+      scheduler-control: {}
+
+  worker:
+    env_file:
+      - ${NEWS_SCHEDULER_DIR:?Set NEWS_SCHEDULER_DIR to the private scheduler config directory}/scheduler-client.env
+    environment:
+      BACKGROUND_EXECUTION_MODE: worker
+      SCHEDULE_DISPATCH_MODE: python
+      SCHEDULER_API_URL: http://scheduler:8080
+      SCHEDULER_API_ALLOW_HTTP: "true"
+
+  scheduler:
+    image: ${SCHEDULER_IMAGE:?Set SCHEDULER_IMAGE to the published immutable image digest}
+    profiles: [standalone-scheduler]
+    env_file:
+      - ${NEWS_SCHEDULER_DIR:?Set NEWS_SCHEDULER_DIR to the private scheduler config directory}/scheduler.env
+    environment:
+      LISTEN_ADDR: ":8080"
+      SCHEDULER_START_PAUSED: "true"
+      SCHEDULER_ALLOW_HTTP_TARGETS: "true"
+    networks:
+      infra: {}
+      scheduler-control: {}
+    restart: unless-stopped
+    init: true
+    user: "65532:65532"
+    read_only: true
+    tmpfs:
+      - /tmp:rw,noexec,nosuid,nodev,size=8m
+    cap_drop: [ALL]
+    security_opt: [no-new-privileges:true]
+    pids_limit: 64
+    mem_limit: 64m
+    memswap_limit: 64m
+    cpus: 0.25
+    stop_grace_period: 20s
+    healthcheck:
+      test: ["CMD", "/scheduler", "healthcheck"]
+      interval: 15s
+      timeout: 3s
+      start_period: 15s
+      retries: 3
+
+networks:
+  # Dedicated internal control link. The scheduler also retains its required
+  # infra attachment for PostgreSQL; do not add any further network here.
+  scheduler-control:
+    name: news-scheduler-control
+    internal: true

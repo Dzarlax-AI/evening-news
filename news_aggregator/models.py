@@ -232,6 +232,10 @@ class BackgroundJob(Base):
     owner_generation = Column(Integer)
     attempt_generation = Column(Integer, nullable=False, server_default="0")
     initialized_at = Column(DateTime)
+    schedule_key = Column(String(128))
+    schedule_revision = Column(Integer)
+    occurrence_id = Column(Uuid(as_uuid=True))
+    scheduled_for = Column(DateTime)
     result = Column(JSON().with_variant(JSONB, "postgresql"))
     error_code = Column(String(40))
 
@@ -258,6 +262,20 @@ class BackgroundJobIdempotencyKey(Base):
 
     __table_args__ = (
         Index("idx_background_job_keys_job", "job_id"),
+    )
+
+
+class SchedulerOccurrenceReceipt(Base):
+    """Durable idempotency receipts independent of background job retention."""
+    __tablename__ = "scheduler_occurrence_receipts"
+
+    occurrence_id = Column(Uuid(as_uuid=True), primary_key=True)
+    envelope_sha256 = Column(String(64), nullable=False)
+    job_id = Column(Uuid(as_uuid=True), nullable=False)
+    accepted_at = Column(DateTime, nullable=False, server_default=func.timezone("UTC", func.now()))
+
+    __table_args__ = (
+        CheckConstraint("length(envelope_sha256) = 64", name="ck_scheduler_receipt_hash"),
     )
 
 

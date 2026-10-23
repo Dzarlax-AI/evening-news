@@ -14,6 +14,7 @@ from sqlalchemy.ext.asyncio import AsyncSession, create_async_engine
 from sqlalchemy.orm import sessionmaker
 
 from news_aggregator.migrations.background_jobs import BackgroundJobsMigration
+from news_aggregator.migrations.scheduled_job_metadata import ScheduledJobMetadataMigration
 from news_aggregator.models import (
     BackgroundJob, BackgroundJobIdempotencyKey, BackgroundWorkerStatus, ScheduleSettings,
 )
@@ -55,6 +56,12 @@ async def pg_jobs():
             await migration.execute(session)
             assert not await migration.check_needed(session)
             await migration.execute(session)
+            # 010 remains a distinct additive migration so an existing 009
+            # installation receives scheduler metadata without rewriting 009.
+            scheduler_metadata = ScheduledJobMetadataMigration()
+            assert await scheduler_metadata.check_needed(session)
+            await scheduler_metadata.execute(session)
+            assert not await scheduler_metadata.check_needed(session)
         async with engine.begin() as conn:
             await conn.run_sync(lambda sync: ScheduleSettings.__table__.create(sync, checkfirst=True))
         yield engine, factory

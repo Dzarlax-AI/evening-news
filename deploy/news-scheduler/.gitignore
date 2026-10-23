@@ -1,0 +1,5 @@
+/scheduler.env
+/scheduler-client.env
+/*.json
+/*.dump
+/*.sql

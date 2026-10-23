@@ -202,7 +202,7 @@ class DurableBackgroundWorker:
         self.orchestrator = None
 
     async def check_schema(self):
-        """Fail closed when the Phase 1 migration has not been applied."""
+        """Fail closed unless all worker and scheduler metadata migrations exist."""
         last_error = None
         for attempt in range(6):
             try:
@@ -220,6 +220,14 @@ class DurableBackgroundWorker:
                     await connection.execute(text(
                         "SELECT key, job_id, created_at "
                         "FROM background_job_idempotency_keys LIMIT 0"
+                    ))
+                    await connection.execute(text(
+                        "SELECT schedule_key, schedule_revision, occurrence_id, scheduled_for "
+                        "FROM background_jobs LIMIT 0"
+                    ))
+                    await connection.execute(text(
+                        "SELECT occurrence_id, envelope_sha256, job_id, accepted_at "
+                        "FROM scheduler_occurrence_receipts LIMIT 0"
                     ))
                 return
             except Exception as exc:
@@ -263,10 +271,13 @@ class DurableBackgroundWorker:
             self._heartbeat_task = asyncio.create_task(
                 self._heartbeat_loop(), name="worker-heartbeat"
             )
-            if settings.scheduler_enabled:
+            if (settings.scheduler_enabled
+                    and settings.schedule_dispatch_mode == "python"):
                 self._scheduler_task = asyncio.create_task(
                     self._schedule_loop(), name="worker-scheduler"
                 )
+            elif settings.schedule_dispatch_mode == "service":
+                logger.info("Python schedule loop disabled (SCHEDULE_DISPATCH_MODE=service)")
             else:
                 logger.info("Worker schedule dispatch disabled (SCHEDULER_ENABLED=false)")
             self._cleanup_task = asyncio.create_task(
@@ -449,6 +460,9 @@ class DurableBackgroundWorker:
             "source_test": 300,
         }
         timeout = defaults.get(job.kind, 3600)
+        payload = job.payload or {}
+        if job.schedule_key and isinstance(payload.get("timeout_seconds"), int):
+            return min(24 * 3600, payload["timeout_seconds"])
         schedule_id = (job.payload or {}).get("schedule_id")
         if schedule_id:
             async with self.session_factory() as session:
@@ -464,10 +478,11 @@ class DurableBackgroundWorker:
 
     async def _notify_schedule(self, job, state, result):
         schedule_id = (job.payload or {}).get("schedule_id")
-        if not schedule_id or not getattr(self, "alerts", None):
+        schedule_key = getattr(job, "schedule_key", None)
+        if (not schedule_id and not schedule_key) or not getattr(self, "alerts", None):
             return
         status = (result or {}).get("status")
-        alert_key = f"scheduler-warning-{schedule_id}"
+        alert_key = f"scheduler-warning-{schedule_key or schedule_id}"
         if state != "succeeded" or status in {"warning", "deferred"}:
             await self.alerts.failure(
                 alert_key,
@@ -593,6 +608,10 @@ class DurableBackgroundWorker:
             await session.commit()
 
     async def _finish_schedule_in_session(self, session, job, state, result):
+        # The Go service owns this schedule's next due time and configuration.
+        # News records execution only on the job; it never writes the legacy row.
+        if getattr(job, "schedule_key", None):
+            return
         payload = job.payload or {}
         schedule_id = payload.get("schedule_id")
         if not schedule_id:
