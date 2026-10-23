@@ -50,7 +50,7 @@ def test_go_empty_rss_success_remains_distinct_from_missing_or_failed_source(mon
         def __init__(self, *args):
             pass
 
-        async def collect(self, descriptors, *, timeout_seconds):
+        async def collect(self, descriptors, *, timeout_seconds, admission_timeout_seconds=None):
             return {'results': [{'source_id': 30, 'type': 'rss', 'outcome': 'success',
                                  'rss_articles': []}]}
 
@@ -67,7 +67,7 @@ def test_go_descriptor_uses_caller_per_source_timeout_budget(monkeypatch):
         def __init__(self, *args):
             pass
 
-        async def collect(self, descriptors, *, timeout_seconds):
+        async def collect(self, descriptors, *, timeout_seconds, admission_timeout_seconds=None):
             received.extend(descriptors)
             return {'results': [{'source_id': 301, 'type': 'rss', 'outcome': 'success',
                                  'rss_articles': []}]}
@@ -77,6 +77,28 @@ def test_go_descriptor_uses_caller_per_source_timeout_budget(monkeypatch):
         [source(301, 'Feed', 'rss')], per_source_timeout=0.25))
     assert received[0]['per_source_budget_ms'] == 250
     assert result == {301: []}
+
+
+def test_go_collect_passes_remaining_pass_deadline_separately_from_wire_budget(monkeypatch):
+    go_settings(monkeypatch)
+    received = {}
+
+    class FakeClient:
+        def __init__(self, *args):
+            pass
+
+        async def collect(self, descriptors, *, timeout_seconds, admission_timeout_seconds=None):
+            received['wire'] = timeout_seconds
+            received['admission'] = admission_timeout_seconds
+            return {'results': [{'source_id': 304, 'type': 'rss', 'outcome': 'success',
+                                 'rss_articles': []}]}
+
+    monkeypatch.setattr('news_aggregator.sources.source_manager_service_client.SourceManagerServiceClient', FakeClient)
+    result = asyncio.run(SourceManager().fetch_from_all_sources_no_db(
+        [source(304, 'Feed', 'rss')], per_source_timeout=120))
+    assert received['wire'] == 120
+    assert received['admission'] > received['wire']
+    assert result == {304: []}
 
 
 def test_go_telegram_limit_above_python_cap_is_clamped_before_adapter_validation(monkeypatch):
@@ -100,7 +122,7 @@ def test_go_telegram_limit_above_python_cap_is_clamped_before_adapter_validation
         def __init__(self, *args):
             pass
 
-        async def collect(self, descriptors, *, timeout_seconds):
+        async def collect(self, descriptors, *, timeout_seconds, admission_timeout_seconds=None):
             received.extend(descriptors)
             return {'results': [{'source_id': 302, 'type': 'telegram', 'outcome': 'success',
                                  'telegram': {'outcome': 'success', 'articles': []}}]}
@@ -152,7 +174,7 @@ def test_go_collection_retains_duplicate_names_by_source_id_without_python_fetch
             assert endpoint == 'http://extractor:8080'
             assert token == 'private-token'
 
-        async def collect(self, descriptors, *, timeout_seconds):
+        async def collect(self, descriptors, *, timeout_seconds, admission_timeout_seconds=None):
             received.extend(descriptors)
             return {'results': [
                 {'source_id': item['source_id'], 'type': 'rss', 'outcome': 'success',
@@ -182,7 +204,7 @@ def test_deferred_sources_repeat_only_their_ids_and_keep_partial_prefix(monkeypa
         def __init__(self, *args):
             pass
 
-        async def collect(self, descriptors, *, timeout_seconds):
+        async def collect(self, descriptors, *, timeout_seconds, admission_timeout_seconds=None):
             ids = [item['source_id'] for item in descriptors]
             calls.append(ids)
             if len(calls) == 1:
@@ -211,7 +233,7 @@ def test_permanently_deferred_source_has_a_bounded_retry_count(monkeypatch):
         def __init__(self, *args):
             pass
 
-        async def collect(self, descriptors, *, timeout_seconds):
+        async def collect(self, descriptors, *, timeout_seconds, admission_timeout_seconds=None):
             attempts.append([item['source_id'] for item in descriptors])
             if len(attempts) <= 8:
                 return {'results': [{'source_id': 43, 'type': 'rss', 'outcome': 'deferred',
@@ -241,7 +263,7 @@ def test_large_rss_limit_is_not_silently_clamped(monkeypatch):
         def __init__(self, *args):
             pass
 
-        async def collect(self, descriptors, *, timeout_seconds):
+        async def collect(self, descriptors, *, timeout_seconds, admission_timeout_seconds=None):
             received.extend(descriptors)
             return {'results': [{'source_id': 47, 'type': 'rss', 'outcome': 'rejected',
                                  'error': {'code': 'invalid_input', 'retryable': False}}]}
@@ -270,7 +292,7 @@ def test_preparation_failure_keeps_empty_source_identity_and_does_not_block_rss(
         def __init__(self, *args):
             pass
 
-        async def collect(self, descriptors, *, timeout_seconds):
+        async def collect(self, descriptors, *, timeout_seconds, admission_timeout_seconds=None):
             calls.append([item['source_id'] for item in descriptors])
             return {'results': [{'source_id': 45, 'type': 'rss', 'outcome': 'success',
                                  'rss_articles': [rss_item('Story', 'https://example.test/story')]}]}
@@ -308,7 +330,7 @@ def test_real_page_monitor_adapter_forwards_go_finalize_deadline(monkeypatch):
         def __init__(self, *args):
             pass
 
-        async def collect(self, descriptors, *, timeout_seconds):
+        async def collect(self, descriptors, *, timeout_seconds, admission_timeout_seconds=None):
             captured = {'outcome': 'success', 'items': [], 'marker': 'captured'}
             return {'results': [{'source_id': 48, 'type': 'custom', 'outcome': 'success',
                                  'page_monitor': captured}]}
@@ -374,7 +396,7 @@ def test_mixed_batch_normalizes_typed_results_and_keeps_other_sources_after_fail
         def __init__(self, *args):
             pass
 
-        async def collect(self, descriptors, *, timeout_seconds):
+        async def collect(self, descriptors, *, timeout_seconds, admission_timeout_seconds=None):
             assert [item['source_id'] for item in descriptors] == [51, 52, 53, 54]
             return {'results': [
                 {'source_id': 51, 'type': 'rss', 'outcome': 'success', 'rss_articles': [

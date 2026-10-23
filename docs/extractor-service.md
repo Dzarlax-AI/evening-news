@@ -92,8 +92,11 @@ JSON encoding and HTTP session creation, then released after the response and
 session close. Normalization, selector learning, AI work and persistence remain
 outside the permit. Queue saturation is reported as retryable `busy` without
 spending an article attempt; its next durable retry is scheduled after 60
-seconds. An admitted request keeps its configured HTTP timeout, bounded by the
-remaining caller deadline. Only an explicit HTTP 429 with a usable
+seconds. Callers pass their remaining outer pass budget separately from each
+HTTP request's configured timeout. Queue time consumes the outer budget; the
+HTTP timeout starts after admission and is bounded by the caller's remaining
+time. If the outer deadline expires in the queue, no HTTP request is started
+and the result is local `busy`. Only an explicit HTTP 429 with a usable
 `Retry-After` may be retried, at most eight times within that deadline; the
 permit is released while waiting. Transport errors are never replayed.
 

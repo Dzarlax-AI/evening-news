@@ -53,9 +53,11 @@ async def test_go_mode_avoids_python_browser_and_parser_and_preserves_article(mo
             assert endpoint == 'http://extractor:8080'
             assert token == 'token'
 
-        async def fetch(self, channel_url, name, *, limit, timeout_seconds):
+        async def fetch(self, channel_url, name, *, limit, timeout_seconds, admission_timeout_seconds=None):
             assert (channel_url, name, limit) == (CHANNEL, 'Example', 100)
             assert 0 < timeout_seconds <= 30
+            assert admission_timeout_seconds > timeout_seconds
+            assert admission_timeout_seconds <= 115
             return {'outcome': 'success', 'articles': [go_article()]}
 
     monkeypatch.setattr('news_aggregator.telegram.service_client.TelegramServiceClient', Client)
@@ -125,6 +127,8 @@ async def test_go_enrichment_replaces_only_when_more_than_twice_as_long(monkeypa
 
     async def extract(*args, **kwargs):
         assert kwargs['source_type'] == 'article'
+        assert kwargs['admission_timeout_seconds'] > kwargs['timeout_seconds']
+        assert kwargs['timeout_seconds'] <= 30
         content = 'expanded #NEWS ' + ('x' * 30)
         return {'outcome': 'success', 'result': {'content': content, 'title': 'Expanded title'}}
 

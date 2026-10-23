@@ -184,9 +184,11 @@ class TelegramSource(BaseSource):
             client = TelegramServiceClient(
                 settings.extraction_service_url,
                 settings.extraction_service_token.get_secret_value())
+            admission_budget = max(0.0, deadline - time.monotonic())
             response = await client.fetch(
                 self.url, self.name, limit=request_limit,
-                timeout_seconds=min(30.0, max(0.001, deadline - time.monotonic())))
+                timeout_seconds=min(30.0, max(0.001, admission_budget)),
+                admission_timeout_seconds=admission_budget)
         except (TelegramServiceError, ValueError) as exc:
             code = exc.code if isinstance(exc, TelegramServiceError) else 'invalid_configuration'
             logger.warning('Telegram Go source failed code=%s', code)
@@ -212,7 +214,7 @@ class TelegramSource(BaseSource):
             if (article.raw_data.get('original_link') and article.content
                     and len(article.content) < 200 and remaining > 0.05):
                 try:
-                    await self._enrich_go_article(article, settings, min(30.0, remaining))
+                    await self._enrich_go_article(article, settings, remaining)
                 except Exception:
                     logger.info('Telegram external enrichment skipped code=unavailable')
             # Keep every validated post even when enrichment fails or exhausts budget.
@@ -262,6 +264,7 @@ class TelegramSource(BaseSource):
         except ValueError:
             browser_eligible = False
         enrichment_deadline = time.monotonic() + timeout_seconds
+        request_timeout = min(30.0, timeout_seconds)
         try:
             client = ExtractionServiceClient(
                 settings.extraction_service_url,
@@ -269,7 +272,8 @@ class TelegramSource(BaseSource):
                 max_bytes=settings.extraction_http_max_bytes,
                 max_chars=settings.extraction_text_max_chars)
             response = await client.extract(
-                link, timeout_seconds=timeout_seconds, source_type='article')
+                link, timeout_seconds=request_timeout, source_type='article',
+                admission_timeout_seconds=timeout_seconds)
             failure = None
         except (ExtractionServiceError, ValueError) as exc:
             response = None
@@ -289,7 +293,8 @@ class TelegramSource(BaseSource):
             try:
                 response = await client.extract(
                     link, timeout_seconds=min(30.0, remaining),
-                    source_type='article', use_browser=True)
+                    source_type='article', use_browser=True,
+                    admission_timeout_seconds=remaining)
             except (ExtractionServiceError, ValueError):
                 return
             if response.get('outcome') == 'success':
