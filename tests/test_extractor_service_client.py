@@ -1,16 +1,22 @@
 """Exercise real bounded HTTP plus routing without external services or state."""
 
 import asyncio
+import json
 from contextlib import asynccontextmanager
 from types import SimpleNamespace
 from unittest.mock import AsyncMock, Mock, patch
 
 import pytest
+import aiohttp
 from aiohttp import web
 from pydantic import SecretStr
 
 from news_aggregator.extraction.core_extractor import CoreExtractor
+from news_aggregator.extraction.admission import endpoint_admission
 from news_aggregator.extraction.service_client import ExtractionServiceClient, ExtractionServiceError
+from news_aggregator.sources.page_monitor_service_client import PageMonitorServiceClient
+from news_aggregator.sources.source_manager_service_client import SourceManagerServiceClient
+from news_aggregator.telegram.service_client import TelegramServiceClient
 
 
 URL = 'https://example.org/article'
@@ -56,6 +62,320 @@ async def test_wire_metadata_media_and_learned_identity():
             learned_pattern={'selector': '.story', 'method': 'browser_rendering'})
     assert result['result']['publication_date'] == '2026-10-15'
     assert result['result']['media'][0]['type'] == 'image'
+
+
+@pytest.mark.asyncio
+async def test_three_distinct_clients_share_single_slot_and_finish_in_one_pass():
+    inflight = 0
+    maximum = 0
+    busy_responses = 0
+
+    async def single_slot(request, response_factory):
+        nonlocal inflight, maximum, busy_responses
+        if inflight:
+            busy_responses += 1
+            return web.Response(status=429, headers={'Retry-After': '0'})
+        inflight += 1
+        maximum = max(maximum, inflight)
+        try:
+            data = await request.json()
+            await asyncio.sleep(0.02)
+            return response_factory(data)
+        finally:
+            inflight -= 1
+
+    async def article_handler(request):
+        return await single_slot(request, lambda data: web.json_response(response_for(data)))
+
+    async def telegram_handler(request):
+        def response(data):
+            post = {
+                'title': 'A post', 'url': 'https://example.org/story', 'content': 'Short post',
+                'summary': None, 'published_at': '2026-10-22T08:15:00+02:00',
+                'source_type': 'telegram', 'source_name': 'Example', 'image_url': None,
+                'media_files': [],
+                'raw_data': {'channel': 'example', 'access_method': 'https://t.me/s/example',
+                    'content_length': 10, 'media_info': {}, 'has_media': False, 'media_count': 0,
+                    'external_links': [], 'hashtags': [], 'original_link': None, 'forwarded_from': None,
+                    'message_id': '123', 'telegram_url': 'https://t.me/example/123'},
+            }
+            return web.json_response({'contract_version': '1', 'build_version': 'test',
+                'request_id': data['request_id'], 'original_url': data['channel_url'],
+                'final_url': 'https://t.me/s/example', 'outcome': 'success',
+                'fetch_method': 'http', 'articles': [post]})
+        return await single_slot(request, response)
+
+    app = web.Application()
+    app.router.add_post('/v1/extract', article_handler)
+    app.router.add_post('/v1/telegram/fetch', telegram_handler)
+    runner = web.AppRunner(app, shutdown_timeout=0.1)
+    await runner.setup()
+    site = web.TCPSite(runner, '127.0.0.1', 0)
+    await site.start()
+    endpoint = f'http://127.0.0.1:{site._server.sockets[0].getsockname()[1]}'
+    try:
+        article_clients = [ExtractionServiceClient(endpoint, TOKEN) for _ in range(3)]
+        telegram = TelegramServiceClient(endpoint, TOKEN)
+        requests = [asyncio.create_task(client.extract(URL, timeout_seconds=1))
+                    for client in article_clients]
+        requests.append(asyncio.create_task(telegram.fetch(
+            'https://t.me/s/example', 'Example', limit=1, timeout_seconds=1)))
+        ai_progress = asyncio.create_task(asyncio.sleep(0.001, result='AI completed'))
+        assert await ai_progress == 'AI completed'
+        assert not all(request.done() for request in requests)
+        results = await asyncio.gather(*requests)
+    finally:
+        await runner.cleanup()
+
+    assert len(results) == 4
+    assert maximum == 1
+    assert busy_responses == 0
+
+
+@pytest.mark.asyncio
+async def test_all_four_clients_share_one_prefixed_service_base():
+    inflight = 0
+    maximum = 0
+    overlap_rejections = 0
+
+    async def unavailable(request):
+        nonlocal inflight, maximum, overlap_rejections
+        if inflight:
+            overlap_rejections += 1
+            return web.Response(status=429, headers={'Retry-After': '0'})
+        inflight += 1
+        maximum = max(maximum, inflight)
+        try:
+            await asyncio.sleep(0.01)
+            return web.Response(status=404)
+        finally:
+            inflight -= 1
+
+    app = web.Application()
+    for route in ('/private/v1/extract', '/private/v1/telegram/fetch',
+                  '/private/v1/page-monitor/extract', '/private/v1/sources/collect'):
+        app.router.add_post(route, unavailable)
+    runner = web.AppRunner(app, shutdown_timeout=0.1)
+    await runner.setup()
+    site = web.TCPSite(runner, '127.0.0.1', 0)
+    await site.start()
+    base = f"http://127.0.0.1:{site._server.sockets[0].getsockname()[1]}/private"
+    config = SimpleNamespace(
+        url=URL, name='Example', min_title_length=10, article_selectors=[], title_selectors=[],
+        date_selectors=[], link_selectors=[], learned_container_selectors=[],
+        learned_title_selectors=[], learned_link_selectors=[], learned_date_selectors=[],
+        learned_selectors=[], use_browser=False, wait_for_js=False,
+    )
+    clients = [
+        ExtractionServiceClient(base, TOKEN),
+        TelegramServiceClient(base, TOKEN),
+        PageMonitorServiceClient(base, TOKEN),
+        SourceManagerServiceClient(base, TOKEN),
+    ]
+    try:
+        outcomes = await asyncio.gather(
+            clients[0].extract(URL, timeout_seconds=1),
+            clients[1].fetch('https://t.me/s/example', 'Example', limit=1, timeout_seconds=1),
+            clients[2].fetch(config, limit=1, timeout_seconds=1),
+            clients[3].collect([{'source_id': 1, 'type': 'rss'}], timeout_seconds=1),
+            return_exceptions=True,
+        )
+    finally:
+        await runner.cleanup()
+
+    assert all(isinstance(outcome, Exception) for outcome in outcomes)
+    assert maximum == 1
+    assert overlap_rejections == 0
+
+
+@pytest.mark.asyncio
+async def test_admission_wait_has_separate_deadline_from_http_timeout():
+    started = asyncio.Event()
+    release = asyncio.Event()
+    requests = 0
+
+    async def handler(request):
+        nonlocal requests
+        requests += 1
+        data = await request.json()
+        if requests == 1:
+            started.set()
+            await release.wait()
+        return web.json_response(response_for(data))
+
+    async with server(handler) as endpoint:
+        first = asyncio.create_task(ExtractionServiceClient(endpoint, TOKEN).extract(
+            URL, timeout_seconds=1, admission_timeout_seconds=1))
+        await started.wait()
+        second = asyncio.create_task(ExtractionServiceClient(endpoint, TOKEN).extract(
+            URL, timeout_seconds=0.05, admission_timeout_seconds=0.5))
+        await asyncio.sleep(0.08)
+        release.set()
+        await first
+        await second
+
+    assert requests == 2
+
+
+@pytest.mark.asyncio
+async def test_admission_timeout_is_busy_and_http_timeout_stays_deadline_exceeded():
+    started = asyncio.Event()
+    release = asyncio.Event()
+
+    async def handler(request):
+        data = await request.json()
+        started.set()
+        await release.wait()
+        return web.json_response(response_for(data))
+
+    async with server(handler) as endpoint:
+        first = asyncio.create_task(ExtractionServiceClient(endpoint, TOKEN).extract(
+            URL, timeout_seconds=1, admission_timeout_seconds=1))
+        await started.wait()
+        with pytest.raises(ExtractionServiceError, match='busy'):
+            await ExtractionServiceClient(endpoint, TOKEN).extract(
+                URL, timeout_seconds=0.2, admission_timeout_seconds=0.03)
+        release.set()
+        await first
+
+    async def slow_handler(request):
+        await asyncio.sleep(0.08)
+        return web.json_response(response_for(await request.json()))
+
+    async with server(slow_handler) as endpoint:
+        with pytest.raises(ExtractionServiceError, match='deadline_exceeded'):
+            await ExtractionServiceClient(endpoint, TOKEN).extract(
+                URL, timeout_seconds=0.02, admission_timeout_seconds=0.2)
+
+
+@pytest.mark.asyncio
+async def test_explicit_busy_retries_only_within_retry_after_budget():
+    calls = 0
+
+    async def handler(request):
+        nonlocal calls
+        calls += 1
+        if calls == 1:
+            return web.Response(status=429, headers={'Retry-After': '0'})
+        return web.json_response(response_for(await request.json()))
+
+    async with server(handler) as endpoint:
+        result = await ExtractionServiceClient(endpoint, TOKEN).extract(URL, timeout_seconds=1)
+
+    assert result['outcome'] == 'success'
+    assert calls == 2
+
+
+@pytest.mark.asyncio
+async def test_explicit_busy_retry_count_is_bounded():
+    calls = 0
+
+    async def handler(_request):
+        nonlocal calls
+        calls += 1
+        return web.Response(status=429, headers={'Retry-After': '0'})
+
+    async with server(handler) as endpoint:
+        with pytest.raises(ExtractionServiceError, match='busy'):
+            await ExtractionServiceClient(endpoint, TOKEN).extract(URL, timeout_seconds=1)
+
+    assert calls == 9
+
+
+@pytest.mark.asyncio
+async def test_json_encoding_and_session_creation_wait_for_admission():
+    sessions = []
+
+    async def handler(request):
+        return web.json_response(response_for(await request.json()))
+
+    async with server(handler) as endpoint:
+        def factory(**kwargs):
+            session = aiohttp.ClientSession(**kwargs)
+            sessions.append(session)
+            return session
+
+        client = ExtractionServiceClient(endpoint, TOKEN, session_factory=factory)
+        with patch('news_aggregator.extraction.service_client.json.dumps', wraps=json.dumps) as encode:
+            async with endpoint_admission(endpoint + '/v1/extract', 1):
+                waiting = asyncio.create_task(client.extract(
+                    URL, timeout_seconds=1, html='x' * 1_000_000))
+                await asyncio.sleep(0.01)
+                encode.assert_not_called()
+                assert sessions == []
+            await waiting
+        assert sessions and all(session.closed for session in sessions)
+
+
+@pytest.mark.asyncio
+async def test_core_outer_deadline_during_admission_is_busy_and_manual_cancel_propagates():
+    async def handler(request):
+        return web.json_response(response_for(await request.json()))
+
+    async with server(handler) as endpoint:
+        settings, core, memory = routing(budget=0.05)
+        settings.extraction_service_url = endpoint
+        settings.extraction_service_timeout_seconds = 0.02
+        with patch('news_aggregator.config.get_settings', return_value=settings), \
+                patch('news_aggregator.extraction.core_extractor.get_extraction_memory',
+                      AsyncMock(return_value=memory)), \
+                patch('news_aggregator.extraction.core_extractor.get_stability_tracker',
+                      AsyncMock(return_value=Mock())):
+            async with endpoint_admission(endpoint + '/v1/extract', 1):
+                with pytest.raises(ExtractionServiceError, match='busy'):
+                    await core.extract_article_content_with_metadata(URL)
+
+            active = asyncio.Event()
+
+            async def hold_permit():
+                async with endpoint_admission(endpoint + '/v1/extract', 2):
+                    active.set()
+                    await asyncio.Future()
+
+            holder = asyncio.create_task(hold_permit())
+            await active.wait()
+            client_task = asyncio.create_task(ExtractionServiceClient(endpoint, TOKEN).extract(
+                URL, timeout_seconds=1, admission_timeout_seconds=2))
+            await asyncio.sleep(0)
+            client_task.cancel()
+            with pytest.raises(asyncio.CancelledError):
+                await client_task
+            holder.cancel()
+            with pytest.raises(asyncio.CancelledError):
+                await holder
+
+
+@pytest.mark.asyncio
+async def test_outer_timeout_before_client_admission_deadline_stays_a_timeout():
+    async def handler(request):
+        return web.json_response(response_for(await request.json()))
+
+    async with server(handler) as endpoint:
+        async with endpoint_admission(endpoint + '/v1/extract', 1):
+            client = ExtractionServiceClient(endpoint, TOKEN)
+            phase = {'value': None}
+            with pytest.raises(TimeoutError):
+                async with asyncio.timeout(0.02):
+                    await client.extract(URL, timeout_seconds=1,
+                        admission_timeout_seconds=2, admission_phase=phase)
+            assert phase['value'] == 'waiting'
+
+
+@pytest.mark.asyncio
+async def test_transport_failure_is_not_replayed():
+    calls = 0
+
+    async def handler(request):
+        nonlocal calls
+        calls += 1
+        request.transport.close()
+        return web.Response()
+
+    async with server(handler) as endpoint:
+        with pytest.raises(ExtractionServiceError, match='transport_error'):
+            await ExtractionServiceClient(endpoint, TOKEN).extract(URL, timeout_seconds=1)
+
+    assert calls == 1
 
 
 @pytest.mark.asyncio
@@ -112,6 +432,28 @@ async def test_streamed_response_size_cap():
     async with server(handler) as endpoint:
         with pytest.raises(ExtractionServiceError, match='response_too_large'):
             await ExtractionServiceClient(endpoint, TOKEN, max_bytes=1000).extract(URL, timeout_seconds=1)
+
+
+@pytest.mark.asyncio
+async def test_malformed_response_closes_permit_for_next_request():
+    calls = 0
+
+    async def handler(request):
+        nonlocal calls
+        calls += 1
+        data = await request.json()
+        if calls == 1:
+            return web.Response(text='{')
+        return web.json_response(response_for(data))
+
+    async with server(handler) as endpoint:
+        client = ExtractionServiceClient(endpoint, TOKEN)
+        with pytest.raises(ExtractionServiceError, match='invalid_payload'):
+            await client.extract(URL, timeout_seconds=1)
+        result = await client.extract(URL, timeout_seconds=1)
+
+    assert result['outcome'] == 'success'
+    assert calls == 2
 
 
 @pytest.mark.parametrize('cancel', [False, True])

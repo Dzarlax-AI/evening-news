@@ -64,7 +64,7 @@ def test_local_admission_busy_refunds_claim_and_never_exhausts(code, attempts):
     assert fields['processing_attempts'] == attempts - 1
     assert fields['processing_state'] == 'retry_wait'
     assert fields['processed'] is False
-    assert fields['next_attempt_at'] == now + timedelta(seconds=30)
+    assert fields['next_attempt_at'] == now + timedelta(seconds=60)
     assert fields['summary'] == 'Saved summary'
 
 
@@ -76,7 +76,7 @@ def test_invalid_retry_after_does_not_break_durable_busy_schedule(retry_after):
 
     assert fields['processing_state'] == 'retry_wait'
     assert fields['processing_attempts'] == 0
-    assert fields['next_attempt_at'] == now + timedelta(seconds=30)
+    assert fields['next_attempt_at'] == now + timedelta(seconds=60)
 
 
 def test_extreme_finite_retry_after_stays_within_datetime_range():

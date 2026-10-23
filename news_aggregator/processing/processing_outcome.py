@@ -49,7 +49,7 @@ def outcome_fields(outcome, attempts, now, *, max_attempts=3,
             # The claim was persisted before work began, but local admission
             # pressure did not start a genuine processing attempt.
             persisted_attempts = max(0, attempts - 1)
-            delay = initial_seconds
+            delay = 60
             next_attempt = now + timedelta(seconds=max(delay, _valid_retry_after(
                 outcome.retry_after_seconds, now)))
         elif attempts >= max_attempts:

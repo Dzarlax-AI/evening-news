@@ -1,6 +1,5 @@
 """Bounded client for the private Go source collection manager."""
 
-import asyncio
 import json
 import math
 from datetime import datetime, timezone
@@ -8,6 +7,7 @@ from urllib.parse import urlsplit
 from uuid import uuid4
 
 import aiohttp
+from ..extraction.admission import run_admitted
 
 
 CONTRACT_VERSION = '1'
@@ -32,10 +32,11 @@ SOURCE_ERROR_CODES = {
 class SourceManagerServiceError(Exception):
     """Finite bridge error that never includes remote response contents."""
 
-    def __init__(self, code, retryable=False):
+    def __init__(self, code, retryable=False, retry_after_seconds=None):
         super().__init__(code)
         self.code = code
         self.retryable = retryable
+        self.retry_after_seconds = retry_after_seconds
 
 
 class SourceManagerServiceClient:
@@ -50,7 +51,8 @@ class SourceManagerServiceClient:
         self._token = token
         self._session_factory = session_factory
 
-    async def collect(self, sources, *, timeout_seconds=120.0, request_id=None):
+    async def collect(self, sources, *, timeout_seconds=120.0, request_id=None,
+                      admission_timeout_seconds=None):
         """Collect one bounded batch and validate that every input ID is returned once."""
         if not isinstance(sources, list) or not 1 <= len(sources) <= MAX_SOURCES:
             raise SourceManagerServiceError('invalid_request')
@@ -73,50 +75,54 @@ class SourceManagerServiceClient:
         if len(set(source_ids)) != len(source_ids):
             raise SourceManagerServiceError('invalid_request')
 
-        transport_margin = min(5.0, float(timeout_seconds) * 0.10)
-        payload = {
-            'contract_version': CONTRACT_VERSION,
-            'request_id': request_id,
-            'batch_budget_ms': min(MAX_BUDGET_MS, max(1, int((timeout_seconds - transport_margin) * 1000))),
-            'sources': sources,
-        }
-        try:
-            body = json.dumps(payload, ensure_ascii=False, separators=(',', ':'), allow_nan=False).encode('utf-8')
-        except (UnicodeEncodeError, ValueError, TypeError):
-            raise SourceManagerServiceError('invalid_request') from None
-        if len(body) > MAX_REQUEST_BYTES:
-            raise SourceManagerServiceError('request_too_large')
-
         timeout_seconds = min(float(timeout_seconds), 120.0)
+
+        async def request(attempt_timeout):
+            transport_margin = min(5.0, attempt_timeout * 0.10)
+            payload = {
+                'contract_version': CONTRACT_VERSION,
+                'request_id': request_id,
+                'batch_budget_ms': min(MAX_BUDGET_MS, max(1, round((attempt_timeout - transport_margin) * 1000))),
+                'sources': sources,
+            }
+            try:
+                body = json.dumps(payload, ensure_ascii=False, separators=(',', ':'), allow_nan=False).encode('utf-8')
+            except (UnicodeEncodeError, ValueError, TypeError):
+                raise SourceManagerServiceError('invalid_request') from None
+            if len(body) > MAX_REQUEST_BYTES:
+                raise SourceManagerServiceError('request_too_large')
+            async with self._session_factory(
+                    timeout=aiohttp.ClientTimeout(total=attempt_timeout), trust_env=False,
+                    auto_decompress=False) as session:
+                async with session.post(
+                        self.endpoint, data=body, allow_redirects=False,
+                        headers={'Authorization': 'Bearer ' + self._token,
+                                 'Content-Type': 'application/json',
+                                 'Accept-Encoding': 'identity'}) as response:
+                    if response.status != 200:
+                        code = {400: 'invalid_request', 401: 'unauthorized', 403: 'unauthorized',
+                                413: 'request_too_large', 429: 'busy', 503: 'unavailable'}.get(
+                                    response.status, 'http_error')
+                        retry_after = response.headers.get('Retry-After', '')
+                        retry_after = min(int(retry_after), 86400) if retry_after.isdigit() else None
+                        raise SourceManagerServiceError(
+                            code, response.status in {429, 502, 503, 504}, retry_after)
+                    if response.headers.get('Content-Encoding', 'identity').lower() != 'identity':
+                        raise SourceManagerServiceError('invalid_payload')
+                    data = bytearray()
+                    async for chunk in response.content.iter_chunked(16_384):
+                        if len(data) + len(chunk) > MAX_RESPONSE_BYTES:
+                            raise SourceManagerServiceError('response_too_large')
+                        data.extend(chunk)
+                    try:
+                        decoded = json.loads(data)
+                    except (ValueError, UnicodeError, RecursionError):
+                        raise SourceManagerServiceError('invalid_payload') from None
+                    return self._validate(decoded, request_id, sources)
+
         try:
-            async with asyncio.timeout(timeout_seconds):
-                async with self._session_factory(
-                        timeout=aiohttp.ClientTimeout(total=timeout_seconds), trust_env=False,
-                        auto_decompress=False) as session:
-                    async with session.post(
-                            self.endpoint, data=body, allow_redirects=False,
-                            headers={'Authorization': 'Bearer ' + self._token,
-                                     'Content-Type': 'application/json',
-                                     'Accept-Encoding': 'identity'}) as response:
-                        if response.status != 200:
-                            code = {400: 'invalid_request', 401: 'unauthorized', 403: 'unauthorized',
-                                    413: 'request_too_large', 429: 'busy', 503: 'unavailable'}.get(
-                                        response.status, 'http_error')
-                            raise SourceManagerServiceError(code, response.status in {429, 502, 503, 504})
-                        if response.headers.get('Content-Encoding', 'identity').lower() != 'identity':
-                            raise SourceManagerServiceError('invalid_payload')
-                        data = bytearray()
-                        async for chunk in response.content.iter_chunked(16_384):
-                            if len(data) + len(chunk) > MAX_RESPONSE_BYTES:
-                                raise SourceManagerServiceError('response_too_large')
-                            data.extend(chunk)
-                        try:
-                            decoded = json.loads(data)
-                        except (ValueError, UnicodeError, RecursionError):
-                            raise SourceManagerServiceError('invalid_payload') from None
-                        return self._validate(decoded, request_id, sources)
-        except TimeoutError:
-            raise SourceManagerServiceError('deadline_exceeded', True) from None
+            return await run_admitted(self.endpoint, timeout_seconds, request, SourceManagerServiceError,
+                                      admission_timeout_seconds=admission_timeout_seconds)
         except aiohttp.ClientError:
             raise SourceManagerServiceError('transport_error', True) from None
 
