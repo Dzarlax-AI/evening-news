@@ -46,6 +46,15 @@ def _utcnow_naive() -> datetime:
     return datetime.now(timezone.utc).replace(tzinfo=None)
 
 
+def job_may_deliver(kind: str, payload: Optional[Dict[str, Any]]) -> bool:
+    """Return whether execution may make an external digest delivery attempt."""
+    if kind == "telegram_digest":
+        return True
+    if kind == "news_digest":
+        return (payload or {}).get("send_telegram", True) is not False
+    return False
+
+
 async def _close_connection_releasing_lock(connection: Optional[AsyncConnection]) -> None:
     """Return a connection only after its session advisory lock is released.
 
@@ -397,7 +406,7 @@ class BackgroundWorkerLease:
         counts = {"interrupted": 0, "delivery_unknown": 0, "recovery_exhausted": 0}
         now = _utcnow_naive()
         for job in rows:
-            if job.kind in {"news_digest", "telegram_digest"}:
+            if job_may_deliver(job.kind, job.payload):
                 job.state = "delivery_unknown"
                 job.error_code = "external_outcome_unknown"
                 job.result = {"status": "warning"}

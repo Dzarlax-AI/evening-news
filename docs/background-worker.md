@@ -175,7 +175,7 @@ and worker schedulers against the same database concurrently.
 
 ## Validation status
 
-The local regression suite passed with 1,206 tests and 10 skips, including real
+At commit `27d05e5`, the local regression suite passed with 1,206 tests and 10 skips, including real
 PostgreSQL ownership, migration, stale-attempt fencing, recovery, subprocess
 cleanup, and JavaScript behavior checks. Independent code review found no
 remaining actionable findings after the fixes. The Docker acceptance gate passed
@@ -186,12 +186,15 @@ and ambiguous Telegram delivery without automatic replay. Recovery explicitly
 advanced only the synthetic article's retry deadline while its worker was stopped;
 attempts and saved stages remained unchanged.
 
-The tested image matched all 132 application/UI files in the checkout. Web
+The ARM64 image matched all 132 application/UI files at commit `27d05e5`. Web
 and Python worker together used about 177–184 MiB after startup in this short fixture run
 (startup snapshot: 231 MiB),
 excluding PostgreSQL and fake service containers. This is not production sizing,
 a real Go/browser benchmark, or a throughput claim. Fixture resources were removed.
-External Codex/CodeRabbit findings were addressed and independently re-reviewed.
+Review follow-ups also preserve resumable processing-only digests (`send_telegram=false`)
+and best-effort optional media refresh. Enabled delivery retains the conservative
+no-replay rule. A fresh focused PostgreSQL/runtime/UI run passed 53 tests after
+these final corrections. The final Linux fixture gate rebuilds the current PR head.
 Final head checks are tracked in [PR #18](https://github.com/Dzarlax-AI/evening-news/pull/18);
 production rollout is outside this change.
 

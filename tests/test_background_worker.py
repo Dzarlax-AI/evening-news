@@ -217,6 +217,150 @@ async def test_ordinary_digest_exception_is_delivery_unknown_and_not_replayed(pg
 
 
 @pytest.mark.asyncio
+@pytest.mark.parametrize("failure", ["exception", "timeout", "cancel"])
+async def test_news_digest_without_delivery_failures_are_not_delivery_unknown(pg_worker_jobs, failure):
+    engine, factory, _, _ = pg_worker_jobs
+    lease = BackgroundWorkerLease(engine)
+    assert await lease.acquire()
+    async with factory() as session:
+        job = await enqueue_job_in_session(
+            session, "news_digest", {"run_processing": True, "send_telegram": False},
+            "digest:no-delivery",
+        )
+        await session.commit()
+    async with factory() as session:
+        claimed = await claim_next_job(session, lease)
+        await session.commit()
+
+    class FailingProcessingOrchestrator:
+        async def start(self):
+            return None
+
+        async def run_full_cycle(self, reservation=None):
+            if failure == "timeout":
+                await asyncio.sleep(1)
+            if failure == "cancel":
+                raise asyncio.CancelledError()
+            raise RuntimeError("processing failed before any delivery was enabled")
+
+    worker = DurableBackgroundWorker(db_engine=engine, session_factory=factory)
+    worker.lease = lease
+    worker.orchestrator = FailingProcessingOrchestrator()
+    if failure == "timeout":
+        async def short_timeout(_job):
+            return 0.001
+        worker._job_timeout_seconds = short_timeout
+    if failure == "cancel":
+        with pytest.raises(asyncio.CancelledError):
+            await worker._run_claim(claimed)
+    else:
+        await worker._run_claim(claimed)
+
+    async with factory() as session:
+        saved = await session.get(BackgroundJob, job.id)
+        expected = ("interrupted", "worker_interrupted") if failure == "cancel" else ("failed", "worker_error")
+        assert (saved.state, saved.error_code) == expected
+        if failure == "cancel":
+            resumed = await claim_next_job(session, lease)
+            assert resumed.id == job.id
+        else:
+            assert await claim_next_job(session, lease) is None
+        await session.rollback()
+    await lease.release()
+
+
+@pytest.mark.asyncio
+async def test_recovery_news_digest_without_delivery_is_resumable(pg_worker_jobs):
+    engine, factory, _, _ = pg_worker_jobs
+    lease = BackgroundWorkerLease(engine)
+    assert await lease.acquire()
+    async with factory() as session:
+        job = await enqueue_job_in_session(
+            session, "news_digest", {"run_processing": True, "send_telegram": False},
+            "digest:recover-no-delivery",
+        )
+        job.state = "running"
+        job.attempt_generation = 1
+        job.owner_generation = lease.generation
+        await session.commit()
+
+    async with factory() as session:
+        recovered = await lease.recover_jobs(session)
+        await session.commit()
+    assert recovered == {"interrupted": 1, "delivery_unknown": 0, "recovery_exhausted": 0}
+
+    async with factory() as session:
+        saved = await session.get(BackgroundJob, job.id)
+        assert saved.state == "interrupted"
+        assert saved.error_code == "worker_interrupted"
+        resumed = await claim_next_job(session, lease)
+        await session.commit()
+        assert resumed.id == job.id
+    await lease.release()
+
+
+@pytest.mark.asyncio
+async def test_article_reprocess_media_failure_is_best_effort(monkeypatch):
+    from types import SimpleNamespace
+    from news_aggregator.services import article_media_reextract
+    from news_aggregator.services.background_execution import execute_job
+
+    attempted = []
+    async def refresh(article_id):
+        attempted.append(article_id)
+        if article_id == 1:
+            raise RuntimeError("media page unavailable")
+        return True
+
+    monkeypatch.setattr(article_media_reextract, "reextract_article_media", refresh)
+
+    class SelectedOrchestrator:
+        async def process_selected_articles(self, article_ids, **kwargs):
+            return {"success": True, "articles_processed": len(article_ids)}
+
+    job = SimpleNamespace(kind="article_reprocess", payload={
+        "article_ids": [1, 2], "force": True, "reextract_media": True,
+    })
+    result = await execute_job(job, SelectedOrchestrator())
+    assert attempted == [1, 2]
+    assert result == {"success": True, "articles_processed": 2}
+
+
+@pytest.mark.asyncio
+async def test_article_reprocess_media_fence_failure_is_not_swallowed(monkeypatch):
+    from types import SimpleNamespace
+    from news_aggregator.services import article_media_reextract
+    from news_aggregator.services.background_execution import execute_job
+
+    async def stale_refresh(article_id):
+        raise StaleWorker("worker attempt is stale")
+
+    monkeypatch.setattr(article_media_reextract, "reextract_article_media", stale_refresh)
+    job = SimpleNamespace(kind="article_reprocess", payload={
+        "article_ids": [1], "force": True, "reextract_media": True,
+    })
+    with pytest.raises(StaleWorker):
+        await execute_job(job, object())
+
+
+@pytest.mark.asyncio
+async def test_article_reprocess_media_cancellation_is_not_swallowed(monkeypatch):
+    from types import SimpleNamespace
+    from news_aggregator.services import article_media_reextract
+    from news_aggregator.services.background_execution import execute_job
+
+    async def cancelled_refresh(article_id):
+        raise asyncio.CancelledError()
+
+    monkeypatch.setattr(article_media_reextract, "reextract_article_media", cancelled_refresh)
+    job = SimpleNamespace(kind="article_reprocess", payload={
+        "article_ids": [1], "force": True, "reextract_media": True,
+    })
+    with pytest.raises(asyncio.CancelledError):
+        await execute_job(job, object())
+
+
+@pytest.mark.asyncio
 async def test_source_test_success_survives_completion_persistence(pg_worker_jobs, monkeypatch):
     engine, factory, _, _ = pg_worker_jobs
     lease = BackgroundWorkerLease(engine)

@@ -15,6 +15,7 @@ from ..models import BackgroundJob, ScheduleSettings
 from .background_jobs import (
     BackgroundJobError, BackgroundWorkerLease, HEARTBEAT_INTERVAL_SECONDS,
     IdempotencyConflict, QueueFull, StaleWorker, claim_next_job, enqueue_job_in_session,
+    job_may_deliver,
     finish_job, read_worker_status,
 )
 from .job_fence import JobExecutionFence, current_job_fence
@@ -153,7 +154,16 @@ async def execute_job(job: BackgroundJob, orchestrator, reservation=None):
         if payload.get("reextract_media"):
             from .article_media_reextract import reextract_article_media
             for article_id in payload["article_ids"]:
-                await reextract_article_media(article_id)
+                try:
+                    await reextract_article_media(article_id)
+                except StaleWorker:
+                    raise
+                except Exception:
+                    logger.warning(
+                        "Could not refresh article media before reprocessing (article_id=%s)",
+                        article_id,
+                        exc_info=True,
+                    )
         result = await orchestrator.process_selected_articles(
             payload["article_ids"], reservation=reservation, force=payload.get("force", True),
             reset=False, preserve_completed_stages=True,
@@ -381,7 +391,7 @@ class DurableBackgroundWorker:
                     finally:
                         release_processing_cycle(reservation)
         except asyncio.CancelledError:
-            if claimed.kind in {"news_digest", "telegram_digest"}:
+            if job_may_deliver(claimed.kind, claimed.payload):
                 state, error_code = "delivery_unknown", "external_outcome_unknown"
             else:
                 state, error_code = "interrupted", "worker_interrupted"
@@ -389,14 +399,14 @@ class DurableBackgroundWorker:
             raise
         except asyncio.TimeoutError:
             logger.warning("Background job timed out (kind=%s)", claimed.kind)
-            if claimed.kind in {"news_digest", "telegram_digest"}:
+            if job_may_deliver(claimed.kind, claimed.payload):
                 state, error_code = "delivery_unknown", "external_outcome_unknown"
             else:
                 state, error_code = "failed", "worker_error"
             result = {"status": "warning"}
         except Exception as exc:
             logger.exception("Background job failed (kind=%s)", claimed.kind)
-            if claimed.kind in {"news_digest", "telegram_digest"}:
+            if job_may_deliver(claimed.kind, claimed.payload):
                 state, error_code = "delivery_unknown", "external_outcome_unknown"
             else:
                 state, error_code = "failed", "worker_error"
