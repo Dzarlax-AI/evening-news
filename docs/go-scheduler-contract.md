@@ -176,7 +176,7 @@ Integration tests use only `SCHEDULER_TEST_DATABASE_URL`, separate from runtime 
 
 ### `POST /v1/import`
 
-Imports one bounded batch of legacy schedules. The request is accepted only while globally paused, and only when `expected_control_revision` equals the current control revision. `items` must contain 1–100 unique keys. Each item has exactly the fields `schedule_key`, `enabled`, `calendar`, `target_alias`, `operation`, `payload`, `next_due_at`; `next_due_at` is an exact UTC timestamp or null. No client-supplied `created_at` is accepted; imported resources receive service-generated creation/update timestamps. Example:
+Imports one bounded batch of legacy schedules. The request is accepted only while globally paused, and only when `expected_control_revision` equals the current control revision. `items` must contain 1–100 unique keys. Each item has exactly the fields `schedule_key`, `enabled`, `calendar`, `target_alias`, `operation`, `payload`, `next_due_at`; `next_due_at` is an exact UTC timestamp or null. Enabled imports require a non-null `next_due_at`; disabled imports require null. No client-supplied `created_at` is accepted; imported resources receive service-generated creation/update timestamps. Example:
 
 ```json
 {
@@ -197,7 +197,7 @@ The request is atomic: if any item conflicts or is invalid, no item is imported.
 
 ### `GET /v1/occurrences`
 
-Authenticated, bounded inventory for rollback and operations. Query parameters: optional `schedule_key`, `limit` 1–100 (default 100), and opaque `cursor`. Returns `200` `{"occurrences":[...],"next_cursor":"<opaque or null>"}` ordered by creation time then occurrence UUID. Each item is exactly:
+Authenticated, bounded inventory for rollback and operations. Query parameters: optional `schedule_key`, `limit` 1–100 (default 100), and opaque `cursor`. If `schedule_key` is supplied, it must refer to a schedule that currently exists; otherwise the endpoint returns `404` `schedule_not_found`. A valid schedule with no occurrences returns an empty array. Returns `200` `{"occurrences":[...],"next_cursor":"<opaque or null>"}` ordered by creation time then occurrence UUID. Each item is exactly:
 
 ```json
 {"occurrence_id":"79c2d7b2-96ee-4eb3-ad6d-81969a0e348e","schedule_key":"news:42","schedule_revision":3,"scheduled_for":"2026-10-23T17:30:19.728869Z","status":"accepted","attempts":1,"created_at":"2026-10-23T17:30:19.728869Z","updated_at":"2026-10-23T17:30:20.000001Z","job_id":"d35ec3f9-4196-4bf8-840a-61e7972442f9"}

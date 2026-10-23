@@ -356,6 +356,9 @@ func (s *Store) Import(ctx context.Context, expectedControl int64, items []Impor
 		if !item.Enabled && item.NextDueAt != nil {
 			return ImportResult{}, errors.New("disabled imports must have null next_due_at")
 		}
+		if item.Enabled && item.NextDueAt == nil {
+			return ImportResult{}, errors.New("enabled imports must have a next_due_at")
+		}
 		b, err := json.Marshal(item.Payload)
 		if err != nil || len(b) > 4096 {
 			return ImportResult{}, errors.New("payload must be an object no larger than 4096 bytes")

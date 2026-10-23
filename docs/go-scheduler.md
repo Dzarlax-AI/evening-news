@@ -104,7 +104,8 @@ flight or undo an already accepted News job.
 Keep the existing Python mode until the new service and adapter have passed the
 isolated acceptance gate. Export the existing News configuration and due times
 through the migration bridge; the scheduler must not connect directly to the
-News database. First import happens while the new service is paused, with stable
+News database. Enabled imports require a non-null due time; disabled imports require null.
+First import happens while the new service is paused, with stable
 `news:<legacy_id>` keys and exact UTC due times, including microseconds.
 
 A production cutover needs separate approval. Drain active scheduled work,
@@ -114,7 +115,8 @@ worker remain available. Do not run two active schedule sources during a
 migration or assume that changing a mode flag transfers persisted state.
 
 For rollback, pause the scheduler and inventory pending/blocked/accepted
-occurrences and News jobs. Export current calendar configuration and next due
+occurrences and News jobs. The bridge rejects unpaused or changing control state
+and any in-flight leased dispatch before writing an inventory artifact. Export current calendar configuration and next due
 times back through the bridge before resuming Python scheduling. Never restore
 an old configuration snapshot blindly, delete outbox entries, or discard jobs.
 The shared collector, browser, egress gateway, and their clients are outside the
@@ -132,7 +134,7 @@ liveness; `/readyz` additionally checks schema/DB readiness and loop freshness.
 An open port or a successful acceptance receipt alone is not execution acceptance.
 Local verification on October 23, 2026:
 
-- Python regression suite against isolated PostgreSQL 16: 1,240 passed, five
+- Python regression suite against isolated PostgreSQL 16: 1,245 passed, five
   explicit real-browser/network checks skipped, and 22 subtests passed.
 - Go unit and PostgreSQL integration tests passed with the race detector;
   `go vet` and Linux amd64 / macOS ARM64 cross-compilation passed.

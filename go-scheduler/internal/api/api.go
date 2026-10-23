@@ -360,6 +360,10 @@ func (a *API) importSchedules(w http.ResponseWriter, r *http.Request) {
 			writeAPIError(w, http.StatusUnprocessableEntity, "invalid_schedule", "disabled imports must have null next_due_at", nil)
 			return
 		}
+		if *item.Enabled && due == nil {
+			writeAPIError(w, http.StatusUnprocessableEntity, "invalid_schedule", "enabled imports must have a next_due_at", nil)
+			return
+		}
 		items = append(items, store.ImportItem{Key: item.Key, Enabled: *item.Enabled, Calendar: item.Calendar, Target: item.Target, Operation: item.Operation, Payload: item.Payload, NextDueAt: due})
 	}
 	ctx, cancel := context.WithTimeout(r.Context(), 10*time.Second)
@@ -397,17 +401,20 @@ func (a *API) occurrences(w http.ResponseWriter, r *http.Request) {
 	key := r.URL.Query().Get("schedule_key")
 	ctx, cancel := context.WithTimeout(r.Context(), 5*time.Second)
 	defer cancel()
+	if key != "" {
+		if _, err := a.Store.GetSchedule(ctx, key); errors.Is(err, store.ErrNotFound) {
+			writeAPIError(w, http.StatusNotFound, "schedule_not_found", "schedule not found", nil)
+			return
+		} else if err != nil {
+			writeAPIError(w, http.StatusServiceUnavailable, "unavailable", "occurrence inventory unavailable", nil)
+			return
+		}
+	}
 	items, next, err := a.Store.ListOccurrences(ctx, key, cursor, limit)
 	if err != nil {
 		if errors.Is(err, store.ErrInvalidCursor) {
 			writeAPIError(w, http.StatusBadRequest, "invalid_json", "invalid pagination cursor", nil)
 			return
-		}
-		if key != "" {
-			if _, e := a.Store.GetSchedule(ctx, key); errors.Is(e, store.ErrNotFound) {
-				writeAPIError(w, http.StatusNotFound, "schedule_not_found", "schedule not found", nil)
-				return
-			}
 		}
 		writeAPIError(w, http.StatusServiceUnavailable, "unavailable", "occurrence inventory unavailable", nil)
 		return

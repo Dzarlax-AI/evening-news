@@ -84,6 +84,26 @@ func TestHTTPEmptyCreateAndImportContract(t *testing.T) {
 		t.Fatal("empty weekday representation changed the schedule revision")
 	}
 
+	existingInventory := request(http.MethodGet, "/v1/occurrences?schedule_key=fixture:first", "")
+	if existingInventory.Code != http.StatusOK {
+		t.Fatalf("existing schedule with no occurrences returned status %d: %s", existingInventory.Code, existingInventory.Body.String())
+	}
+	var emptyInventory struct {
+		Occurrences []json.RawMessage `json:"occurrences"`
+	}
+	if err := json.Unmarshal(existingInventory.Body.Bytes(), &emptyInventory); err != nil || emptyInventory.Occurrences == nil || len(emptyInventory.Occurrences) != 0 {
+		t.Fatal("existing schedule with no occurrences must return an empty array")
+	}
+	missingInventory := request(http.MethodGet, "/v1/occurrences?schedule_key=fixture:missing", "")
+	if missingInventory.Code != http.StatusNotFound {
+		t.Fatalf("unknown schedule occurrence filter returned status %d: %s", missingInventory.Code, missingInventory.Body.String())
+	}
+
+	invalidEnabledImport := request(http.MethodPost, "/v1/import", `{"expected_control_revision":0,"items":[{"schedule_key":"news:missing-due","enabled":true,"calendar":{"type":"daily","timezone":"UTC","hour":18,"minute":30},"target_alias":"worker","operation":"news_digest","payload":{},"next_due_at":null}]}`)
+	if invalidEnabledImport.Code != http.StatusUnprocessableEntity {
+		t.Fatalf("enabled import with null next_due_at returned status %d: %s", invalidEnabledImport.Code, invalidEnabledImport.Body.String())
+	}
+
 	importBody := `{"expected_control_revision":0,"items":[{"schedule_key":"news:microseconds","enabled":true,"calendar":{"type":"daily","timezone":"UTC","hour":18,"minute":30,"weekdays":[]},"target_alias":"worker","operation":"news_digest","payload":{},"next_due_at":"2030-01-02T17:30:19.728869Z"},{"schedule_key":"news:disabled","enabled":false,"calendar":{"type":"daily","timezone":"UTC","hour":18,"minute":30,"weekdays":[]},"target_alias":"worker","operation":"news_processing","payload":{},"next_due_at":null}]}`
 	imported := request(http.MethodPost, "/v1/import", importBody)
 	if imported.Code != http.StatusOK {

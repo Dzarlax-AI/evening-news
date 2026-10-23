@@ -341,8 +341,6 @@ async def create_schedule_setting(
             if validate_resource:
                 validate_resource(resource)
             setting = _service_schedule_to_config(resource)
-            latest = await _service_settings_snapshot(client)
-            setting = next((row for row in latest if row["task_name"] == request.task_name), setting)
             return {"success": True, "message": "Schedule created successfully", "setting": setting}
         except HTTPException:
             raise

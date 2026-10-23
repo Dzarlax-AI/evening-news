@@ -304,6 +304,17 @@ def is_news_owned_schedule(resource):
             or (suffix.isascii() and suffix.isdigit() and int(suffix) > 0))
 
 
+def validate_paused_status(status):
+    if (not isinstance(status, dict)
+            or status.get("paused") is not True
+            or type(status.get("control_revision")) is not int
+            or status["control_revision"] < 0
+            or type(status.get("pending_outbox")) is not int
+            or status["pending_outbox"] < 0):
+        raise ValueError("scheduler must report a valid paused status for rollback inventory")
+    return status["control_revision"], status["pending_outbox"]
+
+
 async def request_json(session, method, url, token, body=None):
     async with session.request(method, url, json=body, headers={"Authorization": f"Bearer {token}"},
                                allow_redirects=False) as response:
@@ -350,6 +361,7 @@ async def rollback_inventory(args):
     timeout = aiohttp.ClientTimeout(total=args.timeout)
     async with aiohttp.ClientSession(timeout=timeout, trust_env=False) as session:
         status = await request_json(session, "GET", base + "/v1/status", token)
+        initial_control_revision, initial_pending_outbox = validate_paused_status(status)
         schedules, next_cursor, seen = [], None, set()
         while True:
             query = "?" + urlencode({"limit": 100, **({"cursor": next_cursor} if next_cursor else {})})
@@ -373,9 +385,17 @@ async def rollback_inventory(args):
             if next_cursor in seen or len(occurrences) > 1_000_000:
                 raise ValueError("scheduler occurrence inventory cursor or size is invalid")
             seen.add(next_cursor)
+        if any(occurrence.get("status") == "leased" for occurrence in occurrences):
+            raise ValueError("scheduler has an in-flight leased dispatch; retry rollback inventory")
         owned_keys = {schedule["schedule_key"] for schedule in schedules}
         occurrences = [occurrence for occurrence in occurrences
                        if occurrence.get("schedule_key") in owned_keys]
+        final_status = await request_json(session, "GET", base + "/v1/status", token)
+        final_control_revision, final_pending_outbox = validate_paused_status(final_status)
+        if (final_control_revision != initial_control_revision
+                or final_pending_outbox != initial_pending_outbox):
+            raise ValueError("scheduler state changed during rollback inventory; retry from a paused state")
+        status = final_status
     engine = create_async_engine(snapshot_database_url())
     factory = sessionmaker(engine, expire_on_commit=False)
     try:

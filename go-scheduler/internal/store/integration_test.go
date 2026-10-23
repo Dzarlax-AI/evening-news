@@ -92,6 +92,13 @@ func TestPostgresPersistenceAndFencing(t *testing.T) {
 		Payload:          map[string]any{"nested": map[string]any{"large": numeric, "decimal": json.Number("0.1234567890123456789")}},
 	}
 	targets := map[string]model.Target{"worker": {URL: "https://fixture.invalid", Token: "fixture-secret"}}
+	_, err = db.Import(ctx, 0, []ImportItem{{Key: "test:enabled-without-due", Enabled: true, Calendar: mutation.Calendar, Target: "worker", Operation: "opaque.operation", Payload: map[string]any{}}}, targets, now)
+	if err == nil {
+		t.Fatal("enabled import without next_due_at must be rejected")
+	}
+	if _, err := db.GetSchedule(ctx, "test:enabled-without-due"); !errors.Is(err, ErrNotFound) {
+		t.Fatal("invalid enabled import unexpectedly created a schedule")
+	}
 	created, _, err := db.PutSchedule(ctx, "test:numeric", mutation, targets, now)
 	if err != nil {
 		t.Fatal("could not create schedule with opaque numeric payload")

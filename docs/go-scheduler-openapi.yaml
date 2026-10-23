@@ -445,7 +445,9 @@ components:
           schema:
             $ref: '#/components/schemas/RevisionConflictError'
     InvalidSchedule:
-      description: Schedule key, calendar, payload, operation, or target alias is invalid.
+      description: >-
+        Schedule key, calendar, payload, operation, target alias, or imported
+        enabled/next_due_at combination is invalid.
       content:
         application/json:
           schema:
@@ -816,6 +818,23 @@ components:
       type: object
       additionalProperties: false
       required: [schedule_key, enabled, calendar, target_alias, operation, payload, next_due_at]
+      allOf:
+        - if:
+            properties:
+              enabled:
+                const: true
+          then:
+            properties:
+              next_due_at:
+                $ref: '#/components/schemas/UTCTimestamp'
+        - if:
+            properties:
+              enabled:
+                const: false
+          then:
+            properties:
+              next_due_at:
+                type: 'null'
       properties:
         schedule_key:
           $ref: '#/components/schemas/ScheduleKey'

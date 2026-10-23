@@ -327,6 +327,29 @@ def test_legacy_admin_crud_facade_uses_service_config_without_schedule_settings_
     asyncio.run(run())
 
 
+def test_service_create_success_does_not_depend_on_post_create_status_read(monkeypatch):
+    client = FakeScheduler()
+    monkeypatch.setattr(settings, "schedule_dispatch_mode", "service")
+    monkeypatch.setattr(module, "_scheduler_client", lambda: client)
+
+    async def status_read_would_fail(*_args, **_kwargs):
+        raise HTTPException(status_code=503, detail="News status store unavailable")
+
+    monkeypatch.setattr(module, "_service_settings_snapshot", status_read_would_fail)
+
+    async def run():
+        result = await module.create_schedule_setting(
+            module.ScheduleCreateRequest(
+                task_name="news_digest", task_config={"run_processing": True},
+            ), None,
+        )
+        assert result["success"] is True
+        assert result["setting"]["schedule_key"] == "news:news_digest"
+        assert len(client.put_calls) == 1
+
+    asyncio.run(run())
+
+
 def test_same_operation_for_another_consumer_is_hidden_and_not_mutated(monkeypatch):
     client = FakeScheduler()
     foreign = {
