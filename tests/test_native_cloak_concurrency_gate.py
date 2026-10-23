@@ -131,6 +131,13 @@ def test_runtime_log_classifier_keeps_only_finite_safe_codes():
     assert "secret" not in json.dumps(result)
 
 
+def test_cloak_permission_classifier_returns_only_finite_code():
+    result = gate.classify_runtime_logs(
+        cloak_logs="PermissionError: [Errno 13] Permission denied: '/private/stage/info/launch-info.json'\n")
+    assert result["cloak"] == [{"kind": "cloak_runtime_diagnostic", "reason": "cloak_permission_denied"}]
+    assert "private" not in json.dumps(result)
+
+
 def test_cdp_socket_timeout_preserves_type_and_maps_exact_method():
     class TimedOutSocket:
         def close(self):

@@ -261,7 +261,12 @@ jobs:
           docker pull --platform linux/amd64 alpine:3.21
       - name: Compare one and two Cloak tabs with an independent CDP peer
         run: |
-          python scripts/native_cloak_concurrency_gate.py --worker-binary /tmp/concurrency-extract-service --egress-binary /tmp/concurrency-extract-egress --output artifacts/native-cloak-concurrency.json
+          native_gate_status=0
+          sudo env "PATH=$PATH" python scripts/native_cloak_concurrency_gate.py --worker-binary /tmp/concurrency-extract-service --egress-binary /tmp/concurrency-extract-egress --output artifacts/native-cloak-concurrency.json || native_gate_status=$?
+          if [ -f artifacts/native-cloak-concurrency.json ]; then
+            sudo chown "$(id -u):$(id -g)" artifacts/native-cloak-concurrency.json
+          fi
+          exit "$native_gate_status"
       - name: Preserve native concurrency evidence
         if: always()
         uses: actions/upload-artifact@v4

@@ -76,6 +76,20 @@ restarts the externally managed shared browser. Legacy backend source scheduling
 is unchanged. Production configuration remains at one render until a separate
 rollout decision.
 
+The isolated concurrency gate is `scripts/native_cloak_concurrency_gate.py`.
+It takes prebuilt Linux/amd64 worker and egress binaries, uses the pinned Cloak
+image and cached helper images, and creates only internal, owned Docker networks.
+An independent CDP peer holds a disposable context while News runs its one/two
+render profiles, cancellation and rejection checks. This models shared-browser
+coexistence; it does not exercise the real Readeck application or prove the
+production firewall policy. Reports distinguish ARM64 emulation from native
+Linux, and browser peak memory is cumulative across both profiles.
+
+On Linux CI the gate runs as root so its private `0700` bind-mounted fixture
+files are accessible to root-owned containers with all capabilities dropped.
+The report is returned to the CI user before artifact upload. Container memory
+caps and private file permissions remain unchanged.
+
 Startup runs an owned-resource capability probe. Health checks additionally
 verify discovery/generation with a maximum 500-ms budget and allocate no targets.
 Health exposes a hash of the configured readiness selector so a benchmark can

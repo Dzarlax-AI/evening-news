@@ -291,6 +291,8 @@ def classify_runtime_logs(worker_logs: str = "", observer_logs: str = "",
     cloak: list[dict[str, str]] = []
     lower_cloak = cloak_logs[-65536:].lower()
     cloak_markers = (
+        ("permission denied", "cloak_permission_denied"),
+        ("permissionerror", "cloak_permission_denied"),
         ("no space left on device", "cloak_storage_exhaustion"),
         ("/dev/shm", "cloak_shared_memory_failure"),
         ("shared memory", "cloak_shared_memory_failure"),
@@ -609,10 +611,13 @@ class DockerGate:
         worker = self._start_worker(self.control_ip(2), gateway_ip, 1)
         one = self._wait_command(observer, "profile_one")
         self._snapshot_cgroup(worker, "worker-concurrency-1")
+        self._snapshot_cgroup(cloak, "cloak-concurrency-1")
         self._docker("stop", "--time", "5", worker, timeout=10)
         self.phase = "profile_two"
         worker = self._start_worker(self.control_ip(2), gateway_ip, 2)
         two = self._wait_command(observer, "profile_two")
+        self._snapshot_cgroup(worker, "worker-concurrency-2")
+        self._snapshot_cgroup(cloak, "cloak-concurrency-2")
         self.phase = "cancellation"
         cancelled = self._wait_command(observer, "cancellation", timeout=35)
         self.phase = "upstream_error"
@@ -633,6 +638,7 @@ class DockerGate:
                                     "gateway": 128 * 1024**2, "origin": 64 * 1024**2,
                                     "observer": 128 * 1024**2},
             "browser_generation_reused_for_both_profiles": True,
+            "browser_memory_peak_scope": "same Cloak generation; cumulative across profiles one and two",
             "profiles": {"one": one, "two": two},
             "cancellation": cancelled,
             "upstream_error": error,
