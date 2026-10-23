@@ -1,6 +1,22 @@
 // Evening News v2 JavaScript - Enhanced Admin Interface
 
 // Простая функция для AJAX запросов (make it global)
+async function readApiResponse(response) {
+    if (typeof response.text !== 'function') {
+        // Compatibility for test doubles and older embedded callers.
+        try { return await response.json(); } catch (_) { return {}; }
+    }
+    const body = await response.text();
+    if (!body) return {};
+    try {
+        return JSON.parse(body);
+    } catch (_) {
+        const message = `Server returned a non-JSON response (HTTP ${response.status}).`;
+        if (response.ok) throw new Error(message);
+        return {detail: message};
+    }
+}
+
 async function apiRequest(url, options = {}) {
     try {
         const onJobUpdate = options.onJobUpdate;
@@ -14,7 +30,7 @@ async function apiRequest(url, options = {}) {
             ...requestOptions
         });
         
-        const data = await response.json();
+        const data = await readApiResponse(response);
         if (!response.ok) {
             throw new Error(data.detail || `HTTP error! status: ${response.status}`);
         }
@@ -60,8 +76,11 @@ async function resolveBackgroundResponse(response, data, onUpdate) {
         try {
             poll = await fetch(data.status_url, {credentials: 'include', signal: controller.signal});
             if (poll.status === 401 || poll.status === 403) throw new Error('Your admin session expired while checking this job.');
-            const job = await poll.json();
+            const job = await readApiResponse(poll);
             if (!poll.ok) throw new Error(job.detail || `Job status request failed (${poll.status}).`);
+            if (!['queued', 'running', 'interrupted', 'succeeded', 'failed', 'delivery_unknown'].includes(job.status)) {
+                throw new Error(`Invalid job status response (HTTP ${poll.status}).`);
+            }
             if (typeof job.worker_available === 'boolean') updateWorkerNotice(job.worker_available);
             if (job.status === 'interrupted') {
                 onUpdate?.({...job, message: 'Waiting for the worker to recover this job...'});
@@ -70,30 +89,30 @@ async function resolveBackgroundResponse(response, data, onUpdate) {
             }
             onUpdate?.(job);
             if (['succeeded', 'failed', 'delivery_unknown'].includes(job.status)) {
-        const resultStatus = job.result && job.result.status;
-        const articleOutcomes = job.result && job.result.article_outcomes;
-        const articleFailure = Array.isArray(articleOutcomes) && articleOutcomes.some(
-            item => item && item.state !== 'completed'
-        );
-        const nonSuccess = ['warning', 'deferred', 'rejected', 'exhausted', 'incomplete'];
-        let message;
-        if (job.status === 'delivery_unknown') {
-            message = 'The delivery outcome is unknown; the message was not resent.';
-        } else if (job.status === 'interrupted') {
-            message = 'The job was interrupted and is waiting for worker recovery.';
-        } else if (resultStatus === 'deferred') {
-            message = 'The work was deferred and will be retried later.';
-        } else if (resultStatus === 'dry_run') {
-            message = 'The dry run completed without changing articles.';
-        } else if (resultStatus === 'rejected' || resultStatus === 'exhausted' || articleFailure) {
-            message = 'The job finished with article-level outcomes; see the returned details.';
-        } else if (resultStatus === 'warning' || resultStatus === 'incomplete') {
-            message = 'The job finished with warnings or incomplete work.';
-        }
-        return {
+                const resultStatus = job.result && job.result.status;
+                const articleOutcomes = job.result && job.result.article_outcomes;
+                const articleFailure = Array.isArray(articleOutcomes) && articleOutcomes.some(
+                    item => item && item.state !== 'completed'
+                );
+                const nonSuccess = ['warning', 'deferred', 'rejected', 'exhausted', 'incomplete'];
+                let message;
+                if (job.status === 'delivery_unknown') {
+                    message = 'The delivery outcome is unknown; the message was not resent.';
+                } else if (job.status === 'interrupted') {
+                    message = 'The job was interrupted and is waiting for worker recovery.';
+                } else if (resultStatus === 'deferred') {
+                    message = 'The work was deferred and will be retried later.';
+                } else if (resultStatus === 'dry_run') {
+                    message = 'The dry run completed without changing articles.';
+                } else if (resultStatus === 'rejected' || resultStatus === 'exhausted' || articleFailure) {
+                    message = 'The job finished with article-level outcomes; see the returned details.';
+                } else if (resultStatus === 'warning' || resultStatus === 'incomplete') {
+                    message = 'The job finished with warnings or incomplete work.';
+                }
+                return {
                     ...job,
-            success: job.status === 'succeeded' && !nonSuccess.includes(resultStatus) && !articleFailure,
-            message,
+                    success: job.status === 'succeeded' && !nonSuccess.includes(resultStatus) && !articleFailure,
+                    message,
                 };
             }
         } catch (error) {
@@ -108,11 +127,13 @@ async function resolveBackgroundResponse(response, data, onUpdate) {
 }
 
 window.resolveBackgroundResponse = resolveBackgroundResponse;
+window.readApiResponse = readApiResponse;
 window.addEventListener('pagehide', () => { window.__eveningNewsLeaving = true; });
 
 // Global NewsAggregator object
 window.NewsAggregator = {
     apiRequest: apiRequest,
+    readApiResponse: readApiResponse,
     resolveBackgroundResponse: resolveBackgroundResponse,
     showNotification: null, // Will be set after initialization
     showLoading: null,

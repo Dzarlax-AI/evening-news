@@ -248,7 +248,7 @@ async function tgLoadSettings() {
     try {
         const r = await fetch('/api/v1/telegram/settings');
         if (!r.ok) throw new Error(await r.text());
-        const d = await r.json();
+        const d = await window.readApiResponse(r);
         tgRenderStatus(d);
         tgPrefillForm(d);
     } catch (e) {
@@ -291,7 +291,7 @@ async function tgSaveSettings() {
                 service_chat_id: document.getElementById('tg-service-chat-id').value.trim()
             })
         });
-        const d = await r.json();
+        const d = await window.readApiResponse(r);
         if (!r.ok) throw new Error(d.detail || 'Ошибка');
         tgShowResult('tg-save-result', true, d.message || 'Сохранено');
         await tgLoadSettings();
@@ -308,7 +308,7 @@ async function tgResetToEnv() {
 async function tgTestConnection() {
     try {
         const r = await fetch('/api/v1/telegram/test', {method:'POST'});
-        const d = await r.json();
+        const d = await window.readApiResponse(r);
         tgShowResult('tg-action-result', d.success, d.message || (d.success ? 'Дайджест отправлен.' : `Задание завершилось: ${d.status || 'ошибка'}`));
     } catch (e) { tgShowResult('tg-action-result', false, e.message); }
 }
@@ -316,7 +316,7 @@ async function tgTestConnection() {
 async function tgSendDigest() {
     try {
         const r = await fetch('/api/v1/telegram/send-digest', {method:'POST'});
-        const data = await r.json();
+        const data = await window.readApiResponse(r);
         if (!r.ok) throw new Error(data.detail || `HTTP ${r.status}`);
         const d = await window.resolveBackgroundResponse(r, data, job => {
             tgShowResult('tg-action-result', true, job.status === 'queued' ? 'Дайджест принят в очередь.' : job.status === 'interrupted' ? 'Дайджест ожидает восстановления обработчиком...' : 'Дайджест отправляется...');
@@ -351,8 +351,8 @@ async function schLoadAll() {
             fetch('/api/v1/schedule/settings'),
             fetch('/api/v1/schedule/status')
         ]);
-        schSettings = await settingsR.json();
-        const status = await statusR.json();
+        schSettings = await window.readApiResponse(settingsR);
+        const status = await window.readApiResponse(statusR);
         schRenderStatus(status);
         schRender();
     } catch (e) {
@@ -444,7 +444,7 @@ async function schSave(name) {
         const r = await fetch('/api/v1/schedule/settings/' + name, {
             method:'PUT', headers:{'Content-Type':'application/json'}, body:JSON.stringify(body)
         });
-        if (!r.ok) throw new Error((await r.json()).detail || 'Ошибка');
+        if (!r.ok) throw new Error((await window.readApiResponse(r)).detail || 'Ошибка');
         await schLoadAll();
     } catch (e) { alert('Ошибка: ' + e.message); }
 }
@@ -454,7 +454,7 @@ async function schToggle(name, enabled) {
         const r = await fetch('/api/v1/schedule/settings/' + name, {
             method:'PUT', headers:{'Content-Type':'application/json'}, body:JSON.stringify({enabled})
         });
-        if (!r.ok) throw new Error((await r.json()).detail || 'Ошибка');
+        if (!r.ok) throw new Error((await window.readApiResponse(r)).detail || 'Ошибка');
     } catch (e) { alert('Ошибка: ' + e.message); await schLoadAll(); }
 }
 
@@ -462,7 +462,7 @@ async function schDelete(name) {
     if (!confirm(`Удалить расписание "${name}"?`)) return;
     try {
         const r = await fetch('/api/v1/schedule/settings/' + name, {method:'DELETE'});
-        if (!r.ok) throw new Error((await r.json()).detail || 'Ошибка');
+        if (!r.ok) throw new Error((await window.readApiResponse(r)).detail || 'Ошибка');
         await schLoadAll();
     } catch (e) { alert('Ошибка: ' + e.message); }
 }
@@ -497,7 +497,7 @@ async function schCreateSchedule() {
         const r = await fetch('/api/v1/schedule/settings', {
             method:'POST', headers:{'Content-Type':'application/json'}, body:JSON.stringify(body)
         });
-        if (!r.ok) throw new Error((await r.json()).detail || 'Ошибка');
+        if (!r.ok) throw new Error((await window.readApiResponse(r)).detail || 'Ошибка');
         schCloseCreateModal();
         await schLoadAll();
     } catch (e) { alert('Ошибка: ' + e.message); }

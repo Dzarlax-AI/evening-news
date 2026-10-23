@@ -768,7 +768,7 @@ async function apiRequest(url, options = {}) {
             },
             ...requestOptions
         });
-        const data = await response.json();
+        const data = await window.readApiResponse(response);
         if (!response.ok) {
             throw new Error(data.detail || `HTTP error! status: ${response.status}`);
         }

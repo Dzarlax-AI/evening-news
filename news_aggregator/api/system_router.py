@@ -88,10 +88,10 @@ async def get_process_monitor_status():
 @router.post("/process-monitor/cleanup")
 async def cleanup_processes():
     """Manually trigger process cleanup."""
+    from ..config import settings
+    if settings.background_execution_mode == "worker":
+        raise HTTPException(status_code=409, detail="Process cleanup is owned by the background worker")
     try:
-        from ..config import settings
-        if settings.background_execution_mode == "worker":
-            raise HTTPException(status_code=409, detail="Process cleanup is owned by the background worker")
         from ..services.process_monitor import ProcessMonitor
         
         monitor = ProcessMonitor()

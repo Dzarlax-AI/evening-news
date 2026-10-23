@@ -57,6 +57,23 @@ class BackgroundJobsMigration(BaseMigration):
                               'ck_background_worker_singleton', 'ck_background_worker_status')
         """))
         status_row = await db.scalar(text("SELECT EXISTS (SELECT 1 FROM background_worker_status WHERE id = 1)"))
+        error_check = await db.scalar(text("""
+            SELECT pg_get_constraintdef(oid) FROM pg_constraint
+            WHERE connamespace = current_schema()::regnamespace
+              AND conname = 'ck_background_jobs_error_code'
+        """))
+        legacy_error_check = await db.scalar(text("""
+            SELECT EXISTS (SELECT 1 FROM pg_constraint
+                           WHERE connamespace = current_schema()::regnamespace
+                             AND conname = 'background_jobs_error_code_check')
+        """))
+        utc_defaults = await db.execute(text("""
+            SELECT table_name, column_default FROM information_schema.columns
+            WHERE table_schema = current_schema()
+              AND ((table_name = 'background_jobs' AND column_name = 'created_at')
+                OR (table_name = 'background_job_idempotency_keys' AND column_name = 'created_at'))
+        """))
+        utc_default_rows = utc_defaults.all()
         return (set(columns.scalars().all()) != {
                     "queue_position", "attempt_generation", "initialized_at"}
                 or set(indexes.scalars().all()) != {
@@ -68,6 +85,10 @@ class BackgroundJobsMigration(BaseMigration):
                     "ck_background_jobs_error_code",
                     "ck_background_jobs_payload_object", "ck_background_jobs_result_object",
                     "ck_background_worker_singleton", "ck_background_worker_status"}
+                or not error_check or "worker_recovery_exhausted" not in error_check
+                or legacy_error_check
+                or len(utc_default_rows) != 2
+                or any("UTC" not in (column_default or "") for _, column_default in utc_default_rows)
                 or not status_row)
 
     async def execute(self, db):
@@ -84,7 +105,7 @@ class BackgroundJobsMigration(BaseMigration):
                     coalesce_key VARCHAR(64),
                     state VARCHAR(24) NOT NULL DEFAULT 'queued' CHECK (state IN (
                         'queued', 'running', 'succeeded', 'failed', 'interrupted', 'delivery_unknown')),
-                    created_at TIMESTAMP NOT NULL DEFAULT CURRENT_TIMESTAMP,
+                    created_at TIMESTAMP NOT NULL DEFAULT (CURRENT_TIMESTAMP AT TIME ZONE 'UTC'),
                     started_at TIMESTAMP,
                     finished_at TIMESTAMP,
                     owner_generation INTEGER,
@@ -92,7 +113,8 @@ class BackgroundJobsMigration(BaseMigration):
                     result JSONB,
                     error_code VARCHAR(40),
                     CHECK (error_code IS NULL OR error_code IN (
-                        'worker_error', 'worker_interrupted', 'external_outcome_unknown',
+                        'worker_error', 'worker_interrupted', 'worker_recovery_exhausted',
+                        'external_outcome_unknown',
                         'invalid_job', 'resource_limit', 'database_unavailable')),
                     CHECK (jsonb_typeof(payload) = 'object'),
                     CHECK (result IS NULL OR jsonb_typeof(result) = 'object')
@@ -141,20 +163,35 @@ class BackgroundJobsMigration(BaseMigration):
                 CREATE TABLE IF NOT EXISTS background_job_idempotency_keys (
                     key VARCHAR(200) PRIMARY KEY,
                     job_id UUID NOT NULL REFERENCES background_jobs(id) ON DELETE CASCADE,
-                    created_at TIMESTAMP NOT NULL DEFAULT CURRENT_TIMESTAMP
+                    created_at TIMESTAMP NOT NULL DEFAULT (CURRENT_TIMESTAMP AT TIME ZONE 'UTC')
                 )
             """))
             await db.execute(text("""
                 CREATE INDEX IF NOT EXISTS idx_background_job_keys_job
                 ON background_job_idempotency_keys (job_id)
             """))
+            await db.execute(text("""
+                ALTER TABLE background_jobs
+                ALTER COLUMN created_at SET DEFAULT (CURRENT_TIMESTAMP AT TIME ZONE 'UTC')
+            """))
+            await db.execute(text("""
+                ALTER TABLE background_job_idempotency_keys
+                ALTER COLUMN created_at SET DEFAULT (CURRENT_TIMESTAMP AT TIME ZONE 'UTC')
+            """))
             # create_all may have created the ORM tables before this migration.
             # Add the same named constraints in that case, using catalog checks
             # so execution remains safe on every startup.
+            await db.execute(text(
+                "ALTER TABLE background_jobs DROP CONSTRAINT IF EXISTS ck_background_jobs_error_code"
+            ))
+            # Replace the older unnamed CHECK emitted by CREATE TABLE with a named constraint.
+            await db.execute(text(
+                "ALTER TABLE background_jobs DROP CONSTRAINT IF EXISTS background_jobs_error_code_check"
+            ))
             for table, name, expression in (
                 ("background_jobs", "ck_background_jobs_kind", "kind IN ('news_processing', 'news_digest', 'telegram_digest', 'backup', 'reprocess_failed', 'article_reprocess', 'summaries_generate', 'source_test')"),
                 ("background_jobs", "ck_background_jobs_state", "state IN ('queued', 'running', 'succeeded', 'failed', 'interrupted', 'delivery_unknown')"),
-                ("background_jobs", "ck_background_jobs_error_code", "error_code IS NULL OR error_code IN ('worker_error', 'worker_interrupted', 'external_outcome_unknown', 'invalid_job', 'resource_limit', 'database_unavailable')"),
+                ("background_jobs", "ck_background_jobs_error_code", "error_code IS NULL OR error_code IN ('worker_error', 'worker_interrupted', 'worker_recovery_exhausted', 'external_outcome_unknown', 'invalid_job', 'resource_limit', 'database_unavailable')"),
                 ("background_jobs", "ck_background_jobs_payload_object", "jsonb_typeof(payload) = 'object'"),
                 ("background_jobs", "ck_background_jobs_result_object", "result IS NULL OR jsonb_typeof(result) = 'object'"),
                 ("background_worker_status", "ck_background_worker_singleton", "id = 1"),

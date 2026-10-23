@@ -105,6 +105,53 @@ async def test_worker_mode_keeps_explicit_telegram_connection_diagnostic(monkeyp
 
 
 @pytest.mark.asyncio
+async def test_public_reprocess_wrapper_delegates_types_and_accepted_response(monkeypatch):
+    from fastapi import Request
+    from fastapi.responses import JSONResponse
+    from news_aggregator.config import settings
+
+    monkeypatch.setattr(settings, "admin_password", "fixture-admin-password")
+    public = importlib.import_module("news_aggregator.public")
+    monkeypatch.setattr(public, "_has_public_admin_access", lambda request: True)
+    db = object()
+    calls = {}
+
+    async def fake_reprocess(article_id, payload, *, db, http_request):
+        calls.update(article_id=article_id, payload=payload, db=db, request=http_request)
+        return JSONResponse(status_code=202, content={
+            "success": True, "status": "queued", "job_id": "fixture-job",
+            "status_url": "/api/v1/jobs/fixture-job",
+        })
+
+    monkeypatch.setattr(public, "reprocess_article", fake_reprocess)
+    request = Request({
+        "type": "http", "http_version": "1.1", "method": "POST",
+        "scheme": "http", "path": "/api/public/article/17/reprocess",
+        "raw_path": b"/api/public/article/17/reprocess", "query_string": b"",
+        "headers": [], "server": ("testserver", 80), "client": ("testclient", 1234),
+    })
+    payload = public.ReprocessRequest(force=True, reextract_media=True)
+    response = await public.reprocess_public_article(17, payload, request, db)
+
+    assert calls == {"article_id": 17, "payload": payload, "db": db, "request": request}
+    assert isinstance(calls["request"], Request)
+    assert response.status_code == 202
+    assert b'"status":"queued"' in response.body
+
+
+@pytest.mark.asyncio
+async def test_worker_mode_process_cleanup_returns_conflict_before_monitor_creation(monkeypatch):
+    from news_aggregator.config import settings
+
+    monkeypatch.setattr(settings, "background_execution_mode", "worker")
+    monkeypatch.setattr(settings, "admin_password", "fixture-admin-password")
+    system = importlib.import_module("news_aggregator.api.system_router")
+    with pytest.raises(HTTPException) as caught:
+        await system.cleanup_processes()
+    assert caught.value.status_code == 409
+
+
+@pytest.mark.asyncio
 async def test_generated_idempotency_key_uses_alphanumeric_prefix(monkeypatch):
     import importlib
     from news_aggregator.config import settings

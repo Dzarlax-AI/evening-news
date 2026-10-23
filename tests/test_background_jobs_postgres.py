@@ -1,6 +1,7 @@
 """PostgreSQL concurrency and fencing checks for the durable job queue."""
 
 import asyncio
+import hashlib
 import math
 import os
 import uuid
@@ -13,7 +14,9 @@ from sqlalchemy.ext.asyncio import AsyncSession, create_async_engine
 from sqlalchemy.orm import sessionmaker
 
 from news_aggregator.migrations.background_jobs import BackgroundJobsMigration
-from news_aggregator.models import BackgroundJob, BackgroundWorkerStatus, ScheduleSettings
+from news_aggregator.models import (
+    BackgroundJob, BackgroundJobIdempotencyKey, BackgroundWorkerStatus, ScheduleSettings,
+)
 from news_aggregator.services.background_jobs import (
     BackgroundWorkerLease,
     IdempotencyConflict,
@@ -52,6 +55,8 @@ async def pg_jobs():
             await migration.execute(session)
             assert not await migration.check_needed(session)
             await migration.execute(session)
+        async with engine.begin() as conn:
+            await conn.run_sync(lambda sync: ScheduleSettings.__table__.create(sync, checkfirst=True))
         yield engine, factory
     finally:
         await engine.dispose()
@@ -143,15 +148,17 @@ async def test_identical_manual_active_work_coalesces_but_payloads_do_not(pg_job
     async with factory() as session:
         same = await enqueue_job_in_session(session, "article_reprocess", {"article_ids": [10]}, "manual:b")
         different = await enqueue_job_in_session(session, "article_reprocess", {"article_ids": [11]}, "manual:c")
-        first.state = "interrupted"
+        first_db = await session.get(BackgroundJob, first.id)
+        first_db.state = "interrupted"
         interrupted_same = await enqueue_job_in_session(
             session, "article_reprocess", {"article_ids": [10]}, "manual:d")
         await session.commit()
-        assert same.id == first.id
+        assert same.id == first_db.id
         assert interrupted_same.id == first.id
         assert different.id != first.id
     async with factory() as session:
-        first.state = "succeeded"
+        first_db = await session.get(BackgroundJob, first.id)
+        first_db.state = "succeeded"
         await session.commit()
     async with factory() as session:
         replayed_alias = await enqueue_job_in_session(
@@ -188,7 +195,7 @@ async def test_singleton_lease_claim_recovery_and_stale_generation_fence(pg_jobs
     async with factory() as session:
         recovered = await second.recover_jobs(session)
         await session.commit()
-        assert recovered == {"interrupted": 1, "delivery_unknown": 0}
+        assert recovered == {"interrupted": 1, "delivery_unknown": 0, "recovery_exhausted": 0}
         proc = await session.get(BackgroundJob, processing.id)
         assert proc.state == "interrupted"
         with pytest.raises(StaleWorker):
@@ -220,7 +227,7 @@ async def test_crashed_telegram_job_becomes_delivery_unknown_and_is_not_replayed
     first.connection = first.owner_id = first.generation = None
     assert await second.acquire()
     async with factory() as session:
-        assert await second.recover_jobs(session) == {"interrupted": 0, "delivery_unknown": 1}
+        assert await second.recover_jobs(session) == {"interrupted": 0, "delivery_unknown": 1, "recovery_exhausted": 0}
         await session.commit()
     async with factory() as session:
         unknown = await session.get(BackgroundJob, job.id)
@@ -231,10 +238,25 @@ async def test_crashed_telegram_job_becomes_delivery_unknown_and_is_not_replayed
 
 
 @pytest.mark.asyncio
+async def test_job_and_alias_server_timestamps_are_utc_with_local_session_timezone(pg_jobs):
+    _, factory = pg_jobs
+    before = datetime.utcnow()
+    async with factory() as session:
+        await session.execute(text("SET TIME ZONE 'Europe/Belgrade'"))
+        job = await enqueue_job_in_session(session, "news_processing", {}, "utc:created")
+        await session.commit()
+        created = await session.get(BackgroundJob, job.id)
+        alias = await session.get(
+            BackgroundJobIdempotencyKey,
+            hashlib.sha256(b"utc:created").hexdigest(),
+        )
+        assert abs((created.created_at - before).total_seconds()) < 5
+        assert abs((alias.created_at - before).total_seconds()) < 5
+
+
+@pytest.mark.asyncio
 async def test_recovering_scheduled_digest_clears_running_schedule_atomically(pg_jobs):
     engine, factory = pg_jobs
-    async with engine.begin() as connection:
-        await connection.run_sync(lambda sync: ScheduleSettings.__table__.create(sync))
     first, second = BackgroundWorkerLease(engine), BackgroundWorkerLease(engine)
     assert await first.acquire()
     async with factory() as session:
@@ -260,7 +282,7 @@ async def test_recovering_scheduled_digest_clears_running_schedule_atomically(pg
     assert await second.acquire()
 
     async with factory() as session:
-        assert await second.recover_jobs(session) == {"interrupted": 0, "delivery_unknown": 1}
+        assert await second.recover_jobs(session) == {"interrupted": 0, "delivery_unknown": 1, "recovery_exhausted": 0}
         await session.commit()
     async with factory() as session:
         recovered_schedule = await session.get(ScheduleSettings, schedule.id)
@@ -278,8 +300,6 @@ async def test_recovered_scheduled_processing_finishes_schedule_successfully(pg_
     from news_aggregator.services.background_execution import DurableBackgroundWorker
 
     engine, factory = pg_jobs
-    async with engine.begin() as connection:
-        await connection.run_sync(lambda sync: ScheduleSettings.__table__.create(sync))
     first, second = BackgroundWorkerLease(engine), BackgroundWorkerLease(engine)
     assert await first.acquire()
     async with factory() as session:
@@ -304,7 +324,7 @@ async def test_recovered_scheduled_processing_finishes_schedule_successfully(pg_
     first.connection = first.owner_id = first.generation = None
     assert await second.acquire()
     async with factory() as session:
-        assert await second.recover_jobs(session) == {"interrupted": 1, "delivery_unknown": 0}
+        assert await second.recover_jobs(session) == {"interrupted": 1, "delivery_unknown": 0, "recovery_exhausted": 0}
         await session.commit()
     async with factory() as session:
         recovering_schedule = await session.get(ScheduleSettings, schedule.id)

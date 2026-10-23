@@ -18,21 +18,6 @@ from pathlib import Path
 ROOT = Path(__file__).resolve().parents[1]
 FIXTURE_DIR = ROOT / "tests" / "fixtures" / "background-worker"
 OWNER_LABEL = "io.evening-news.background-worker-gate"
-RUNTIME_SOURCE_FILES = (
-    "news_aggregator/worker.py",
-    "news_aggregator/config.py",
-    "news_aggregator/models.py",
-    "news_aggregator/database.py",
-    "news_aggregator/main.py",
-    "news_aggregator/migrations/background_jobs.py",
-    "news_aggregator/orchestrator.py",
-    "news_aggregator/services/background_execution.py",
-    "news_aggregator/services/background_jobs.py",
-    "news_aggregator/services/job_fence.py",
-    "news_aggregator/api/background_jobs_router.py",
-)
-
-
 class GateFailure(RuntimeError):
     pass
 
@@ -73,19 +58,61 @@ class DockerGate:
 
     def source_hashes(self, container: str | None = None) -> dict[str, str]:
         if container is None:
+            source_paths = sorted(
+                path.relative_to(ROOT).as_posix()
+                for package in ("news_aggregator", "web")
+                for path in (ROOT / package).rglob("*")
+                if path.is_file()
+                and "__pycache__" not in path.parts
+                and (package == "web" or path.suffix == ".py")
+            )
             return {
                 path: hashlib.sha256((ROOT / path).read_bytes()).hexdigest()
-                for path in RUNTIME_SOURCE_FILES
+                for path in source_paths
             }
         script = (
-            "import hashlib,json; paths=" + repr(list(RUNTIME_SOURCE_FILES)) +
-            "; print(json.dumps({p:hashlib.sha256(open('/app/'+p,'rb').read()).hexdigest() for p in paths}))"
+            "import hashlib,json; from pathlib import Path; root=Path('/app'); "
+            "paths=sorted(str(p.relative_to(root)) for folder in ('news_aggregator','web') "
+            "for p in (root/folder).rglob('*') if p.is_file() and '__pycache__' not in p.parts "
+            "and (folder == 'web' or p.suffix == '.py')); "
+            "print(json.dumps({p:hashlib.sha256((root/p).read_bytes()).hexdigest() for p in paths}))"
         )
         output = self.docker("exec", container, "python", "-c", script).stdout.strip()
         try:
             return json.loads(output.splitlines()[-1])
         except (ValueError, IndexError):
             raise GateFailure("Could not read runtime source hashes from app image") from None
+
+    def safe_app_trace(self, container: str) -> dict:
+        log_result = self.docker("logs", "--tail", "400", container, check=False)
+        logs = (log_result.stdout or "") + "\n" + (log_result.stderr or "")
+        frames = []
+        exceptions = []
+        safe_details = []
+        frame_pattern = re.compile(r'File "(/app/news_aggregator/[^\"]+)", line (\d+)')
+        exception_pattern = re.compile(r"^\s*([A-Za-z_][A-Za-z0-9_.]*(?:Error|Exception))(?::|$)")
+        missing_attribute_pattern = re.compile(
+            r"^\s*AttributeError: (?:(?:module|type) '([^']+)'|\s*'([^']+)' object) has no attribute '([A-Za-z_][A-Za-z0-9_]*)'\s*$"
+        )
+        for line in logs.splitlines():
+            frame = frame_pattern.search(line)
+            if frame:
+                frames.append({"file": frame.group(1).removeprefix("/app/"), "line": int(frame.group(2))})
+            exc = exception_pattern.match(line)
+            if exc:
+                exceptions.append(exc.group(1).split(".")[-1])
+            missing_attribute = missing_attribute_pattern.match(line)
+            if missing_attribute:
+                safe_details.append({
+                    "kind": "missing_attribute",
+                    "target_type": missing_attribute.group(1) or missing_attribute.group(2),
+                    "attribute": missing_attribute.group(3),
+                })
+        return {
+            "exception_types": exceptions[-5:],
+            "application_frames": frames[-12:],
+            "safe_details": safe_details[-3:],
+        }
 
     def create_network(self) -> None:
         self.docker("network", "create", "--internal", "--label", f"{OWNER_LABEL}={self.owner}",
@@ -259,7 +286,8 @@ class DockerGate:
             current = self.job(job_id)
             if current.get("status") in states:
                 return current
-            if current.get("status") in {"succeeded", "failed", "interrupted", "delivery_unknown"}:
+            terminal_states = {"succeeded", "failed", "delivery_unknown"}
+            if current.get("status") in terminal_states:
                 diagnostics = self.record_job_diagnostics(job_id, current)
                 raise GateFailure(
                     f"Job reached terminal state outside expected states: {current.get('status')}; "
@@ -282,7 +310,7 @@ class DockerGate:
                 return counters
             if job_id:
                 current = self.job(job_id)
-                if current.get("status") in {"succeeded", "failed", "interrupted", "delivery_unknown"}:
+                if current.get("status") in {"succeeded", "failed", "delivery_unknown"}:
                     diagnostics = self.record_job_diagnostics(job_id, current)
                     raise GateFailure(
                         f"Job reached terminal state before fake {name} counter advanced: "
@@ -365,9 +393,13 @@ class DockerGate:
                            mounts=False, memory="256m")
         self.run_container(f"{self.prefix}-fake", command=["python", "/fixtures/fake_services.py"],
                            alias="fixture-services", memory="128m", disable_healthcheck=True)
-        self.docker("exec", f"{self.prefix}-postgres", "sh", "-lc",
-                    "until pg_isready -U gate_user -d gate_db >/dev/null 2>&1; do sleep 1; done", timeout=90)
-        self.docker("exec", f"{self.prefix}-postgres", "createdb", "-U", "gate_user", "empty_gate_db")
+        self.docker("exec", "--env", "PGPASSWORD=fixture-only-password",
+                    f"{self.prefix}-postgres", "sh", "-lc",
+                    "until pg_isready -h 127.0.0.1 -U gate_user -d gate_db >/dev/null 2>&1; do sleep 1; done",
+                    timeout=90)
+        self.docker("exec", "--env", "PGPASSWORD=fixture-only-password",
+                    f"{self.prefix}-postgres", "createdb", "-h", "127.0.0.1",
+                    "-U", "gate_user", "empty_gate_db")
 
         # The worker must refuse to start when the additive queue schema is absent.
         schema_check_name = f"{self.prefix}-schema-check-worker"
@@ -386,6 +418,26 @@ class DockerGate:
                                                            "--host", "0.0.0.0", "--port", "8000"],
                            alias="web", env=self.app_environment("web"), memory="512m")
         self.wait_http_probe("health")
+        openapi = self.exec_json(f"{self.prefix}-web", "openapi-check")
+        self.report["checks"]["public_reprocess_contract_in_openapi"] = (
+            openapi.get("http_status") == 200
+            and openapi.get("response", {}).get("auth_login") is True
+            and openapi.get("response", {}).get("public_reprocess") is True
+            and openapi.get("response", {}).get("api_reprocess") is True
+        )
+        if not self.report["checks"]["public_reprocess_contract_in_openapi"]:
+            raise GateFailure("Live OpenAPI schema did not expose the expected public/login routes")
+        login_probe = self.exec_json(f"{self.prefix}-web", "auth-login-check")
+        login_response = login_probe.get("response", {})
+        self.report["admin_login_diagnostic"] = {
+            "http_status": login_response.get("http_status"),
+            "response_fields": login_response.get("response_fields", []),
+            "token_returned": login_response.get("token_returned") is True,
+        }
+        if login_response.get("http_status") != 200:
+            self.report["admin_login_diagnostic"]["safe_exception"] = self.safe_app_trace(
+                f"{self.prefix}-web"
+            )
         workspace_hashes = self.source_hashes()
         image_hashes = self.source_hashes(f"{self.prefix}-web")
         self.report["runtime_source_hashes"] = {
@@ -505,10 +557,43 @@ class DockerGate:
 
         # Reprocess the actual stored article, block AI, kill worker, and prove takeover resumes the job.
         self.fake_control(ai="block")
+        public_unauthorized = self.exec_json(
+            f"{self.prefix}-web", "public-reprocess-unauthorized", str(article_id)
+        )
+        self.report["checks"]["public_reprocess_requires_admin_cookie"] = (
+            public_unauthorized.get("http_status") == 401
+        )
+        if not self.report["checks"]["public_reprocess_requires_admin_cookie"]:
+            raise GateFailure("Public article reprocess accepted a request without the admin cookie")
         reprocess = self.exec_json(f"{self.prefix}-web", "reprocess", str(article_id), "gate-reprocess-request")
         if reprocess.get("http_status") != 202:
-            raise GateFailure("Article reprocess did not return HTTP 202")
+            response_body = reprocess.get("response", {})
+            detail = response_body.get("detail") if isinstance(response_body, dict) else None
+            if isinstance(detail, str):
+                detail = detail[:240]
+            else:
+                detail = None
+            self.report["public_reprocess_rejection"] = {
+                "http_status": reprocess.get("http_status"),
+                "detail": detail,
+                "response_fields": sorted(response_body) if isinstance(response_body, dict) else [],
+            }
+            self.report["public_reprocess_exception"] = self.safe_app_trace(f"{self.prefix}-web")
+            raise GateFailure(
+                f"Public article reprocess did not return HTTP 202 "
+                f"(status={reprocess.get('http_status')}, detail={detail!r}, "
+                f"exception_types={self.report['public_reprocess_exception']['exception_types']})"
+            )
         reprocess_id = reprocess["response"]["job_id"]
+        admin_flow = reprocess["response"].get("fixture_admin_flow", {})
+        self.report["checks"]["public_reprocess_real_admin_cookie_flow"] = (
+            admin_flow.get("admin_page_http_status") == 200
+            and admin_flow.get("admin_cookie_received") is True
+            and admin_flow.get("public_admin_check_http_status") == 404
+            and admin_flow.get("public_admin_check_authorized") is True
+        )
+        if not self.report["checks"]["public_reprocess_real_admin_cookie_flow"]:
+            raise GateFailure("Public reprocess did not use the real admin page cookie flow")
         before_kill = self.wait_counter("gemini", counters["gemini"] + 1, job_id=reprocess_id)
         if self.job(reprocess_id).get("status") != "running":
             raise GateFailure("Article reprocess was not running while its synthetic AI call was blocked")
@@ -526,7 +611,7 @@ class DockerGate:
         # Start a new owner. It must recover the running attempt and continue the same durable job.
         self.docker("start", worker_name)
         self.report["explicit_restarts"]["worker"] += 1
-        self.wait_job(reprocess_id, {"running"})
+        self.wait_job(reprocess_id, {"running"}, timeout=60)
         deadline = time.monotonic() + 60
         recovered_attempt = False
         while time.monotonic() < deadline:

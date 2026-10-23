@@ -8,20 +8,20 @@ from datetime import datetime, timedelta
 from unittest.mock import AsyncMock
 
 import pytest
-from sqlalchemy import select, text, update
+from sqlalchemy import func, select, text, update
 from sqlalchemy.ext.asyncio import AsyncSession
 from sqlalchemy.orm import sessionmaker
 from sqlalchemy.engine import make_url
 
 from news_aggregator.database import FencedAsyncSession
-from news_aggregator.models import BackgroundJob
+from news_aggregator.models import Article, BackgroundJob, Source
 from news_aggregator.services.background_execution import (
     DurableBackgroundWorker, JobExecutionFence, _bounded_result, job_execution,
     worker_healthcheck,
 )
 from news_aggregator.services.background_jobs import (
-    BackgroundWorkerLease, BackgroundWorkerStatus, StaleWorker,
-    claim_next_job, enqueue_job_in_session,
+    BackgroundWorkerLease, BackgroundWorkerStatus, MAX_PENDING_JOBS, StaleWorker,
+    claim_next_job, enqueue_job_in_session, read_worker_status,
 )
 from news_aggregator.services.background_jobs import _safe_result
 from news_aggregator.models import ScheduleSettings
@@ -45,6 +45,8 @@ async def pg_worker_jobs():
             await connection.execute(text(f'CREATE SCHEMA "{schema}"'))
         async with factory() as session:
             await BackgroundJobsMigration().execute(session)
+        async with engine.begin() as connection:
+            await connection.run_sync(lambda sync: ScheduleSettings.__table__.create(sync, checkfirst=True))
         yield engine, factory, admin, schema
     finally:
         await engine.dispose()
@@ -301,7 +303,7 @@ async def test_selected_article_initialization_is_not_repeated_after_reclaim(pg_
     first.connection = first.owner_id = first.generation = None
     assert await second.acquire()
     async with factory() as session:
-        assert await second.recover_jobs(session) == {"interrupted": 1, "delivery_unknown": 0}
+        assert await second.recover_jobs(session) == {"interrupted": 1, "delivery_unknown": 0, "recovery_exhausted": 0}
         await session.commit()
     async with factory() as session:
         resumed = await claim_next_job(session, second)
@@ -320,8 +322,6 @@ async def test_selected_article_initialization_is_not_repeated_after_reclaim(pg_
 @pytest.mark.asyncio
 async def test_graceful_interruption_keeps_schedule_occurrence_for_resume(pg_worker_jobs):
     engine, factory, _, _ = pg_worker_jobs
-    async with engine.begin() as connection:
-        await connection.run_sync(lambda sync: ScheduleSettings.__table__.create(sync))
     lease = BackgroundWorkerLease(engine)
     assert await lease.acquire()
     async with factory() as session:
@@ -384,10 +384,243 @@ async def test_graceful_interruption_keeps_schedule_occurrence_for_resume(pg_wor
 
 
 @pytest.mark.asyncio
-async def test_worker_due_schedule_enqueue_is_unique_and_finishes_atomically(pg_worker_jobs):
+async def test_recovery_reconciles_orphan_schedules_and_preserves_live_or_edited_rows(pg_worker_jobs):
+    engine, factory, _, _ = pg_worker_jobs
+    lease = BackgroundWorkerLease(engine)
+    assert await lease.acquire()
+    now = datetime.utcnow()
+    old = now - timedelta(hours=2)
+    due = now - timedelta(minutes=5)
+    async with factory() as session:
+        processing_orphan = ScheduleSettings(
+            task_name="orphan_processing", enabled=True, is_running=False,
+            next_run=due, last_run=None,
+            last_status="running",
+        )
+        no_next_run_orphan = ScheduleSettings(
+            task_name="orphan_without_next_run", enabled=True, is_running=True,
+            next_run=None, last_run=old, updated_at=old - timedelta(minutes=1),
+            last_status="running",
+        )
+        digest_orphan = ScheduleSettings(
+            task_name="news_digest", enabled=True, schedule_type="interval",
+            task_config={"interval_minutes": 45}, timezone="Europe/Belgrade",
+            is_running=True, next_run=due, last_run=old,
+            updated_at=old - timedelta(minutes=1), last_status="running",
+        )
+        queued_schedule = ScheduleSettings(
+            task_name="queued_processing", enabled=True, is_running=True,
+            next_run=due, last_run=old, updated_at=old - timedelta(minutes=1),
+            last_status="running",
+        )
+        interrupted_schedule = ScheduleSettings(
+            task_name="interrupted_processing", enabled=True, is_running=True,
+            next_run=due, last_run=old, updated_at=old - timedelta(minutes=1),
+            last_status="running",
+        )
+        running_schedule = ScheduleSettings(
+            task_name="running_backup", enabled=True, is_running=True,
+            next_run=due, last_run=old, updated_at=old - timedelta(minutes=1),
+            last_status="running",
+        )
+        edited_schedule = ScheduleSettings(
+            task_name="edited_backup", enabled=True, is_running=True,
+            next_run=now + timedelta(hours=2), task_config={"admin": "preserve"},
+            updated_at=now, last_status="admin_edit",
+        )
+        session.add_all([
+            processing_orphan, no_next_run_orphan, digest_orphan, queued_schedule,
+            interrupted_schedule, running_schedule, edited_schedule,
+        ])
+        await session.flush()
+        # Reproduce the legacy scheduler UPDATE: updated_at is newer than last_run.
+        await session.execute(update(ScheduleSettings).where(
+            ScheduleSettings.id == processing_orphan.id
+        ).values(is_running=True, last_run=old))
+        await session.flush()
+        await session.refresh(processing_orphan)
+        assert processing_orphan.updated_at > processing_orphan.last_run
+
+        async def scheduled_job(setting, kind, key):
+            return await enqueue_job_in_session(session, kind, {
+                "schedule_id": setting.id, "scheduled_for": due.isoformat(),
+            }, key, coalesce_active=False)
+
+        queued_job = await scheduled_job(queued_schedule, "news_processing", "recover:queued")
+        interrupted_job = await scheduled_job(interrupted_schedule, "news_processing", "recover:interrupted")
+        running_job = await scheduled_job(running_schedule, "backup", "recover:running")
+        interrupted_job.state = "interrupted"
+        running_job.state = "running"
+        running_job.owner_generation = lease.generation
+        running_job.attempt_generation = 1
+        await session.commit()
+
+    async with factory() as session:
+        result = await lease.recover_jobs(session)
+        await session.commit()
+    assert result == {"interrupted": 2, "delivery_unknown": 0, "recovery_exhausted": 0}
+
+    async with factory() as session:
+        processing_saved = await session.get(ScheduleSettings, processing_orphan.id)
+        no_next_run_saved = await session.get(ScheduleSettings, no_next_run_orphan.id)
+        digest_saved = await session.get(ScheduleSettings, digest_orphan.id)
+        queued_saved = await session.get(ScheduleSettings, queued_schedule.id)
+        interrupted_saved = await session.get(ScheduleSettings, interrupted_schedule.id)
+        running_saved = await session.get(ScheduleSettings, running_schedule.id)
+        edited_saved = await session.get(ScheduleSettings, edited_schedule.id)
+        jobs = {
+            job.id: job for job in (
+                await session.execute(select(BackgroundJob))
+            ).scalars().all()
+        }
+
+        assert processing_saved.is_running is False
+        assert processing_saved.last_status == "interrupted"
+        assert processing_saved.next_run == due
+        assert no_next_run_saved.is_running is False
+        assert no_next_run_saved.next_run > datetime.utcnow()
+        assert digest_saved.is_running is False
+        assert digest_saved.last_status == "delivery_unknown"
+        assert digest_saved.last_error == "External delivery outcome is unknown after service restart"
+        assert digest_saved.next_run > datetime.utcnow()
+        for saved in (queued_saved, interrupted_saved, running_saved):
+            assert saved.is_running is True
+        assert jobs[queued_job.id].state == "queued"
+        assert jobs[interrupted_job.id].state == "interrupted"
+        assert jobs[running_job.id].state == "interrupted"
+        assert edited_saved.is_running is False
+        assert edited_saved.enabled is True
+        assert edited_saved.task_config == {"admin": "preserve"}
+        assert edited_saved.next_run > datetime.utcnow()
+    await lease.release()
+
+
+@pytest.mark.asyncio
+async def test_old_digest_recovery_does_not_overwrite_newer_schedule_occurrence(pg_worker_jobs):
+    engine, factory, _, _ = pg_worker_jobs
+    lease = BackgroundWorkerLease(engine)
+    assert await lease.acquire()
+    now = datetime.utcnow()
+    schedule_edited_at = now - timedelta(minutes=2)
+    async with factory() as session:
+        schedule = ScheduleSettings(
+            task_name="news_digest", enabled=True, schedule_type="interval",
+            task_config={"interval_minutes": 60}, is_running=True,
+            last_run=schedule_edited_at, next_run=now + timedelta(hours=3),
+            last_status="running", last_error=None, updated_at=schedule_edited_at,
+        )
+        session.add(schedule)
+        await session.flush()
+        old_job = await enqueue_job_in_session(
+            session, "news_digest", {
+                "schedule_id": schedule.id,
+                "scheduled_for": (now - timedelta(hours=2)).isoformat(),
+            }, "recover:old-digest",
+            coalesce_active=False,
+        )
+        new_job = await enqueue_job_in_session(
+            session, "news_digest", {
+                "schedule_id": schedule.id,
+                "scheduled_for": (now - timedelta(minutes=1)).isoformat(),
+            }, "recover:new-digest",
+            coalesce_active=False,
+        )
+        old_job.state = "running"
+        old_job.created_at = now - timedelta(minutes=5)
+        old_job.started_at = now - timedelta(seconds=1)
+        old_job.attempt_generation = 1
+        old_job.owner_generation = lease.generation
+        new_job.created_at = now - timedelta(minutes=1)
+        await session.commit()
+
+    async with factory() as session:
+        recovered = await lease.recover_jobs(session)
+        await session.commit()
+    assert recovered == {"interrupted": 0, "delivery_unknown": 1, "recovery_exhausted": 0}
+
+    async with factory() as session:
+        saved_schedule = await session.get(ScheduleSettings, schedule.id)
+        saved_old = await session.get(BackgroundJob, old_job.id)
+        saved_new = await session.get(BackgroundJob, new_job.id)
+        assert saved_old.state == "delivery_unknown"
+        assert saved_new.state == "queued"
+        assert saved_schedule.is_running is True
+        assert saved_schedule.enabled is True
+        assert saved_schedule.task_config == {"interval_minutes": 60}
+        assert saved_schedule.next_run == now + timedelta(hours=3)
+        assert saved_schedule.last_status == "running"
+        assert saved_schedule.last_run == schedule_edited_at
+    await lease.release()
+
+
+@pytest.mark.asyncio
+async def test_recovery_attempt_limit_fails_poison_job_and_claims_next_without_resetting_article(pg_worker_jobs, monkeypatch):
     engine, factory, _, _ = pg_worker_jobs
     async with engine.begin() as connection:
-        await connection.run_sync(lambda sync: ScheduleSettings.__table__.create(sync))
+        await connection.run_sync(lambda sync: Source.__table__.create(sync, checkfirst=True))
+        await connection.run_sync(lambda sync: Article.__table__.create(sync, checkfirst=True))
+    from news_aggregator.config import settings
+    monkeypatch.setattr(settings, "worker_max_job_attempts", 2)
+
+    lease = BackgroundWorkerLease(engine)
+    assert await lease.acquire()
+    now = datetime.utcnow()
+    async with factory() as session:
+        source = Source(id=7, name="Fixture", source_type="rss", url="https://fixture.invalid/feed")
+        article = Article(
+            id=7, source_id=7, title="Fixture article", url="https://fixture.invalid/article",
+            processing_state="retry_wait", processing_attempts=4,
+            summary_processed=True, category_processed=True, ad_processed=True,
+        )
+        schedule = ScheduleSettings(
+            task_name="article_reprocess", enabled=True, is_running=True,
+            next_run=now + timedelta(hours=1), last_status="running",
+        )
+        session.add_all([source, article, schedule])
+        await session.flush()
+        poison = await enqueue_job_in_session(session, "news_processing", {
+            "schedule_id": schedule.id,
+            "scheduled_for": now.isoformat(),
+        }, "recovery:poison", coalesce_active=False)
+        next_job = await enqueue_job_in_session(
+            session, "news_processing", {}, "recovery:next", coalesce_active=False
+        )
+        poison.state = "running"
+        poison.attempt_generation = 2
+        poison.owner_generation = 1
+        poison.started_at = now + timedelta(seconds=1)
+        await session.commit()
+
+    async with factory() as session:
+        recovered = await lease.recover_jobs(session)
+        await session.commit()
+    assert recovered == {"interrupted": 0, "delivery_unknown": 0, "recovery_exhausted": 1}
+
+    async with factory() as session:
+        failed = await session.get(BackgroundJob, poison.id)
+        saved_schedule = await session.get(ScheduleSettings, schedule.id)
+        saved_article = await session.get(Article, 7)
+        assert failed.state == "failed"
+        assert failed.error_code == "worker_recovery_exhausted"
+        assert failed.result == {"status": "incomplete"}
+        assert saved_schedule.is_running is False
+        assert saved_schedule.last_status == "failed"
+        assert saved_schedule.last_error == "Worker restart limit reached"
+        assert saved_schedule.next_run > datetime.utcnow()
+        assert saved_article.processing_state == "retry_wait"
+        assert saved_article.processing_attempts == 4
+        assert saved_article.summary_processed is True
+        assert saved_article.category_processed is True
+        assert saved_article.ad_processed is True
+        claimed = await claim_next_job(session, lease)
+        await session.commit()
+        assert claimed.id == next_job.id
+    await lease.release()
+
+
+@pytest.mark.asyncio
+async def test_worker_due_schedule_enqueue_is_unique_and_finishes_atomically(pg_worker_jobs):
+    engine, factory, _, _ = pg_worker_jobs
     lease = BackgroundWorkerLease(engine)
     assert await lease.acquire()
     due = datetime.utcnow() - timedelta(minutes=3)
@@ -398,6 +631,8 @@ async def test_worker_due_schedule_enqueue_is_unique_and_finishes_atomically(pg_
             next_run=due, last_status="success",
         )
         session.add(schedule)
+        await session.flush()
+        original_updated_at = schedule.updated_at
         await session.commit()
 
     worker = DurableBackgroundWorker(db_engine=engine, session_factory=factory)
@@ -416,6 +651,7 @@ async def test_worker_due_schedule_enqueue_is_unique_and_finishes_atomically(pg_
         assert saved_schedule.last_run is not None
         assert saved_schedule.next_run > datetime.utcnow()
         assert saved_schedule.task_config == {"interval_minutes": 60}
+        assert saved_schedule.updated_at == original_updated_at
         claimed = await claim_next_job(session, lease)
         await session.commit()
         assert claimed.id == jobs[0].id
@@ -438,6 +674,102 @@ async def test_worker_due_schedule_enqueue_is_unique_and_finishes_atomically(pg_
         assert saved_schedule.last_success_at is not None
         assert saved_schedule.last_finished_at is not None
         assert saved_schedule.next_run > saved_schedule.last_finished_at
+    await lease.release()
+
+
+@pytest.mark.asyncio
+async def test_invalid_due_schedule_does_not_block_later_valid_schedule(pg_worker_jobs):
+    engine, factory, _, _ = pg_worker_jobs
+    lease = BackgroundWorkerLease(engine)
+    assert await lease.acquire()
+    now = datetime.utcnow()
+    bad_due = now - timedelta(minutes=5)
+    valid_due = now - timedelta(minutes=4)
+    async with factory() as session:
+        bad = ScheduleSettings(
+            task_name="telegram_digest", enabled=True, schedule_type="interval",
+            task_config={"interval_minutes": "not-an-integer"},
+            next_run=bad_due, last_status="success",
+        )
+        valid = ScheduleSettings(
+            task_name="backup", enabled=True, schedule_type="interval",
+            task_config={"interval_minutes": 60}, next_run=valid_due,
+            last_status="success",
+        )
+        session.add_all([bad, valid])
+        await session.commit()
+
+    worker = DurableBackgroundWorker(db_engine=engine, session_factory=factory)
+    worker.lease = lease
+    await worker._enqueue_due_schedules()
+    async with factory() as session:
+        bad_saved = await session.get(ScheduleSettings, bad.id)
+        valid_saved = await session.get(ScheduleSettings, valid.id)
+        jobs = (await session.execute(select(BackgroundJob))).scalars().all()
+        assert bad_saved.is_running is False
+        assert bad_saved.last_status == "failed"
+        assert bad_saved.last_error == "Invalid scheduled task configuration"
+        assert bad_saved.next_run is None
+        assert valid_saved.is_running is True
+        assert valid_saved.next_run > datetime.utcnow()
+        assert len(jobs) == 1
+        assert jobs[0].kind == "backup"
+        assert jobs[0].payload["schedule_id"] == valid.id
+    await lease.release()
+
+
+@pytest.mark.asyncio
+async def test_queue_full_commits_prior_schedule_and_leaves_remaining_due(pg_worker_jobs):
+    engine, factory, _, _ = pg_worker_jobs
+    lease = BackgroundWorkerLease(engine)
+    assert await lease.acquire()
+    now = datetime.utcnow()
+    first_due = now - timedelta(minutes=5)
+    second_due = now - timedelta(minutes=4)
+    async with factory() as session:
+        for index in range(MAX_PENDING_JOBS - 1):
+            await enqueue_job_in_session(
+                session, "news_processing", {}, f"queue-full-seed:{index}",
+                coalesce_active=False,
+            )
+        first = ScheduleSettings(
+            task_name="backup", enabled=True, schedule_type="interval",
+            task_config={"interval_minutes": 60}, next_run=first_due,
+        )
+        second = ScheduleSettings(
+            task_name="telegram_digest", enabled=True, schedule_type="interval",
+            task_config={"interval_minutes": 60}, next_run=second_due,
+        )
+        session.add_all([first, second])
+        await session.commit()
+
+    worker = DurableBackgroundWorker(db_engine=engine, session_factory=factory)
+    worker.lease = lease
+    await worker._enqueue_due_schedules()
+    async with factory() as session:
+        first_saved = await session.get(ScheduleSettings, first.id)
+        second_saved = await session.get(ScheduleSettings, second.id)
+        count = await session.scalar(select(func.count()).select_from(BackgroundJob))
+        assert count == MAX_PENDING_JOBS
+        assert first_saved.is_running is True
+        assert second_saved.is_running is False
+        assert second_saved.next_run == second_due
+    await lease.release()
+
+
+@pytest.mark.asyncio
+async def test_local_database_timezone_keeps_worker_heartbeat_utc(pg_worker_jobs):
+    engine, factory, _, _ = pg_worker_jobs
+    lease = BackgroundWorkerLease(engine)
+    assert await lease.acquire()
+    await lease.connection.execute(text("SET TIME ZONE 'Europe/Belgrade'"))
+    await lease.connection.commit()
+    await lease.heartbeat()
+    async with factory() as session:
+        status = await session.get(BackgroundWorkerStatus, 1)
+        assert status.heartbeat_at is not None
+        assert abs((datetime.utcnow() - status.heartbeat_at).total_seconds()) < 5
+        assert (await read_worker_status(session))["healthy"] is True
     await lease.release()
 
 

@@ -11,7 +11,7 @@ import math
 import re
 import uuid
 from contextlib import asynccontextmanager
-from datetime import datetime, timezone
+from datetime import datetime, timedelta, timezone
 from typing import Any, Dict, Optional
 
 from sqlalchemy import func, select, text, update
@@ -35,7 +35,7 @@ ALLOWED_KINDS = frozenset({
     "reprocess_failed", "article_reprocess", "summaries_generate", "source_test",
 })
 ERROR_CODES = frozenset({
-    "worker_error", "worker_interrupted", "external_outcome_unknown",
+    "worker_error", "worker_interrupted", "worker_recovery_exhausted", "external_outcome_unknown",
     "invalid_job", "resource_limit", "database_unavailable",
 })
 IDEMPOTENCY_KEY_RE = re.compile(r"^[A-Za-z0-9][A-Za-z0-9._:+-]{0,199}$")
@@ -337,7 +337,7 @@ class BackgroundWorkerLease:
                 generation = await conn.scalar(text("""
                     UPDATE background_worker_status
                     SET generation = generation + 1, owner_id = :owner,
-                        heartbeat_at = CURRENT_TIMESTAMP, status = 'running'
+                        heartbeat_at = CURRENT_TIMESTAMP AT TIME ZONE 'UTC', status = 'running'
                     WHERE id = 1
                     RETURNING generation
                 """), {"owner": owner_id})
@@ -358,7 +358,7 @@ class BackgroundWorkerLease:
             async with self.connection.begin():
                 result = await self.connection.execute(text("""
                     UPDATE background_worker_status
-                    SET heartbeat_at = CURRENT_TIMESTAMP
+                    SET heartbeat_at = CURRENT_TIMESTAMP AT TIME ZONE 'UTC'
                     WHERE id = 1 AND owner_id = :owner AND generation = :generation
                           AND status = 'running'
                 """), {"owner": self.owner_id, "generation": self.generation})
@@ -387,46 +387,129 @@ class BackgroundWorkerLease:
             await _close_connection_releasing_lock(conn)
 
     async def recover_jobs(self, session: AsyncSession) -> Dict[str, int]:
-        """Fence and retain abandoned work; ambiguous external sends stay terminal."""
+        """Recover abandoned jobs and orphaned scheduler ownership under the lease."""
+        from ..config import settings
+
         await self.assert_generation(session, lock_row=True)
         rows = (await session.execute(select(BackgroundJob).where(
-            BackgroundJob.state == "running").with_for_update())).scalars().all()
-        counts = {"interrupted": 0, "delivery_unknown": 0}
+            BackgroundJob.state.in_(("running", "interrupted"))
+        ).with_for_update())).scalars().all()
+        counts = {"interrupted": 0, "delivery_unknown": 0, "recovery_exhausted": 0}
+        now = _utcnow_naive()
         for job in rows:
-            recovered_state = "interrupted"
             if job.kind in {"news_digest", "telegram_digest"}:
                 job.state = "delivery_unknown"
                 job.error_code = "external_outcome_unknown"
+                job.result = {"status": "warning"}
                 counts["delivery_unknown"] += 1
-                recovered_state = "delivery_unknown"
+                schedule_state = "delivery_unknown"
+                schedule_error = "External delivery outcome is unknown"
+            elif job.attempt_generation >= settings.worker_max_job_attempts:
+                job.state = "failed"
+                job.error_code = "worker_recovery_exhausted"
+                job.result = {"status": "incomplete"}
+                counts["recovery_exhausted"] += 1
+                schedule_state = "failed"
+                schedule_error = "Worker restart limit reached"
             else:
                 job.state = "interrupted"
                 job.error_code = "worker_interrupted"
+                job.result = None
                 counts["interrupted"] += 1
-            job.finished_at = func.now()
+                schedule_state = "interrupted"
+                schedule_error = "Worker stopped before the scheduled job finished"
+            job.finished_at = now
+            job.owner_generation = None
             schedule_id = (job.payload or {}).get("schedule_id")
-            if schedule_id and recovered_state == "delivery_unknown":
+            if schedule_id and schedule_state in {"delivery_unknown", "failed"}:
                 schedule = await session.get(
                     ScheduleSettings, schedule_id, with_for_update=True
                 )
-                # Do not let recovery from an old job overwrite a schedule the
-                # administrator edited after that job was accepted.
+                # A setting edited after this attempt began belongs to the
+                # administrator and must not be overwritten by stale recovery.
                 if schedule and schedule.is_running and not (
                     job.created_at and schedule.updated_at
                     and schedule.updated_at > job.created_at
                 ):
                     schedule.is_running = False
-                    schedule.last_finished_at = _utcnow_naive()
-                    schedule.last_status = recovered_state
-                    schedule.last_error = (
-                        "External delivery outcome is unknown"
-                        if recovered_state == "delivery_unknown"
-                        else "Worker stopped before the scheduled job finished"
-                    )
+                    schedule.last_finished_at = now
+                    schedule.last_status = schedule_state
+                    schedule.last_error = schedule_error
                     if not schedule.enabled:
                         schedule.next_run = None
+                    elif schedule_state == "failed":
+                        schedule.next_run = now + timedelta(minutes=10)
+                    elif schedule_state == "delivery_unknown" and (
+                        schedule.next_run is None or schedule.next_run <= now
+                    ):
+                        config = schedule.task_config if isinstance(schedule.task_config, dict) else {}
+                        schedule.next_run = self._next_schedule_occurrence(schedule, config, now)
+
+        # Older embedded scheduler runs can leave is_running set without a
+        # durable job row. Reconcile those only after preserving all live,
+        # queued, and resumable scheduled work above.
+        await session.flush()
+        active_jobs = (await session.execute(select(BackgroundJob.id, BackgroundJob.payload).where(
+            BackgroundJob.state.in_(("queued", "running", "interrupted"))
+        ))).all()
+        active_schedule_ids = {
+            payload.get("schedule_id")
+            for _, payload in active_jobs
+            if isinstance(payload, dict) and isinstance(payload.get("schedule_id"), int)
+        }
+        schedules = (await session.execute(select(ScheduleSettings).where(
+            ScheduleSettings.is_running.is_(True)
+        ).with_for_update())).scalars().all()
+        now = _utcnow_naive()
+        for schedule in schedules:
+            if schedule.id in active_schedule_ids:
+                continue
+
+            config = schedule.task_config if isinstance(schedule.task_config, dict) else {}
+            delivery_may_have_started = schedule.task_name == "telegram_digest" or (
+                schedule.task_name == "news_digest"
+                and config.get("send_telegram", True) is not False
+            )
+            schedule.is_running = False
+            schedule.last_finished_at = now
+            if delivery_may_have_started:
+                schedule.last_status = "delivery_unknown"
+                schedule.last_error = "External delivery outcome is unknown after service restart"
+                if schedule.enabled:
+                    if schedule.next_run is None or schedule.next_run <= now:
+                        schedule.next_run = self._next_schedule_occurrence(schedule, config, now)
+                else:
+                    schedule.next_run = None
+            else:
+                # Match the existing embedded scheduler's startup behavior:
+                # clear the abandoned running flag and preserve its next due time.
+                schedule.last_status = "interrupted"
+                schedule.last_error = "Service restarted while task was marked running"
+                if not schedule.enabled:
+                    schedule.next_run = None
+                elif schedule.next_run is None:
+                    schedule.next_run = self._next_schedule_occurrence(schedule, config, now)
         await session.flush()
         return counts
+
+    @staticmethod
+    def _next_schedule_occurrence(schedule, config, now):
+        """Compute a future occurrence without replaying an ambiguous digest."""
+        from .scheduler import calculate_next_run
+
+        interval = config.get("interval_minutes", 30)
+        if isinstance(interval, bool) or not isinstance(interval, int):
+            interval = 30
+        interval = max(1, min(interval, 24 * 60))
+        next_run = calculate_next_run(
+            schedule_type=schedule.schedule_type,
+            hour=schedule.hour,
+            minute=schedule.minute,
+            weekdays=schedule.weekdays or [],
+            timezone=schedule.timezone,
+            interval_minutes=interval,
+        )
+        return next_run if next_run and next_run > now else now + timedelta(minutes=30)
 
     async def assert_generation(self, session: AsyncSession, *, lock_row: bool = False) -> None:
         if not self.owned:

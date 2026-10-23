@@ -40,13 +40,23 @@ const context = vm.createContext({window, document, AbortController, console: {l
     const response = responses.shift();
     assert.ok(response, 'unexpected extra request');
     return {status: response.http || 200, ok: (response.http || 200) < 400,
-      json: async () => response.body};
+      json: async () => response.body,
+      text: async () => Object.hasOwn(response, 'raw') ? response.raw : JSON.stringify(response.body)};
   }});
 vm.runInContext(input.source, context);
 async function main() {
   if (input.scenario.modal) {
     vm.runInContext('window.refreshArticle = async function()' + input.modal, context);
     await window.refreshArticle();
+  } else if (input.scenario.api) {
+    try {
+      const result = await window.NewsAggregator.apiRequest('/fixture');
+      if (input.scenario.error) assert.fail('Expected an HTTP response error');
+      if (input.scenario.empty) assert.equal(Object.keys(result).length, 0);
+    } catch (error) {
+      if (!input.scenario.error) throw error;
+      assert.match(error.message, new RegExp(input.scenario.error));
+    }
   } else {
     try {
       const result = await window.resolveBackgroundResponse({status:202},
@@ -55,7 +65,8 @@ async function main() {
       assert.equal(result.status, input.scenario.status);
     } catch (error) {
       if (!input.scenario.error) throw error;
-      assert.match(error.message, /session expired/);
+      assert.match(error.message, typeof input.scenario.error === 'string'
+        ? new RegExp(input.scenario.error) : /session expired/);
     }
   }
   await Promise.resolve();
@@ -97,6 +108,25 @@ def test_poller_stops_on_authentication_failure():
 def test_unknown_delivery_is_not_success():
     run_ui({"responses": [{"body": {"status": "delivery_unknown"}}],
             "success": False, "status": "delivery_unknown"})
+
+
+def test_proxy_html_error_preserves_http_status():
+    run_ui({"api": True, "responses": [{"http": 502, "raw": "<html>Proxy unavailable</html>"}],
+            "error": "HTTP 502"})
+
+
+def test_empty_no_content_response_does_not_raise_json_error():
+    run_ui({"api": True, "responses": [{"http": 204, "raw": ""}], "empty": True})
+
+
+@pytest.mark.parametrize("response", [
+    {"http": 200, "raw": "<html>Login required</html>"},
+    {"http": 200, "body": {}},
+    {"http": 204, "raw": ""},
+])
+def test_invalid_job_status_response_stops_polling(response):
+    result = run_ui({"responses": [response], "error": "response|status"})
+    assert result["calls"] == 1
 
 
 @pytest.mark.parametrize("status,success,state,reason,label", [

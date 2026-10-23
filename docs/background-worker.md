@@ -30,6 +30,12 @@ manual jobs to run. `WORKER_POLL_INTERVAL_SECONDS` defaults to 1,
 `WORKER_SHUTDOWN_DRAIN_SECONDS` to 20, and `WORKER_JOB_RETENTION_DAYS` to 7.
 The worker refuses to start unless worker mode is explicitly selected.
 
+`WORKER_MAX_JOB_ATTEMPTS` defaults to 3 (allowed range 1–10). After repeated
+interrupted execution reaches this limit, recovery marks that job `failed` with
+`worker_recovery_exhausted` so later queued work can proceed. The job remains
+inspectable; articles and saved stages are retained. This job recovery limit is
+separate from article retry counters and does not change browser-busy refunds.
+
 The web process applies the application's additive migrations at startup. The
 worker requires a compatible schema; it does not apply migrations itself. The
 new migration creates the durable jobs, idempotency keys, and worker ownership
@@ -129,6 +135,12 @@ Loss of ownership stops claims and cancels active work. A second worker cannot
 start another scheduler or execute the same pipeline in parallel. Web restarts
 do not cancel accepted work.
 
+Startup also clears orphaned running flags left by the embedded scheduler while
+preserving configuration, enabled state, future run times, and active durable
+occurrences. Ambiguous orphaned digests are marked `delivery_unknown` and are
+advanced to a future occurrence. One invalid due schedule is isolated and marked
+failed without rolling back other valid schedules; a full queue remains retryable.
+
 Digest jobs can have an uncertain external outcome after a crash. Such jobs
 become `delivery_unknown` and are not resent automatically. An explicit user
 action is required to retry delivery. This boundary does not promise exactly-once
@@ -163,22 +175,25 @@ and worker schedulers against the same database concurrently.
 
 ## Validation status
 
-The local regression suite passed with 1,191 tests and 10 skips, including real
+The local regression suite passed with 1,206 tests and 10 skips, including real
 PostgreSQL ownership, migration, stale-attempt fencing, recovery, subprocess
 cleanup, and JavaScript behavior checks. Independent code review found no
 remaining actionable findings after the fixes. The Docker acceptance gate passed
-all 20 checks on macOS ARM64 using PostgreSQL 16 and separate web/worker
+all 23 checks on macOS ARM64 using PostgreSQL 16 and separate web/worker
 containers. It exercised source collection, extraction, and Gemini through HTTP
 fixtures, a web restart during processing, singleton ownership, worker recovery,
 and ambiguous Telegram delivery without automatic replay. Recovery explicitly
 advanced only the synthetic article's retry deadline while its worker was stopped;
 attempts and saved stages remained unchanged.
 
-The tested image matched all 34 changed runtime/UI files in the checkout. Web
-and Python worker together used about 175–182 MiB in this short fixture run,
+The tested image matched all 132 application/UI files in the checkout. Web
+and Python worker together used about 177–184 MiB after startup in this short fixture run
+(startup snapshot: 231 MiB),
 excluding PostgreSQL and fake service containers. This is not production sizing,
 a real Go/browser benchmark, or a throughput claim. Fixture resources were removed.
-Final PR/CI validation remains required; production rollout is outside this change.
+External Codex/CodeRabbit findings were addressed and independently re-reviewed.
+Final head checks are tracked in [PR #18](https://github.com/Dzarlax-AI/evening-news/pull/18);
+production rollout is outside this change.
 
 To repeat the acceptance gate without publishing an image:
 
@@ -192,3 +207,9 @@ python scripts/run_background_worker_fixture_gate.py \
 The harness creates uniquely labeled resources on an internal-only Docker network,
 mounts only read-only test fixtures, uses dummy credentials, and removes only its
 own containers and network. It never accepts a production endpoint.
+
+The gate uses the real `/admin/` Basic-auth page to obtain the JWT cookie and
+checks the public article-reprocess endpoint with it. A separate diagnostic
+found a pre-existing HTTP 500 in the auxiliary `/auth/login` endpoint (its
+dependency returns a string, while the handler reads `.username`). That endpoint
+is unchanged by this PR; the tested administrator cookie path succeeds.

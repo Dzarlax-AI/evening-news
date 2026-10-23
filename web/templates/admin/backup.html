@@ -302,7 +302,7 @@ async function createBackup() {
             headers: { 'Content-Type': 'application/json' },
             body: JSON.stringify({ description: 'Manual backup from web interface' })
         });
-        const data = await response.json();
+        const data = await window.readApiResponse(response);
         if (!response.ok) {
             showOpStatus('error', data.detail || data.message || 'Ошибка');
             return;
@@ -325,7 +325,7 @@ async function createBackup() {
 async function loadBackups() {
     try {
         const response = await fetch('/api/v1/backups');
-        const data = await response.json();
+        const data = await window.readApiResponse(response);
         currentBackups = data.backups || [];
         displayBackups(currentBackups);
     } catch (error) {
@@ -391,7 +391,7 @@ async function performRestore() {
             headers: { 'Content-Type': 'application/json' },
             body: JSON.stringify({ backup_file: restoreBackupFile })
         });
-        const result = await response.json();
+        const result = await window.readApiResponse(response);
         if (response.ok) {
             showOpStatus('success', 'Восстановление запущено. Перезагрузка через 10с...');
             setTimeout(() => window.location.reload(), 10000);
@@ -406,7 +406,7 @@ async function performRestore() {
 async function loadScheduleSettings() {
     try {
         const response = await fetch('/api/v1/backup/schedule');
-        const s = await response.json();
+        const s = await window.readApiResponse(response);
         document.getElementById('schedule-enabled').checked = s.enabled || false;
         document.getElementById('schedule-time').value = s.schedule_time || '03:00';
         document.getElementById('keep-days').value = s.keep_days || 30;
@@ -426,7 +426,7 @@ async function saveSchedule() {
                 keep_days: parseInt(document.getElementById('keep-days').value)
             })
         });
-        const result = await response.json();
+        const result = await window.readApiResponse(response);
         if (response.ok) {
             showOpStatus('success', 'Настройки сохранены');
             setTimeout(hideOpStatus, 3000);
@@ -518,7 +518,7 @@ async function restoreFromUploadedBackup(filename) {
             headers: { 'Content-Type': 'application/json' },
             body: JSON.stringify({ filename })
         });
-        const result = await response.json();
+        const result = await window.readApiResponse(response);
         if (result.success) {
             showOpStatus('success', `Восстановление из ${filename} запущено`);
         } else {

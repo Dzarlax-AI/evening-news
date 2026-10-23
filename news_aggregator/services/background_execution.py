@@ -14,7 +14,7 @@ from ..database import AsyncSessionLocal, engine
 from ..models import BackgroundJob, ScheduleSettings
 from .background_jobs import (
     BackgroundJobError, BackgroundWorkerLease, HEARTBEAT_INTERVAL_SECONDS,
-    QueueFull, StaleWorker, claim_next_job, enqueue_job_in_session,
+    IdempotencyConflict, QueueFull, StaleWorker, claim_next_job, enqueue_job_in_session,
     finish_job, read_worker_status,
 )
 from .job_fence import JobExecutionFence, current_job_fence
@@ -527,40 +527,59 @@ class DurableBackgroundWorker:
             for setting in rows:
                 due = setting.next_run
                 kind = setting.task_name
-                if kind not in {"news_processing", "news_digest", "telegram_digest", "backup", "reprocess_failed"}:
+                try:
+                    async with session.begin_nested():
+                        if kind not in {"news_processing", "news_digest", "telegram_digest", "backup", "reprocess_failed"}:
+                            raise ValueError("unknown scheduled task type")
+                        config = setting.task_config if isinstance(setting.task_config, dict) else {}
+                        payload = {"schedule_id": setting.id, "scheduled_for": due.isoformat()}
+                        if kind == "news_digest":
+                            payload.update(run_processing=bool(config.get("run_processing", True)),
+                                           send_telegram=bool(config.get("send_telegram", True)))
+                        if kind == "reprocess_failed":
+                            payload.update(limit=config.get("limit", 20), dry_run=bool(config.get("dry_run", False)))
+                        key = f"schedule:{setting.id}:{due.isoformat()}"
+                        job = await enqueue_job_in_session(session, kind, payload, key, coalesce_active=False)
+                        interval = 30
+                        if setting.schedule_type == "interval":
+                            interval = config.get("interval_minutes", 30)
+                            if (isinstance(interval, bool) or not isinstance(interval, int)
+                                    or not 1 <= interval <= 24 * 60):
+                                raise ValueError("invalid schedule interval")
+                        next_run = calculate_next_run(
+                            schedule_type=setting.schedule_type, hour=setting.hour,
+                            minute=setting.minute, weekdays=setting.weekdays or [],
+                            timezone=setting.timezone, interval_minutes=interval,
+                        )
+                        if next_run is None:
+                            raise ValueError("invalid schedule configuration")
+                        if job.state in {"succeeded", "failed", "delivery_unknown"}:
+                            setting.next_run = next_run
+                            continue
+                        await session.execute(update(ScheduleSettings).where(
+                            ScheduleSettings.id == setting.id,
+                            ScheduleSettings.enabled.is_(True),
+                            ScheduleSettings.is_running.is_(False),
+                        ).values(
+                            is_running=True,
+                            last_run=now,
+                            next_run=next_run,
+                            updated_at=ScheduleSettings.updated_at,
+                        ).execution_options(synchronize_session=False))
+                        await session.refresh(setting)
+                except QueueFull:
+                    logger.info("Background queue is full; remaining schedules stay due")
+                    break
+                except (ValueError, IdempotencyConflict) as exc:
+                    setting.is_running = False
                     setting.last_status = "failed"
-                    setting.last_error = "Unknown scheduled task type"
+                    setting.last_error = (
+                        "Scheduled occurrence conflicts with an existing job"
+                        if isinstance(exc, IdempotencyConflict)
+                        else "Invalid scheduled task configuration"
+                    )
                     setting.last_finished_at = now
                     setting.next_run = None
-                    continue
-                config = setting.task_config if isinstance(setting.task_config, dict) else {}
-                payload = {"schedule_id": setting.id, "scheduled_for": due.isoformat()}
-                if kind == "news_digest":
-                    payload.update(run_processing=bool(config.get("run_processing", True)),
-                                   send_telegram=bool(config.get("send_telegram", True)))
-                if kind == "reprocess_failed":
-                    payload.update(limit=config.get("limit", 20), dry_run=bool(config.get("dry_run", False)))
-                key = f"schedule:{setting.id}:{due.isoformat()}"
-                job = await enqueue_job_in_session(session, kind, payload, key, coalesce_active=False)
-                interval = int(config.get("interval_minutes", 30)) if setting.schedule_type == "interval" else 30
-                next_run = calculate_next_run(
-                    schedule_type=setting.schedule_type, hour=setting.hour,
-                    minute=setting.minute, weekdays=setting.weekdays or [],
-                    timezone=setting.timezone, interval_minutes=interval,
-                )
-                if job.state in {"succeeded", "failed", "delivery_unknown"}:
-                    setting.next_run = next_run
-                    continue
-                await session.execute(update(ScheduleSettings).where(
-                    ScheduleSettings.id == setting.id,
-                    ScheduleSettings.enabled.is_(True),
-                    ScheduleSettings.is_running.is_(False),
-                ).values(
-                    is_running=True,
-                    last_run=now,
-                    next_run=next_run,
-                    updated_at=ScheduleSettings.updated_at,
-                ).execution_options(synchronize_session=False))
             await session.commit()
 
     async def _finish_schedule_in_session(self, session, job, state, result):
