@@ -32,7 +32,6 @@ func TestPostgresPersistenceAndFencing(t *testing.T) {
 	if err != nil {
 		t.Fatal("could not connect to isolated scheduler test database")
 	}
-	defer admin.Close()
 
 	var random [8]byte
 	if _, err := rand.Read(random[:]); err != nil {
@@ -309,6 +308,7 @@ func TestPostgresAvailabilityUsesDatabaseClock(t *testing.T) {
 		t.Fatal("could not connect to isolated scheduler test database")
 	}
 	defer admin.Close()
+	defer admin.Close()
 
 	var random [8]byte
 	if _, err := rand.Read(random[:]); err != nil {
@@ -418,3 +418,95 @@ func postgresNow(t *testing.T, ctx context.Context, db *Store) time.Time {
 }
 
 func intPtr(value int) *int { return &value }
+
+func TestPostgresImportedDailyDueConsumesScheduledLocalDate(t *testing.T) {
+	dsn := strings.TrimSpace(os.Getenv("SCHEDULER_TEST_DATABASE_URL"))
+	if dsn == "" {
+		t.Skip("SCHEDULER_TEST_DATABASE_URL is not set")
+	}
+	parsed, err := url.Parse(dsn)
+	if err != nil || (parsed.Hostname() != "localhost" && parsed.Hostname() != "127.0.0.1") {
+		t.Fatal("scheduler integration tests require a localhost PostgreSQL test URL")
+	}
+	admin, err := pgxpool.New(context.Background(), dsn)
+	if err != nil {
+		t.Fatal("could not connect to isolated scheduler test database")
+	}
+
+	var random [8]byte
+	if _, err := rand.Read(random[:]); err != nil {
+		t.Fatal("could not create isolated schema name")
+	}
+	schema := "scheduler_daily_dst_" + hex.EncodeToString(random[:])
+	if _, err := admin.Exec(context.Background(), `CREATE SCHEMA `+pgx.Identifier{schema}.Sanitize()); err != nil {
+		t.Fatal("could not create isolated scheduler test schema")
+	}
+	t.Cleanup(func() {
+		if _, err := admin.Exec(context.Background(), `DROP SCHEMA `+pgx.Identifier{schema}.Sanitize()+` CASCADE`); err != nil {
+			t.Error("could not clean up isolated scheduler test schema")
+		}
+		admin.Close()
+	})
+
+	ctx, cancel := context.WithTimeout(context.Background(), 20*time.Second)
+	defer cancel()
+	db, err := Open(ctx, dsn, schema, 4, true)
+	if err != nil {
+		t.Fatal("could not open scheduler store")
+	}
+	defer db.Close()
+	control, err := db.GetControl(ctx)
+	if err != nil {
+		t.Fatal("could not read scheduler control")
+	}
+	targets := map[string]model.Target{"worker": {URL: "https://fixture.invalid", Token: "fixture-secret"}}
+	hour, minute := 19, 0
+	importedDue := time.Date(2026, 10, 25, 17, 0, 0, 0, time.UTC)
+	item := ImportItem{
+		Key:      "news:legacy-daily-19",
+		Enabled:  true,
+		Calendar: model.Calendar{Type: "daily", Timezone: "Europe/Belgrade", Hour: &hour, Minute: &minute},
+		Target:   "worker", Operation: "news_processing", Payload: map[string]any{}, NextDueAt: &importedDue,
+	}
+	if _, err := db.Import(ctx, control.Revision, []ImportItem{item}, targets, importedDue); err != nil {
+		t.Fatal("could not import legacy daily schedule")
+	}
+	control, err = db.GetControl(ctx)
+	if err != nil {
+		t.Fatal("could not reload scheduler control after import")
+	}
+	if _, err := db.SetPaused(ctx, control.Revision, false, time.Now().UTC()); err != nil {
+		t.Fatal("could not resume scheduler")
+	}
+	stored, err := db.GetSchedule(ctx, item.Key)
+	if err != nil || stored.NextDueAt == nil || !stored.NextDueAt.Equal(importedDue) {
+		t.Fatal("import did not preserve the exact legacy due instant")
+	}
+	if generated, err := db.GenerateDue(ctx, importedDue, 10, 10); err != nil || generated != 1 {
+		t.Fatal("first imported occurrence was not generated")
+	}
+	var occurrenceID string
+	var scheduledFor time.Time
+	if err := db.Pool.QueryRow(ctx, `SELECT occurrence_id::text,scheduled_for FROM `+db.outbox+` WHERE schedule_key=$1`, item.Key).Scan(&occurrenceID, &scheduledFor); err != nil || !scheduledFor.Equal(importedDue) {
+		t.Fatal("first occurrence did not retain the exact imported due instant")
+	}
+	stored, err = db.GetSchedule(ctx, item.Key)
+	wantNext := time.Date(2026, 10, 26, 18, 0, 0, 0, time.UTC)
+	if err != nil || stored.NextDueAt == nil || !stored.NextDueAt.Equal(wantNext) {
+		t.Fatal("next due time did not advance past the imported scheduled local date")
+	}
+	claimed, err := db.Claim(ctx, importedDue, 30*time.Second, 1)
+	if err != nil || len(claimed) != 1 || claimed[0].Envelope.OccurrenceID != occurrenceID {
+		t.Fatal("could not claim the imported occurrence")
+	}
+	if err := db.Ack(ctx, occurrenceID, claimed[0].LeaseToken, "00000000-0000-4000-8000-000000000002", time.Now().UTC()); err != nil {
+		t.Fatal("could not accept the imported occurrence")
+	}
+	if generated, err := db.GenerateDue(ctx, time.Date(2026, 10, 25, 18, 0, 0, 0, time.UTC), 10, 10); err != nil || generated != 0 {
+		t.Fatal("scheduler generated a second occurrence on the imported local date")
+	}
+	var occurrenceCount int
+	if err := db.Pool.QueryRow(ctx, `SELECT count(*) FROM `+db.outbox+` WHERE schedule_key=$1`, item.Key).Scan(&occurrenceCount); err != nil || occurrenceCount != 1 {
+		t.Fatal("imported local date produced more than one occurrence")
+	}
+}

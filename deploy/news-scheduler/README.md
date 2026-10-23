@@ -94,7 +94,10 @@ application data and schema modification.
 Run Compose from the canonical News project directory and include the
 canonical News files, the currently approved overlays that define the
 `infra`/`private-control` networks, and `compose.scheduler.yml` in that order.
-Use the scheduler profile only when explicitly starting this service. Render
+Activate `--profile standalone-scheduler` for every invocation that includes
+`compose.service-mode.yml`, including operations targeting the app or worker;
+its required healthy scheduler dependency must be present in the Compose model.
+During paused preparation, explicitly targeting the scheduler also activates it. Render
 with the immutable `SCHEDULER_IMAGE` value set in the operator environment, but
 do not print or attach the fully rendered configuration: it contains
 credentials from the existing application environment. Inspect a sanitized
@@ -167,8 +170,10 @@ inventory artifacts in the approved protected backup location.
    row has been changed. Review the News facade's settings/status reads without
    creating a job. Record the import response and control revision without
    recording tokens or payloads.
-6. **Switch the app and worker, then resume.** Apply
-   `compose.service-mode.yml` while the Go scheduler remains paused. Confirm
+6. **Switch the app and worker, then resume.** Remove
+   `compose.cutover-drain.yml` from the active Compose file list, activate
+   `--profile standalone-scheduler`, and apply `compose.service-mode.yml` while
+   the Go scheduler remains paused. Confirm
    the app is healthy, service-mode schedule reads/status use the Go facade,
    the worker still owns its fresh lease, and adapter authentication is
    configured with the receiver token. Then, as a separate final cutover
@@ -180,8 +185,9 @@ inventory artifacts in the approved protected backup location.
 7. **Post-cutover observation.** Verify scheduler and News health, pending and
    blocked outbox counts, worker lease freshness, job/receipt counts, container
    restarts and OOM counters, and that no duplicate scheduled occurrence was
-   accepted. Keep the drain overlay, snapshot, import response, and inventory
-   through the agreed observation window; do not delete outbox rows,
+   accepted. Keep the drain overlay file, snapshot, import response, and inventory
+   through the agreed observation window. Do not include the drain overlay in
+   the active Compose file list after switching to service mode; do not delete outbox rows,
    occurrences, receipts, or News jobs as cleanup.
 
 ## Rollback checklist
@@ -218,10 +224,12 @@ database, delete queue data, or replay an accepted occurrence.
    both schedulers at once. Keep the Go database and its inventory intact for
    review; do not drop its database or schema as part of rollback.
 
-## Known rollout gate
+## Daily DST policy
 
-The scheduler intentionally retains the approved legacy DST parity. A
-Belgrade daily 02:15 schedule can run twice on an autumn transition local date.
-This behavior was not changed in PR #19. Resolve whether that affects the
-production schedules before cutover; do not silently change the calendar
-semantics as part of this deployment.
+The approved correction computes daily schedules by local civil date. An autumn
+fold uses its first occurrence only. A spring gap shifts by its actual offset
+change; fully skipped dates and shifts leaving the configured local date are
+skipped. Hourly, weekly and interval behavior remains unchanged. Initial import
+preserves the exact existing due timestamp; subsequent daily calculation uses
+the corrected policy. Verify this policy and sequential transition regressions
+before cutover; do not rewrite imported due times during migration.

@@ -611,11 +611,23 @@ components:
         - $ref: '#/components/schemas/WeeklyCalendar'
         - $ref: '#/components/schemas/HourlyCalendar'
         - $ref: '#/components/schemas/IntervalCalendar'
-      description: IANA timezone calendar; only the fields applicable to its type are allowed.
+      description: >-
+        IANA timezone calendar; only the fields applicable to its type are allowed.
+        Daily schedules use local civil dates, select the first instant in a fold,
+        shift nonexistent times by the actual forward offset change, and skip a
+        fully skipped local date. A gap shift crossing local midnight is skipped
+        to keep at most one occurrence on a local date. Daily weekday filters
+        apply to the local date.
     DailyCalendar:
       type: object
       additionalProperties: false
       required: [type, timezone, hour, minute]
+      description: >-
+        The initial imported next_due_at is preserved exactly. Subsequent daily
+        calculations use local civil dates: the first instant in an autumn fold
+        is the sole candidate, spring-gap times shift by the actual offset
+        change, and a fully skipped local date or a shift crossing local midnight
+        is skipped.
       properties:
         type:
           const: daily

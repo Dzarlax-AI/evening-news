@@ -6,6 +6,7 @@ import (
 	"regexp"
 	"sort"
 	"time"
+	_ "time/tzdata" // Keep IANA transition rules available in the distroless runtime.
 
 	"github.com/Dzarlax-AI/evening-news/go-scheduler/internal/model"
 )
@@ -90,6 +91,9 @@ func NextAfter(schedule model.Calendar, now time.Time) (time.Time, error) {
 	now = now.UTC().Truncate(time.Microsecond)
 	location, _ := time.LoadLocation(schedule.Timezone)
 	local := now.UTC().In(location)
+	if schedule.Type == "daily" {
+		return nextDailyCivil(schedule, now, local, location, nil)
+	}
 	if schedule.Type == "weekly" {
 		for days := 0; days <= 7; days++ {
 			candidateDate := local.AddDate(0, 0, days)
@@ -108,15 +112,6 @@ func NextAfter(schedule model.Calendar, now time.Time) (time.Time, error) {
 	legacyLocation := time.FixedZone("legacy-offset", offset)
 	legacyNow := now.UTC().In(legacyLocation)
 	switch schedule.Type {
-	case "daily":
-		candidate := time.Date(legacyNow.Year(), legacyNow.Month(), legacyNow.Day(), *schedule.Hour, *schedule.Minute, 0, 0, legacyLocation)
-		if !candidate.After(legacyNow) {
-			candidate = candidate.Add(24 * time.Hour)
-		}
-		for len(schedule.Weekdays) > 0 && !contains(schedule.Weekdays, isoWeekday(candidate)) {
-			candidate = candidate.Add(24 * time.Hour)
-		}
-		return candidate.UTC(), nil
 	case "hourly":
 		candidate := time.Date(legacyNow.Year(), legacyNow.Month(), legacyNow.Day(), legacyNow.Hour(), *schedule.Minute, 0, 0, legacyLocation)
 		if !candidate.After(legacyNow) {
@@ -134,6 +129,132 @@ func NextAfter(schedule model.Calendar, now time.Time) (time.Time, error) {
 	default:
 		return time.Time{}, fmt.Errorf("unsupported calendar type %q", schedule.Type)
 	}
+}
+
+// NextAfterOccurrence advances a schedule after storing an occurrence. For
+// daily schedules, the local date of scheduledFor is consumed even if its
+// imported UTC offset does not match the current timezone rules. Other calendar
+// types retain NextAfter's behavior.
+func NextAfterOccurrence(schedule model.Calendar, now, scheduledFor time.Time) (time.Time, error) {
+	if schedule.Type != "daily" {
+		return NextAfter(schedule, now)
+	}
+	if err := Validate(schedule); err != nil {
+		return time.Time{}, err
+	}
+	now = now.UTC().Truncate(time.Microsecond)
+	location, _ := time.LoadLocation(schedule.Timezone)
+	localNow := now.In(location)
+	consumedDate := scheduledFor.UTC().In(location)
+	return nextDailyCivil(schedule, now, localNow, location, &consumedDate)
+}
+
+// nextDailyCivil calculates daily schedules from local calendar dates. A fold
+// chooses the first instant for the wall time, while a gap shifts the wall time
+// forward by that transition's actual offset change. If a timezone skips the
+// entire date, that date has no occurrence.
+func nextDailyCivil(schedule model.Calendar, now, local time.Time, location *time.Location, afterDate *time.Time) (time.Time, error) {
+	date := time.Date(local.Year(), local.Month(), local.Day(), 0, 0, 0, 0, time.UTC)
+	var exclusiveDate time.Time
+	if afterDate != nil {
+		exclusiveDate = time.Date(afterDate.Year(), afterDate.Month(), afterDate.Day(), 0, 0, 0, 0, time.UTC)
+		if exclusiveDate.After(date) {
+			date = exclusiveDate
+		}
+	}
+	for days := 0; days < 3700; days++ {
+		candidateDate := date.AddDate(0, 0, days)
+		if afterDate != nil && !candidateDate.After(exclusiveDate) {
+			continue
+		}
+		if len(schedule.Weekdays) > 0 && !contains(schedule.Weekdays, isoWeekday(candidateDate)) {
+			continue
+		}
+		candidate, exists := civilWallTime(candidateDate, *schedule.Hour, *schedule.Minute, location)
+		if exists && candidate.After(now) {
+			return candidate, nil
+		}
+	}
+	return time.Time{}, errors.New("could not calculate next daily occurrence")
+}
+
+// civilWallTime resolves a minute-precision wall time without relying on
+// time.Date's unspecified choice for ambiguous or nonexistent local times.
+// IANA transitions are sampled over a window wider than the maximum civil
+// offset; transition boundaries are then located to the second.
+func civilWallTime(date time.Time, hour, minute int, location *time.Location) (time.Time, bool) {
+	wall := time.Date(date.Year(), date.Month(), date.Day(), hour, minute, 0, 0, time.UTC)
+	start := wall.Add(-72 * time.Hour)
+	end := wall.Add(72 * time.Hour)
+	offsets := make(map[int]struct{})
+	var transitionGaps [][3]int64 // transition Unix second, old offset, new offset
+
+	step := time.Hour
+	previous := start
+	_, previousOffset := previous.In(location).Zone()
+	offsets[previousOffset] = struct{}{}
+	for current := start.Add(step); !current.After(end); current = current.Add(step) {
+		_, currentOffset := current.In(location).Zone()
+		offsets[currentOffset] = struct{}{}
+		if currentOffset != previousOffset {
+			low, high := previous.Unix(), current.Unix()
+			for low+1 < high {
+				middle := low + (high-low)/2
+				_, middleOffset := time.Unix(middle, 0).In(location).Zone()
+				if middleOffset == previousOffset {
+					low = middle
+				} else {
+					high = middle
+				}
+			}
+			transitionGaps = append(transitionGaps, [3]int64{high, int64(previousOffset), int64(currentOffset)})
+		}
+		previous, previousOffset = current, currentOffset
+	}
+
+	candidates := make([]time.Time, 0, 2)
+	for offset := range offsets {
+		candidate := wall.Add(-time.Duration(offset) * time.Second)
+		if matchesCivilMinute(candidate.In(location), date, hour, minute) {
+			candidates = append(candidates, candidate)
+		}
+	}
+	if len(candidates) > 0 {
+		first := candidates[0]
+		for _, candidate := range candidates[1:] {
+			if candidate.Before(first) {
+				first = candidate
+			}
+		}
+		return first.UTC(), true
+	}
+
+	for _, gap := range transitionGaps {
+		transition := time.Unix(gap[0], 0).UTC()
+		oldOffset, newOffset := gap[1], gap[2]
+		if newOffset <= oldOffset {
+			continue
+		}
+		gapStart := transition.Add(time.Duration(oldOffset) * time.Second)
+		gapEnd := transition.Add(time.Duration(newOffset) * time.Second)
+		if wall.Before(gapStart) || !wall.Before(gapEnd) {
+			continue
+		}
+		shiftedWall := wall.Add(time.Duration(newOffset-oldOffset) * time.Second)
+		candidate := shiftedWall.Add(-time.Duration(newOffset) * time.Second).UTC()
+		// Do not let a skipped civil date, or a gap crossing midnight, create a
+		// second occurrence on the following local date.
+		if matchesCivilMinute(candidate.In(location), date, shiftedWall.Hour(), shiftedWall.Minute()) {
+			return candidate, true
+		}
+		return time.Time{}, false
+	}
+	return time.Time{}, false
+}
+
+func matchesCivilMinute(local, date time.Time, hour, minute int) bool {
+	return local.Year() == date.Year() && local.Month() == date.Month() && local.Day() == date.Day() &&
+		local.Hour() == hour && local.Minute() == minute && local.Second() == 0 && local.Nanosecond() == 0
 }
 
 func contains(values []int, value int) bool {

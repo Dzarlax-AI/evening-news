@@ -20,8 +20,7 @@ from zoneinfo import ZoneInfo, ZoneInfoNotFoundError
 import aiohttp
 from sqlalchemy import select
 from sqlalchemy.engine import make_url
-from sqlalchemy.ext.asyncio import create_async_engine
-from sqlalchemy.orm import sessionmaker
+from sqlalchemy.ext.asyncio import async_sessionmaker, create_async_engine
 
 # Support direct invocation as `python scripts/scheduler_bridge.py`.
 sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
@@ -29,6 +28,7 @@ sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
 from news_aggregator.models import BackgroundJob, ScheduleSettings
 
 OPERATIONS = {"news_processing", "news_digest", "telegram_digest", "backup", "reprocess_failed"}
+MAX_RESPONSE_BYTES = 512 * 1024
 ACTIVE_STATES = {"queued", "running", "retrying", "interrupted", "delivery_unknown"}
 TASK_FIELDS = {
     "news_processing": set(),
@@ -133,7 +133,7 @@ def legacy_run_history(row):
 
 async def export_snapshot(path):
     engine = create_async_engine(snapshot_database_url())
-    factory = sessionmaker(engine, expire_on_commit=False)
+    factory = async_sessionmaker(engine, expire_on_commit=False)
     try:
         async with factory() as session:
             schedules = (await session.execute(
@@ -374,9 +374,17 @@ def validate_paused_status(status):
 async def request_json(session, method, url, token, body=None):
     async with session.request(method, url, json=body, headers={"Authorization": f"Bearer {token}"},
                                allow_redirects=False) as response:
-        raw = await response.content.read(512 * 1024 + 1)
-        if len(raw) > 512 * 1024:
-            raise ValueError("scheduler response exceeded the bounded response limit")
+        raw = bytearray()
+        while True:
+            # StreamReader.read(n) may return fewer than n bytes before EOF.
+            # Keep reading, but never buffer more than the configured limit
+            # plus one byte needed to prove that the response is oversized.
+            chunk = await response.content.read(min(64 * 1024, MAX_RESPONSE_BYTES + 1 - len(raw)))
+            if not chunk:
+                break
+            raw.extend(chunk)
+            if len(raw) > MAX_RESPONSE_BYTES:
+                raise ValueError("scheduler response exceeded the bounded response limit")
         if response.status >= 300:
             raise ValueError(f"scheduler API returned HTTP {response.status}")
         if response.status == 204:
@@ -467,7 +475,7 @@ async def rollback_inventory(args):
             raise ValueError("scheduler state changed during rollback inventory; retry from a paused state")
         status = final_status
     engine = create_async_engine(snapshot_database_url())
-    factory = sessionmaker(engine, expire_on_commit=False)
+    factory = async_sessionmaker(engine, expire_on_commit=False)
     try:
         async with factory() as session:
             keys = sorted(news_schedule_keys)

@@ -59,13 +59,19 @@ the work succeeded. News reports execution results from its own job records.
 The Python worker retains article processing, AI, job ownership/recovery, and
 conservative handling of ambiguous digest delivery.
 
-Legacy calendar compatibility is retained in this PR. Daily and hourly schedules
-mirror Python's fixed-offset `pytz` arithmetic around DST changes. This includes
-a known autumn edge: Belgrade daily 02:15 can be scheduled for October 26, 2026
-at 00:15 UTC and then 01:15 UTC, producing two runs on the same local date.
-The migration does not silently correct that behavior. A civil-time daily
-policy is documented as a separate decision in the approval plan; settle it
-before a production cutover involving affected schedules.
+Daily schedules now follow local civil dates. When a configured wall time is
+ambiguous during an autumn fold, the first instant is the day's occurrence; if
+that instant has passed, the second fold instant is skipped. A nonexistent wall
+time during a spring gap is shifted forward by the transition's actual offset
+change (60 minutes in Belgrade, 30 minutes in Lord Howe). A fully skipped local
+date has no occurrence; a gap adjustment that would cross local midnight is
+also skipped to prevent two occurrences on one local date. Daily weekday filters
+use the local calendar date.
+Hourly, weekly, and interval calculations are unchanged. Imports preserve their
+stored `next_due_at` exactly; the civil-time policy is applied when the scheduler
+calculates the next due time after an occurrence. After a daily occurrence, the
+next due date must follow the local date represented by that occurrence's
+`scheduled_for`, even when the imported instant used a stale UTC offset.
 
 The services may share one PostgreSQL server. Use different database roles and
 schemas: the scheduler role must not read or write the News schema, and the News

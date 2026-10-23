@@ -502,7 +502,7 @@ func (s *Store) GenerateDue(ctx context.Context, now time.Time, limit, maxOutbox
 		if err != nil {
 			return 0, err
 		}
-		next, err := calendar.NextAfter(cal, now)
+		next, err := calendar.NextAfterOccurrence(cal, now, d.when)
 		if err != nil {
 			return 0, err
 		}
