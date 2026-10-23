@@ -332,6 +332,57 @@ def test_wait_command_preserves_failure_receipt_if_observer_exits_first(monkeypa
         "error": "native_browser_discovery_transport_error"}}
 
 
+def test_main_captures_relay_diagnostics_before_removing_stage(monkeypatch, tmp_path):
+    worker = tmp_path / "worker"
+    egress = tmp_path / "egress"
+    worker.write_bytes(b"worker")
+    egress.write_bytes(b"egress")
+    worker.chmod(0o700)
+    egress.chmod(0o700)
+    output = tmp_path / "report.json"
+    created = {}
+
+    class FailedGate:
+        def __init__(self, stage, _worker, _egress, _output):
+            self.stage = stage
+            self.phase = "profile_two"
+            self.relay_diagnostics_path = stage / "relay-diagnostics" / "relay.json"
+            self.max_memory = {}
+            self.cgroup_metrics = {}
+            self.partial_results = {"profile_one": {"ok": True, "result": {"max_overlap": 1}}}
+            created["stage"] = stage
+
+        def execute(self):
+            self.relay_diagnostics_path.parent.mkdir(mode=0o700)
+            self.relay_diagnostics_path.write_text(json.dumps({
+                "schema_version": 1, "active": 1, "peak_active": 4,
+                "counters": {"accepted": 7, "capacity_rejected": 2},
+            }))
+            raise gate.GateError("client_gate_timeout", phase="profile_two")
+
+        def diagnostic_state(self):
+            return {}
+
+        def runtime_diagnostics(self):
+            return {"worker": [], "observer": [], "cloak": []}
+
+        def cleanup(self):
+            return []
+
+    monkeypatch.setattr(gate, "DockerGate", FailedGate)
+    monkeypatch.setattr(sys, "argv", ["native_cloak_concurrency_gate.py", "--worker-binary", str(worker),
+                                       "--egress-binary", str(egress), "--output", str(output),
+                                       "--stage-parent", str(tmp_path)])
+    assert gate.main() == 1
+    report = json.loads(output.read_text())
+    assert not created["stage"].exists()
+    assert report["relay_diagnostics"] == {
+        "available": True, "active": 1, "peak_active": 4,
+        "counters": {"accepted": 7, "capacity_rejected": 2},
+    }
+    assert report["partial_results"]["profile_one"]["ok"] is True
+
+
 def fixture_server(tmp_path):
     state = origin.FixtureState(tmp_path)
     server = ThreadingHTTPServer(("127.0.0.1", 0), origin.handler_for(state))

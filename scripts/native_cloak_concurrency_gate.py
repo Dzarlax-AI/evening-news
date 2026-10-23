@@ -908,6 +908,7 @@ def main() -> int:
     finally:
         runtime_state = gate.diagnostic_state()
         runtime_diagnostics = gate.runtime_diagnostics()
+        relay_diagnostics = read_relay_diagnostics(gate.relay_diagnostics_path)
         try:
             cleanup_failures = gate.cleanup()
         except Exception:
@@ -925,7 +926,7 @@ def main() -> int:
                   "sampled_max_memory_bytes": dict(gate.max_memory),
                   "container_cgroup_metrics": dict(gate.cgroup_metrics),
                   "cgroup_oom_observation": _cgroup_oom_observation(gate.cgroup_metrics),
-                  "relay_diagnostics": read_relay_diagnostics(gate.relay_diagnostics_path),
+                  "relay_diagnostics": relay_diagnostics,
                   "partial_results": dict(gate.partial_results)}
         _write_private(args.output.resolve(), report)
         return 1
