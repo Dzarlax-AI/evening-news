@@ -24,7 +24,7 @@ Everything runs on a schedule you control, or you can trigger any step manually 
 
 Python remains the application and orchestration layer: it owns RSS collection, scheduling, AI processing, selector memory, database writes, and digest delivery. The private Go extractor service handles article extraction and can also collect Telegram and Page Monitor sources. These routes are selected independently; each Python mode remains the default, and Go routes require the private service URL and bearer token. A Python fallback for article extraction is available only when explicitly enabled.
 
-The production Compose profile selects Go for article extraction, Telegram, and Page Monitor. Go browser requests use the shared Cloak browser through the private control network and egress gateway; Readeck also uses that browser. The Python app retains its browser pool for paths that remain in Python mode. See the [Page Monitor guide](docs/go-page-monitor.md), [Telegram guide](docs/go-telegram-source.md), and [production deployment handoff](deploy/news-extractor/HANDOFF.md).
+The production Compose profile selects Go for article extraction, Telegram, and Page Monitor. Go browser requests use the shared Cloak browser through the private control network and egress gateway. The Python app retains its browser pool for paths that remain in Python mode. See the [Page Monitor guide](docs/go-page-monitor.md), [Telegram guide](docs/go-telegram-source.md), and [production deployment handoff](deploy/news-extractor/HANDOFF.md).
 
 ```mermaid
 flowchart TD
@@ -56,7 +56,6 @@ flowchart TD
 
     subgraph browser["Shared browser infrastructure"]
         Cloak[Cloak browser]
-        Readeck[Readeck]
         Egress[HTTP/S egress gateway]
     end
 
@@ -79,7 +78,6 @@ flowchart TD
     GoPage -->|guarded HTTP| WebOrigins
     Cloak -->|browser HTTP/S| Egress
     Egress --> WebOrigins
-    Readeck -->|CDP control| Cloak
     SourceManager --> DB
     GoTelegram -->|posts| SourceManager
     GoPage -->|items| SourceManager
@@ -205,7 +203,7 @@ This mounts local application code into the container so changes take effect wit
 
 ### Production topology
 
-Production combines the existing News Compose project with [`compose.native.yml`](deploy/news-extractor/compose.native.yml) and the infrastructure overlay [`compose.shared-browser.yml`](deploy/news-extractor/compose.shared-browser.yml). The News overlay configures the private Go service, selects Go for article extraction, Telegram, and Page Monitor, and connects the app and worker to the shared Cloak browser through private control and egress networks. Readeck uses that shared browser as well. Follow the [deployment handoff](deploy/news-extractor/HANDOFF.md) for the actual merge order and runtime checks; these overlay files are not standalone Compose projects.
+Production combines the existing News Compose project with [`compose.native.yml`](deploy/news-extractor/compose.native.yml) and the infrastructure overlay [`compose.shared-browser.yml`](deploy/news-extractor/compose.shared-browser.yml). The News overlay configures the private Go service, selects Go for article extraction, Telegram, and Page Monitor, and connects the app and worker to the shared Cloak browser through private control and egress networks. Follow the [deployment handoff](deploy/news-extractor/HANDOFF.md) for the actual merge order and runtime checks; these overlay files are not standalone Compose projects.
 
 ---
 
