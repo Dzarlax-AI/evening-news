@@ -13,7 +13,7 @@ import stat
 import subprocess
 import sys
 import time
-from typing import Any
+from typing import Any, NamedTuple
 
 from policy import (TABLE, parse_controllers, private_ipv4, readback_comment_matches,
                     readback_has_drop_hooks, render_policy, stable_fingerprint)
@@ -31,6 +31,7 @@ STOP_GRACE_SECONDS = 10
 RELAY_HEARTBEAT_MAX_AGE_SECONDS = 10
 RELAY_UID = 65534
 RELAY_HEARTBEAT_DIRECTORY_UID = 0
+CDP_PROBE_FAILURE_LIMIT = 3
 SET_PRIV = "/usr/bin/setpriv"
 NFT = "/usr/sbin/nft"
 IP = "/usr/sbin/ip"
@@ -299,15 +300,57 @@ def _listener_ready(pid: int) -> bool:
 
 
 def _probe_cdp_as_relay_user() -> bool:
-    script = (
-        "import json,sys,urllib.request; "
-        "opener=urllib.request.build_opener(urllib.request.ProxyHandler({})); "
-        "v=json.load(opener.open('http://127.0.0.1:5100/json/version',timeout=2)); "
-        "sys.exit(0 if isinstance(v,dict) and isinstance(v.get('webSocketDebuggerUrl'),str) else 1)"
-    )
-    result = _run(_drop_privilege_args(65534, 65534) + ["--", sys.executable, "-c", script],
-                  check=False, timeout=4, env=_child_environment(relay=True))
-    return result.returncode == 0
+    return _probe_cdp_diagnostic().code == "ok"
+
+
+class CDPProbeResult(NamedTuple):
+    code: str
+    elapsed_ms: int
+
+
+def _probe_cdp_diagnostic() -> CDPProbeResult:
+    script = """import json, socket, sys, urllib.error, urllib.request
+opener = urllib.request.build_opener(urllib.request.ProxyHandler({}))
+try:
+    response = opener.open('http://127.0.0.1:5100/json/version', timeout=2)
+    body = response.read(65537)
+    response.close()
+except (TimeoutError, socket.timeout):
+    sys.exit(11)
+except urllib.error.HTTPError:
+    sys.exit(14)
+except urllib.error.URLError as error:
+    sys.exit(11 if isinstance(error.reason, (TimeoutError, socket.timeout)) else 13)
+except OSError:
+    sys.exit(13)
+if len(body) > 65536:
+    sys.exit(12)
+try:
+    value = json.loads(body)
+except (json.JSONDecodeError, UnicodeDecodeError):
+    sys.exit(10)
+sys.exit(0 if isinstance(value, dict) and isinstance(value.get('webSocketDebuggerUrl'), str) else 12)
+"""
+    command = _drop_privilege_args(65534, 65534) + ["--", sys.executable, "-c", script]
+    started = time.monotonic()
+    try:
+        result = subprocess.run(command, text=True, capture_output=True, timeout=4,
+                                check=False, env=_child_environment(relay=True))
+    except subprocess.TimeoutExpired:
+        code = "subprocess_timeout"
+    except OSError:
+        code = "subprocess_error"
+    else:
+        code = {
+            0: "ok",
+            10: "invalid_json",
+            11: "http_timeout",
+            12: "invalid_payload",
+            13: "connection_error",
+            14: "http_error",
+        }.get(result.returncode, "subprocess_error")
+    elapsed_ms = min(4000, max(0, int((time.monotonic() - started) * 1000)))
+    return CDPProbeResult(code, elapsed_ms)
 
 
 def _prepare_relay_heartbeat_dir() -> None:
@@ -564,6 +607,7 @@ def supervise() -> int:
     _write_state(state)
     deadline = time.monotonic() + STARTUP_TIMEOUT_SECONDS
     ready = False
+    consecutive_probe_failures = 0
     try:
         while True:
             if stopping:
@@ -588,10 +632,24 @@ def supervise() -> int:
                     raise StartupError("browser_child_command_invalid")
                 if _fd_count(chrome.pid) >= threshold:
                     raise StartupError("chrome_fd_threshold_exceeded")
-                if not _listener_ready(relay.pid) or not _probe_cdp_as_relay_user():
-                    raise StartupError("browser_cdp_unavailable")
+                if not _listener_ready(relay.pid):
+                    raise StartupError("browser_listener_unavailable")
                 if not _relay_heartbeat_fresh(relay.pid):
                     raise StartupError("relay_heartbeat_stale")
+                probe = _probe_cdp_diagnostic()
+                if not _relay_heartbeat_fresh(relay.pid):
+                    raise StartupError("relay_heartbeat_stale")
+                if probe.code == "ok":
+                    if consecutive_probe_failures:
+                        print("browser_cdp_probe_recovered "
+                              f"failed_probes={consecutive_probe_failures}", flush=True)
+                    consecutive_probe_failures = 0
+                else:
+                    consecutive_probe_failures += 1
+                    print(f"browser_cdp_probe_failed reason={probe.code} "
+                          f"consecutive={consecutive_probe_failures} elapsed_ms={probe.elapsed_ms}", flush=True)
+                    if consecutive_probe_failures >= CDP_PROBE_FAILURE_LIMIT:
+                        raise StartupError("browser_cdp_unavailable")
             time.sleep(POLICY_POLL_SECONDS)
     finally:
         _terminate(relay)
