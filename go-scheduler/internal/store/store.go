@@ -441,6 +441,11 @@ func (s *Store) GenerateDue(ctx context.Context, now time.Time, limit, maxOutbox
 		}
 		return 0, tx.Commit(ctx)
 	}
+	var availableAt time.Time
+	if err := tx.QueryRow(ctx, `SELECT clock_timestamp()`).Scan(&availableAt); err != nil {
+		return 0, err
+	}
+	availableAt = availableAt.UTC().Truncate(time.Microsecond)
 	var outstanding int64
 	if err = tx.QueryRow(ctx, `SELECT count(*) FROM `+s.outbox+` WHERE status<>'accepted'`).Scan(&outstanding); err != nil {
 		return 0, err
@@ -493,7 +498,7 @@ func (s *Store) GenerateDue(ctx context.Context, now time.Time, limit, maxOutbox
 		if err != nil {
 			return 0, err
 		}
-		_, err = tx.Exec(ctx, `INSERT INTO `+s.outbox+`(occurrence_id,schedule_key,schedule_revision,scheduled_for,target_alias,operation,payload,status,available_at) VALUES($1,$2,$3,$4,$5,$6,$7::jsonb,'pending',$8)`, id, d.key, d.revision, d.when, d.target, d.op, string(d.payload), now.UTC())
+		_, err = tx.Exec(ctx, `INSERT INTO `+s.outbox+`(occurrence_id,schedule_key,schedule_revision,scheduled_for,target_alias,operation,payload,status,available_at) VALUES($1,$2,$3,$4,$5,$6,$7::jsonb,'pending',$8)`, id, d.key, d.revision, d.when, d.target, d.op, string(d.payload), availableAt)
 		if err != nil {
 			return 0, err
 		}
@@ -599,7 +604,16 @@ func (s *Store) MarkDispatch(ctx context.Context, now time.Time) error {
 
 func (s *Store) Retry(ctx context.Context, id, token, code string, next time.Time, now time.Time) error {
 	now = now.UTC().Truncate(time.Microsecond)
-	tag, err := s.Pool.Exec(ctx, `UPDATE `+s.outbox+` SET status='pending',available_at=$3,lease_token=NULL,lease_until=NULL,last_error_code=$4,updated_at=$5 WHERE occurrence_id=$1::uuid AND status='leased' AND lease_token=$2::uuid AND lease_until>clock_timestamp()`, id, token, next.UTC().Truncate(time.Microsecond), code, now)
+	delay := next.Sub(now)
+	if delay < 0 {
+		delay = 0
+	}
+	var dbNow time.Time
+	if err := s.Pool.QueryRow(ctx, `SELECT clock_timestamp()`).Scan(&dbNow); err != nil {
+		return err
+	}
+	dbNow = dbNow.UTC().Truncate(time.Microsecond)
+	tag, err := s.Pool.Exec(ctx, `UPDATE `+s.outbox+` SET status='pending',available_at=$3,lease_token=NULL,lease_until=NULL,last_error_code=$4,updated_at=$5 WHERE occurrence_id=$1::uuid AND status='leased' AND lease_token=$2::uuid AND lease_until>clock_timestamp()`, id, token, dbNow.Add(delay), code, dbNow)
 	if err != nil {
 		return err
 	}
@@ -640,7 +654,12 @@ func (s *Store) RetryBlocked(ctx context.Context, id string, now time.Time) (str
 	case "accepted":
 		return status, ErrOccurrenceNotRetryable
 	case "blocked":
-		_, err = tx.Exec(ctx, `UPDATE `+s.outbox+` SET status='pending',available_at=$2,lease_token=NULL,lease_until=NULL,last_error_code=NULL,updated_at=$2 WHERE occurrence_id=$1::uuid`, id, now.UTC())
+		var dbNow time.Time
+		if err = tx.QueryRow(ctx, `SELECT clock_timestamp()`).Scan(&dbNow); err != nil {
+			return "", err
+		}
+		dbNow = dbNow.UTC().Truncate(time.Microsecond)
+		_, err = tx.Exec(ctx, `UPDATE `+s.outbox+` SET status='pending',available_at=$2,lease_token=NULL,lease_until=NULL,last_error_code=NULL,updated_at=$2 WHERE occurrence_id=$1::uuid`, id, dbNow)
 		if err != nil {
 			return "", err
 		}
@@ -650,6 +669,14 @@ func (s *Store) RetryBlocked(ctx context.Context, id string, now time.Time) (str
 		return "", err
 	}
 	return status, nil
+}
+
+func (s *Store) DatabaseNow(ctx context.Context) (time.Time, error) {
+	var now time.Time
+	if err := s.Pool.QueryRow(ctx, `SELECT clock_timestamp()`).Scan(&now); err != nil {
+		return time.Time{}, err
+	}
+	return now.UTC().Truncate(time.Microsecond), nil
 }
 
 type Status struct {

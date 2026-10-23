@@ -25,7 +25,9 @@ flowchart LR
 A calendar becomes a concrete occurrence at its scheduled time. The scheduler
 writes that occurrence, its outgoing command, and the next due time in one
 transaction. HTTP happens after commit. A dispatcher lease fences stale attempts;
-retries preserve the occurrence ID and immutable envelope.
+retries preserve the occurrence ID and immutable envelope. Outbox availability,
+claim leases, fencing, and Retry-After interpretation use PostgreSQL time;
+relative retry delays are rebased onto that clock, including operator retry.
 
 A valid receipt means that the consumer durably accepted work. It does not mean
 the work succeeded. News reports execution results from its own job records.

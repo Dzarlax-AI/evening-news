@@ -2,6 +2,7 @@ package dispatch
 
 import (
 	"math"
+	"net/http"
 	"strconv"
 	"testing"
 	"time"
@@ -16,5 +17,20 @@ func TestParseRetryAfterClampsLargeSecondsBeforeDuration(t *testing.T) {
 	}
 	if got := parseRetryAfter("2", now); !got.Equal(now.Add(2 * time.Second)) {
 		t.Fatal("ordinary integer Retry-After was not preserved")
+	}
+}
+
+func TestParseRetryAfterHTTPDateUsesDatabaseClockUnderApplicationSkew(t *testing.T) {
+	databaseNow := time.Date(2026, 10, 23, 17, 30, 0, 0, time.UTC)
+	header := databaseNow.Add(3 * time.Second).Format(http.TimeFormat)
+	for _, skew := range []time.Duration{-2 * time.Minute, 2 * time.Minute} {
+		appNow := databaseNow.Add(skew)
+		got := parseRetryAfter(header, databaseNow)
+		if delay := got.Sub(databaseNow); delay != 3*time.Second {
+			t.Fatalf("app clock skew %s changed HTTP-date Retry-After delay to %s", appNow.Sub(databaseNow), delay)
+		}
+		if appNow.Add(3 * time.Second).Equal(got) {
+			t.Fatalf("test setup failed: application clock skew %s accidentally matched database time", skew)
+		}
 	}
 }

@@ -295,4 +295,126 @@ func TestPostgresMigrationWorksForPrecreatedSchemaOwner(t *testing.T) {
 	}
 }
 
+func TestPostgresAvailabilityUsesDatabaseClock(t *testing.T) {
+	dsn := strings.TrimSpace(os.Getenv("SCHEDULER_TEST_DATABASE_URL"))
+	if dsn == "" {
+		t.Skip("SCHEDULER_TEST_DATABASE_URL is not set")
+	}
+	parsed, err := url.Parse(dsn)
+	if err != nil || (parsed.Hostname() != "localhost" && parsed.Hostname() != "127.0.0.1") {
+		t.Fatal("scheduler integration tests require a localhost PostgreSQL test URL")
+	}
+	admin, err := pgxpool.New(context.Background(), dsn)
+	if err != nil {
+		t.Fatal("could not connect to isolated scheduler test database")
+	}
+	defer admin.Close()
+
+	var random [8]byte
+	if _, err := rand.Read(random[:]); err != nil {
+		t.Fatal("could not create isolated schema name")
+	}
+	schema := "scheduler_clock_test_" + hex.EncodeToString(random[:])
+	if _, err := admin.Exec(context.Background(), `CREATE SCHEMA `+pgx.Identifier{schema}.Sanitize()); err != nil {
+		t.Fatal("could not create isolated scheduler test schema")
+	}
+	t.Cleanup(func() {
+		_, _ = admin.Exec(context.Background(), `DROP SCHEMA `+pgx.Identifier{schema}.Sanitize()+` CASCADE`)
+	})
+
+	ctx, cancel := context.WithTimeout(context.Background(), 20*time.Second)
+	defer cancel()
+	db, err := Open(ctx, dsn, schema, 4, true)
+	if err != nil {
+		t.Fatal("could not open scheduler store")
+	}
+	defer db.Close()
+	control, err := db.GetControl(ctx)
+	if err != nil {
+		t.Fatal("could not read scheduler control")
+	}
+	if _, err := db.SetPaused(ctx, control.Revision, false, time.Now().UTC()); err != nil {
+		t.Fatal("could not resume scheduler")
+	}
+	targets := map[string]model.Target{"worker": {URL: "https://fixture.invalid", Token: "fixture-secret"}}
+	for _, offset := range []time.Duration{-2 * time.Minute, 2 * time.Minute} {
+		t.Run(offset.String(), func(t *testing.T) {
+			appNow := time.Now().UTC().Add(offset).Truncate(time.Microsecond)
+			key := "clock:" + strings.ReplaceAll(offset.String(), "-", "minus-")
+			mutation := model.Mutation{Enabled: true, Calendar: model.Calendar{Type: "interval", Timezone: "UTC", IntervalMinutes: intPtr(10)}, Target: "worker", Operation: "clock_test", Payload: map[string]any{}}
+			if _, _, err := db.PutSchedule(ctx, key, mutation, targets, appNow); err != nil {
+				t.Fatal("could not create clock test schedule")
+			}
+			if _, err := db.Pool.Exec(ctx, `UPDATE `+db.schedules+` SET next_due_at=clock_timestamp()-interval '10 minutes' WHERE schedule_key=$1`, key); err != nil {
+				t.Fatal("could not make test schedule due")
+			}
+			if generated, err := db.GenerateDue(ctx, appNow, 10, 10); err != nil || generated != 1 {
+				t.Fatal("could not generate a due occurrence")
+			}
+			var occurrenceID string
+			var available time.Time
+			if err := db.Pool.QueryRow(ctx, `SELECT occurrence_id::text,available_at FROM `+db.outbox+` WHERE schedule_key=$1`, key).Scan(&occurrenceID, &available); err != nil {
+				t.Fatal("could not read generated occurrence")
+			}
+			dbNow := postgresNow(t, ctx, db)
+			if delta := available.Sub(dbNow); delta < -2*time.Second || delta > 2*time.Second {
+				t.Fatalf("generated occurrence availability did not use the database clock: delta=%s", delta)
+			}
+			claimed, err := db.Claim(ctx, appNow, 30*time.Second, 1)
+			if err != nil || len(claimed) != 1 || claimed[0].Envelope.OccurrenceID != occurrenceID {
+				t.Fatal("generated occurrence was not immediately claimable")
+			}
+
+			if err := db.Retry(ctx, occurrenceID, claimed[0].LeaseToken, "temporary", appNow.Add(time.Minute), appNow); err != nil {
+				t.Fatal("could not schedule retry")
+			}
+			var retryAt time.Time
+			if err := db.Pool.QueryRow(ctx, `SELECT available_at FROM `+db.outbox+` WHERE occurrence_id=$1::uuid`, occurrenceID).Scan(&retryAt); err != nil {
+				t.Fatal("could not read retry availability")
+			}
+			dbNow = postgresNow(t, ctx, db)
+			if delta := retryAt.Sub(dbNow); delta < 58*time.Second || delta > 62*time.Second {
+				t.Fatalf("retry delay was not preserved relative to PostgreSQL clock: delta=%s", delta)
+			}
+			if claims, err := db.Claim(ctx, appNow, 30*time.Second, 1); err != nil || len(claims) != 0 {
+				t.Fatal("delayed retry was claimable before its delay elapsed")
+			}
+
+			if _, err := db.Pool.Exec(ctx, `UPDATE `+db.outbox+` SET available_at=clock_timestamp()-interval '1 microsecond' WHERE occurrence_id=$1::uuid`, occurrenceID); err != nil {
+				t.Fatal("could not release retry for blocked-retry check")
+			}
+			claimed, err = db.Claim(ctx, appNow, 30*time.Second, 1)
+			if err != nil || len(claimed) != 1 {
+				t.Fatal("could not reclaim retry occurrence")
+			}
+			if err := db.Block(ctx, occurrenceID, claimed[0].LeaseToken, "invalid_target", appNow); err != nil {
+				t.Fatal("could not block occurrence")
+			}
+			if _, err := db.RetryBlocked(ctx, occurrenceID, appNow); err != nil {
+				t.Fatal("could not retry blocked occurrence")
+			}
+			if err := db.Pool.QueryRow(ctx, `SELECT available_at FROM `+db.outbox+` WHERE occurrence_id=$1::uuid`, occurrenceID).Scan(&available); err != nil {
+				t.Fatal("could not read blocked retry availability")
+			}
+			dbNow = postgresNow(t, ctx, db)
+			if delta := available.Sub(dbNow); delta < -2*time.Second || delta > 2*time.Second {
+				t.Fatalf("blocked retry availability did not use the database clock: delta=%s", delta)
+			}
+			claimed, err = db.Claim(ctx, appNow, 30*time.Second, 1)
+			if err != nil || len(claimed) != 1 || claimed[0].Envelope.OccurrenceID != occurrenceID {
+				t.Fatal("blocked retry was not immediately claimable")
+			}
+		})
+	}
+}
+
+func postgresNow(t *testing.T, ctx context.Context, db *Store) time.Time {
+	t.Helper()
+	var now time.Time
+	if err := db.Pool.QueryRow(ctx, `SELECT clock_timestamp()`).Scan(&now); err != nil {
+		t.Fatal("could not read PostgreSQL clock")
+	}
+	return now.UTC()
+}
+
 func intPtr(value int) *int { return &value }

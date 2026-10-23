@@ -85,8 +85,7 @@ func (d *Dispatcher) send(parent context.Context, item store.Claimed) {
 	storeCancel()
 	req, err := http.NewRequestWithContext(ctx, http.MethodPost, target.URL, bytes.NewReader(body))
 	if err != nil {
-		completedAt := clockNow()
-		d.retry(parent, item, "request_failed", time.Time{}, completedAt)
+		d.retry(parent, item, "request_failed", "")
 		return
 	}
 	req.Header.Set("Content-Type", "application/json")
@@ -94,8 +93,7 @@ func (d *Dispatcher) send(parent context.Context, item store.Claimed) {
 	req.Header.Set("Idempotency-Key", item.Envelope.OccurrenceID)
 	resp, err := d.client.Do(req)
 	if err != nil {
-		completedAt := clockNow()
-		d.retry(parent, item, "network_error", time.Time{}, completedAt)
+		d.retry(parent, item, "network_error", "")
 		return
 	}
 	defer resp.Body.Close()
@@ -105,7 +103,7 @@ func (d *Dispatcher) send(parent context.Context, item store.Claimed) {
 		return
 	}
 	if resp.StatusCode == http.StatusTooManyRequests || resp.StatusCode == http.StatusServiceUnavailable || resp.StatusCode >= 500 {
-		d.retry(parent, item, "target_unavailable", parseRetryAfter(resp.Header.Get("Retry-After"), responseAt), responseAt)
+		d.retry(parent, item, "target_unavailable", resp.Header.Get("Retry-After"))
 		return
 	}
 	if resp.StatusCode != http.StatusOK && resp.StatusCode != http.StatusAccepted {
@@ -114,38 +112,32 @@ func (d *Dispatcher) send(parent context.Context, item store.Claimed) {
 	}
 	mediaType, _, err := mime.ParseMediaType(resp.Header.Get("Content-Type"))
 	if err != nil || mediaType != "application/json" {
-		completedAt := clockNow()
-		d.retry(parent, item, "invalid_receipt", time.Time{}, completedAt)
+		d.retry(parent, item, "invalid_receipt", "")
 		return
 	}
 	data, err := io.ReadAll(io.LimitReader(resp.Body, maxReceiptBytes+1))
 	if err != nil || len(data) > maxReceiptBytes {
-		completedAt := clockNow()
-		d.retry(parent, item, "invalid_receipt", time.Time{}, completedAt)
+		d.retry(parent, item, "invalid_receipt", "")
 		return
 	}
 	var receipt model.Receipt
 	if err := jsonstrict.RejectDuplicateKeys(data); err != nil {
-		completedAt := clockNow()
-		d.retry(parent, item, "invalid_receipt", time.Time{}, completedAt)
+		d.retry(parent, item, "invalid_receipt", "")
 		return
 	}
 	dec := json.NewDecoder(bytes.NewReader(data))
 	dec.DisallowUnknownFields()
 	if err = dec.Decode(&receipt); err != nil {
-		completedAt := clockNow()
-		d.retry(parent, item, "invalid_receipt", time.Time{}, completedAt)
+		d.retry(parent, item, "invalid_receipt", "")
 		return
 	}
 	var extra any
 	if err = dec.Decode(&extra); !errors.Is(err, io.EOF) {
-		completedAt := clockNow()
-		d.retry(parent, item, "invalid_receipt", time.Time{}, completedAt)
+		d.retry(parent, item, "invalid_receipt", "")
 		return
 	}
 	if receipt.Version != 1 || receipt.OccurrenceID != item.Envelope.OccurrenceID || receipt.Status != "accepted" || !canonicalUUID(receipt.JobID) {
-		completedAt := clockNow()
-		d.retry(parent, item, "invalid_receipt", time.Time{}, completedAt)
+		d.retry(parent, item, "invalid_receipt", "")
 		return
 	}
 	completedAt := clockNow()
@@ -156,17 +148,21 @@ func (d *Dispatcher) send(parent context.Context, item store.Claimed) {
 	}
 }
 
-func (d *Dispatcher) retry(parent context.Context, item store.Claimed, code string, requested time.Time, completedAt time.Time) {
-	next := requested
-	if next.IsZero() {
-		next = completedAt.Add(backoff(item.Attempt))
-	}
-	if next.After(completedAt.Add(maxRetryAfter)) {
-		next = completedAt.Add(maxRetryAfter)
-	}
+func (d *Dispatcher) retry(parent context.Context, item store.Claimed, code, retryAfter string) {
 	ctx, cancel := cleanupContext(parent)
 	defer cancel()
-	_ = d.Store.Retry(ctx, item.Envelope.OccurrenceID, item.LeaseToken, code, next, completedAt)
+	dbNow, err := d.Store.DatabaseNow(ctx)
+	if err != nil {
+		return
+	}
+	next := parseRetryAfter(retryAfter, dbNow)
+	if next.IsZero() {
+		next = dbNow.Add(backoff(item.Attempt))
+	}
+	if next.After(dbNow.Add(maxRetryAfter)) {
+		next = dbNow.Add(maxRetryAfter)
+	}
+	_ = d.Store.Retry(ctx, item.Envelope.OccurrenceID, item.LeaseToken, code, next, dbNow)
 }
 func (d *Dispatcher) block(parent context.Context, item store.Claimed, code string, completedAt time.Time) {
 	ctx, cancel := cleanupContext(parent)
