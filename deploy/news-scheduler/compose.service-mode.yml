@@ -1,0 +1,15 @@
+# Apply only after import and verification, while the Go scheduler is still
+# paused. Resume the Go scheduler as a separate final cutover action.
+services:
+  app:
+    environment:
+      SCHEDULE_DISPATCH_MODE: service
+      SCHEDULER_ENABLED: "false"
+    depends_on:
+      scheduler:
+        condition: service_healthy
+
+  worker:
+    environment:
+      SCHEDULE_DISPATCH_MODE: service
+      SCHEDULER_ENABLED: "false"

@@ -178,7 +178,7 @@ def service_config(args):
     base = args.api_url.rstrip("/")
     parsed = urlsplit(base)
     if parsed.scheme != "https" and not (args.allow_http and parsed.scheme == "http"):
-        raise ValueError("scheduler API must use HTTPS (or explicit --allow-http for an isolated fixture)")
+        raise ValueError("scheduler API must use HTTPS (or explicit --allow-http on an isolated private network)")
     if not parsed.netloc or parsed.username or parsed.password or parsed.query or parsed.fragment:
         raise ValueError("invalid scheduler API URL")
     token = os.environ.get("SCHEDULER_API_TOKEN")
@@ -521,12 +521,12 @@ def main():
     importing.add_argument("--snapshot", required=True)
     importing.add_argument("--api-url", required=True)
     importing.add_argument("--expected-control-revision", required=True)
-    importing.add_argument("--allow-http", action="store_true", help="only for an isolated fixture")
+    importing.add_argument("--allow-http", action="store_true", help="permit HTTP only on an isolated private test or deployment network")
     importing.add_argument("--timeout", type=float, default=10)
     inventory = sub.add_parser("rollback-inventory", help="capture Go schedules and durable occurrence state")
     inventory.add_argument("--api-url", required=True)
     inventory.add_argument("--output", required=True)
-    inventory.add_argument("--allow-http", action="store_true", help="only for an isolated fixture")
+    inventory.add_argument("--allow-http", action="store_true", help="permit HTTP only on an isolated private test or deployment network")
     inventory.add_argument("--timeout", type=float, default=10)
     args = parser.parse_args()
     try:

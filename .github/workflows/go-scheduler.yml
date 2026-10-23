@@ -11,6 +11,8 @@ on:
       - 'docker/**'
       - 'scripts/run_go_scheduler_fixture_gate.py'
       - 'scripts/scheduler_bridge.py'
+      - 'scripts/check_ghcr_tag_absent.py'
+      - 'tests/test_ghcr_tag_guard.py'
       - '.github/workflows/go-scheduler.yml'
   pull_request:
     paths:
@@ -21,8 +23,15 @@ on:
       - 'docker/**'
       - 'scripts/run_go_scheduler_fixture_gate.py'
       - 'scripts/scheduler_bridge.py'
+      - 'scripts/check_ghcr_tag_absent.py'
+      - 'tests/test_ghcr_tag_guard.py'
       - '.github/workflows/go-scheduler.yml'
   workflow_dispatch:
+    inputs:
+      publish:
+        description: Publish the standalone scheduler image from main
+        type: boolean
+        default: false
 
 permissions:
   contents: read
@@ -47,6 +56,8 @@ jobs:
           --health-retries 10
     steps:
       - uses: actions/checkout@v4
+      - name: Test fail-closed GHCR SHA tag guard
+        run: python3 tests/test_ghcr_tag_guard.py
       - uses: actions/setup-go@v5
         with:
           go-version-file: go-scheduler/go.mod
@@ -93,3 +104,61 @@ jobs:
           name: standalone-go-scheduler-fixture
           path: artifacts/go-scheduler-fixture/
           if-no-files-found: ignore
+
+  publish:
+    needs: [scheduler-tests, scheduler-fixture]
+    if: ${{ github.event_name == 'workflow_dispatch' && inputs.publish && github.ref == 'refs/heads/main' }}
+    concurrency:
+      group: go-scheduler-publish-${{ github.sha }}
+      cancel-in-progress: false
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    permissions:
+      contents: read
+      packages: write
+    steps:
+      - uses: actions/checkout@v4
+      - uses: docker/setup-buildx-action@v3
+      - name: Compute fixture-matched scheduler source hash
+        id: source
+        run: |
+          set -euo pipefail
+          scheduler_hash="$(python -c "import runpy; ns=runpy.run_path('scripts/run_go_scheduler_fixture_gate.py'); print(ns['DockerGate'].scheduler_source_hash(None))")"
+          echo "scheduler_build_id=$scheduler_hash" >> "$GITHUB_OUTPUT"
+      - uses: docker/login-action@v3
+        with:
+          registry: ghcr.io
+          username: ${{ github.actor }}
+          password: ${{ secrets.GITHUB_TOKEN }}
+      - name: Refuse to overwrite an existing SHA tag
+        env:
+          IMAGE_TAG: ghcr.io/dzarlax-ai/rss-scheduler:sha-${{ github.sha }}
+          GHCR_USERNAME: ${{ github.actor }}
+          GHCR_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: python3 scripts/check_ghcr_tag_absent.py
+      - name: Publish verified standalone scheduler image
+        id: image
+        uses: docker/build-push-action@v5
+        with:
+          context: ./go-scheduler
+          file: ./go-scheduler/Dockerfile
+          platforms: linux/amd64
+          push: true
+          tags: ghcr.io/dzarlax-ai/rss-scheduler:sha-${{ github.sha }}
+          labels: |
+            org.opencontainers.image.source=${{ github.server_url }}/${{ github.repository }}
+            org.opencontainers.image.revision=${{ github.sha }}
+            org.opencontainers.image.title=Evening News standalone scheduler
+          build-args: |
+            SCHEDULER_BUILD_ID=${{ steps.source.outputs.scheduler_build_id }}
+          cache-from: type=gha,scope=go-scheduler
+          cache-to: type=gha,mode=max,scope=go-scheduler
+      - name: Record exact published scheduler digest
+        env:
+          IMAGE_DIGEST: ${{ steps.image.outputs.digest }}
+        run: printf 'ghcr.io/dzarlax-ai/rss-scheduler@%s\n' "$IMAGE_DIGEST" > scheduler-image.txt
+      - uses: actions/upload-artifact@v4
+        with:
+          name: standalone-go-scheduler-image
+          path: scheduler-image.txt
+          retention-days: 14

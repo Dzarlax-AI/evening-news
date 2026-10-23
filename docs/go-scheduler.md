@@ -9,6 +9,31 @@ browser. Its HTTP wire format is specified in the
 This integration is being validated locally and in CI. It has not been deployed.
 The existing production scheduler remains in the Python execution worker.
 
+## Verified image publication
+
+The `Standalone Go scheduler` GitHub Actions workflow publishes no image on PRs
+or ordinary pushes. To publish a release candidate after the change is on
+`main`, start the workflow with its explicit publish flag:
+
+```bash
+gh workflow run go-scheduler.yml --ref main -f publish=true
+```
+
+Publication is gated on both `scheduler-tests` (race tests, isolated PostgreSQL,
+`go vet`, and cross-builds) and `scheduler-fixture` (the isolated combined
+service acceptance gate). The publish job is restricted to a manual dispatch on
+`main`; it builds only `linux/amd64` and tags the image with the full source
+commit as `ghcr.io/dzarlax-ai/rss-scheduler:sha-<commit>`. It sets the OCI
+revision label and embeds the fixture's scheduler source hash as
+`SCHEDULER_BUILD_ID`. The publish job serializes by commit and refuses to
+overwrite an existing SHA tag. It uploads `scheduler-image.txt` with the exact
+registry digest; use that digest reference for deployment and retain it for
+rollback. The preflight uses the authenticated GHCR registry API and fails
+closed on authentication, transport, or ambiguous responses. It accepts an
+explicit missing-manifest response, and treats an unknown package as absent
+only after obtaining a repository-scoped GHCR token and rechecking it. CI
+publication does not deploy or change the existing Python scheduler.
+
 ## Ownership and execution
 
 ```mermaid
@@ -81,6 +106,11 @@ News settings:
 | `SCHEDULED_JOBS_TOKEN` | Token accepted only by the News scheduled-command adapter |
 | `SCHEDULED_JOBS_RECEIPT_LIMIT` | Durable receipt capacity, default and maximum 100,000 |
 | `SCHEDULER_HTTP_TIMEOUT_SECONDS` | Bounded scheduler client timeout, default 5 seconds |
+
+The offline `scheduler_bridge.py import` and `rollback-inventory` commands use
+HTTPS by default. Their explicit `--allow-http` opt-in is also supported for a
+scheduler API reachable only over an isolated private test or deployment
+network; never use it for a public or untrusted network path.
 
 The News endpoint is `POST /api/v1/internal/scheduled-jobs`. It requires the
 consumer-scoped bearer token, independently of administrator login. It validates
