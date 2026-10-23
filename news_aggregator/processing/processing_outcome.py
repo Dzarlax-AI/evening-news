@@ -1,5 +1,6 @@
 """Explicit article outcomes and durable retry scheduling."""
 
+import math
 from dataclasses import dataclass, field
 from datetime import datetime, timedelta
 from typing import Any, Dict, Optional
@@ -25,20 +26,41 @@ class ProcessingOutcome:
     retry_after_seconds: Optional[float] = None
 
 
+def _valid_retry_after(value, now):
+    """Return a usable Retry-After delay without letting malformed values break scheduling."""
+    try:
+        seconds = float(value)
+    except (TypeError, ValueError, OverflowError):
+        return 0
+    if isinstance(value, bool) or not math.isfinite(seconds) or seconds < 0:
+        return 0
+    return min(seconds, max(0, (datetime.max - now).total_seconds() - 1))
+
+
 def outcome_fields(outcome, attempts, now, *, max_attempts=3,
                    initial_seconds=1800, later_seconds=21600):
     """Translate one whole-pipeline outcome into persisted scheduling fields."""
     state = outcome.state
     next_attempt = None
+    persisted_attempts = attempts
     if state == "retry_wait":
-        if attempts >= max_attempts:
+        local_admission_busy = outcome.error in {"busy", "native_browser_busy"}
+        if local_admission_busy:
+            # The claim was persisted before work began, but local admission
+            # pressure did not start a genuine processing attempt.
+            persisted_attempts = max(0, attempts - 1)
+            delay = initial_seconds
+            next_attempt = now + timedelta(seconds=max(delay, _valid_retry_after(
+                outcome.retry_after_seconds, now)))
+        elif attempts >= max_attempts:
             state = "exhausted"
         else:
             delay = initial_seconds if attempts == 1 else later_seconds
-            delay = max(delay, outcome.retry_after_seconds or 0)
+            delay = max(delay, _valid_retry_after(outcome.retry_after_seconds, now))
             next_attempt = now + timedelta(seconds=delay)
     return {
         **outcome.fields,
+        "processing_attempts": persisted_attempts,
         "processing_state": state,
         "next_attempt_at": next_attempt,
         "last_processing_error": (outcome.error or "")[:2000] or None,

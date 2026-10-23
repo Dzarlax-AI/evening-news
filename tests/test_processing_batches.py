@@ -169,6 +169,120 @@ async def test_crashed_extraction_uses_durable_retry_and_preserves_sibling_progr
 
 
 @pytest.mark.asyncio
+@pytest.mark.parametrize('prior_attempts', [0, 1, 2])
+async def test_busy_outcome_refunds_claim_on_every_budget_position(isolated, prior_attempts):
+    orchestrator, engine = isolated
+    orchestrator._processing_limits = lambda: {
+        'max_attempts': 3, 'initial_seconds': 30, 'later_seconds': 120,
+    }
+    add_articles(engine, 1, processing_state='retry_wait' if prior_attempts else 'pending',
+                 processing_attempts=prior_attempts,
+                 next_attempt_at=datetime.utcnow() - timedelta(seconds=1) if prior_attempts else None)
+    orchestrator.ai_processor.process_article_outcome.return_value = ProcessingOutcome(
+        'retry_wait', error='native_browser_busy', retry_after_seconds=45)
+
+    await orchestrator._process_unprocessed_articles({'errors': []})
+
+    with Session(engine) as db:
+        saved = db.get(Article, 1)
+        assert saved.processing_attempts == prior_attempts
+        assert saved.processing_state == 'retry_wait'
+        assert saved.processed is False
+        assert saved.last_processing_error == 'native_browser_busy'
+        assert saved.next_attempt_at >= datetime.utcnow() + timedelta(seconds=44)
+        assert saved.summary is None
+    assert orchestrator.ai_processor.process_article_outcome.await_args.args[0]['processing_attempts'] == prior_attempts
+
+
+@pytest.mark.asyncio
+async def test_repeated_busy_is_durable_and_success_after_busy_spends_one_attempt(isolated):
+    orchestrator, engine = isolated
+    orchestrator._processing_limits = lambda: {
+        'max_attempts': 3, 'initial_seconds': 1, 'later_seconds': 1,
+    }
+    add_articles(engine, 1, category_processed=True, ad_processed=True)
+    orchestrator.ai_processor.process_article_outcome.return_value = ProcessingOutcome(
+        'retry_wait', {'summary': 'Existing saved summary', 'summary_processed': True}, 'busy')
+
+    for _ in range(4):
+        await orchestrator._process_unprocessed_articles({'errors': []})
+        with Session(engine) as db:
+            saved = db.get(Article, 1)
+            assert saved.processing_state == 'retry_wait'
+            assert saved.processing_attempts == 0
+            assert saved.processed is False
+            assert saved.summary == 'Existing saved summary'
+            db.execute(update(Article).where(Article.id == 1).values(
+                next_attempt_at=datetime.utcnow() - timedelta(seconds=1)))
+            db.commit()
+
+    orchestrator.ai_processor.process_article_outcome.return_value = ProcessingOutcome('completed')
+    await orchestrator._process_unprocessed_articles({'errors': []})
+    with Session(engine) as db:
+        saved = db.get(Article, 1)
+        assert saved.processing_state == 'completed'
+        assert saved.processing_attempts == 1
+        assert saved.processed is True
+        assert saved.summary == 'Existing saved summary'
+    assert orchestrator.ai_processor.process_article_outcome.await_count == 5
+
+
+@pytest.mark.asyncio
+async def test_busy_does_not_hide_later_genuine_failure_exhaustion(isolated):
+    orchestrator, engine = isolated
+    orchestrator._processing_limits = lambda: {
+        'max_attempts': 3, 'initial_seconds': 1, 'later_seconds': 1,
+    }
+    add_articles(engine, 1, processing_state='retry_wait', processing_attempts=2,
+                 next_attempt_at=datetime.utcnow() - timedelta(seconds=1))
+    orchestrator.ai_processor.process_article_outcome.return_value = ProcessingOutcome(
+        'retry_wait', error='native_browser_busy')
+    await orchestrator._process_unprocessed_articles({'errors': []})
+    with Session(engine) as db:
+        saved = db.get(Article, 1)
+        assert saved.processing_attempts == 2
+        assert saved.processing_state == 'retry_wait'
+        db.execute(update(Article).where(Article.id == 1).values(
+            next_attempt_at=datetime.utcnow() - timedelta(seconds=1)))
+        db.commit()
+
+    orchestrator.ai_processor.process_article_outcome.return_value = ProcessingOutcome(
+        'retry_wait', error='native_browser_timeout')
+    await orchestrator._process_unprocessed_articles({'errors': []})
+    with Session(engine) as db:
+        saved = db.get(Article, 1)
+        assert saved.processing_attempts == 3
+        assert saved.processing_state == 'exhausted'
+        assert saved.processed is True
+        assert saved.last_processing_error == 'native_browser_timeout'
+
+
+@pytest.mark.asyncio
+async def test_cancellation_before_outcome_save_keeps_durable_claim_for_recovery(isolated):
+    orchestrator, engine = isolated
+    add_articles(engine, 1)
+    started = asyncio.Event()
+
+    async def wait_for_cancel(article, stats):
+        started.set()
+        await asyncio.Event().wait()
+
+    orchestrator.ai_processor.process_article_outcome.side_effect = wait_for_cancel
+    task = asyncio.create_task(orchestrator._process_unprocessed_articles({'errors': []}))
+    await started.wait()
+    task.cancel()
+    with pytest.raises(asyncio.CancelledError):
+        await task
+
+    with Session(engine) as db:
+        saved = db.get(Article, 1)
+        assert saved.processing_attempts == 1
+        assert saved.processing_state == 'retry_wait'
+        assert saved.next_attempt_at > datetime.utcnow()
+        assert saved.last_processing_error == 'Attempt interrupted before outcome was saved'
+
+
+@pytest.mark.asyncio
 async def test_only_explicit_retry_selection_resets_budget(isolated):
     orchestrator, engine = isolated
     add_articles(engine, 2, processing_state="exhausted", processing_attempts=3)
