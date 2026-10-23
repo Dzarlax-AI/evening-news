@@ -141,33 +141,24 @@ class FakeScheduler:
         self.resources = [row for row in self.resources if row["schedule_key"] != key]
 
 
-def test_settings_get_route_works_in_python_and_service_modes(monkeypatch):
+def test_settings_get_route_uses_go_when_python_scheduler_is_disabled(monkeypatch):
     from news_aggregator.api import create_api_router
     from news_aggregator.database import get_db
 
     monkeypatch.setattr(settings, "admin_username", "fixture-admin")
     monkeypatch.setattr(settings, "admin_password", "fixture-only")
+    monkeypatch.setattr(settings, "scheduler_enabled", False)
+    monkeypatch.setattr(module, "_scheduler_client", lambda: FakeScheduler())
     auth = "Basic " + base64.b64encode(b"fixture-admin:fixture-only").decode()
 
-    class EmptyDB:
-        async def execute(self, _statement):
-            return SimpleNamespace(scalars=lambda: SimpleNamespace(all=lambda: []))
-
-    async def db_dependency():
-        yield EmptyDB()
+    async def forbidden_legacy_database_dependency():
+        raise AssertionError("Go-owned schedule reads must not query legacy settings")
+        yield
 
     async def run():
         app = FastAPI()
         app.include_router(create_api_router(), prefix="/api/v1")
-        app.dependency_overrides[get_db] = db_dependency
-
-        monkeypatch.setattr(settings, "schedule_dispatch_mode", "python")
-        status, body = await _asgi_get(app, "/api/v1/schedule/settings", auth)
-        assert status == 200
-        assert __import__("json").loads(body)["settings"] == []
-
-        monkeypatch.setattr(settings, "schedule_dispatch_mode", "service")
-        monkeypatch.setattr(module, "_scheduler_client", lambda: FakeScheduler())
+        app.dependency_overrides[get_db] = forbidden_legacy_database_dependency
         status, body = await _asgi_get(app, "/api/v1/schedule/settings", auth)
         assert status == 200
         assert __import__("json").loads(body)["settings"] == []
@@ -182,7 +173,7 @@ def test_service_facade_reports_missing_client_configuration_as_503(monkeypatch)
 
     async def run():
         with pytest.raises(HTTPException) as caught:
-            await module.get_schedule_settings(None)
+            await module.get_schedule_settings()
         assert caught.value.status_code == 503
         assert caught.value.detail == "Scheduler service is not configured"
 
@@ -212,7 +203,7 @@ def test_service_facade_maps_malformed_service_timestamps_to_502(monkeypatch, ti
 
     async def run():
         with pytest.raises(HTTPException) as caught:
-            await module.get_schedule_settings(None)
+            await module.get_schedule_settings()
         assert caught.value.status_code == 502
         assert caught.value.detail == "Scheduler service returned an invalid response"
 
@@ -332,7 +323,7 @@ def test_legacy_admin_crud_facade_uses_service_config_without_schedule_settings_
                 task_name="news_digest", schedule_type="daily", hour=18, minute=30,
                 weekdays=[1, 2, 3, 4, 5], timezone="Europe/Belgrade",
                 task_config={"run_processing": True, "send_telegram": False},
-            ), None,
+            ),
         )
         assert created["success"] is True
         assert created["setting"]["schedule_key"] == "news:news_digest"
@@ -352,20 +343,18 @@ def test_legacy_admin_crud_facade_uses_service_config_without_schedule_settings_
         updated = await module.update_schedule_setting(
             "news_digest",
             module.ScheduleUpdateRequest(enabled=False, task_config={"send_telegram": True}),
-            None,
         )
         assert updated["setting"]["schedule_revision"] == 2
         assert updated["setting"]["next_run"] is None
         assert client.put_calls[1][1]["expected_revision"] == 1
         assert client.put_calls[1][1]["payload"] == {"send_telegram": True}
 
-        removed = await module.delete_schedule_setting("news_digest", None)
+        removed = await module.delete_schedule_setting("news_digest")
         assert removed["success"] is True
         assert client.deleted == [("news:news_digest", 2)]
         with pytest.raises(HTTPException) as caught:
             await module.create_schedule_setting(
                 module.ScheduleCreateRequest(task_name="backup", task_config={"keep_days": 14}),
-                None,
             )
         assert caught.value.status_code == 422
         assert len(client.put_calls) == 2
@@ -387,7 +376,7 @@ def test_service_create_success_does_not_depend_on_post_create_status_read(monke
         result = await module.create_schedule_setting(
             module.ScheduleCreateRequest(
                 task_name="news_digest", task_config={"run_processing": True},
-            ), None,
+            ),
         )
         assert result["success"] is True
         assert result["setting"]["schedule_key"] == "news:news_digest"
@@ -425,7 +414,6 @@ def test_service_update_success_does_not_depend_on_post_update_status_read(monke
         result = await module.update_schedule_setting(
             "news_digest",
             module.ScheduleUpdateRequest(enabled=False, task_config={"send_telegram": False}),
-            None,
         )
         assert result["success"] is True
         assert result["setting"]["schedule_revision"] == 2
@@ -462,7 +450,7 @@ def test_same_operation_for_another_consumer_is_hidden_and_not_mutated(monkeypat
 
     async def run():
         created = await module.create_schedule_setting(
-            module.ScheduleCreateRequest(task_name="backup", task_config={}), None,
+            module.ScheduleCreateRequest(task_name="backup", task_config={}),
         )
         assert created["setting"]["schedule_key"] == "news:backup"
         assert created["setting"]["task_name"] == "backup"
@@ -470,7 +458,7 @@ def test_same_operation_for_another_consumer_is_hidden_and_not_mutated(monkeypat
         assert client.put_calls[0][0] == "news:backup"
 
         updated = await module.update_schedule_setting(
-            "backup", module.ScheduleUpdateRequest(enabled=False), None,
+            "backup", module.ScheduleUpdateRequest(enabled=False),
         )
         assert updated["setting"]["schedule_key"] == "news:backup"
         assert client.put_calls[-1][0] == "news:backup"

@@ -172,13 +172,15 @@ async def execute_job(job: BackgroundJob, orchestrator, reservation=None):
     if kind == "source_test":
         from ..models import Source
         from .source_manager import SourceManager
+        source_manager = SourceManager()
         async with AsyncSessionLocal() as session:
             source = await session.get(Source, payload["source_id"])
             if source is None:
                 raise ValueError("source no longer exists")
-            source_manager = SourceManager()
-            instance = await source_manager.get_source_instance(source)
-        return {"success": bool(await instance.test_connection())}
+            source_snapshot = source_manager._source_test_snapshot(source)
+            await session.commit()
+        success = await source_manager._probe_source(source_snapshot)
+        return {"success": bool(success)}
     if kind == "backup":
         from .backup_service import BackupService
         path = await BackupService().create_backup()
@@ -239,6 +241,7 @@ class DurableBackgroundWorker:
         ) from last_error
 
     async def run(self):
+        settings.validate_runtime_services()
         if settings.background_execution_mode != "worker":
             raise RuntimeError(
                 "Background worker refused to start: set BACKGROUND_EXECUTION_MODE=worker"
@@ -248,7 +251,6 @@ class DurableBackgroundWorker:
             logger.error("Another background worker holds the PostgreSQL lease")
             return 2
         queue = None
-        monitor_started = False
         try:
             from .database_queue import get_database_queue
             queue = get_database_queue()
@@ -262,34 +264,20 @@ class DurableBackgroundWorker:
             self.orchestrator = NewsOrchestrator()
             from .operational_alerts import OperationalAlertManager
             self.alerts = OperationalAlertManager(self.orchestrator.send_operational_alert)
-            from .process_monitor import start_process_monitor
-            try:
-                await start_process_monitor()
-                monitor_started = True
-            except Exception:
-                logger.exception("Worker browser process monitor could not start")
             self._heartbeat_task = asyncio.create_task(
                 self._heartbeat_loop(), name="worker-heartbeat"
             )
-            if (settings.scheduler_enabled
-                    and settings.schedule_dispatch_mode == "python"):
-                self._scheduler_task = asyncio.create_task(
-                    self._schedule_loop(), name="worker-scheduler"
-                )
-            elif settings.schedule_dispatch_mode == "service":
-                logger.info("Python schedule loop disabled (SCHEDULE_DISPATCH_MODE=service)")
-            else:
-                logger.info("Worker schedule dispatch disabled (SCHEDULER_ENABLED=false)")
+            # Scheduled occurrences are dispatched by the Go scheduler service.
             self._cleanup_task = asyncio.create_task(
                 self._retention_loop(), name="worker-retention"
             )
             await self._consume_loop()
         finally:
             self.stop_event.set()
-            for task in (self._scheduler_task, self._heartbeat_task, self._cleanup_task):
+            for task in (self._heartbeat_task, self._cleanup_task):
                 if task and not task.done():
                     task.cancel()
-            for task in (self._scheduler_task, self._heartbeat_task, self._cleanup_task):
+            for task in (self._heartbeat_task, self._cleanup_task):
                 if task:
                     try:
                         await task
@@ -311,12 +299,6 @@ class DurableBackgroundWorker:
                     await self.orchestrator.stop()
             except Exception:
                 logger.exception("Worker orchestrator did not stop cleanly")
-            if monitor_started:
-                from .process_monitor import stop_process_monitor
-                try:
-                    await stop_process_monitor()
-                except Exception:
-                    logger.exception("Worker browser process monitor did not stop cleanly")
             if queue is not None:
                 try:
                     await queue.stop()
@@ -502,20 +484,8 @@ class DurableBackgroundWorker:
         except asyncio.TimeoutError:
             return
 
-    async def _schedule_loop(self):
-        while not self.stop_event.is_set():
-            try:
-                await self._enqueue_due_schedules()
-            except asyncio.CancelledError:
-                raise
-            except Exception:
-                logger.exception("Could not enqueue scheduled jobs")
-            try:
-                await asyncio.wait_for(self.stop_event.wait(), 5)
-            except asyncio.TimeoutError:
-                pass
-
     async def _retention_loop(self):
+        """Prune expired terminal jobs while the worker owns the lease."""
         while not self.stop_event.is_set():
             try:
                 await self._prune_terminal_jobs()
@@ -538,73 +508,6 @@ class DurableBackgroundWorker:
             ).order_by(BackgroundJob.finished_at).limit(RETENTION_BATCH))).scalars().all()
             if stale:
                 await session.execute(delete(BackgroundJob).where(BackgroundJob.id.in_(stale)))
-            await session.commit()
-
-    async def _enqueue_due_schedules(self):
-        from .scheduler import calculate_next_run
-        now = datetime.utcnow()
-        async with self.session_factory() as session:
-            await self.lease.assert_generation(session, lock_row=True)
-            rows = (await session.execute(select(ScheduleSettings).where(
-                ScheduleSettings.enabled.is_(True), ScheduleSettings.is_running.is_(False),
-                ScheduleSettings.next_run.is_not(None), ScheduleSettings.next_run <= now,
-            ).order_by(ScheduleSettings.next_run).limit(20).with_for_update(skip_locked=True))).scalars().all()
-            for setting in rows:
-                due = setting.next_run
-                kind = setting.task_name
-                try:
-                    async with session.begin_nested():
-                        if kind not in {"news_processing", "news_digest", "telegram_digest", "backup", "reprocess_failed"}:
-                            raise ValueError("unknown scheduled task type")
-                        config = setting.task_config if isinstance(setting.task_config, dict) else {}
-                        payload = {"schedule_id": setting.id, "scheduled_for": due.isoformat()}
-                        if kind == "news_digest":
-                            payload.update(run_processing=bool(config.get("run_processing", True)),
-                                           send_telegram=bool(config.get("send_telegram", True)))
-                        if kind == "reprocess_failed":
-                            payload.update(limit=config.get("limit", 20), dry_run=bool(config.get("dry_run", False)))
-                        key = f"schedule:{setting.id}:{due.isoformat()}"
-                        job = await enqueue_job_in_session(session, kind, payload, key, coalesce_active=False)
-                        interval = 30
-                        if setting.schedule_type == "interval":
-                            interval = config.get("interval_minutes", 30)
-                            if (isinstance(interval, bool) or not isinstance(interval, int)
-                                    or not 1 <= interval <= 24 * 60):
-                                raise ValueError("invalid schedule interval")
-                        next_run = calculate_next_run(
-                            schedule_type=setting.schedule_type, hour=setting.hour,
-                            minute=setting.minute, weekdays=setting.weekdays or [],
-                            timezone=setting.timezone, interval_minutes=interval,
-                        )
-                        if next_run is None:
-                            raise ValueError("invalid schedule configuration")
-                        if job.state in {"succeeded", "failed", "delivery_unknown"}:
-                            setting.next_run = next_run
-                            continue
-                        await session.execute(update(ScheduleSettings).where(
-                            ScheduleSettings.id == setting.id,
-                            ScheduleSettings.enabled.is_(True),
-                            ScheduleSettings.is_running.is_(False),
-                        ).values(
-                            is_running=True,
-                            last_run=now,
-                            next_run=next_run,
-                            updated_at=ScheduleSettings.updated_at,
-                        ).execution_options(synchronize_session=False))
-                        await session.refresh(setting)
-                except QueueFull:
-                    logger.info("Background queue is full; remaining schedules stay due")
-                    break
-                except (ValueError, IdempotencyConflict) as exc:
-                    setting.is_running = False
-                    setting.last_status = "failed"
-                    setting.last_error = (
-                        "Scheduled occurrence conflicts with an existing job"
-                        if isinstance(exc, IdempotencyConflict)
-                        else "Invalid scheduled task configuration"
-                    )
-                    setting.last_finished_at = now
-                    setting.next_run = None
             await session.commit()
 
     async def _finish_schedule_in_session(self, session, job, state, result):

@@ -1,14 +1,16 @@
-"""Review regressions for candidate selection and provider failure semantics."""
+"""Shared content-quality and provider regressions.
+
+HTML candidate selection is covered by Go extractor quality_regression_test.go
+and quality_cleanup_regression_test.go, its sole runtime implementation.
+"""
 
 from types import SimpleNamespace
 from unittest.mock import AsyncMock, patch
 
 import pytest
-from bs4 import BeautifulSoup
 
 from news_aggregator.core.exceptions import APIError
 from news_aggregator.extraction.extraction_utils import ExtractionUtils
-from news_aggregator.extraction.html_processor import HTMLProcessor
 from news_aggregator.processing.ai_processor import AIProcessor
 from news_aggregator.services.ai_client import AIClient
 
@@ -33,47 +35,6 @@ def test_membership_plan_chooser_signature_rejected_but_editorial_discussion_pre
     )
     assert not utils.is_good_content(MEMBERSHIP_CHOOSER)
     assert utils.is_good_content(discussion)
-
-
-@pytest.mark.parametrize('method', ['extract_by_enhanced_selectors', 'extract_by_enhanced_heuristics'])
-def test_membership_plan_chooser_does_not_leak_through_html_candidates(method):
-    processor = HTMLProcessor(ExtractionUtils())
-    soup = BeautifulSoup('<article><p>' + MEMBERSHIP_CHOOSER + '</p></article>', 'html.parser')
-    result = getattr(processor, method)(soup)
-    assert (result[0] if isinstance(result, tuple) else result) is None
-
-
-@pytest.mark.parametrize('method', ['extract_by_enhanced_selectors', 'extract_by_enhanced_heuristics'])
-def test_oversized_container_does_not_hide_smaller_valid_article(monkeypatch, method):
-    from news_aggregator.config import settings
-    monkeypatch.setattr(settings, 'extraction_text_max_chars', 500)
-    valid = ('Researchers published new evidence about distant galaxies and stellar formation. '
-             'Scientists compared detailed observations across several independent instruments. '
-             'Their findings explain important physical processes and future experimental priorities.')
-    soup = BeautifulSoup('<main>' + 'navigation ' * 80 + '<article><p>' + valid + '</p></article></main>', 'html.parser')
-    utils = ExtractionUtils()
-    assert not utils.is_good_content('large ' * 100)
-    assert utils.is_good_content(valid)
-    result = getattr(HTMLProcessor(utils), method)(soup)
-    assert (result[0] if isinstance(result, tuple) else result) == valid
-
-
-def test_nested_oversized_containers_do_not_crowd_out_valid_heuristic_candidate(monkeypatch):
-    from news_aggregator.config import settings
-    monkeypatch.setattr(settings, 'extraction_text_max_chars', 500)
-    valid = ('Researchers published new evidence about distant galaxies and stellar formation. '
-             'Scientists compared detailed observations across several independent instruments. '
-             'Their findings explain important physical processes and future experimental priorities.')
-    html = '<div>' * 60 + 'large ' * 200 + '<p>' + valid + '</p>' + '</div>' * 60
-    processor = HTMLProcessor(ExtractionUtils())
-    scored_lengths = []
-    score = processor._score_content_element
-    def checked_score(element, text):
-        scored_lengths.append(len(text))
-        return score(element, text)
-    monkeypatch.setattr(processor, '_score_content_element', checked_score)
-    assert processor.extract_by_enhanced_heuristics(BeautifulSoup(html, 'html.parser')) == valid
-    assert scored_lengths and max(scored_lengths) <= 500
 
 
 @pytest.mark.asyncio

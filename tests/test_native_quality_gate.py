@@ -27,33 +27,24 @@ def _report(variant: str, ids: list[str], attempted: list[str]) -> dict:
 
 def _write_capture_state(captures: Path, phase: str) -> None:
     if phase == 'c-smoke':
-        attempted = {'B': [], 'C': ['case-0001']}
+        attempted = {'C': ['case-0001']}
         reports = {'C': _report('C', ['case-0001'], attempted['C'])}
-    elif phase == 'b-quality':
-        attempted = {'B': list(gate.QUALITY_CASES), 'C': ['case-0001']}
-        reports = {
-            'C': _report('C', ['case-0001'], attempted['C']),
-            'B': _report('B', list(gate.QUALITY_CASES), attempted['B']),
-        }
     else:
-        attempted = {'B': list(gate.QUALITY_CASES), 'C': list(gate.QUALITY_CASES)}
-        reports = {
-            'C': _report('C', list(gate.QUALITY_CASES), attempted['C']),
-            'B': _report('B', list(gate.QUALITY_CASES), attempted['B']),
-        }
+        attempted = {'C': list(gate.QUALITY_CASES)}
+        reports = {'C': _report('C', list(gate.QUALITY_CASES), attempted['C'])}
     ledger = {
         'version': 1,
         'corpus_sha256': gate.QUALITY_CORPUS_SHA256,
         'attempted': attempted,
-        'blocked_hosts': {'B': [], 'C': []},
-        'last_navigation_epoch': {'B': None, 'C': 1790000000},
+        'blocked_hosts': {'C': []},
+        'last_navigation_epoch': {'C': 1790000000},
     }
     (captures / 'ledger.json').write_text(json.dumps(ledger))
     for variant, report in reports.items():
         (captures / f'report-{variant}.json').write_text(json.dumps(report))
 
 
-def test_live_quality_uses_fixed_c_b_c_sequence_and_validates_each_ledger(tmp_path):
+def test_live_quality_uses_fixed_go_sequence_and_validates_each_ledger(tmp_path):
     captures = tmp_path / 'captures'
     captures.mkdir(mode=0o700)
     captures.chmod(0o700)
@@ -78,17 +69,17 @@ def test_live_quality_uses_fixed_c_b_c_sequence_and_validates_each_ledger(tmp_pa
             active_deadline=gate.time.monotonic() + 1000,
             hard_deadline=gate.time.monotonic() + 1100, phase_records=records)
 
-    assert [result['phase'] for result in results] == ['c-smoke', 'b-quality', 'c-quality']
-    assert [result['variant'] for result in results] == ['C', 'B', 'C']
+    assert [result['phase'] for result in results] == ['c-smoke', 'c-quality']
+    assert [result['variant'] for result in results] == ['C', 'C']
     assert [result['case_ids'] for result in results] == [
-        ['case-0001'], list(gate.QUALITY_CASES), list(gate.QUALITY_CASES[1:])]
-    assert [record['state'] for record in records] == ['completed'] * 3
+        ['case-0001'], list(gate.QUALITY_CASES[1:])]
+    assert [record['state'] for record in records] == ['completed'] * 2
     assert [args[args.index('--quality-phase') + 1] for args, _ in commands] == [
-        'c-smoke', 'b-quality', 'c-quality']
+        'c-smoke', 'c-quality']
     assert all('--live' in args and '--quality-profile' in args
                and '--bounded-profile' in args and '--supervisor-cleanup' in args
                for args, _ in commands)
-    assert [kwargs['timeout'] for _, kwargs in commands] == [360, 360, 360]
+    assert [kwargs['timeout'] for _, kwargs in commands] == [360, 360]
 
 
 def test_quality_corpus_pin_accepts_full_50_case_corpus(tmp_path, monkeypatch):
@@ -345,13 +336,13 @@ def test_live_quality_main_runs_pre_gate_and_c_b_c_before_diagnostic_summary(tmp
     assert summary['state'] == 'diagnostic_completed'
     assert summary['quality_claim_scope'] == 'diagnostic_only'
     assert [row.get('phase') for row in summary['quality_phases']] == [
-        'synthetic-pre-gate', 'c-smoke', 'b-quality', 'c-quality']
+        'synthetic-pre-gate', 'c-smoke', 'c-quality']
     assert [row.get('phase') for row in summary['quality_phases'][1:]] == [
-        'c-smoke', 'b-quality', 'c-quality']
+        'c-smoke', 'c-quality']
     assert summary['quality_attempted_case_ids'] == {
-        'B': list(gate.QUALITY_CASES), 'C': list(gate.QUALITY_CASES)}
+        'C': list(gate.QUALITY_CASES)}
     assert events.index('source-pin') < events.index('runtime-pin') < events.index('corpus-pin')
     assert events.index('corpus-pin') < events.index('synthetic-browser-gate')
     assert events.index('synthetic-browser-gate') < events.index('live-c-smoke')
-    assert events.index('live-c-smoke') < events.index('live-b-quality') < events.index('live-c-quality')
+    assert events.index('live-c-smoke') < events.index('live-c-quality')
     assert 'origin_url' not in json.dumps(summary)

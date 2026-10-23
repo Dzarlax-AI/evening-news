@@ -5,33 +5,7 @@ from unittest.mock import AsyncMock, MagicMock, patch
 
 import pytest
 
-import news_aggregator.core.browser_pool as bp
-from news_aggregator.orchestrator import NewsOrchestrator
-
-
-@pytest.fixture(autouse=True)
-def reset_browser_pool_state():
-    original = {
-        "browser": bp._browser,
-        "generation": bp._browser_generation,
-        "cycle_lock": bp._cycle_lock,
-        "cycle_leases": bp._active_cycle_leases,
-        "tab_leases": bp._active_tab_leases,
-        "close_when_idle": bp._close_when_idle,
-    }
-    bp._browser = None
-    bp._browser_generation = 0
-    bp._cycle_lock = asyncio.Lock()
-    bp._active_cycle_leases = set()
-    bp._active_tab_leases = set()
-    bp._close_when_idle = False
-    yield
-    bp._browser = original["browser"]
-    bp._browser_generation = original["generation"]
-    bp._cycle_lock = original["cycle_lock"]
-    bp._active_cycle_leases = original["cycle_leases"]
-    bp._active_tab_leases = original["tab_leases"]
-    bp._close_when_idle = original["close_when_idle"]
+from news_aggregator.orchestrator import NewsOrchestrator, processing_cycle_busy
 
 
 def make_orchestrator() -> NewsOrchestrator:
@@ -52,20 +26,17 @@ def make_orchestrator() -> NewsOrchestrator:
 
 
 @pytest.mark.asyncio
-async def test_full_cycle_closes_browser_session_on_success():
+async def test_full_cycle_releases_reservation_after_success():
     orchestrator = make_orchestrator()
 
-    with patch(
-        "news_aggregator.core.browser_pool.close_browser", AsyncMock()
-    ) as close_browser:
-        result = await orchestrator.run_full_cycle()
+    result = await orchestrator.run_full_cycle()
 
     assert result["fatal_error"] is None
-    close_browser.assert_awaited_once()
+    assert not processing_cycle_busy()
 
 
 @pytest.mark.asyncio
-async def test_full_cycle_closes_browser_session_on_warning_result():
+async def test_full_cycle_releases_reservation_after_warning_result():
     orchestrator = make_orchestrator()
     orchestrator._process_unprocessed_articles.return_value = {
         "articles_processed": 0,
@@ -74,65 +45,39 @@ async def test_full_cycle_closes_browser_session_on_warning_result():
         "errors": ["one article failed"],
     }
 
-    with patch(
-        "news_aggregator.core.browser_pool.close_browser", AsyncMock()
-    ) as close_browser:
-        result = await orchestrator.run_full_cycle()
+    result = await orchestrator.run_full_cycle()
 
     assert result["errors"] == ["one article failed"]
     assert result["fatal_error"] is None
-    close_browser.assert_awaited_once()
+    assert not processing_cycle_busy()
 
 
 @pytest.mark.asyncio
-async def test_full_cycle_closes_browser_session_on_fatal_result():
+async def test_full_cycle_releases_reservation_after_fatal_result():
     orchestrator = make_orchestrator()
     orchestrator.source_manager.get_sources_from_db.side_effect = RuntimeError("db down")
 
-    with patch(
-        "news_aggregator.core.browser_pool.close_browser", AsyncMock()
-    ) as close_browser:
-        result = await orchestrator.run_full_cycle()
+    result = await orchestrator.run_full_cycle()
 
     assert "db down" in result["fatal_error"]
-    close_browser.assert_awaited_once()
+    assert not processing_cycle_busy()
 
 
 @pytest.mark.asyncio
-async def test_full_cycle_closes_browser_session_before_propagating_cancellation():
+async def test_full_cycle_releases_reservation_before_propagating_cancellation():
     orchestrator = make_orchestrator()
     entered = asyncio.Event()
-    close_started = asyncio.Event()
-    allow_close = asyncio.Event()
-
     async def hang():
         entered.set()
         await asyncio.Event().wait()
 
     orchestrator.source_manager.get_sources_from_db.side_effect = hang
-
-    async def delayed_close():
-        close_started.set()
-        await allow_close.wait()
-
-    with patch(
-        "news_aggregator.core.browser_pool.close_browser",
-        AsyncMock(side_effect=delayed_close),
-    ) as close_browser:
-        task = asyncio.create_task(orchestrator.run_full_cycle())
-        await entered.wait()
-        task.cancel()
-        await close_started.wait()
-        task.cancel()
-        await asyncio.sleep(0)
-        task.cancel()
-        await asyncio.sleep(0)
-        assert not task.done()
-        allow_close.set()
-        with pytest.raises(asyncio.CancelledError):
-            await task
-
-    close_browser.assert_awaited_once()
+    task = asyncio.create_task(orchestrator.run_full_cycle())
+    await entered.wait()
+    task.cancel()
+    with pytest.raises(asyncio.CancelledError):
+        await task
+    assert not processing_cycle_busy()
 
 
 @pytest.mark.asyncio
@@ -164,10 +109,7 @@ async def test_cleanup_failure_does_not_replace_fatal_cycle_result():
     orchestrator = make_orchestrator()
     orchestrator.source_manager.get_sources_from_db.side_effect = RuntimeError("primary")
 
-    with patch(
-        "news_aggregator.core.browser_pool.close_browser",
-        AsyncMock(side_effect=RuntimeError("cleanup")),
-    ):
-        result = await orchestrator.run_full_cycle()
+    result = await orchestrator.run_full_cycle()
 
     assert "primary" in result["fatal_error"]
+    assert not processing_cycle_busy()

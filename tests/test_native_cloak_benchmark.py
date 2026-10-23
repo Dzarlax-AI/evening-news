@@ -33,7 +33,7 @@ def test_origin_rejects_non_fixture_or_non_443_destinations(origin):
 
 
 def test_default_origin_is_exact_dotted_fixture_host_accepted_by_go():
-    default = bench.build_parser().parse_args(["--variant", "A", "--output", "report.json"]).origin
+    default = bench.build_parser().parse_args(["--variant", "C", "--output", "report.json"]).origin
     assert default == "https://native-fixture.test"
     assert bench.validate_origin(default) == default
     assert "." in bench.urlsplit(default).hostname
@@ -63,46 +63,12 @@ def test_challenge_fixture_requires_challenge_error_classification():
             "expected_error": "native_browser_challenge"}
     assert bench.compare_case(case, {"outcome": "rejected", "error": "native_browser_challenge"})["passed"]
     assert not bench.compare_case(case, {"outcome": "rejected", "error": "public_url_denied"})["passed"]
-    assert bench._is_challenge_html('<title>Just a moment</title><script src="cf_chl_x"></script>')
-    assert not bench._is_challenge_html("An article mentioning a challenge")
 
 
-def test_proxy_credentials_are_scoped_to_exact_proxy_auth_challenge():
-    proxy = "http://10.40.0.12:3128"
-    assert bench.proxy_challenge_matches("Proxy", "http://10.40.0.12:3128", proxy)
-    assert not bench.proxy_challenge_matches("Server", "http://10.40.0.12:3128", proxy)
-    assert not bench.proxy_challenge_matches("Proxy", "https://native-fixture.test", proxy)
-    assert not bench.proxy_challenge_matches("Proxy", "http://10.40.0.12:31280", proxy)
-
-
-def test_pinned_nodriver_frame_tree_result_uses_frame_id_():
-    from nodriver import cdp
-
-    command = cdp.page.get_frame_tree()
-    assert next(command)["method"] == "Page.getFrameTree"
-    frame = {"id": "main-frame", "loaderId": "loader", "url": "about:blank",
-             "domainAndRegistry": "", "securityOrigin": "null", "mimeType": "text/html",
-             "secureContextType": "Secure", "crossOriginIsolatedContextType": "NotIsolated",
-             "gatedAPIFeatures": []}
-    with pytest.raises(StopIteration) as result:
-        command.send({"frameTree": {"frame": frame}})
-    tree = result.value.value
-    assert tree.frame.id_ == "main-frame"
-    assert not hasattr(tree, "frame_tree")
-
-
-def test_real_nodriver_request_event_keeps_frame_and_request_maps_separate():
-    from nodriver import cdp
-
-    event = object.__new__(cdp.network.RequestWillBeSent)
-    event.request_id = "request-1"
-    event.type_ = cdp.network.ResourceType.DOCUMENT
-    event.frame_id = "main-frame"
-    state = {"request_count": 0, "requests": {}, "request_frames": {}, "frames": {"main-frame"}}
-    assert bench._record_request_event(state, event) is False
-    assert state["requests"] == {"request-1": True}
-    assert state["request_frames"] == {"request-1": "main-frame"}
-    assert state["frames"] == {"main-frame"}
+def test_python_benchmark_variants_are_not_available():
+    for variant in ("A", "B"):
+        with pytest.raises(SystemExit):
+            bench.build_parser().parse_args(["--variant", variant, "--output", "report.json"])
 
 
 def test_native_readiness_gate_requires_each_go_timing_and_network_condition():
@@ -114,49 +80,6 @@ def test_native_readiness_gate_requires_each_go_timing_and_network_condition():
                    {"last_activity": 10.251}, {"active_requests": 1},
                    {"main_status": 0}, {"main_status": 302}):
         assert not gate(**{**ready, **change})
-
-
-def test_disposable_context_cleanup_stops_then_disposes_then_retires_transport():
-    calls = []
-
-    class Tab:
-        def __init__(self):
-            self.__dict__["_benchmark_download_handler"] = lambda _event: None
-
-        async def send(self, command):
-            calls.append(command.gi_code.co_name)
-
-    tab = Tab()
-    sentinel = object()
-
-    class Browser:
-        def __init__(self):
-            self._browser_pool_tabs = {id(tab): tab}
-            self._targets = [tab, sentinel]
-
-        async def send(self, command):
-            calls.append(command.gi_code.co_name)
-
-        def remove_handler(self, _event_type, callback):
-            assert callback is handler
-            calls.append("remove_download_handler")
-
-    browser = Browser()
-
-    class Pool:
-        _managed_connections = {id(tab): tab}
-
-        async def _close_transport(self, connection):
-            assert connection is tab
-            calls.append("local_transport_retire")
-
-    handler = tab.__dict__["_benchmark_download_handler"]
-    asyncio.run(bench._dispose_context_and_retire(Pool(), browser, "owned-context", tab))
-    assert calls == ["remove_download_handler", "stop_loading", "dispose_browser_context", "local_transport_retire"]
-    assert "_benchmark_download_handler" not in tab.__dict__
-    assert browser._targets == [sentinel]
-    assert browser._browser_pool_tabs == {}
-    assert Pool._managed_connections == {}
 
 
 def test_native_service_capability_must_be_ready_and_native_with_selector():
@@ -366,48 +289,6 @@ def test_fixture_origin_serves_javascript_cookie_redirect_slow_dom_and_challenge
     huge = request("/huge-dom")["body"]
     assert b"Fixture signal delta" in huge and len(huge) < 5 * 1024 * 1024
 
-    # Run the real production parser against the controlled, captured fixture HTML.
-    from bs4 import BeautifulSoup
-    from news_aggregator.extraction.extraction_utils import ExtractionUtils
-    from news_aggregator.extraction.html_processor import HTMLProcessor
-    processor = HTMLProcessor(ExtractionUtils())
-    for path, anchor in (("/article-beta", "Fixture signal beta"), ("/slow", "Fixture signal gamma")):
-        parsed_html = request(path)["body"].decode("utf-8")
-        content, selector = processor.extract_by_enhanced_selectors(BeautifulSoup(parsed_html, "html.parser"))
-        assert selector == "article"
-        assert content and len(content) > 400 and anchor in content
-
-
-def test_production_extraction_helpers_construct_without_database_access(monkeypatch):
-    """The parser baseline uses production helpers but must not touch persistence."""
-    from news_aggregator.extraction.extraction_utils import ExtractionUtils
-    from news_aggregator.extraction.html_processor import HTMLProcessor
-    from news_aggregator.extraction.date_extractor import DateExtractor
-    from news_aggregator.extraction.metadata_extractor import MetadataExtractor
-    from news_aggregator.extraction.extraction_strategies import ExtractionStrategies
-    from bs4 import BeautifulSoup
-
-    def forbidden_connect(*_args, **_kwargs):
-        raise AssertionError("benchmark parser attempted database access")
-
-    try:
-        from news_aggregator.database import get_db
-    except ImportError:
-        get_db = None
-    if get_db is not None and hasattr(get_db, "engine"):
-        monkeypatch.setattr(get_db.engine, "connect", forbidden_connect)
-    utils = ExtractionUtils()
-    processor = HTMLProcessor(utils)
-    strategy = ExtractionStrategies(utils, processor, DateExtractor(utils), MetadataExtractor(utils))
-    assert strategy.html_processor is processor
-    fixture_spec = importlib.util.spec_from_file_location("native_cloak_db_free_fixture", FIXTURES / "origin.py")
-    fixture = importlib.util.module_from_spec(fixture_spec)
-    fixture_spec.loader.exec_module(fixture)
-    captured = "<article><p>" + fixture.ROUTES["/article-beta"] + "</p></article>"
-    content, selector = processor.extract_by_enhanced_selectors(BeautifulSoup(captured, "html.parser"))
-    assert selector == "article" and content and len(content) > 400
-
-
 def test_report_summary_does_not_copy_sensitive_fields():
     case = {"id": "safe-case", "expected_state": "success", "expected_contains": ["anchor"]}
     result = {"outcome": "success", "content": "anchor secret url https://private.example/path", "token": "secret"}
@@ -416,29 +297,32 @@ def test_report_summary_does_not_copy_sensitive_fields():
     assert "https://private.example/path" not in json.dumps(check)
 
 
-def test_runner_emits_redacted_report_and_marks_expected_anchor_mismatch(tmp_path, monkeypatch):
+def test_go_runner_emits_redacted_report_and_marks_expected_anchor_mismatch(tmp_path, monkeypatch):
     corpus = {"version": 1, "cases": [{"id": "safe-case", "path": "/fixture", "expected_contains": ["real anchor"], "expected_state": "success"}]}
     corpus_path = tmp_path / "corpus.json"
     corpus_path.write_text(json.dumps(corpus), encoding="utf-8")
-    app_path, cloak_path = tmp_path / "app", tmp_path / "cloak"
-    app_path.mkdir()
-    cloak_path.mkdir()
-    cgroups = {"app": app_path, "cloak": cloak_path}
+    worker_path, cloak_path, gateway_path = tmp_path / "worker", tmp_path / "cloak", tmp_path / "gateway"
+    for path in (worker_path, cloak_path, gateway_path):
+        path.mkdir()
+    cgroups = {"worker": worker_path, "cloak": cloak_path, "gateway": gateway_path}
     monkeypatch.setattr(bench, "sample_cgroups", lambda _paths: {
         name: {"memory_current_bytes": 100, "memory_anon_bytes": 60, "memory_file_bytes": 30,
                "memory_lifetime_peak_bytes": 120, "memory_shmem_bytes": 10, "cpu_usage_usec": 1, "pids": 2,
                "oom_events": 0, "oom_kill_events": 0} for name in cgroups
     })
 
-    async def fake_python(_variant, _url, _proxy, _token):
+    async def fake_service(_url, _endpoint, _token):
         return {"outcome": "success", "state": "extracted", "content_chars": 10,
                 "html_bytes": 100, "method": "browser_rendering", "selector_present": True,
                 "content": "a different result"}
 
-    monkeypatch.setattr(bench, "_run_python_case", fake_python)
-    args = Namespace(variant="A", origin="https://native-fixture.test", corpus=str(corpus_path),
-                     cgroup=[f"app={app_path}", f"cloak={cloak_path}"], case=[], token_env=None,
-                     proxy_token_env=None, proxy=None, endpoint=None, cycles=1, idle_seconds=[])
+    monkeypatch.setattr(bench, "_run_service_case", fake_service)
+    monkeypatch.setattr(bench, "_probe_native_capabilities", lambda _endpoint: asyncio.sleep(0, result={"ready": True}))
+    monkeypatch.setenv("EXTRACTOR_TEST_TOKEN", "synthetic-service-token")
+    args = Namespace(variant="C", origin="https://native-fixture.test", corpus=str(corpus_path),
+                     cgroup=[f"worker={worker_path}", f"cloak={cloak_path}", f"gateway={gateway_path}"],
+                     case=[], token_env="EXTRACTOR_TEST_TOKEN", endpoint="http://127.0.0.1:8080",
+                     native_ready_selector=bench.READY_SELECTOR, cycles=1, idle_seconds=[])
     report = __import__("asyncio").run(bench.run(args))
     encoded = json.dumps(report)
     assert report["status"] == "mismatch"

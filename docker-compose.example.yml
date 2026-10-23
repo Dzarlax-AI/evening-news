@@ -1,88 +1,56 @@
-version: '3.8'
-
 services:
-  # News Aggregator Web Application
   web:
     build:
       context: .
       dockerfile: docker/Dockerfile
-    container_name: news_aggregator_web
     ports:
       - "8000:8000"
-    environment:
-      # Database
-      - DATABASE_URL=postgresql+asyncpg://newsuser:${DB_PASSWORD:-newspass123}@postgres:5432/newsdb
-      
-      # AI/API Configuration (обязательные для работы) - ЗАМЕНИТЕ НА ВАШИ ЗНАЧЕНИЯ
-      # Google Gemini API
-      - GEMINI_API_KEY=your_gemini_api_key_here
-      - GEMINI_API_ENDPOINT=https://generativelanguage.googleapis.com/v1/models
-      - RPS=${RPS:-3}
-      
-      # AI Models Configuration (Gemini)
-      - SUMMARIZATION_MODEL=gemini-3-flash-preview
-      - CATEGORIZATION_MODEL=gemini-3-flash-preview
-      - DIGEST_MODEL=gemini-3-flash-preview
-      
-      # Telegram Integration (обязательные) - ЗАМЕНИТЕ НА ВАШИ ЗНАЧЕНИЯ
-      - TELEGRAM_TOKEN=1234567890:AAExxxxxxxxxxxxxxxxxxxxxxxxxxxxx
-      - TELEGRAM_CHAT_ID=123456789             # основной канал — дайджесты с новостями
-      - TELEGRAM_SERVICE_CHAT_ID=              # сервисный канал — ошибки и алерты (если пусто — используется TELEGRAM_CHAT_ID)
-      - TELEGRAM_RICH_MESSAGES_ENABLED=true
-      - SITE_BASE_URL=https://your-domain.com
-      
-      # Application Settings
-      - LOG_LEVEL=INFO
-      - DEVELOPMENT=false
-      - MAX_WORKERS=5
-      - CACHE_TTL=86400
-      - CACHE_DIR=/app/cache
-
-      # Scheduler settings (optional)
-      - SCHEDULER_CHECK_INTERVAL_SECONDS=60
-      - SCHEDULER_RESET_EVERY_CHECKS=10
-      - SCHEDULER_STUCK_HOURS=4
-      - SCHEDULER_TASK_TIMEOUT_SECONDS=0
-      
-      # Admin Authentication (ОБЯЗАТЕЛЬНО УСТАНОВИТЕ!)
-      - ADMIN_USERNAME=admin
-      - ADMIN_PASSWORD=your_secure_admin_password_here
-      - JWT_SECRET=your_jwt_secret_here
-      
-      # Database password (for backup operations)
-      - DB_PASSWORD=${DB_PASSWORD:-newspass123}
-
-      # CORS / trusted hosts
-      - ALLOWED_ORIGINS=https://your-domain.com,http://localhost:8000
-      - TRUSTED_HOSTS=your-domain.com,localhost,127.0.0.1
-
-      # Chrome browser via CDP (see browser service below)
-      - BROWSER_WS_ENDPOINT=ws://browser:9222
-
-      # Database init (allow create_all for fresh installs; set false in prod)
-      - ALLOW_CREATE_ALL=true
-      
-      # Article categories configuration
-      - NEWS_CATEGORIES=Business,Tech,Science,Nature,Serbia,Marketing,Other,Media
-      - DEFAULT_CATEGORY=Other
-    
+    environment: &app-environment
+      DATABASE_URL: postgresql+asyncpg://newsuser:${DB_PASSWORD:?Set DB_PASSWORD}@postgres:5432/newsdb
+      GEMINI_API_KEY: ${GEMINI_API_KEY:?Set GEMINI_API_KEY}
+      GEMINI_API_ENDPOINT: https://generativelanguage.googleapis.com/v1/models
+      SUMMARIZATION_MODEL: ${SUMMARIZATION_MODEL:-gemini-2.0-flash}
+      CATEGORIZATION_MODEL: ${CATEGORIZATION_MODEL:-gemini-2.0-flash}
+      DIGEST_MODEL: ${DIGEST_MODEL:-gemini-2.0-flash}
+      TELEGRAM_TOKEN: ${TELEGRAM_TOKEN:?Set TELEGRAM_TOKEN}
+      TELEGRAM_CHAT_ID: ${TELEGRAM_CHAT_ID:?Set TELEGRAM_CHAT_ID}
+      TELEGRAM_SERVICE_CHAT_ID: ${TELEGRAM_SERVICE_CHAT_ID:-}
+      SITE_BASE_URL: ${SITE_BASE_URL:-http://localhost:8000}
+      ADMIN_USERNAME: ${ADMIN_USERNAME:-admin}
+      ADMIN_PASSWORD: ${ADMIN_PASSWORD:?Set ADMIN_PASSWORD}
+      JWT_SECRET: ${JWT_SECRET:?Set JWT_SECRET}
+      ALLOW_CREATE_ALL: "true"
+      BACKGROUND_EXECUTION_MODE: worker
+      SCHEDULE_DISPATCH_MODE: service
+      SCHEDULER_ENABLED: "false"
+      SCHEDULER_API_URL: http://scheduler:8080
+      SCHEDULER_API_TOKEN: ${SCHEDULER_API_TOKEN:?Set SCHEDULER_API_TOKEN}
+      SCHEDULER_API_ALLOW_HTTP: "true"
+      SCHEDULED_JOBS_TOKEN: ${SCHEDULED_JOBS_TOKEN:?Set SCHEDULED_JOBS_TOKEN}
+      SOURCE_MANAGER_MODE: go
+      TELEGRAM_SOURCE_MODE: go
+      PAGE_MONITOR_SOURCE_MODE: go
+      EXTRACTION_SERVICE_MODE: go
+      EXTRACTION_SERVICE_URL: http://extractor:8080
+      EXTRACTION_SERVICE_TOKEN: ${EXTRACTION_SERVICE_TOKEN:?Set EXTRACTION_SERVICE_TOKEN}
+      EXTRACTION_SERVICE_PYTHON_FALLBACK: "false"
+      LOG_LEVEL: ${LOG_LEVEL:-INFO}
+      DEVELOPMENT: ${DEVELOPMENT:-false}
+      MAX_WORKERS: ${MAX_WORKERS:-5}
+      CACHE_DIR: /app/cache
+      ALLOWED_ORIGINS: ${ALLOWED_ORIGINS:-http://localhost:8000}
+      TRUSTED_HOSTS: ${TRUSTED_HOSTS:-localhost,127.0.0.1,web}
     depends_on:
       postgres:
         condition: service_healthy
-      browser:
-        condition: service_started
-    
+      extractor:
+        condition: service_healthy
+      scheduler:
+        condition: service_healthy
     volumes:
-      - ./backups:/app/backups
-      - ./scripts:/app/scripts
       - app_cache:/app/cache
       - app_logs:/app/logs
-    
-    networks:
-      - news_network
-    
     restart: unless-stopped
-    
     healthcheck:
       test: ["CMD", "curl", "-f", "http://localhost:8000/health"]
       interval: 30s
@@ -90,91 +58,102 @@ services:
       retries: 3
       start_period: 40s
 
-  # PostgreSQL Database
+  worker:
+    build:
+      context: .
+      dockerfile: docker/Dockerfile
+    command: ["python", "-m", "news_aggregator.worker"]
+    environment: *app-environment
+    depends_on:
+      web:
+        condition: service_healthy
+    volumes:
+      - app_cache:/app/cache
+      - app_logs:/app/logs
+    restart: unless-stopped
+    healthcheck:
+      test: ["CMD", "python", "-m", "news_aggregator.worker", "--healthcheck"]
+      interval: 10s
+      timeout: 6s
+      start_period: 30s
+      retries: 3
+
   postgres:
-    image: postgres:16-alpine
-    container_name: news_aggregator_db
+    image: postgres:17-alpine
     environment:
       POSTGRES_DB: newsdb
       POSTGRES_USER: newsuser
-      POSTGRES_PASSWORD: ${DB_PASSWORD:-newspass123}
-
+      POSTGRES_PASSWORD: ${DB_PASSWORD:?Set DB_PASSWORD}
     volumes:
       - postgres_data:/var/lib/postgresql/data
       - ./db/init.sql:/docker-entrypoint-initdb.d/01_init.sql:ro
-      - ./backups/postgres:/backup
-
     ports:
-      - "5432:5432"
-
-    networks:
-      - news_network
-
-    restart: unless-stopped
-
+      - "127.0.0.1:5432:5432"
     healthcheck:
       test: ["CMD-SHELL", "pg_isready -U newsuser -d newsdb"]
       interval: 10s
       timeout: 5s
       retries: 5
-      start_period: 30s
-
-
-  # Chrome browser — приложение подключается по CDP (Chrome DevTools Protocol)
-  browser:
-    image: gcr.io/zenika-hub/alpine-chrome:123
-    command:
-      - --no-sandbox
-      - --disable-gpu
-      - --disable-dev-shm-usage
-      - --remote-debugging-address=0.0.0.0
-      - --remote-debugging-port=9222
-      - --hide-scrollbars
-    networks:
-      - news_network
     restart: unless-stopped
 
-# Named Volumes для персистентного хранения данных
+  extractor:
+    build:
+      context: ./go
+      dockerfile: ../docker/Dockerfile.extractor
+    environment:
+      LISTEN_ADDR: ":8080"
+      EXTRACTOR_SERVICE_TOKEN: ${EXTRACTION_SERVICE_TOKEN:?Set EXTRACTION_SERVICE_TOKEN}
+      EXTRACTOR_MAX_CONCURRENT: ${EXTRACTOR_MAX_CONCURRENT:-4}
+      EXTRACTOR_BROWSER_CONCURRENT: ${EXTRACTOR_BROWSER_CONCURRENT:-2}
+      EXTRACTOR_HTTP_ONLY: "true"
+    restart: unless-stopped
+    healthcheck:
+      test: ["CMD", "/extract-service", "-healthcheck"]
+      interval: 15s
+      timeout: 3s
+      retries: 3
+
+  scheduler:
+    build:
+      context: ./go-scheduler
+      dockerfile: Dockerfile
+    environment:
+      LISTEN_ADDR: ":8080"
+      SCHEDULER_DATABASE_URL: postgres://scheduler:${SCHEDULER_DB_PASSWORD:?Set SCHEDULER_DB_PASSWORD}@scheduler-postgres:5432/schedulerdb
+      SCHEDULER_DB_SCHEMA: scheduler_service
+      SCHEDULER_API_TOKEN: ${SCHEDULER_API_TOKEN:?Set SCHEDULER_API_TOKEN}
+      SCHEDULER_TARGET_ALIASES: news-worker
+      SCHEDULER_TARGET_NEWS_WORKER_URL: http://web:8000/api/v1/internal/scheduled-jobs
+      SCHEDULER_TARGET_NEWS_WORKER_TOKEN: ${SCHEDULED_JOBS_TOKEN:?Set SCHEDULED_JOBS_TOKEN}
+      SCHEDULER_ALLOW_HTTP_TARGETS: "true"
+    depends_on:
+      scheduler-postgres:
+        condition: service_healthy
+    restart: unless-stopped
+    healthcheck:
+      test: ["CMD", "/scheduler", "healthcheck"]
+      interval: 15s
+      timeout: 3s
+      start_period: 15s
+      retries: 3
+
+  scheduler-postgres:
+    image: postgres:17-alpine
+    environment:
+      POSTGRES_DB: schedulerdb
+      POSTGRES_USER: scheduler
+      POSTGRES_PASSWORD: ${SCHEDULER_DB_PASSWORD:?Set SCHEDULER_DB_PASSWORD}
+    volumes:
+      - scheduler_postgres_data:/var/lib/postgresql/data
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U scheduler -d schedulerdb"]
+      interval: 10s
+      timeout: 5s
+      retries: 5
+    restart: unless-stopped
+
 volumes:
   postgres_data:
-    driver: local
+  scheduler_postgres_data:
   app_cache:
-    driver: local
   app_logs:
-    driver: local
-
-# Networks
-networks:
-  news_network:
-    driver: bridge
-    ipam:
-      config:
-        - subnet: 172.20.0.0/16
-
-# ==========================================
-# ИНСТРУКЦИИ ПО ИСПОЛЬЗОВАНИЮ:
-# ==========================================
-#
-# 1. ЗАПУСК:
-#    docker-compose -f docker-compose.example.yml up -d
-#
-# 2. ЛОГИ И СТАТУС:
-#    docker-compose -f docker-compose.example.yml logs -f web
-#    docker-compose -f docker-compose.example.yml ps
-#
-# 3. ОСТАНОВКА:
-#    docker-compose -f docker-compose.example.yml down
-#
-# 4. ДОСТУП К ПРИЛОЖЕНИЮ:
-#    - Главная страница (новости): http://localhost:8000
-#    - Админ-панель: http://localhost:8000/admin (требует пароль)
-#    - API документация: http://localhost:8000/docs
-#    - База данных: localhost:5432 (newsuser/newspass123)
-#
-# ВАЖНО: Перед запуском замените:
-# - GEMINI_API_KEY на ваш реальный ключ API Google Gemini
-# - TELEGRAM_TOKEN на токен вашего бота
-# - TELEGRAM_CHAT_ID на ID основного канала (дайджесты)
-# - TELEGRAM_SERVICE_CHAT_ID на ID сервисного канала (ошибки/алерты, опционально)
-# - SITE_BASE_URL на публичный URL сайта для ссылок полной версии
-# - ADMIN_PASSWORD на надежный пароль для админки

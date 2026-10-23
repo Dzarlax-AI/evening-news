@@ -1,14 +1,13 @@
 """Runtime fencing checks for the separately deployed background worker."""
 
 import asyncio
-import hashlib
 import os
 import uuid
 from datetime import datetime, timedelta
 from unittest.mock import AsyncMock
 
 import pytest
-from sqlalchemy import func, select, text, update
+from sqlalchemy import select, text, update
 from sqlalchemy.ext.asyncio import AsyncSession
 from sqlalchemy.orm import sessionmaker
 from sqlalchemy.engine import make_url
@@ -20,11 +19,24 @@ from news_aggregator.services.background_execution import (
     worker_healthcheck,
 )
 from news_aggregator.services.background_jobs import (
-    BackgroundWorkerLease, BackgroundWorkerStatus, MAX_PENDING_JOBS, StaleWorker,
+    BackgroundWorkerLease, BackgroundWorkerStatus, StaleWorker,
     claim_next_job, enqueue_job_in_session, read_worker_status,
 )
 from news_aggregator.services.background_jobs import _safe_result
 from news_aggregator.models import ScheduleSettings
+
+
+@pytest.mark.asyncio
+async def test_worker_retention_loop_runs_pruning_and_stops_cleanly():
+    worker = DurableBackgroundWorker()
+    worker.stop_event = asyncio.Event()
+
+    async def prune_once():
+        worker.stop_event.set()
+
+    worker._prune_terminal_jobs = AsyncMock(side_effect=prune_once)
+    await worker._retention_loop()
+    worker._prune_terminal_jobs.assert_awaited_once()
 
 
 @pytest.fixture
@@ -89,6 +101,7 @@ async def test_worker_refuses_embedded_mode(monkeypatch):
     from news_aggregator.config import settings
 
     monkeypatch.setattr(settings, "background_execution_mode", "embedded")
+    monkeypatch.setattr(type(settings), "validate_runtime_services", lambda self: True)
     worker = DurableBackgroundWorker(db_engine=object())
     worker.lease.acquire = AsyncMock()
     with pytest.raises(RuntimeError, match="BACKGROUND_EXECUTION_MODE=worker"):
@@ -138,6 +151,7 @@ async def test_worker_releases_lease_if_queue_startup_fails(monkeypatch):
     from news_aggregator.config import settings
 
     monkeypatch.setattr(settings, "background_execution_mode", "worker")
+    monkeypatch.setattr(type(settings), "validate_runtime_services", lambda self: True)
     worker = DurableBackgroundWorker(db_engine=object())
     worker.check_schema = AsyncMock()
     lease_state = {"released": False}
@@ -761,145 +775,6 @@ async def test_recovery_attempt_limit_fails_poison_job_and_claims_next_without_r
         claimed = await claim_next_job(session, lease)
         await session.commit()
         assert claimed.id == next_job.id
-    await lease.release()
-
-
-@pytest.mark.asyncio
-async def test_worker_due_schedule_enqueue_is_unique_and_finishes_atomically(pg_worker_jobs):
-    engine, factory, _, _ = pg_worker_jobs
-    lease = BackgroundWorkerLease(engine)
-    assert await lease.acquire()
-    due = datetime.utcnow() - timedelta(minutes=3)
-    async with factory() as session:
-        schedule = ScheduleSettings(
-            task_name="news_processing", enabled=True, schedule_type="interval",
-            timezone="Europe/Belgrade", task_config={"interval_minutes": 60},
-            next_run=due, last_status="success",
-        )
-        session.add(schedule)
-        await session.flush()
-        original_updated_at = schedule.updated_at
-        await session.commit()
-
-    worker = DurableBackgroundWorker(db_engine=engine, session_factory=factory)
-    worker.lease = lease
-    await worker._enqueue_due_schedules()
-    await worker._enqueue_due_schedules()
-    async with factory() as session:
-        jobs = (await session.execute(select(BackgroundJob))).scalars().all()
-        saved_schedule = await session.get(ScheduleSettings, schedule.id)
-        assert len(jobs) == 1
-        assert jobs[0].payload["schedule_id"] == schedule.id
-        assert jobs[0].payload["scheduled_for"] == due.isoformat()
-        schedule_key = f"schedule:{schedule.id}:{due.isoformat()}"
-        assert jobs[0].idempotency_key == hashlib.sha256(schedule_key.encode()).hexdigest()
-        assert saved_schedule.is_running is True
-        assert saved_schedule.last_run is not None
-        assert saved_schedule.next_run > datetime.utcnow()
-        assert saved_schedule.task_config == {"interval_minutes": 60}
-        assert saved_schedule.updated_at == original_updated_at
-        claimed = await claim_next_job(session, lease)
-        await session.commit()
-        assert claimed.id == jobs[0].id
-
-    class SuccessfulOrchestrator:
-        async def start(self):
-            return None
-
-        async def run_full_cycle(self, reservation=None):
-            return {"success": True, "articles_processed": 3}
-
-    worker.orchestrator = SuccessfulOrchestrator()
-    await worker._run_claim(claimed)
-    async with factory() as session:
-        saved_job = await session.get(BackgroundJob, claimed.id)
-        saved_schedule = await session.get(ScheduleSettings, schedule.id)
-        assert saved_job.state == "succeeded"
-        assert saved_schedule.is_running is False
-        assert saved_schedule.last_status == "success"
-        assert saved_schedule.last_success_at is not None
-        assert saved_schedule.last_finished_at is not None
-        assert saved_schedule.next_run > saved_schedule.last_finished_at
-    await lease.release()
-
-
-@pytest.mark.asyncio
-async def test_invalid_due_schedule_does_not_block_later_valid_schedule(pg_worker_jobs):
-    engine, factory, _, _ = pg_worker_jobs
-    lease = BackgroundWorkerLease(engine)
-    assert await lease.acquire()
-    now = datetime.utcnow()
-    bad_due = now - timedelta(minutes=5)
-    valid_due = now - timedelta(minutes=4)
-    async with factory() as session:
-        bad = ScheduleSettings(
-            task_name="telegram_digest", enabled=True, schedule_type="interval",
-            task_config={"interval_minutes": "not-an-integer"},
-            next_run=bad_due, last_status="success",
-        )
-        valid = ScheduleSettings(
-            task_name="backup", enabled=True, schedule_type="interval",
-            task_config={"interval_minutes": 60}, next_run=valid_due,
-            last_status="success",
-        )
-        session.add_all([bad, valid])
-        await session.commit()
-
-    worker = DurableBackgroundWorker(db_engine=engine, session_factory=factory)
-    worker.lease = lease
-    await worker._enqueue_due_schedules()
-    async with factory() as session:
-        bad_saved = await session.get(ScheduleSettings, bad.id)
-        valid_saved = await session.get(ScheduleSettings, valid.id)
-        jobs = (await session.execute(select(BackgroundJob))).scalars().all()
-        assert bad_saved.is_running is False
-        assert bad_saved.last_status == "failed"
-        assert bad_saved.last_error == "Invalid scheduled task configuration"
-        assert bad_saved.next_run is None
-        assert valid_saved.is_running is True
-        assert valid_saved.next_run > datetime.utcnow()
-        assert len(jobs) == 1
-        assert jobs[0].kind == "backup"
-        assert jobs[0].payload["schedule_id"] == valid.id
-    await lease.release()
-
-
-@pytest.mark.asyncio
-async def test_queue_full_commits_prior_schedule_and_leaves_remaining_due(pg_worker_jobs):
-    engine, factory, _, _ = pg_worker_jobs
-    lease = BackgroundWorkerLease(engine)
-    assert await lease.acquire()
-    now = datetime.utcnow()
-    first_due = now - timedelta(minutes=5)
-    second_due = now - timedelta(minutes=4)
-    async with factory() as session:
-        for index in range(MAX_PENDING_JOBS - 1):
-            await enqueue_job_in_session(
-                session, "news_processing", {}, f"queue-full-seed:{index}",
-                coalesce_active=False,
-            )
-        first = ScheduleSettings(
-            task_name="backup", enabled=True, schedule_type="interval",
-            task_config={"interval_minutes": 60}, next_run=first_due,
-        )
-        second = ScheduleSettings(
-            task_name="telegram_digest", enabled=True, schedule_type="interval",
-            task_config={"interval_minutes": 60}, next_run=second_due,
-        )
-        session.add_all([first, second])
-        await session.commit()
-
-    worker = DurableBackgroundWorker(db_engine=engine, session_factory=factory)
-    worker.lease = lease
-    await worker._enqueue_due_schedules()
-    async with factory() as session:
-        first_saved = await session.get(ScheduleSettings, first.id)
-        second_saved = await session.get(ScheduleSettings, second.id)
-        count = await session.scalar(select(func.count()).select_from(BackgroundJob))
-        assert count == MAX_PENDING_JOBS
-        assert first_saved.is_running is True
-        assert second_saved.is_running is False
-        assert second_saved.next_run == second_due
     await lease.release()
 
 

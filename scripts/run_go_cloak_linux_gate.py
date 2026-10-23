@@ -61,7 +61,6 @@ QUALITY_CASES = ('case-0001', 'case-0008', 'case-0034', 'case-0041', 'case-0050'
 QUALITY_CORPUS_PATH = Path('/tmp/news-native-cloak.vh6lLSy2/shadow-private/corpus-run/corpus.json')
 QUALITY_PRIVATE_OUTPUT_LIMIT = 256 * 1024**2
 QUALITY_PHASES = (('C', 'c-smoke', ('case-0001',)),
-                  ('B', 'b-quality', QUALITY_CASES),
                   ('C', 'c-quality', tuple(case for case in QUALITY_CASES if case != 'case-0001')))
 NATIVE_STABILITY_CASE_IDS = (
     'article-js-cookie', 'redirect-article', 'slow-article', 'large-dom', 'challenge-page',
@@ -377,23 +376,16 @@ def validate_maintenance_options(runtime_only: bool, news_web_stopped: bool,
 
 def validate_worker_recovery_options(*, enabled, runtime_only, short_window,
                                      news_web_stopped, live_quality,
-                                     long_synthetic_soak, observe_resource_thresholds,
-                                     go_worker_only=False):
-    if go_worker_only and not enabled:
-        raise GateError('go_worker_only_requires_worker_recovery_gate')
+                                     long_synthetic_soak, observe_resource_thresholds):
     if enabled and (not runtime_only or not short_window or news_web_stopped
             or live_quality or long_synthetic_soak or observe_resource_thresholds):
         raise GateError('worker_recovery_gate_profile_invalid')
 
 
-def worker_recovery_stand_args(stage: Path, deadline: int, label: str,
-                               *, go_worker_only: bool = False) -> list[str]:
-    args = ['python3', str(stage/'benchmark/scripts/native_shadow_stand.py'), '--stage', str(stage),
+def worker_recovery_stand_args(stage: Path, deadline: int, label: str) -> list[str]:
+    return ['python3', str(stage/'benchmark/scripts/native_shadow_stand.py'), '--stage', str(stage),
             '--bootstrap', '--gate-only', '--bounded-profile', '--supervisor-cleanup',
             '--worker-recovery-gate', '--deadline', str(deadline), '--supervisor-label', label]
-    if go_worker_only:
-        args.append('--go-worker-only')
-    return args
 
 
 def verify_quality_corpus(path: Path) -> str:
@@ -464,18 +456,14 @@ def validate_quality_capture_state(captures: Path, phase: str) -> dict:
                 or not isinstance(ledger.get('blocked_hosts'), dict)
                 or not isinstance(ledger.get('last_navigation_epoch'), dict)):
             raise ValueError
-        expected_attempts = {'B': [], 'C': []}
+        expected_attempts = {'C': []}
         for variant, _, case_ids in QUALITY_PHASES:
             expected_attempts[variant].extend(case_ids)
-            if variant == 'B':
-                break
         if phase == 'c-smoke':
-            expected_attempts = {'B': [], 'C': ['case-0001']}
-        elif phase == 'b-quality':
-            expected_attempts = {'B': list(QUALITY_CASES), 'C': ['case-0001']}
+            expected_attempts = {'C': ['case-0001']}
         else:
-            expected_attempts = {'B': list(QUALITY_CASES), 'C': list(QUALITY_CASES)}
-        for variant in ('B', 'C'):
+            expected_attempts = {'C': list(QUALITY_CASES)}
+        for variant in ('C',):
             attempted = ledger['attempted'].get(variant)
             if (not isinstance(attempted, list) or len(attempted) != len(set(attempted))
                     or attempted != expected_attempts[variant]):
@@ -486,7 +474,7 @@ def validate_quality_capture_state(captures: Path, phase: str) -> dict:
                                                        for host in hosts)
                     or (epoch is not None and (type(epoch) not in (int, float) or epoch <= 0))):
                 raise ValueError
-        report_names = {'report-C.json'} if phase == 'c-smoke' else {'report-C.json', 'report-B.json'}
+        report_names = {'report-C.json'}
         reports = {}
         for name in report_names:
             path = captures / name
@@ -496,8 +484,7 @@ def validate_quality_capture_state(captures: Path, phase: str) -> dict:
             report = json.loads(path.read_text())
             rows = report.get('rows')
             row_ids = [row.get('id') for row in rows] if isinstance(rows, list) else None
-            selected = (['case-0001'] if variant == 'C' and phase in ('c-smoke', 'b-quality')
-                        else list(QUALITY_CASES))
+            selected = (['case-0001'] if phase == 'c-smoke' else list(QUALITY_CASES))
             if (report.get('schema_version') != 1 or report.get('variant') != variant
                     or report.get('corpus_sha256') != QUALITY_CORPUS_SHA256
                     or report.get('status') != 'complete' or report.get('fatal_error') is not None
@@ -1479,7 +1466,7 @@ def run_live_quality(supervisor: Supervisor, stage: Path, *, corpus: Path,
                      captures: Path, receipt: Path, parent_label: str,
                      active_deadline: float, hard_deadline: float,
                      phase_records: list[dict]):
-    """Execute the pinned C smoke, full B, and remaining C quality sequence."""
+    """Execute the pinned Go smoke followed by the remaining Go quality cases."""
     phase_results = []
     for variant, phase_name, case_ids in QUALITY_PHASES:
         if time.monotonic() >= active_deadline:
@@ -1530,13 +1517,11 @@ def main():
                         help=('diagnostic only: observe PSI and aggregate working-set threshold exceedances '
                               'without aborting; requires --runtime-only and a bounded diagnostic profile'))
     parser.add_argument('--live-quality', action='store_true',
-                        help='run the pinned five-case C/B/C live quality batch within fixed watchdog limits')
+                        help='run the pinned five-case Go live quality batch within fixed watchdog limits')
     parser.add_argument('--long-synthetic-soak', action='store_true',
                         help='run the fixed 600-second native synthetic stability workload diagnostically')
     parser.add_argument('--worker-recovery-gate', action='store_true',
                         help='run the bounded synthetic fatal-worker recovery acceptance gate')
-    parser.add_argument('--go-worker-only', action='store_true',
-                        help='test Go worker recovery without Python shared-browser compatibility; requires --worker-recovery-gate')
     parser.add_argument('--maintenance-container-id',
                         help='exact 64-hex news_web container ID captured before the authorized stop')
     parser.add_argument('--watchdog', action='store_true', help=argparse.SUPPRESS)
@@ -1550,8 +1535,7 @@ def main():
         runtime_only=args.runtime_only, short_window=args.short_window,
         news_web_stopped=args.news_web_stopped, live_quality=args.live_quality,
         long_synthetic_soak=args.long_synthetic_soak,
-        observe_resource_thresholds=args.observe_resource_thresholds,
-        go_worker_only=args.go_worker_only)
+        observe_resource_thresholds=args.observe_resource_thresholds)
     if args.worker_recovery_gate and ((stage/'.worker-recovery-active').exists()
             or (stage/'.worker-recovery-active').is_symlink()):
         raise GateError('worker_recovery_marker_stale')
@@ -1661,9 +1645,7 @@ def main():
     if args.worker_recovery_gate:
         summary.update({'worker_recovery_gate': True,
                         'memory_psi_policy': 'observe_only',
-                        'memory_psi_threshold_observations': 0,
-                        'python_shared_browser_compatibility':
-                            'not_tested' if args.go_worker_only else 'pending'})
+                        'memory_psi_threshold_observations': 0})
     if runtime_bundle_sha256 is not None:
         summary['runtime_bundle_manifest_sha256'] = runtime_bundle_sha256
     try:
@@ -1725,9 +1707,7 @@ def main():
                 raise GateError('native_stability_cleanup_unconfirmed')
             summary['native_stability'] = validate_stability_observation(stage)
         elif args.worker_recovery_gate:
-            stand = worker_recovery_stand_args(
-                stage, deadline, PARENT_LABEL+label_value,
-                go_worker_only=args.go_worker_only)
+            stand = worker_recovery_stand_args(stage, deadline, PARENT_LABEL+label_value)
             stand_timeout = max(1, int(active_deadline-time.monotonic()))
             supervisor.run_command(stand, phase='native-worker-recovery-gate', timeout=stand_timeout,
                                    log_path=stage/'stand.log', stage_size=True)
@@ -1770,14 +1750,8 @@ def main():
                             or args.observe_resource_thresholds
                             else 'passed')
         if args.worker_recovery_gate:
-            if args.go_worker_only:
-                summary.update({'acceptance_scope': 'go_native_worker_recovery_with_memory_caps',
-                                'python_shared_browser_compatibility': 'not_tested',
-                                'strict_psi_capacity_accepted': False})
-            else:
-                summary.update({'acceptance_scope': 'synthetic_integration_with_memory_caps',
-                                'python_shared_browser_compatibility': 'passed',
-                                'strict_psi_capacity_accepted': False})
+            summary.update({'acceptance_scope': 'go_native_worker_recovery_with_memory_caps',
+                            'strict_psi_capacity_accepted': False})
     except BaseException as exc:
         summary['state'] = 'failed'
         summary['error'] = str(exc) if isinstance(exc, GateError) else type(exc).__name__

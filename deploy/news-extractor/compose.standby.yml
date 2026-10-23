@@ -1,14 +1,14 @@
-# Reviewed draft: merge with the canonical personal_ai_stack deploy/news base.
-# Render and inspect with dedicated env; never deploy this file by itself.
+# HTTP-only Go extractor profile. Merge with the canonical News base and
+# render/inspect with the dedicated deployment environment.
 services:
   app:
     image: ${NEWS_APP_IMAGE:?Set the verified Python client image by digest}
     environment:
-      EXTRACTION_SERVICE_MODE: python
+      EXTRACTION_SERVICE_MODE: go
       EXTRACTION_SERVICE_NATIVE_BROWSER: 'false'
       EXTRACTION_SERVICE_URL: http://extractor:8080
       EXTRACTION_SERVICE_TOKEN: ${NEWS_EXTRACTOR_TOKEN:?Set the dedicated service token}
-      EXTRACTION_SERVICE_PYTHON_FALLBACK: 'true'
+      EXTRACTION_SERVICE_PYTHON_FALLBACK: 'false'
       EXTRACTION_SERVICE_TIMEOUT_SECONDS: '30'
       EXTRACTION_SERVICE_TOTAL_BUDGET_SECONDS: '120'
   extractor:

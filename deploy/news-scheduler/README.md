@@ -85,16 +85,20 @@ PostgreSQL system-catalog visibility is expected.
 The checked-in `compose.scheduler.yml` is a staged template and keeps the
 `standalone-scheduler` profile for preparation workflows. The final production
 Compose render removes that preparation-only profile so the scheduler remains
-part of ordinary future Compose operations. Keep `compose.cutover-drain.yml`
-out of the active production file list. Any Compose model that includes
+part of ordinary future Compose operations. Any Compose model that includes
 `compose.service-mode.yml` must include the scheduler service so its healthy
 dependency is defined.
 
 The deployed modes are `BACKGROUND_EXECUTION_MODE=worker`,
 `SCHEDULE_DISPATCH_MODE=service`, and `SCHEDULER_ENABLED=false` on the News
-processes. The standalone Go control is unpaused. This leaves the Python
-schedule loop disabled while News schedule CRUD/status uses the Go facade; the
-Python worker continues consuming durable jobs.
+processes. The last setting is inert compatibility configuration; no Python
+calendar loop remains. The standalone Go control owns schedule CRUD/status and
+dispatch, and the Python worker consumes its accepted durable jobs.
+
+Pause schedule creation and dispatch through the authenticated Go control API.
+`SCHEDULER_ENABLED=false` is not a pause switch, and no Compose overlay changes
+Go scheduler state. Wait for active dispatch leases to settle before inventory
+or rollback work; pausing does not cancel a request already in flight.
 
 Render Compose with the scheduler image digest and private config directory
 set in the operator environment. Inspect only a sanitized projection of image
@@ -142,9 +146,11 @@ delete queue data, or replay an accepted occurrence.
    current scheduler state and exact due instants. The inventory command is
    read-only; it does not write settings back into News.
 4. Keep Go paused until reconciliation is verified against the isolated
-   snapshot and News execution/receipt inventory. With separate rollback
-   authorization, switch app and worker back to Python mode, enable Python
-   scheduling, and only then resume it. Never run both schedulers at once.
+   snapshot and News execution/receipt inventory. If the scheduler release
+   must be rolled back, restore a previously approved Go scheduler/app
+   release and resume only after the occurrence and receipt inventory is
+   reconciled. This repository no longer contains a Python calendar runtime;
+   do not switch modes or resume dispatch against an unreconciled inventory.
    Keep the Go database and inventory for review; do not drop them as part of
    rollback.
 

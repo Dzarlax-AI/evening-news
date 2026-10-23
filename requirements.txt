@@ -17,8 +17,7 @@ Brotli>=1.2.0                   # Bounded streaming decompression API
 pydantic>=2.5.0
 pydantic-settings>=2.1.0
 
-# RSS parsing (для чтения источников)
-feedparser>=6.0.10
+# HTML utilities used by News processing and selector learning
 beautifulsoup4>=4.12.2
 
 # Date handling
@@ -60,9 +59,7 @@ rich>=13.7.0
 # Process monitoring
 psutil>=5.9.6                 # System and process monitoring
 
-# Content extraction improvements
-readability-lxml>=0.8.1       # Mozilla readability algorithm
-nodriver==0.50.3              # Chrome CDP browser automation; lifecycle behavior is version-sensitive
+# Shared content utilities
 chardet>=5.2.0                # Character encoding detection
 
 # Testing

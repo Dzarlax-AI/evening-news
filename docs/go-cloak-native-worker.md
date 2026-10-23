@@ -153,27 +153,27 @@ production reliability claim.
 
 ## Benchmark and remaining gates
 
-`scripts/benchmark_native_cloak.py` provides fixed-corpus A/B/C/D controller
-runs and `tests/fixtures/native-cloak/origin.py` serves controlled HTTPS pages.
+`scripts/benchmark_native_cloak.py` now provides fixed-corpus Go-only (`C`)
+controller runs; `tests/fixtures/native-cloak/origin.py` serves controlled HTTPS
+pages. The A/B/D comparison tools and Python observer have been retired. Results
+below from earlier A/B/C/D runs are historical evidence, not a runnable current
+acceptance profile.
 Real cgroup-v2 counters are required: absent data fails instead of becoming zero.
 Distinct, non-overlapping cgroups prevent duplicate sums. One-second synchronized
 samples yield the maximum observed sum; `memory.peak` is a separate container
 lifetime peak, not a sum claimed as a simultaneous system peak. Reports exclude
 URL/body/credentials and distinguish short smoke from independent fresh runs.
 
-A retains the existing Python browser helper and its production policy. B uses
-nodriver with a matched native profile. C uses the Go service with that profile.
-D currently proves controller/client plumbing only; it is not full application
-processing evidence. A/C includes policy changes; B/C is the intended controller
-comparison. Three independent repeats require fresh external containers, not a
-loop labeled as independent inside one process.
+Current acceptance uses the Go service and its native profile. Three independent
+repeats require fresh external containers, not a loop labeled as independent
+inside one process.
 
 Fresh verification: **487 Python tests passed, 5 explicit real-browser/soak tests
 skipped**, using dedicated local PostgreSQL; Go test/vet/module verification
 passed, including Linux race across all eight packages. The new pinned-Cloak
 integration evidence above is separate from those skipped Python checks.
 
-Three short fresh-container series completed: A/B/C (90 jobs), matched-readiness
+Historical runs: three short fresh-container series completed: A/B/C (90 jobs), matched-readiness
 B/C (60 jobs), and matched-readiness/equal-384-MiB-controller-limit B/C (60 jobs).
 All 210 measured jobs met fixture expectations with no OOM events. Warmups are
 separate from these counts. Each series is one invocation per variant; this is

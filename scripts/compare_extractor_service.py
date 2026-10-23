@@ -1,21 +1,17 @@
-"""Compare captured article fixtures with the independent extractor HTTP service.
+"""Check the independent extractor HTTP service against frozen captured-input expectations.
 
-Python replay uses production extraction helpers with network and persistence
-blocked. Service requests contain the captured HTML/content and disable browser
-rendering. Reports intentionally contain only bounded state, method, length and
-comparison flags; article text, URLs and tokens never enter the report.
+Requests contain bounded captured HTML/content and disable browser rendering.
+Reports include outcome and match flags, never article text, URLs, or tokens.
 """
 
 import argparse
 import asyncio
 import hashlib
-import importlib.util
 import json
 import os
 from pathlib import Path
 import re
 import sys
-import time
 
 sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
 
@@ -30,30 +26,14 @@ MAX_TEXT_CHARS = 100000
 MAX_BUDGET_SECONDS = 30
 MAX_CASE_ID_CHARS = 96
 SUPPORTED_SOURCE_TYPES = {"article", "web"}
-# These strategies consume the supplied capture directly in the service. The
-# pipeline strategies can fetch alternate URLs after a failed candidate, so
-# they are excluded from this strictly offline comparison.
+# Only direct captured-input strategies are accepted, so the service cannot
+# fetch alternate URLs as part of this offline contract gate.
 SUPPORTED_STRATEGIES = {
     "source_content", "enhanced_selectors", "readability", "json_ld",
     "open_graph", "meta_description", "enhanced_heuristics", "fallback_extraction",
 }
-ALLOWED_METHODS = SUPPORTED_STRATEGIES | {
-    "browser_rendering", "browser_heuristics", "reddit_json", "reddit_linked_article",
-    "failed", "other",
-}
 ALLOWED_INPUT_FIELDS = {"url", "html", "content", "title", "strategy"}
-METADATA_FIELDS = ("title", "publication_date", "author", "description", "image_url")
 EXPECTED_STATES = {"extracted", "failed", "resource_limit"}
-
-
-def _load_replay_module():
-    path = Path(__file__).with_name("benchmark_python_pipeline.py")
-    spec = importlib.util.spec_from_file_location("benchmark_python_pipeline", path)
-    if spec is None or spec.loader is None:
-        raise RuntimeError("python_replay_unavailable")
-    module = importlib.util.module_from_spec(spec)
-    spec.loader.exec_module(module)
-    return module
 
 
 def _load_corpus(path):
@@ -165,45 +145,6 @@ def _validate_case(case):
         raise ValueError("case_requires_http_url")
 
 
-def _method(value):
-    return value if isinstance(value, str) and value in ALLOWED_METHODS else "other"
-
-
-def _media_value(result):
-    return result.get("media") or []
-
-
-def _comparison(python_result, service_payload):
-    go_result = service_payload["result"]
-    python_content = python_result.get("content") or ""
-    service_content = go_result.get("content") or ""
-    python_media = _media_value(python_result)
-    service_media = go_result.get("media") or []
-    python_state = python_result.get("state", "failed")
-    outcome = service_payload["outcome"]
-    service_state = go_result.get("state")
-    if service_state not in EXPECTED_STATES:
-        service_state = "extracted" if outcome == "success" else "failed"
-    known_rejected = outcome == "rejected" and python_state == "failed" and service_state == "failed"
-    metadata = {
-        key: (python_result.get(key) or "") == (go_result.get(key) or "")
-        for key in METADATA_FIELDS
-    }
-    return {
-        "python_state": python_state if python_state in {"extracted", "failed", "resource_limit"} else "other",
-        "service_state": service_state,
-        "service_outcome": outcome,
-        "known_rejected": known_rejected,
-        "python_method": _method(python_result.get("method")),
-        "service_method": _method(go_result.get("method_used") or go_result.get("method")),
-        "python_chars": min(len(python_content), MAX_TEXT_CHARS),
-        "service_chars": min(len(service_content), MAX_TEXT_CHARS),
-        "content_match": " ".join(python_content.split()) == " ".join(service_content.split()),
-        "metadata_match": metadata,
-        "media_match": python_media == service_media,
-    }
-
-
 def _projected_match(expected, actual):
     if isinstance(expected, dict):
         return isinstance(actual, dict) and all(
@@ -226,7 +167,7 @@ def _expected_matches(expected, result, state):
     return (state == expected["state"]
             and all(" ".join(value.split()) in normalized for value in expected.get("contains", []))
             and all(" ".join(value.split()) not in normalized for value in expected.get("not_contains", []))
-            and all(_projected_match(value, result.get(key)) for key, value in fields.items())
+            and all(key in result and _projected_match(value, result[key]) for key, value in fields.items())
             and ("method" not in expected or expected["method"] == method)
             and (not expected.get("error")
                  or expected["error"] in (result.get("error") or ""))
@@ -234,30 +175,13 @@ def _expected_matches(expected, result, state):
                     for value in expected.get("trace_contains", [])))
 
 
-def _mismatch(row):
-    if not row["python_expected_match"] or not row["service_expected_match"]:
-        return True
-    if row["known_rejected"]:
-        return False
-    return (row["python_state"] != row["service_state"]
-            or not row["content_match"] or not all(row["metadata_match"].values())
-            or not row["media_match"])
-
-
-def _classify(row, expected):
-    if not row["python_expected_match"] and not row["service_expected_match"]:
-        return "both_expectation_mismatch"
-    if not row["python_expected_match"]:
-        return "python_expectation_mismatch"
-    if not row["service_expected_match"]:
-        return "service_expectation_mismatch"
-    if expected["state"] != "extracted":
-        return "expected_failure"
-    if row["known_rejected"]:
-        return "known_rejected"
-    if row["mismatch"]:
-        return "implementation_difference"
-    return "matched"
+def _service_state(payload):
+    state = payload["result"].get("state")
+    if state is None:
+        state = "extracted" if payload.get("outcome") in {"success", "partial"} else "failed"
+    if state not in EXPECTED_STATES:
+        raise ValueError("service_result_requires_supported_state")
+    return state
 
 
 async def run(args):
@@ -268,35 +192,28 @@ async def run(args):
         raise ValueError("missing_token_environment_variable")
     corpus, corpus_sha = _load_corpus(args.corpus)
     cases = _select_cases(corpus, args.case)
-    replay = _load_replay_module()
     client = ExtractionServiceClient(args.endpoint, token, max_bytes=MAX_HTML_BYTES,
                                      max_chars=MAX_TEXT_CHARS)
     rows = []
     for cycle in range(1, args.cycles + 1):
         for case in cases:
             data = case["input"]
-            start = time.perf_counter()
-            python_result = await replay.replay(case)
-            python_ms = round((time.perf_counter() - start) * 1000, 3)
             request_data = {key: data[key] for key in ("url", "html", "content", "title", "strategy") if key in data}
-            service_start = time.perf_counter()
             payload = await client.extract(
                 request_data["url"], timeout_seconds=MAX_BUDGET_SECONDS,
                 html=request_data.get("html"), content=request_data.get("content"),
                 title=request_data.get("title"), strategy=request_data.get("strategy", "auto"),
                 source_type=case.get("source_type", "article"), use_browser=False,
             )
-            service_ms = round((time.perf_counter() - service_start) * 1000, 3)
-            row = _comparison(python_result, payload)
             expected = case["expected"]
-            row["python_expected_match"] = _expected_matches(
-                expected, python_result, row["python_state"])
-            row["service_expected_match"] = _expected_matches(
-                expected, payload["result"], row["service_state"])
-            row.update({"id": case["id"], "cycle": cycle,
-                        "python_duration_ms": python_ms, "service_duration_ms": service_ms})
-            row["mismatch"] = _mismatch(row)
-            row["classification"] = _classify(row, expected)
+            state = _service_state(payload)
+            matched = _expected_matches(expected, payload["result"], state)
+            row = {"id": case["id"], "cycle": cycle, "state": state,
+                   "outcome": payload["outcome"],
+                   "method": payload["result"].get("method_used") or payload["result"].get("method") or "",
+                   "content_chars": min(len(payload["result"].get("content") or ""), MAX_TEXT_CHARS),
+                   "expected_match": matched, "mismatch": not matched,
+                   "classification": "matched" if matched else "expected_mismatch"}
             rows.append(row)
     report = {
         "version": 1,
@@ -305,7 +222,7 @@ async def run(args):
         "cycles": args.cycles,
         "records": rows,
         "mismatches": sum(row["mismatch"] for row in rows),
-        "scope": "captured input; Python offline replay and independent HTTP service; browser disabled",
+        "scope": "captured input checked against frozen expectations; independent HTTP service; browser disabled",
     }
     output = Path(args.output)
     output.parent.mkdir(parents=True, exist_ok=True)

@@ -11,8 +11,7 @@
       "provenance": {
         "kind": "synthetic",
         "derived_from": [
-          "go/extractor/types.go",
-          "scripts/benchmark_python_pipeline.py"
+          "go/extractor/types.go"
         ]
       },
       "input": {

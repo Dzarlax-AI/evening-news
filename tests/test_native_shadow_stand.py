@@ -30,32 +30,7 @@ def test_observer_mounts_staged_python_extraction_sources_read_only(tmp_path):
     assert all(path.endswith(':ro') for path in stand.observer_extraction_mounts(tmp_path))
 
 
-def test_python_proxy_sources_are_separate_read_only_opt_in_mounts(tmp_path):
-    assert stand.observer_python_proxy_mounts(tmp_path) == [
-        str(tmp_path/'benchmark/news_aggregator/config.py') + ':/app/news_aggregator/config.py:ro',
-        str(tmp_path/'benchmark/news_aggregator/core/browser_pool.py') + ':/app/news_aggregator/core/browser_pool.py:ro',
-        str(tmp_path/'benchmark/news_aggregator/core/browser_proxy.py') + ':/app/news_aggregator/core/browser_proxy.py:ro',
-    ]
-
-
-def test_python_source_parser_mounts_are_separate_read_only_opt_in_mounts(tmp_path):
-    mounts=stand.observer_python_parser_mounts(tmp_path)
-    assert mounts==[
-        str(tmp_path/'benchmark/news_aggregator/sources/base.py') +
-        ':/app/news_aggregator/sources/base.py:ro',
-        str(tmp_path/'benchmark/news_aggregator/sources/page_monitor_source.py') +
-        ':/app/news_aggregator/sources/page_monitor_source.py:ro',
-        str(tmp_path/'benchmark/news_aggregator/telegram/telegram_source.py') +
-        ':/app/news_aggregator/telegram/telegram_source.py:ro',
-        str(tmp_path/'benchmark/news_aggregator/telegram/message_parser.py') +
-        ':/app/news_aggregator/telegram/message_parser.py:ro',
-        str(tmp_path/'benchmark/news_aggregator/telegram/media_extractor.py') +
-        ':/app/news_aggregator/telegram/media_extractor.py:ro',
-    ]
-    assert all(path.endswith(':ro') for path in mounts)
-
-
-def test_shared_python_compatibility_runs_only_after_synthetic_origin_is_listening(tmp_path):
+def test_go_native_browser_route_gate_runs_after_origin_is_ready(tmp_path):
     events=[]
     instance=object.__new__(stand.Stand)
     instance.stage=tmp_path
@@ -64,7 +39,6 @@ def test_shared_python_compatibility_runs_only_after_synthetic_origin_is_listeni
                       'control':{'ip':'172.22.0.2'}}
     instance.app='pinned-app'
     instance.worker_recovery_gate=True
-    instance.go_worker_only=False
     instance.bounded_profile=True
     instance.observer='observer-test'
     def run(suffix,*args,**kwargs):
@@ -84,7 +58,6 @@ def test_shared_python_compatibility_runs_only_after_synthetic_origin_is_listeni
         events.append('browser_generation_read')
         return json.dumps({'browser_generation':generation})
     instance.docker=docker
-    instance.python_shared_browser_gate=lambda: events.append('python_compatibility_gate')
     def native_gate(_generation):
         events.append('native_route_gate')
         raise stand.StandError('stop_after_order_check')
@@ -92,66 +65,7 @@ def test_shared_python_compatibility_runs_only_after_synthetic_origin_is_listeni
     with pytest.raises(stand.StandError,match='stop_after_order_check'):
         instance._controlled_browser_routes()
     assert events==['origin_started','origin_namespace_verified','origin_listener_ready',
-                    'browser_generation_read','python_compatibility_gate','native_route_gate']
-
-
-@pytest.mark.asyncio
-async def test_fixed_fixture_html_runs_through_production_telegram_and_page_monitor_parsers():
-    origin_path=Path(__file__).parent/'fixtures/native-shadow/gate_origin.py'
-    origin_spec=importlib.util.spec_from_file_location('native_gate_origin_fixture',origin_path)
-    origin=importlib.util.module_from_spec(origin_spec)
-    sys.modules[origin_spec.name]=origin
-    origin_spec.loader.exec_module(origin)
-
-    from news_aggregator.sources.base import SourceInfo, SourceType
-    from news_aggregator.sources.page_monitor_source import PageMonitorConfig, PageMonitorSource
-    from news_aggregator.telegram.telegram_source import TelegramSource
-
-    telegram_html=origin.route_response('/telegram-fixture','172.22.0.5').body.decode()
-    telegram=TelegramSource(SourceInfo(
-        name='fixture',source_type=SourceType.TELEGRAM,
-        url='https://native-fixture.test/telegram-fixture',description='fixed fixture'))
-    telegram_articles=await telegram._parse_html(telegram_html,'https://native-fixture.test/telegram-fixture')
-    assert len(telegram_articles)==1
-    assert telegram_articles[0].source_type=='telegram'
-    assert telegram_articles[0].raw_data['message_id']=='1'
-    assert len(telegram_articles[0].content)>=200
-
-    monitor_config=PageMonitorConfig(
-        url='https://native-fixture.test/page-monitor-fixture',name='fixture',
-        article_selectors=['.monitor-item'],title_selectors=['h2'],link_selectors=['a'],
-        enable_ai_analysis=False)
-    monitor=PageMonitorSource(monitor_config)
-    monitor_html=origin.route_response('/page-monitor-fixture','172.22.0.5').body.decode()
-    monitor_articles=await monitor._extract_articles_from_html(monitor_html)
-    assert len(monitor_articles)==1
-    assert monitor_articles[0]['title']=='Gate Page Monitor fixture update'
-    assert monitor_articles[0]['link']=='https://native-fixture.test/article-alpha'
-
-
-def test_go_worker_only_skips_python_compatibility_gate_and_mounts(tmp_path):
-    assert stand.python_shared_compatibility_enabled(True, False)
-    assert not stand.python_shared_compatibility_enabled(True, True)
-    assert not stand.python_shared_compatibility_enabled(False, True)
-    selected_mounts = (stand.observer_python_proxy_mounts(tmp_path)
-                       if stand.python_shared_compatibility_enabled(True, False) else [])
-    selected_parser_mounts = (stand.observer_python_parser_mounts(tmp_path)
-                              if stand.python_shared_compatibility_enabled(True, False) else [])
-    go_only_mounts = (stand.observer_python_proxy_mounts(tmp_path)
-                      if stand.python_shared_compatibility_enabled(True, True) else [])
-    assert len(selected_mounts) == 3
-    assert len(selected_parser_mounts) == 5
-    assert go_only_mounts == []
-
-
-def test_go_worker_only_cli_requires_worker_recovery_profile(tmp_path, monkeypatch):
-    monkeypatch.setattr(stand, 'Stand', lambda *_a, **_k: pytest.fail(
-        'stand created before go-worker-only option validation'))
-    monkeypatch.setattr(stand.sys, 'argv', [
-        'native_shadow_stand.py', '--stage', str(tmp_path), '--bootstrap', '--gate-only',
-        '--bounded-profile', '--go-worker-only'])
-    with pytest.raises(stand.StandError, match='go_worker_only_requires_worker_recovery_gate'):
-        stand.main()
+                    'browser_generation_read','native_route_gate']
 
 
 def test_core_extractor_native_gate_uses_current_production_route_and_no_python_browser():
@@ -239,203 +153,6 @@ def test_core_extractor_native_gate_invocation_requires_worker_recovery_and_acce
     assert calls[0][0][4]==stand.CORE_EXTRACTOR_NATIVE_GATE
     assert calls[0][0][5]==generation
     assert calls[0][1]['timeout']==75
-
-
-def test_python_shared_browser_gate_uses_production_pool_and_sanitized_receipt():
-    script=stand.PYTHON_SHARED_BROWSER_GATE
-    assert 'from news_aggregator.core import browser_pool as pool' in script
-    assert 'from news_aggregator.core.resource_limits import read_browser_html' in script
-    assert 'pool.browser_tab(' in script and 'pool.run_browser_operation(' in script
-    assert 'from news_aggregator.telegram.telegram_source import TelegramSource' in script
-    assert 'telegram._fetch_with_browser()' in script
-    assert 'from news_aggregator.sources.page_monitor_source import PageMonitorConfig, PageMonitorSource' in script
-    assert 'monitor._extract_articles_from_html(monitor_html)' in script
-    assert 'enable_ai_analysis=False' in script
-    assert "hashlib.sha256(websocket.encode()).hexdigest()" in script
-    assert "write_receipt({'initial_navigation_succeeded':initial_ok" in script
-    assert 'benchmark_native' not in script and 'target_id' not in script
-    assert "os.open('/out/python-shared-browser.json'" in script
-    assert "'browser_generation_unchanged':False" in script
-
-
-def test_python_shared_browser_failure_codes_are_finite_and_do_not_export_messages():
-    tree=ast.parse(stand.PYTHON_SHARED_BROWSER_GATE)
-    functions=[node for node in tree.body if
-        (isinstance(node,ast.FunctionDef) and node.name in {
-            'classify_failure_code','classify_cause_type','classify_navigation_error_code',
-            'classify_proxy_diagnostics'})
-        or (isinstance(node,ast.Assign) and any(isinstance(target,ast.Name)
-            and target.id=='SAFE_NAVIGATION_ERROR_CODES' for target in node.targets))]
-    assert len(functions)==5
-    namespace={}
-    exec(compile(ast.Module(body=functions,type_ignores=[]),'<failure-codes>','exec'),namespace)
-    class BrowserUnavailableError(Exception): pass
-    generic=BrowserUnavailableError('private endpoint and token')
-    assert namespace['classify_failure_code'](generic)=='browser_unavailable_other'
-    assert namespace['classify_failure_code'](BrowserUnavailableError('Browser proxy setup failed'))=='proxy_setup_failed'
-    assert namespace['classify_failure_code'](RuntimeError('secret-bearing message'))=='runtime_error'
-    assert namespace['classify_cause_type'](generic)=='none'
-    try:
-        try:
-            raise type('ProtocolException',(Exception,),{})('sensitive CDP payload')
-        except Exception:
-            raise BrowserUnavailableError('Browser proxy setup failed') from None
-    except BrowserUnavailableError as wrapped:
-        cause_type=namespace['classify_cause_type'](wrapped)
-        assert cause_type=='ProtocolException'
-    assert 'sensitive CDP payload' not in cause_type
-
-    class NavigationError(Exception): pass
-    error=NavigationError('raw protocol details')
-    error.navigation_error_code='net::ERR_PROXY_CONNECTION_FAILED'
-    assert namespace['classify_navigation_error_code'](error)=='net::ERR_PROXY_CONNECTION_FAILED'
-    error.navigation_error_code='net::ERR_PROXY_CONNECTION_FAILED SECRET'
-    assert namespace['classify_navigation_error_code'](error)=='other'
-    error.navigation_error_code='other'
-    assert namespace['classify_navigation_error_code'](error)=='other'
-    assert 'raw protocol details' not in namespace['classify_navigation_error_code'](error)
-
-    diagnostic_keys=('request_paused','request_continued','request_blocked','auth_required','auth_proxy',
-        'auth_server','auth_other','auth_provided','auth_cancelled','auth_continued','handler_failed')
-    diagnostics={key:0 for key in diagnostic_keys}
-    diagnostics.update(request_paused=2,auth_required=1,auth_proxy=1,auth_provided=1,auth_continued=1)
-    error.proxy_diagnostics=diagnostics
-    assert namespace['classify_proxy_diagnostics'](error)==diagnostics
-    error.proxy_diagnostics={**diagnostics,'token':'sensitive'}
-    assert namespace['classify_proxy_diagnostics'](error) is None
-    error.proxy_diagnostics={**diagnostics,'auth_proxy':4097}
-    assert namespace['classify_proxy_diagnostics'](error) is None
-
-
-def test_python_shared_browser_optional_navigation_code_is_validated():
-    receipt={'state':'failed','navigation_error_code':'net::ERR_PROXY_CONNECTION_FAILED'}
-    assert stand.validate_python_shared_navigation_code(receipt)==receipt
-    assert stand.validate_python_shared_navigation_code({'state':'failed'})=={'state':'failed'}
-    for code in ('raw CDP errorText', [], 1):
-        with pytest.raises(stand.StandError,match='python_shared_browser_receipt_invalid'):
-            stand.validate_python_shared_navigation_code({'navigation_error_code':code})
-    keys={'request_paused','request_continued','request_blocked','auth_required','auth_proxy',
-          'auth_server','auth_other','auth_provided','auth_cancelled','auth_continued','handler_failed'}
-    diagnostics={key:0 for key in keys}
-    failed={'state':'failed','proxy_diagnostics':diagnostics}
-    assert stand.validate_python_shared_navigation_code(failed)==failed
-    for invalid in ({**diagnostics,'token':'secret'}, {**diagnostics,'request_paused':True},
-                    {**diagnostics,'handler_failed':4097}):
-        with pytest.raises(stand.StandError,match='python_shared_browser_receipt_invalid'):
-            stand.validate_python_shared_navigation_code({'proxy_diagnostics':invalid})
-
-
-def test_python_context_normalizer_accepts_generated_nodriver_response():
-    from nodriver import cdp
-
-    tree=ast.parse(stand.PYTHON_SHARED_BROWSER_GATE)
-    main=next(node for node in tree.body if isinstance(node,ast.AsyncFunctionDef) and node.name=='main')
-    normalizer=next(node for node in ast.walk(main)
-        if isinstance(node,ast.FunctionDef) and node.name=='contexts_value')
-    namespace={}
-    exec(compile(ast.Module(body=[normalizer],type_ignores=[]),'<contexts-value>','exec'),namespace)
-    contexts_value=namespace['contexts_value']
-
-    command=cdp.target.get_browser_contexts()
-    assert next(command)=={'method':'Target.getBrowserContexts'}
-    try:
-        command.send({'browserContextIds':['owned-context'],
-                      'defaultBrowserContextId':'default-context'})
-    except StopIteration as result:
-        response=result.value
-    assert isinstance(response,tuple) and len(response)==2
-    assert contexts_value(response)=={'owned-context'}
-    assert contexts_value((['legacy-context'],))=={'legacy-context'}
-    assert contexts_value(['list-context'])=={'list-context'}
-
-    for malformed in ((['ctx'],'ctx'), (['ctx'],False), (None,),
-                      (['ctx'],None,'extra'), ('not-a-list',None)):
-        with pytest.raises(RuntimeError):
-            contexts_value(malformed)
-
-
-def test_python_shared_browser_connection_and_baseline_are_guarded_by_cleanup():
-    tree=ast.parse(stand.PYTHON_SHARED_BROWSER_GATE)
-    main=next(node for node in tree.body if isinstance(node,ast.AsyncFunctionDef) and node.name=='main')
-    guarded=next(node for node in main.body if isinstance(node,ast.Try) and node.finalbody)
-    assert any(isinstance(node,ast.Assign) and any(
-        isinstance(target,ast.Name) and target.id=='baseline' for target in node.targets)
-        for node in guarded.body)
-    assert any(isinstance(node,ast.Call) and isinstance(node.func,ast.Attribute)
-        and node.func.attr=='get_browser' for statement in guarded.body for node in ast.walk(statement))
-    assert any(isinstance(node,ast.Call) and isinstance(node.func,ast.Attribute)
-        and node.func.attr=='close_browser' for statement in guarded.finalbody for node in ast.walk(statement))
-    assert guarded.handlers and guarded.handlers[0].type.id=='BaseException'
-    failure_targets={target.id for node in guarded.handlers[0].body if isinstance(node,ast.Assign)
-        for target in node.targets if isinstance(target,ast.Name)}
-    assert {'failure_phase','failure_type'} <= failure_targets
-    assert any(isinstance(statement,ast.Assign) and any(isinstance(target,ast.Name)
-        and target.id=='cleanup_failure_type' for target in statement.targets)
-        for node in guarded.finalbody for statement in ast.walk(node))
-
-
-def test_python_shared_browser_gate_reports_sanitized_setup_failure(tmp_path):
-    receipt_path=tmp_path/'python-shared-browser.json'
-    script=stand.PYTHON_SHARED_BROWSER_GATE.replace(
-        "'/out/python-shared-browser.json'",repr(str(receipt_path)))
-    environment={key:value for key,value in os.environ.items()
-                 if key!='EXTRACTOR_NATIVE_PROXY_TOKEN'}
-    result=subprocess.run([sys.executable,'-c',script,'http://172.22.0.4:8081'],
-        capture_output=True,text=True,env=environment,timeout=5)
-    assert result.returncode==1
-    assert result.stdout=='' and result.stderr==''
-    assert stat.S_IMODE(receipt_path.stat().st_mode)==0o600
-    receipt=json.loads(receipt_path.read_text())
-    assert receipt=={
-        'initial_navigation_succeeded':False,'deferred_navigation_succeeded':False,
-        'blocked_http_rejected':False,'publisher_auth_rejected':False,
-        'publisher_auth_cancelled':False,'proxy_authentication_succeeded':False,
-        'telegram_browser_parser_succeeded':False,'page_monitor_browser_parser_succeeded':False,
-        'forbidden_side_effect_imports_absent':False,'owned_context_cleanup':False,
-        'browser_generation_unchanged':False,'context_checks':0,'bounded_html_reads':0,
-        'failure_phase':'setup','failure_type':'RuntimeError','failure_code':'runtime_error',
-        'failure_cause_type':'none',
-    }
-
-
-def test_python_shared_browser_gate_requires_complete_success_receipt(tmp_path):
-    instance=stand.Stand.__new__(stand.Stand)
-    instance.anchors={'gateway':{'ip':'172.22.0.4'}}
-    instance.observer='owned-observer'
-    instance.run_dir=tmp_path
-    instance.check_budget=lambda: None
-    receipt={'initial_navigation_succeeded':True,'deferred_navigation_succeeded':True,
-        'blocked_http_rejected':True,'publisher_auth_rejected':True,'publisher_auth_cancelled':True,
-        'proxy_authentication_succeeded':True,'telegram_browser_parser_succeeded':True,
-        'page_monitor_browser_parser_succeeded':True,'forbidden_side_effect_imports_absent':True,
-        'owned_context_cleanup':True,'browser_generation_unchanged':True,
-        'context_checks':6,'bounded_html_reads':4}
-    calls=[]
-    def docker(*args,**kwargs):
-        calls.append((args,kwargs))
-        (tmp_path/'python-shared-browser.json').write_text(json.dumps(receipt))
-        return ''
-    instance.docker=docker
-    assert instance.python_shared_browser_gate()==receipt
-    assert calls[0][0][:4]==('exec','owned-observer','python','-c')
-    assert calls[0][1]['timeout']==90
-
-    (tmp_path/'python-shared-browser.json').unlink()
-    failed_receipt={'navigation_error_code':'net::ERR_PROXY_CONNECTION_FAILED'}
-    def failed_docker(*_args,**_kwargs):
-        path=tmp_path/'python-shared-browser.json'
-        path.write_text(json.dumps(failed_receipt))
-        path.chmod(0o600)
-        raise subprocess.CalledProcessError(1,['docker','exec'])
-    instance.docker=failed_docker
-    with pytest.raises(stand.StandError,match='python_shared_browser_gate_failed'):
-        instance.python_shared_browser_gate()
-
-    (tmp_path/'python-shared-browser.json').unlink()
-    instance.docker=docker
-    receipt['publisher_auth_rejected']=False
-    with pytest.raises(stand.StandError,match='python_shared_browser_receipt_invalid'):
-        instance.python_shared_browser_gate()
 
 
 def test_diagnostic_logs_verify_worker_and_capture_both_docker_streams(monkeypatch):
@@ -799,11 +516,11 @@ def test_idle_offsets_and_oom_guard(tmp_path,monkeypatch):
         instance.idle_gates('C','oom')
 
 
-def test_first_public_smoke_requires_c_single_case_before_b(tmp_path):
+def test_first_public_smoke_requires_single_c_case(tmp_path):
     corpus=tmp_path/'corpus.json';corpus.write_text('{"version":1}')
     instance=stand.Stand.__new__(stand.Stand)
     instance.check_public_smoke('C',corpus,tmp_path,['case-0001'])
-    for variant,ids in [('B',[]),('B',['case-0001']),('C',[]),('C',['case-0001','case-0002'])]:
+    for variant,ids in [('C',[]),('C',['case-0001','case-0002'])]:
         with pytest.raises(stand.StandError,match='first_public'):
             instance.check_public_smoke(variant,corpus,tmp_path,ids)
 
@@ -822,7 +539,7 @@ def test_public_smoke_rejects_failed_incomplete_or_stale_report(tmp_path,change)
     report.update(change)
     (tmp_path/'report-C.json').write_text(json.dumps(report))
     instance=stand.Stand.__new__(stand.Stand)
-    for variant in ('B','C'):
+    for variant in ('C',):
         with pytest.raises(stand.StandError,match='first_public_native_tls'):
             instance.check_public_smoke(variant,corpus,tmp_path,['case-0002'])
 
@@ -835,11 +552,10 @@ def test_public_smoke_accepts_only_matching_complete_c_success(tmp_path):
             'fatal_error':None,'rows':[{'id':'case-0001','outcome':'success'}]}
     prior=tmp_path/'report-C.json';prior.write_text(json.dumps(report))
     instance=stand.Stand.__new__(stand.Stand)
-    for variant in ('B','C'):
-        instance.check_public_smoke(variant,corpus,tmp_path)
+    instance.check_public_smoke('C',corpus,tmp_path)
     prior.write_text('{broken')
     with pytest.raises(stand.StandError,match='first_public_native_tls'):
-        instance.check_public_smoke('B',corpus,tmp_path)
+        instance.check_public_smoke('C',corpus,tmp_path)
 
 
 @pytest.mark.parametrize('error,status,allowed',[
@@ -867,81 +583,22 @@ def test_public_smoke_requires_origin_tls_not_extraction_success(tmp_path,error,
                                       'error':error,'upstream_status':status}]}
     (tmp_path/'report-C.json').write_text(json.dumps(report))
     instance=stand.Stand.__new__(stand.Stand)
-    for variant in ('B','C'):
-        if allowed:
-            instance.check_public_smoke(variant,corpus,tmp_path)
-        else:
-            with pytest.raises(stand.StandError,match='first_public_native_tls'):
-                instance.check_public_smoke(variant,corpus,tmp_path)
-
-
-@pytest.mark.parametrize('b_change',[
-    None, {'corpus_sha256':'stale'}, {'fatal_error':'browser_transport_unavailable'},
-    {'status':'incomplete'}, {'variant':'C'}, {'rows':[]},
-    {'rows':[{'outcome':'failed','error':'transport_error','upstream_status':None}]},
-])
-def test_later_c_failure_only_permits_verified_b_continuation(tmp_path,b_change):
-    import hashlib
-    corpus=tmp_path/'corpus.json';corpus.write_bytes(b'{"version":1}')
-    first={'id':'case-0001','outcome':'rejected','error':'native_browser_http_rejected',
-           'upstream_status':403}
-    base={'schema_version':1,'corpus_sha256':hashlib.sha256(corpus.read_bytes()).hexdigest()}
-    failed_c={**base,'variant':'C','status':'incomplete','fatal_error':'native_browser_unavailable',
-              'rows':[first,{'id':'case-0008','outcome':'failed','error':'native_browser_unavailable'}]}
-    c_path=tmp_path/'report-C.json';c_path.write_text(json.dumps(failed_c))
-    b_path=tmp_path/'report-B.json'
-    healthy_b={**base,'variant':'B','status':'complete','fatal_error':None,
-               'rows':[first]+[{'id':f'case-{i:04d}','outcome':'success'} for i in range(2,6)]}
-    if b_change is not None:
-        healthy_b.update(b_change)
-        b_path.write_text(json.dumps(healthy_b))
-    instance=stand.Stand.__new__(stand.Stand)
-    for variant in ('B','C'):
-        with pytest.raises(stand.StandError,match='first_public_native_tls'):
-            instance.check_public_smoke(variant,corpus,tmp_path)
-
-
-def test_b_continues_after_later_c_failure_without_rewriting_evidence(tmp_path):
-    import hashlib
-    corpus=tmp_path/'corpus.json';corpus.write_bytes(b'{"version":1}')
-    first={'id':'case-0001','outcome':'rejected','error':'native_browser_http_rejected',
-           'upstream_status':403}
-    base={'schema_version':1,'corpus_sha256':hashlib.sha256(corpus.read_bytes()).hexdigest()}
-    c_path=tmp_path/'report-C.json';b_path=tmp_path/'report-B.json'
-    c_report={**base,'variant':'C','status':'incomplete','fatal_error':'native_browser_unavailable',
-              'rows':[first,{'id':'case-0008','outcome':'failed','error':'native_browser_unavailable'}]}
-    b_report={**base,'variant':'B','status':'complete','fatal_error':None,
-              'rows':[first]+[{'id':f'case-{i:04d}','outcome':'success'} for i in range(2,6)]}
-    c_path.write_text(json.dumps(c_report));b_path.write_text(json.dumps(b_report))
-    original=(c_path.read_bytes(),b_path.read_bytes())
-    instance=stand.Stand.__new__(stand.Stand)
-    instance.check_public_smoke('B',corpus,tmp_path)
-    with pytest.raises(stand.StandError,match='first_public_native_tls'):
+    if allowed:
         instance.check_public_smoke('C',corpus,tmp_path)
-    assert original==(c_path.read_bytes(),b_path.read_bytes())
-    for fatal in (None,''):
-        c_report['fatal_error']=fatal
-        c_path.write_text(json.dumps(c_report))
+    else:
         with pytest.raises(stand.StandError,match='first_public_native_tls'):
-            instance.check_public_smoke('B',corpus,tmp_path)
-    c_report['fatal_error']='native_browser_unavailable'
-    c_report['rows'][0]={**first,'error':'transport_error','upstream_status':None}
-    c_path.write_text(json.dumps(c_report))
-    for variant in ('B','C'):
-        with pytest.raises(stand.StandError,match='first_public_native_tls'):
-            instance.check_public_smoke(variant,corpus,tmp_path)
+            instance.check_public_smoke('C',corpus,tmp_path)
 
 
 @pytest.mark.parametrize('phase,variant,cases', [
     ('c-smoke', 'C', ('case-0001',)),
-    ('b-quality', 'B', stand.QUALITY_CASES),
     ('c-quality', 'C', tuple(case for case in stand.QUALITY_CASES if case != 'case-0001')),
 ])
 def test_quality_phase_has_fixed_variant_and_case_allowlist(phase, variant, cases):
     stand.validate_quality_phase(variant, phase, ())
     stand.validate_quality_phase(variant, phase, cases)
     with pytest.raises(stand.StandError, match='quality_phase_selection_invalid'):
-        stand.validate_quality_phase('B' if variant == 'C' else 'C', phase, cases)
+        stand.validate_quality_phase('B', phase, cases)
     with pytest.raises(stand.StandError, match='quality_phase_selection_invalid'):
         stand.validate_quality_phase(variant, phase, (*cases, 'case-9999'))
 
@@ -1243,8 +900,6 @@ def _controlled_gate_stand(tmp_path, monkeypatch, *, wire_ok=True, ready=True, c
     instance.wait_http = lambda *_args: None
     instance.check_budget = lambda: None
     events = []
-    instance.go_worker_only=False
-    instance.python_shared_browser_gate=lambda: events.append(('python-shared-browser-gate',))
     generation_calls = 0
 
     def run(name, _image, _args, **_kwargs):
@@ -1322,16 +977,13 @@ def test_production_core_extractor_gate_is_scoped_to_worker_recovery_profile(
     gate_events=[event for event in events if event[0]=='core-native-gate']
     if worker_recovery_gate:
         assert gate_events==[('core-native-gate','a'*64)]
-        assert ('python-shared-browser-gate',) in events
         listener_index=events.index(('listener-ready','gateway',443,0))
-        assert listener_index<events.index(('python-shared-browser-gate',))
-        assert events.index(('python-shared-browser-gate',))<events.index(gate_events[0])
+        assert listener_index<events.index(gate_events[0])
         assert events.index(gate_events[0])<next(i for i,event in enumerate(events)
                                                    if event[0]=='request')
         assert ('worker-recovery',) in events
     else:
         assert gate_events==[]
-        assert ('python-shared-browser-gate',) not in events
         assert ('overload',) in events
 
 

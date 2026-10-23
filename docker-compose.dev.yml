@@ -1,66 +1,26 @@
+# Development overlay. Start the complete local service stack with:
+# docker compose -f docker-compose.example.yml -f docker-compose.dev.yml up --build
 services:
   web:
-    build:
-      context: .
-      dockerfile: docker/Dockerfile
-    container_name: news_dev
-    ports:
-      - "8000:8000"
     environment:
-      # Remote DB via Tailscale
-      - DATABASE_URL=postgresql+asyncpg://news_user:4F8A0hmu3PC1J5YPSeXTeg%3D%3D@host.docker.internal:5432/aistack
-      - DB_POOL_SIZE=3
-      - DB_MAX_OVERFLOW=5
-      - DB_POOL_TIMEOUT=60
-      - ALLOW_CREATE_ALL=false
-
-      # AI
-      - AI_PROVIDER=gemini
-      - GEMINI_API_KEY=AIzaSyCdvTYDzAcpQBkh0JR7H8GudplWU_T5caw
-      - GEMINI_API_ENDPOINT=https://generativelanguage.googleapis.com/v1/models
-      - RPS=5
-      - SUMMARIZATION_MODEL=gemini-3.1-flash-lite-preview
-      - CATEGORIZATION_MODEL=gemini-3.1-flash-lite-preview
-      - DIGEST_MODEL=gemini-3.1-flash-lite-preview
-
-      # Telegram (use test values or prod)
-      - TELEGRAM_TOKEN=6987235886:AAEsgXDyjaW6N5g7xjTmq2e_CGCUQqSJ_O8
-      - TELEGRAM_CHAT_ID=388128
-      - TELEGRAM_RICH_MESSAGES_ENABLED=true
-      - SITE_BASE_URL=http://localhost:8000
-
-      # Admin
-      - ADMIN_USERNAME=dzarlax
-      - ADMIN_PASSWORD=dev
-      - JWT_SECRET=dev-secret-key
-      - TRUST_FORWARD_AUTH=false
-
-      # App
-      - LOG_LEVEL=DEBUG
-      - DEVELOPMENT=true
-      # Disable scheduler in dev — shares prod DB, would cause conflicts
-      - SCHEDULER_ENABLED=false
-      - MAX_WORKERS=2
-      - CACHE_TTL=86400
-      - CACHE_DIR=/app/cache
-
-      # Categories
-      - LOCAL_CATEGORY=Serbia
-
-      # CORS
-      - ALLOWED_ORIGINS=http://localhost:8000
-      - TRUSTED_HOSTS=localhost,127.0.0.1
-
-      # No Chrome browser in dev (optional — comment out if needed)
-      # - BROWSER_WS_ENDPOINT=ws://browser:9222
-    extra_hosts:
-      - "host.docker.internal:100.104.66.65"
+      LOG_LEVEL: DEBUG
+      DEVELOPMENT: "true"
+      MAX_WORKERS: "2"
+      NEWS_LIMIT_ENABLED: "true"
+      NEWS_LIMIT_MAX_ARTICLES: "2"
+      NEWS_LIMIT_PER_SOURCE: "2"
     volumes:
-      # Mount source code — changes apply without rebuild
       - ./news_aggregator:/app/news_aggregator:ro
       - ./web:/app/web:ro
-      - dev_cache:/app/cache
-    restart: unless-stopped
 
-volumes:
-  dev_cache:
+  worker:
+    environment:
+      LOG_LEVEL: DEBUG
+      DEVELOPMENT: "true"
+      MAX_WORKERS: "2"
+      NEWS_LIMIT_ENABLED: "true"
+      NEWS_LIMIT_MAX_ARTICLES: "2"
+      NEWS_LIMIT_PER_SOURCE: "2"
+    volumes:
+      - ./news_aggregator:/app/news_aggregator:ro
+      - ./web:/app/web:ro

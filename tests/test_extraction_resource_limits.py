@@ -2,21 +2,16 @@
 
 import asyncio
 import gzip
-import json
 import zlib
-from unittest.mock import AsyncMock, Mock, patch
+from unittest.mock import Mock, patch
 
 import brotli
 import pytest
 from aiohttp import ClientSession, web
 
 from news_aggregator.core.resource_limits import (
-    ResourceLimitError, enforce_text_limit, read_browser_html, read_page_bytes,
+    ResourceLimitError, enforce_text_limit, read_page_bytes,
 )
-
-
-async def run_operation(coro, *args, **kwargs):
-    return await coro
 
 
 @pytest.mark.parametrize("encoding,compress", [
@@ -76,46 +71,6 @@ async def test_unknown_encoding_fails_closed():
     with pytest.raises(ResourceLimitError, match="encoding"):
         await read_page_bytes(response, 10)
     response.close.assert_called_once()
-
-
-@pytest.mark.asyncio
-async def test_browser_uses_bounded_js_value_and_preserves_html():
-    html = '<html><head><title>Title</title></head><body><article class="custom">Text</article></body></html>'
-    tab = Mock(evaluate=AsyncMock(return_value=json.dumps({"html": html})), get_content=AsyncMock())
-    with patch("news_aggregator.core.browser_pool.run_browser_operation", side_effect=run_operation):
-        assert await read_browser_html(tab) == html
-    tab.get_content.assert_not_called()
-    expression = tab.evaluate.call_args.args[0]
-    assert "TextEncoder" in expression
-    assert "JSON.stringify({error:" in expression
-    assert tab.evaluate.call_args.kwargs["return_by_value"] is True
-
-
-@pytest.mark.asyncio
-async def test_browser_limit_is_terminal_and_multibyte_aware():
-    from news_aggregator.config import settings
-    tab = Mock(evaluate=AsyncMock(return_value=json.dumps({"html": "я" * 6})))
-    with (
-        patch.object(settings, "extraction_browser_max_bytes", 10),
-        patch("news_aggregator.core.browser_pool.run_browser_operation", side_effect=run_operation),
-        pytest.raises(ResourceLimitError, match="browser_limit"),
-    ):
-        await read_browser_html(tab)
-
-
-@pytest.mark.asyncio
-async def test_resource_limit_does_not_retry_or_train_bad_selector():
-    from news_aggregator.extraction import ContentExtractor
-    extractor = ContentExtractor()
-    strategies = Mock(attempt_extraction_with_metadata=AsyncMock(side_effect=ResourceLimitError("budget")))
-    extractor.core_extractor.strategies = strategies
-    with (
-        patch("news_aggregator.extraction.core_extractor.get_extraction_memory", AsyncMock()) as memory,
-        pytest.raises(ResourceLimitError),
-    ):
-        await extractor.extract_article_content_with_metadata("https://example.com/article")
-    strategies.attempt_extraction_with_metadata.assert_awaited_once()
-    memory.assert_not_called()
 
 
 def test_text_limit_enforced_without_silent_truncation():

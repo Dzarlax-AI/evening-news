@@ -7,7 +7,7 @@ services:
       - ${NEWS_SCHEDULER_DIR:?Set NEWS_SCHEDULER_DIR to the private scheduler config directory}/scheduler-client.env
     environment:
       BACKGROUND_EXECUTION_MODE: worker
-      SCHEDULE_DISPATCH_MODE: python
+      SCHEDULE_DISPATCH_MODE: service
       SCHEDULER_API_URL: http://scheduler:8080
       SCHEDULER_API_ALLOW_HTTP: "true"
     networks:
@@ -18,7 +18,7 @@ services:
       - ${NEWS_SCHEDULER_DIR:?Set NEWS_SCHEDULER_DIR to the private scheduler config directory}/scheduler-client.env
     environment:
       BACKGROUND_EXECUTION_MODE: worker
-      SCHEDULE_DISPATCH_MODE: python
+      SCHEDULE_DISPATCH_MODE: service
       SCHEDULER_API_URL: http://scheduler:8080
       SCHEDULER_API_ALLOW_HTTP: "true"
 

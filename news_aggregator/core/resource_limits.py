@@ -1,6 +1,5 @@
 """Bound external page data before parsing or transferring it into Python."""
 
-import json
 import zlib
 
 import brotli
@@ -82,34 +81,3 @@ async def read_page_text(response, max_bytes=None) -> str:
         return data.decode(charset, errors="replace")
     except LookupError:
         return data.decode("utf-8", errors="replace")
-
-
-async def read_browser_html(tab, *, timeout_seconds=None) -> str:
-    """Return a bounded HTML value, never a recursive CDP DOM tree."""
-    from .browser_pool import run_browser_operation
-
-    limit = settings.extraction_browser_max_bytes
-    expression = """(() => {
-        if (!document.documentElement) return JSON.stringify({html: ''});
-        const html = document.documentElement.outerHTML;
-        if (html.length > LIMIT || new TextEncoder().encode(html).length > LIMIT)
-            return JSON.stringify({error: 'resource_limit'});
-        return JSON.stringify({html});
-    })()""".replace("LIMIT", str(limit))
-    result = await run_browser_operation(
-        tab.evaluate(expression, return_by_value=True),
-        "bounded HTML retrieval",
-        timeout_seconds=timeout_seconds,
-        browser_session=tab,
-    )
-    if not isinstance(result, str):
-        raise ValueError("Browser returned invalid HTML envelope")
-    result = json.loads(result)
-    if result.get("error"):
-        raise ResourceLimitError("extraction_browser_limit")
-    html = result.get("html")
-    if not isinstance(html, str):
-        raise ValueError("Browser returned invalid HTML")
-    if len(html) > limit or len(html.encode("utf-8")) > limit:
-        raise ResourceLimitError("extraction_browser_limit")
-    return html

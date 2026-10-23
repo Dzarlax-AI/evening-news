@@ -1,113 +1,50 @@
-"""Content extraction components for Evening News v2."""
+"""Content extraction compatibility facade backed exclusively by the Go service."""
 
 import asyncio
 import weakref
 
 from .core_extractor import CoreExtractor
-from .extraction_strategies import ExtractionStrategies
-from .html_processor import HTMLProcessor
-from .date_extractor import DateExtractor
-from .metadata_extractor import MetadataExtractor
 from .extraction_utils import ExtractionUtils
 from .extraction_logger import ExtractionLogger, get_extraction_logger
 
 
-# Shared ExtractionStrategies singleton — reuses one browser connection
-_shared_strategies: "ExtractionStrategies | None" = None
-
-
-def _get_shared_strategies() -> ExtractionStrategies:
-    """Get or create the shared ExtractionStrategies instance."""
-    global _shared_strategies
-    if _shared_strategies is None:
-        utils = ExtractionUtils()
-        html_proc = HTMLProcessor(utils)
-        date_ext = DateExtractor(utils)
-        meta_ext = MetadataExtractor(utils)
-        _shared_strategies = ExtractionStrategies(utils, html_proc, date_ext, meta_ext)
-    return _shared_strategies
-
-
 class ContentExtractor:
-    """
-    Main content extractor that delegates to specialized components.
-
-    This is a facade that provides the same interface as the original
-    monolithic ContentExtractor but uses modular components internally.
-
-    ExtractionStrategies (and its browser connection) is shared across
-    all instances to avoid creating a new CDP session per extraction.
-    """
+    """Keep the established Python API while delegating all extraction to Go."""
 
     def __init__(self):
-        strategies = _get_shared_strategies()
-        self.utils = strategies.utils
-        self.html_processor = strategies.html_processor
-        self.date_extractor = strategies.date_extractor
-        self.metadata_extractor = strategies.metadata_extractor
-        self.extraction_strategies = strategies
-        self.core_extractor = CoreExtractor(
-            self.utils, self.html_processor, self.extraction_strategies
-        )
+        self.utils = ExtractionUtils()
+        self.core_extractor = CoreExtractor(self.utils)
         _ACTIVE_EXTRACTORS.add(self)
 
     async def __aenter__(self):
-        """Async context manager entry."""
         return self
 
     async def __aexit__(self, exc_type, exc_val, exc_tb):
-        """Async context manager exit — does NOT close shared browser."""
-        pass
-    
+        await self.close_browser()
+
     async def close_browser(self):
-        """Close browser if open."""
         return await self.core_extractor.close_browser()
-    
+
     async def extract_article_content_with_metadata(self, url: str, retry_count: int = 3):
-        """Extract article content with metadata (main public method)."""
         return await self.core_extractor.extract_article_content_with_metadata(url, retry_count)
-    
+
     async def extract_article_content(self, url: str, retry_count: int = 2):
-        """Extract article content (main public method)."""
         return await self.core_extractor.extract_article_content(url, retry_count)
 
 
-# Factory function for backward compatibility
 async def get_content_extractor():
-    """Get a ContentExtractor instance (maintains original API)."""
     return ContentExtractor()
 
 
 async def cleanup_content_extractor():
-    """Cleanup resources (maintains original API)."""
-    if not _ACTIVE_EXTRACTORS:
-        return
-
     extractors = [extractor for extractor in list(_ACTIVE_EXTRACTORS) if extractor]
-    if not extractors:
-        return
-
-    await asyncio.gather(
-        *(extractor.close_browser() for extractor in extractors),
-        return_exceptions=True
-    )
+    if extractors:
+        await asyncio.gather(*(extractor.close_browser() for extractor in extractors),
+                             return_exceptions=True)
     _ACTIVE_EXTRACTORS.clear()
 
 
-_ACTIVE_EXTRACTORS: "weakref.WeakSet[ContentExtractor]" = weakref.WeakSet()
+_ACTIVE_EXTRACTORS = weakref.WeakSet()
 
-
-__all__ = [
-    'ContentExtractor',
-    'get_content_extractor',
-    'cleanup_content_extractor',
-    'CoreExtractor',
-    'ExtractionStrategies',
-    'HTMLProcessor',
-    'DateExtractor',
-    'MetadataExtractor',
-    'ExtractionUtils',
-    'ExtractionLogger',
-    'get_extraction_logger'
-]
-
+__all__ = ['ContentExtractor', 'get_content_extractor', 'cleanup_content_extractor',
+           'CoreExtractor', 'ExtractionUtils', 'ExtractionLogger', 'get_extraction_logger']

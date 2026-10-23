@@ -142,8 +142,7 @@ async def test_source(
             return accepted_response(accepted)
         
         # Test source connection
-        source_instance = await source_manager.get_source_instance(source)
-        success = await source_instance.test_connection()
+        success = await source_manager.test_source_connection(db, source_id)
         
         return {
             "source_id": source_id,

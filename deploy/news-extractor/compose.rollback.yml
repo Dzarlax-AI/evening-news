@@ -1,6 +1,7 @@
-# Last overlay restores authoritative Python routing without touching the DB.
+# Last overlay selects the HTTP-only Go extraction profile without touching the DB.
 services:
   app:
     environment:
-      EXTRACTION_SERVICE_MODE: python
+      EXTRACTION_SERVICE_MODE: go
       EXTRACTION_SERVICE_NATIVE_BROWSER: 'false'
+      EXTRACTION_SERVICE_PYTHON_FALLBACK: 'false'

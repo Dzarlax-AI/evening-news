@@ -50,26 +50,6 @@ def processing_cycle_busy():
     return _processing_cycle_token is not None
 
 
-async def _release_browser_lease(lease):
-    """Finish resource cleanup despite repeated cancellation of a manual run."""
-    from .core.browser_pool import release_browser_cycle
-    cleanup = asyncio.create_task(release_browser_cycle(lease))
-    cancelled = False
-    while not cleanup.done():
-        try:
-            await asyncio.shield(cleanup)
-        except asyncio.CancelledError:
-            cancelled = True
-        except Exception:
-            break
-    try:
-        await cleanup
-    except Exception:
-        logger.exception('Browser lease cleanup failed')
-    if cancelled:
-        raise asyncio.CancelledError
-
-
 @dataclass
 class ArticleDTO:
     """Lightweight article data transfer object for AI processing."""
@@ -169,9 +149,6 @@ class NewsOrchestrator:
 
     async def _run_full_cycle(self) -> Dict[str, Any]:
         """Run complete news processing cycle."""
-        from .core.browser_pool import acquire_browser_cycle
-
-        browser_cycle_lease = await acquire_browser_cycle()
         start_time = datetime.utcnow()
         stats = {
             'start_time': start_time.isoformat(),
@@ -217,12 +194,7 @@ class NewsOrchestrator:
                 result = await db.execute(source_query)
                 sources_db = result.scalars().all()
 
-                # Go collection is correlated and persisted by stable source ID;
-                # Python mode keeps its historical name keyed return shape.
-                if settings.source_manager_mode == 'go':
-                    source_map = {s.id: s for s in sources_db}
-                else:
-                    source_map = {s.name: s for s in sources_db}
+                source_map = {source.id: source for source in sources_db}
 
                 return await self.source_manager.save_fetched_articles_with_sources(raw_articles, source_map, db)
 
@@ -280,35 +252,7 @@ class NewsOrchestrator:
             stats['errors'].append(error_msg)
             stats['fatal_error'] = error_msg
             return stats
-        finally:
-            # News cycles share one CDP client session but never own Chrome itself.
-            # Release this cycle's lease on every outcome; the pool disconnects
-            # only after the last overlapping cycle has exited.
-            from .core.browser_pool import release_browser_cycle
 
-            cleanup_task = asyncio.create_task(
-                release_browser_cycle(browser_cycle_lease)
-            )
-            cancelled = False
-            while not cleanup_task.done():
-                try:
-                    await asyncio.shield(cleanup_task)
-                except asyncio.CancelledError:
-                    cancelled = True
-                except Exception:
-                    break
-            try:
-                await cleanup_task
-            except Exception as cleanup_error:
-                # Cleanup is secondary and must not replace the cycle outcome.
-                logger.warning(
-                    "Browser session cleanup failed (%s): %s",
-                    type(cleanup_error).__name__,
-                    cleanup_error,
-                )
-            if cancelled:
-                raise asyncio.CancelledError
-    
     async def _get_telegram_service_with_db_overrides(self) -> TelegramService:
         """Load telegram channel IDs from DB and return a properly configured service."""
         from .models import Setting
@@ -615,18 +559,13 @@ class NewsOrchestrator:
             return {'status': 'busy', 'success': False}
         if token is not _processing_cycle_token:
             raise ValueError('Invalid processing cycle reservation')
-        browser_lease = None
         try:
-            from .core.browser_pool import acquire_browser_cycle
-            browser_lease = await acquire_browser_cycle()
             if reset:
                 await self._reset_selected_articles(article_ids, force=force)
             stats = {'api_calls_made': 0, 'errors': []}
             stats.update(await self._process_unprocessed_articles(
                 stats, selected_ids=article_ids, force_refresh=force,
                 preserve_completed_stages=preserve_completed_stages))
-            # Selected requests report durable outcomes, while cycle counters
-            # continue to count completed news articles only.
             async def read_outcomes(db):
                 result = await db.execute(select(
                     Article.id, Article.processing_state, Article.last_processing_error,
@@ -648,12 +587,8 @@ class NewsOrchestrator:
                 'settled' if stats['settled'] else 'incomplete')
             return stats
         finally:
-            try:
-                if browser_lease is not None:
-                    await _release_browser_lease(browser_lease)
-            finally:
-                if reservation is None:
-                    release_processing_cycle(token)
+            if reservation is None:
+                release_processing_cycle(token)
 
     async def _generate_daily_summaries(self, timeout: float = 60.0) -> Dict[str, Any]:
         """Generate daily summaries: read articles, generate AI summaries, save to DB."""
@@ -824,22 +759,15 @@ class NewsOrchestrator:
             return {'status': 'busy', 'processed': 0, 'improved': 0, 'errors': []}
         if token is not _processing_cycle_token:
             raise ValueError('Invalid processing cycle reservation')
-        browser_lease = None
         try:
-            from .core.browser_pool import acquire_browser_cycle
-            browser_lease = await acquire_browser_cycle()
             stats = {'api_calls_made': 0, 'errors': []}
             result = await self._process_unprocessed_articles(stats, max_articles=max(1, limit))
             return {**result, 'processed': result['articles_processed'],
                     'improved': result['articles_summarized'], 'errors': stats['errors']}
         finally:
-            try:
-                if browser_lease is not None:
-                    await _release_browser_lease(browser_lease)
-            finally:
-                if reservation is None:
-                    release_processing_cycle(token)
-    
+            if reservation is None:
+                release_processing_cycle(token)
+
     # Legacy method compatibility (delegate to processors)
     async def _get_summary_by_source_type(self, article: Article, source_type: str, stats: Dict[str, Any]) -> str:
         """Legacy method - delegate to summarization processor."""
