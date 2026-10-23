@@ -374,7 +374,8 @@ class PageMonitorSource(BaseSource):
                     result = await client.fetch(self._service_config(), limit=scan_limit,
                                                 offset=offset,
                                                 timeout_seconds=min(30.0, fetch_budget,
-                                                                    self.config.wait_timeout_ms / 1000.0))
+                                                                    self.config.wait_timeout_ms / 1000.0),
+                                                admission_timeout_seconds=fetch_budget)
             else:
                 # The Go batch already collected this response. Its prefix is
                 # valid even if the pass deadline has expired; that deadline only
@@ -443,7 +444,8 @@ class PageMonitorSource(BaseSource):
                         async with asyncio.timeout_at(usable_deadline):
                             reparsed = await client.parse(
                                 self._service_config(), study_html, current_snapshot.timestamp,
-                                limit=scan_limit, timeout_seconds=min(30.0, remaining()), offset=0)
+                                limit=scan_limit, timeout_seconds=min(30.0, remaining()), offset=0,
+                                admission_timeout_seconds=remaining())
                         if reparsed['outcome'] == 'partial':
                             logger.warning("Page Monitor Go reparse returned a partial prefix: %s",
                                            reparsed['error']['code'])
@@ -1220,12 +1222,22 @@ class PageMonitorSource(BaseSource):
         if settings.page_monitor_source_mode == 'go':
             from .page_monitor_service_client import PageMonitorServiceClient
             try:
-                await self._load_learned_structure()
-                token = settings.extraction_service_token.get_secret_value()
-                client = PageMonitorServiceClient(settings.extraction_service_url, token)
-                result = await client.fetch(self._service_config(), limit=1,
-                                            timeout_seconds=min(30.0, settings.extraction_service_timeout_seconds,
-                                                                self.config.wait_timeout_ms / 1000.0))
+                loop = asyncio.get_running_loop()
+                total_budget = min(float(settings.extraction_service_total_budget_seconds), 120.0)
+                reserve = min(5.0, total_budget * 0.10)
+                usable_deadline = loop.time() + max(0.0, total_budget - reserve)
+                async with asyncio.timeout_at(usable_deadline):
+                    await self._load_learned_structure()
+                    admission_budget = max(0.0, usable_deadline - loop.time())
+                    if admission_budget <= 0:
+                        return False
+                    token = settings.extraction_service_token.get_secret_value()
+                    client = PageMonitorServiceClient(settings.extraction_service_url, token)
+                    result = await client.fetch(
+                        self._service_config(), limit=1,
+                        timeout_seconds=min(30.0, settings.extraction_service_timeout_seconds,
+                                            self.config.wait_timeout_ms / 1000.0),
+                        admission_timeout_seconds=admission_budget)
                 return result['outcome'] in {'success', 'partial'}
             except Exception as exc:
                 logger.warning("Page Monitor Go connection test failed: %s", type(exc).__name__)

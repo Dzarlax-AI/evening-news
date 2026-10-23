@@ -151,7 +151,8 @@ class CoreExtractor:
             pattern = await memory.get_successful_pattern(self.utils.extract_domain(clean_url))
             supplied_pattern = dict(pattern) if pattern else None
 
-        async def call_service(timeout, *, use_browser=False):
+        async def call_service(timeout, *, use_browser=False, admission_timeout=None,
+                               admission_phase=None):
             token = settings.extraction_service_token
             if not settings.extraction_service_url or not token:
                 raise ExtractionServiceError('not_configured')
@@ -164,7 +165,9 @@ class CoreExtractor:
             learned_pattern = (self._request_learned_pattern(supplied_pattern, use_browser)
                                if native_mode else supplied_pattern)
             return await client.extract(clean_url, timeout_seconds=timeout, learned_pattern=learned_pattern,
-                                        use_browser=use_browser)
+                                        use_browser=use_browser,
+                                        admission_timeout_seconds=admission_timeout,
+                                        admission_phase=admission_phase)
 
         if mode == 'shadow':
             # Authoritative processing runs once. The service has no DB/LLM access;
@@ -191,8 +194,10 @@ class CoreExtractor:
 
         started = time.monotonic()
         total_budget = settings.extraction_service_total_budget_seconds
+        total_deadline = asyncio.timeout(total_budget)
+        admission_phase = {'value': None}
         try:
-            async with asyncio.timeout(total_budget):
+            async with total_deadline:
                 failure = None
                 response = None
                 use_browser = False
@@ -202,9 +207,16 @@ class CoreExtractor:
                         raise ExtractionServiceError('deadline_exceeded', True)
                     failure = None
                     try:
+                        # Finish any awaited request preparation before fixing the
+                        # shared admission deadline for this service attempt.
+                        await prepare_service_request()
+                        remaining = total_budget - (time.monotonic() - started)
+                        if remaining <= 0:
+                            raise ExtractionServiceError('deadline_exceeded', True)
                         response = await call_service(
                             min(settings.extraction_service_timeout_seconds, remaining),
-                            use_browser=use_browser)
+                            use_browser=use_browser, admission_timeout=remaining,
+                            admission_phase=admission_phase)
                     except (ExtractionServiceError, ValueError) as exc:
                         code = self._service_error_label(
                             exc.code if isinstance(exc, ExtractionServiceError) else 'invalid_configuration')
@@ -263,7 +275,9 @@ class CoreExtractor:
                     extra={'event': 'extractor_python_fallback', 'code': reason})
                 async with asyncio.timeout(remaining):
                     return await self._extract_article_content_python(url, retry_count)
-        except TimeoutError:
+        except TimeoutError as exc:
+            if total_deadline.expired() and admission_phase['value'] == 'waiting':
+                raise ExtractionServiceError('busy', True) from None
             raise ExtractionServiceError('deadline_exceeded', True) from None
 
     @staticmethod

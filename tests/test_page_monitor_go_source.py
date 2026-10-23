@@ -41,7 +41,7 @@ def test_delivery_limit_acknowledges_only_yielded_items_and_recovers_reappearing
     class FakeClient:
         def __init__(self, *args, **kwargs):
             pass
-        async def fetch(self, sent_config, *, limit, timeout_seconds, offset=0):
+        async def fetch(self, sent_config, *, limit, timeout_seconds, offset=0, admission_timeout_seconds=None):
             assert limit == 20  # caller delivery limit must not truncate the scan
             calls.append(limit)
             titles = ['Story one', 'Story two', 'Story three', 'Story four', 'Story five']
@@ -74,7 +74,7 @@ def test_go_offset_continuation_delivers_full_window_then_resets_without_redeliv
         def __init__(self, *args, **kwargs):
             pass
 
-        async def fetch(self, sent_config, *, limit, timeout_seconds, offset=0):
+        async def fetch(self, sent_config, *, limit, timeout_seconds, offset=0, admission_timeout_seconds=None):
             calls.append(offset)
             result_items = response(config, titles[offset:offset + 2])['items']
             if offset + len(result_items) < limit:
@@ -115,7 +115,7 @@ def test_go_source_seeds_acknowledged_hashes_from_existing_snapshot(monkeypatch)
         def __init__(self, *args, **kwargs):
             pass
 
-        async def fetch(self, sent_config, *, limit, timeout_seconds, offset=0):
+        async def fetch(self, sent_config, *, limit, timeout_seconds, offset=0, admission_timeout_seconds=None):
             return response(config, ['Story one', 'Story two'])
 
     monkeypatch.setattr('news_aggregator.sources.page_monitor_service_client.PageMonitorServiceClient',
@@ -137,7 +137,7 @@ def test_empty_resource_limit_advances_cursor_without_acknowledging_or_resetting
         def __init__(self, *args, **kwargs):
             pass
 
-        async def fetch(self, sent_config, *, limit, timeout_seconds, offset=0):
+        async def fetch(self, sent_config, *, limit, timeout_seconds, offset=0, admission_timeout_seconds=None):
             calls.append(offset)
             if offset == 0:
                 result = response(config, [], 'partial')
@@ -178,7 +178,7 @@ def test_empty_resource_without_cursor_and_failed_continuation_preserve_acknowle
         def __init__(self, *args, **kwargs):
             pass
 
-        async def fetch(self, sent_config, *, limit, timeout_seconds, offset=0):
+        async def fetch(self, sent_config, *, limit, timeout_seconds, offset=0, admission_timeout_seconds=None):
             calls.append(offset)
             if len(calls) == 3:
                 raise PageMonitorServiceError('unavailable', True)
@@ -219,7 +219,7 @@ def test_empty_resource_continuation_keeps_hash_metadata_within_window_bound(mon
         def __init__(self, *args, **kwargs):
             pass
 
-        async def fetch(self, sent_config, *, limit, timeout_seconds, offset=0):
+        async def fetch(self, sent_config, *, limit, timeout_seconds, offset=0, admission_timeout_seconds=None):
             if offset == 0:
                 result = response(config, [], 'partial')
                 result.update(error={'code': 'resource_limit', 'retryable': False}, next_offset=1)
@@ -316,8 +316,9 @@ def test_go_service_timeouts_respect_configured_wait_timeout_and_preserve_flags(
         def __init__(self, *args, **kwargs):
             pass
 
-        async def fetch(self, sent_config, *, limit, timeout_seconds, offset=0):
-            requests.append((sent_config.use_browser, sent_config.wait_for_js, timeout_seconds))
+        async def fetch(self, sent_config, *, limit, timeout_seconds, offset=0, admission_timeout_seconds=None):
+            requests.append((sent_config.use_browser, sent_config.wait_for_js, timeout_seconds,
+                             admission_timeout_seconds))
             return response(config, ['Story one'])
 
     monkeypatch.setattr('news_aggregator.sources.page_monitor_service_client.PageMonitorServiceClient',
@@ -329,9 +330,10 @@ def test_go_service_timeouts_respect_configured_wait_timeout_and_preserve_flags(
 
     asyncio.run(run())
     assert len(requests) == 2
-    for use_browser, wait_for_js, timeout_seconds in requests:
+    for use_browser, wait_for_js, timeout_seconds, admission_timeout_seconds in requests:
         assert (use_browser, wait_for_js) == (False, False)
         assert 0 < timeout_seconds <= 1.5
+        assert admission_timeout_seconds > timeout_seconds
 
 
 def test_partial_prefix_delivers_without_losing_remaining_items(monkeypatch, caplog):
@@ -343,7 +345,7 @@ def test_partial_prefix_delivers_without_losing_remaining_items(monkeypatch, cap
     class PartialClient:
         def __init__(self, *args, **kwargs):
             pass
-        async def fetch(self, sent_config, *, limit, timeout_seconds, offset=0):
+        async def fetch(self, sent_config, *, limit, timeout_seconds, offset=0, admission_timeout_seconds=None):
             result = response(config, ['Story one', 'Story two', 'Story three'], 'partial')
             result['error'] = {'code': 'resource_limit', 'retryable': False}
             return result
@@ -364,7 +366,7 @@ def test_partial_resource_limit_prefix_skips_selector_learning(monkeypatch):
     class StudyNeededPartialClient:
         def __init__(self, *args, **kwargs):
             pass
-        async def fetch(self, sent_config, *, limit, timeout_seconds, offset=0):
+        async def fetch(self, sent_config, *, limit, timeout_seconds, offset=0, admission_timeout_seconds=None):
             result = response(config, ['Story one'], 'partial')
             result.update(error={'code': 'resource_limit', 'retryable': False},
                           needs_selector_study=True, study_html='<article>fallback</article>')
@@ -383,7 +385,7 @@ def test_changed_article_hash_is_delivered_again(monkeypatch):
     class ChangingClient:
         def __init__(self, *args, **kwargs):
             pass
-        async def fetch(self, sent_config, *, limit, timeout_seconds, offset=0):
+        async def fetch(self, sent_config, *, limit, timeout_seconds, offset=0, admission_timeout_seconds=None):
             counter['calls'] += 1
             result = response(config, ['Stable story'])
             if counter['calls'] == 2:
@@ -410,11 +412,11 @@ def test_ai_study_reparses_the_same_html_and_failure_keeps_original_prefix(monke
     class StudyClient:
         def __init__(self, *args, **kwargs):
             pass
-        async def fetch(self, sent_config, *, limit, timeout_seconds, offset=0):
+        async def fetch(self, sent_config, *, limit, timeout_seconds, offset=0, admission_timeout_seconds=None):
             result = response(config, ['Story one', 'Story two'])
             result.update(needs_selector_study=True, study_html='<article>captured once</article>')
             return result
-        async def parse(self, sent_config, html, snapshot_at, *, limit, timeout_seconds, offset=0):
+        async def parse(self, sent_config, html, snapshot_at, *, limit, timeout_seconds, offset=0, admission_timeout_seconds=None):
             captured.update(html=html, snapshot_at=snapshot_at, limit=limit)
             raise PageMonitorServiceError('unsupported_selector')
 
@@ -442,7 +444,7 @@ def test_ai_reparse_partial_cursor_continues_from_reparsed_prefix(monkeypatch):
         def __init__(self, *args, **kwargs):
             pass
 
-        async def fetch(self, sent_config, *, limit, timeout_seconds, offset=0):
+        async def fetch(self, sent_config, *, limit, timeout_seconds, offset=0, admission_timeout_seconds=None):
             calls.append(('fetch', offset))
             result = response(config, ['Story three', 'Story four', 'Story five'][offset - 2:])
             if offset == 0:
@@ -450,7 +452,7 @@ def test_ai_reparse_partial_cursor_continues_from_reparsed_prefix(monkeypatch):
                 result.update(needs_selector_study=True, study_html='<article>captured</article>')
             return result
 
-        async def parse(self, sent_config, html, snapshot_at, *, limit, timeout_seconds, offset=0):
+        async def parse(self, sent_config, html, snapshot_at, *, limit, timeout_seconds, offset=0, admission_timeout_seconds=None):
             calls.append(('parse', offset))
             result = response(config, ['Story one', 'Story two'], 'partial')
             result.update(error={'code': 'deadline_exceeded', 'retryable': True}, next_offset=2)
@@ -488,7 +490,7 @@ def test_short_deadline_hanging_optional_phase_keeps_prefix_and_ack(monkeypatch,
     class HangingOptionalClient:
         def __init__(self, *args, **kwargs):
             pass
-        async def fetch(self, sent_config, *, limit, timeout_seconds, offset=0):
+        async def fetch(self, sent_config, *, limit, timeout_seconds, offset=0, admission_timeout_seconds=None):
             result = response(config, ['Story one'])
             result.update(needs_selector_study=True, study_html='<article>captured</article>')
             return result
@@ -522,7 +524,7 @@ def test_empty_resource_limit_partial_preserves_ack_and_propagates_without_learn
     class EmptyLimitClient:
         def __init__(self, *args, **kwargs):
             pass
-        async def fetch(self, sent_config, *, limit, timeout_seconds, offset=0):
+        async def fetch(self, sent_config, *, limit, timeout_seconds, offset=0, admission_timeout_seconds=None):
             result = response(config, [], 'partial')
             result['error'] = {'code': 'resource_limit', 'retryable': False}
             return result

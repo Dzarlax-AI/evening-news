@@ -1,6 +1,5 @@
 """Bounded client for the private Go Page Monitor extraction API."""
 
-import asyncio
 import hashlib
 import json
 import math
@@ -9,6 +8,7 @@ from uuid import uuid4
 from urllib.parse import urlsplit
 
 import aiohttp
+from ..extraction.admission import run_admitted
 
 
 MAX_REQUEST_BYTES = 8 * 1024 * 1024
@@ -28,10 +28,11 @@ ERROR_CODES = {
 class PageMonitorServiceError(Exception):
     """Finite error classification safe to log without remote response data."""
 
-    def __init__(self, code, retryable=False):
+    def __init__(self, code, retryable=False, retry_after_seconds=None):
         super().__init__(code)
         self.code = code
         self.retryable = retryable
+        self.retry_after_seconds = retry_after_seconds
 
 
 class PageMonitorServiceClient:
@@ -48,11 +49,13 @@ class PageMonitorServiceClient:
         self.max_bytes = min(max_bytes, MAX_RESPONSE_BYTES)
         self._session_factory = session_factory
 
-    async def fetch(self, config, *, limit, timeout_seconds, offset=0):
+    async def fetch(self, config, *, limit, timeout_seconds, offset=0, admission_timeout_seconds=None):
         return await self._call(config, operation='fetch', limit=limit,
-                                timeout_seconds=timeout_seconds, offset=offset)
+                                timeout_seconds=timeout_seconds, offset=offset,
+                                admission_timeout_seconds=admission_timeout_seconds)
 
-    async def parse(self, config, html, snapshot_at, *, limit, timeout_seconds, offset=0):
+    async def parse(self, config, html, snapshot_at, *, limit, timeout_seconds, offset=0,
+                    admission_timeout_seconds=None):
         if not isinstance(html, str) or not isinstance(snapshot_at, datetime):
             raise PageMonitorServiceError('invalid_request')
         try:
@@ -66,10 +69,10 @@ class PageMonitorServiceClient:
         return await self._call(config, operation='parse', limit=limit,
                                 timeout_seconds=timeout_seconds, html=html,
                                 snapshot_at=snapshot_at.astimezone(timezone.utc).isoformat().replace('+00:00', 'Z'),
-                                offset=offset)
+                                offset=offset, admission_timeout_seconds=admission_timeout_seconds)
 
     async def _call(self, config, *, operation, limit, timeout_seconds, html=None, snapshot_at=None,
-                    offset=0):
+                    offset=0, admission_timeout_seconds=None):
         if type(limit) is not int or not 1 <= limit <= MAX_ITEMS:
             raise ValueError('invalid_page_monitor_limit')
         if type(offset) is not int or not 0 <= offset < limit:
@@ -111,53 +114,56 @@ class PageMonitorServiceClient:
             raise PageMonitorServiceError('invalid_request')
         if sum(map(len, groups)) + len(general) > 256:
             raise PageMonitorServiceError('invalid_request')
-        payload = {
-            'contract_version': '1', 'request_id': str(uuid4()), 'operation': operation,
-            'url': config.url, 'source_name': config.name,
-            'budget_ms': max(1, min(30_000, int(timeout_seconds * 1000))),
-            'limit': limit, 'offset': offset, 'min_title_length': config.min_title_length,
-            **selectors,
-        }
-        if operation == 'fetch':
-            payload['use_browser'] = config.use_browser
-            payload['wait_for_js'] = config.wait_for_js
-        else:
-            payload['provided_html'] = html
-            payload['snapshot_at'] = snapshot_at
+        async def request(attempt_timeout):
+            payload = {
+                'contract_version': '1', 'request_id': str(uuid4()), 'operation': operation,
+                'url': config.url, 'source_name': config.name,
+                'budget_ms': max(1, min(30_000, int(attempt_timeout * 1000))),
+                'limit': limit, 'offset': offset, 'min_title_length': config.min_title_length,
+                **selectors,
+            }
+            if operation == 'fetch':
+                payload['use_browser'] = config.use_browser
+                payload['wait_for_js'] = config.wait_for_js
+            else:
+                payload['provided_html'] = html
+                payload['snapshot_at'] = snapshot_at
+            try:
+                body = json.dumps(payload, ensure_ascii=False, separators=(',', ':'), allow_nan=False).encode('utf-8')
+            except (UnicodeEncodeError, ValueError, TypeError):
+                raise PageMonitorServiceError('invalid_request') from None
+            if len(body) > MAX_REQUEST_BYTES:
+                raise PageMonitorServiceError('request_too_large')
+            async with self._session_factory(timeout=aiohttp.ClientTimeout(total=attempt_timeout),
+                                             trust_env=False, auto_decompress=False) as session:
+                async with session.post(self.endpoint, data=body, allow_redirects=False,
+                                        headers={'Authorization': 'Bearer ' + self._token,
+                                                 'Content-Type': 'application/json',
+                                                 'Accept-Encoding': 'identity'}) as response:
+                    if response.status != 200:
+                        codes = {400: 'invalid_request', 401: 'unauthorized', 403: 'unauthorized',
+                                 413: 'request_too_large', 429: 'busy', 503: 'unavailable'}
+                        retry_after = response.headers.get('Retry-After', '')
+                        retry_after = min(int(retry_after), 86400) if retry_after.isdigit() else None
+                        raise PageMonitorServiceError(codes.get(response.status, 'http_error'),
+                                                      response.status in {429, 502, 503, 504}, retry_after)
+                    if response.headers.get('Content-Encoding', 'identity').lower() != 'identity':
+                        raise PageMonitorServiceError('invalid_payload')
+                    data = bytearray()
+                    async for chunk in response.content.iter_chunked(16_384):
+                        if len(data) + len(chunk) > self.max_bytes:
+                            raise PageMonitorServiceError('response_too_large')
+                        data.extend(chunk)
+                    try:
+                        result = json.loads(data)
+                    except (ValueError, UnicodeError, RecursionError):
+                        raise PageMonitorServiceError('invalid_payload') from None
+                    return self._validate(result, payload, config, limit)
+
         try:
-            body = json.dumps(payload, ensure_ascii=False, separators=(',', ':'), allow_nan=False).encode('utf-8')
-        except (UnicodeEncodeError, ValueError, TypeError):
-            raise PageMonitorServiceError('invalid_request') from None
-        if len(body) > MAX_REQUEST_BYTES:
-            raise PageMonitorServiceError('request_too_large')
-        timeout_seconds = min(float(timeout_seconds), 30.0)
-        try:
-            async with asyncio.timeout(timeout_seconds):
-                async with self._session_factory(timeout=aiohttp.ClientTimeout(total=timeout_seconds),
-                                                 trust_env=False, auto_decompress=False) as session:
-                    async with session.post(self.endpoint, data=body, allow_redirects=False,
-                                            headers={'Authorization': 'Bearer ' + self._token,
-                                                     'Content-Type': 'application/json',
-                                                     'Accept-Encoding': 'identity'}) as response:
-                        if response.status != 200:
-                            codes = {400: 'invalid_request', 401: 'unauthorized', 403: 'unauthorized',
-                                     413: 'request_too_large', 429: 'busy', 503: 'unavailable'}
-                            raise PageMonitorServiceError(codes.get(response.status, 'http_error'),
-                                                          response.status in {429, 502, 503, 504})
-                        if response.headers.get('Content-Encoding', 'identity').lower() != 'identity':
-                            raise PageMonitorServiceError('invalid_payload')
-                        data = bytearray()
-                        async for chunk in response.content.iter_chunked(16_384):
-                            if len(data) + len(chunk) > self.max_bytes:
-                                raise PageMonitorServiceError('response_too_large')
-                            data.extend(chunk)
-                        try:
-                            result = json.loads(data)
-                        except (ValueError, UnicodeError, RecursionError):
-                            raise PageMonitorServiceError('invalid_payload') from None
-                        return self._validate(result, payload, config, limit)
-        except TimeoutError:
-            raise PageMonitorServiceError('deadline_exceeded', True) from None
+            return await run_admitted(self.endpoint, min(float(timeout_seconds), 30.0), request,
+                                       PageMonitorServiceError,
+                                       admission_timeout_seconds=admission_timeout_seconds)
         except aiohttp.ClientError:
             raise PageMonitorServiceError('transport_error', True) from None
 

@@ -84,6 +84,22 @@ not an implicit success. Python alone controls durable retries; method fallbacks
 inside Go consume one request budget. Request IDs correlate diagnostics and are
 not persistent deduplication keys.
 
+The Python article, Telegram, Page Monitor and SourceManager clients share one
+event-loop-local permit per configured service base URL. One request may be in
+flight and at most eight may wait; admission ends after 120 seconds or the
+caller's outer deadline, whichever comes first. The permit is acquired before
+JSON encoding and HTTP session creation, then released after the response and
+session close. Normalization, selector learning, AI work and persistence remain
+outside the permit. Queue saturation is reported as retryable `busy` without
+spending an article attempt; its next durable retry is scheduled after 60
+seconds. Callers pass their remaining outer pass budget separately from each
+HTTP request's configured timeout. Queue time consumes the outer budget; the
+HTTP timeout starts after admission and is bounded by the caller's remaining
+time. If the outer deadline expires in the queue, no HTTP request is started
+and the result is local `busy`. Only an explicit HTTP 429 with a usable
+`Retry-After` may be retried, at most eight times within that deadline; the
+permit is released while waiting. Transport errors are never replayed.
+
 `/health/live`, `/health/ready`, `/version` and `/stats` are private operational endpoints.
 Chrome availability is a capability, not a requirement for HTTP-only service.
 Never publish the extraction or CDP ports on a public interface.

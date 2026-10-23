@@ -1,11 +1,11 @@
 """Bounded private extractor API v1 client. No retries or persistence live here."""
 
-import asyncio
 import json
 from uuid import uuid4
 from urllib.parse import urlsplit
 
 import aiohttp
+from .admission import run_admitted
 
 
 class ExtractionServiceError(Exception):
@@ -43,52 +43,56 @@ class ExtractionServiceClient:
         self._session_factory = session_factory
 
     async def extract(self, url, *, timeout_seconds, learned_pattern=None, html=None,
-                      content=None, title=None, strategy='auto', source_type='article', use_browser=False):
+                      content=None, title=None, strategy='auto', source_type='article', use_browser=False,
+                      admission_timeout_seconds=None, admission_phase=None):
         if timeout_seconds <= 0:
             raise ExtractionServiceError('deadline_exceeded', True)
         request_id = str(uuid4())
-        payload = {'request_id': request_id, 'url': url, 'strategy': strategy, 'source_type': source_type,
-                   'budget_ms': max(1, min(30000, int(timeout_seconds * 1000))),
-                   'max_bytes': self.max_bytes, 'max_chars': self.max_chars}
-        for name, value in (('html', html), ('content', content), ('title', title), ('use_browser', use_browser)):
-            if value is not None:
-                payload[name] = value
-        if learned_pattern:
-            payload.update(learned_selector=learned_pattern.get('selector') or '',
-                           learned_method=learned_pattern.get('method') or '')
-        body = json.dumps(payload).encode('utf-8')
-        if len(body) > self.max_bytes:
-            raise ExtractionServiceError('request_too_large')
+        async def request(attempt_timeout):
+            payload = {'request_id': request_id, 'url': url, 'strategy': strategy, 'source_type': source_type,
+                       'budget_ms': max(1, min(30000, int(attempt_timeout * 1000))),
+                       'max_bytes': self.max_bytes, 'max_chars': self.max_chars}
+            for name, value in (('html', html), ('content', content), ('title', title), ('use_browser', use_browser)):
+                if value is not None:
+                    payload[name] = value
+            if learned_pattern:
+                payload.update(learned_selector=learned_pattern.get('selector') or '',
+                               learned_method=learned_pattern.get('method') or '')
+            body = json.dumps(payload).encode('utf-8')
+            if len(body) > self.max_bytes:
+                raise ExtractionServiceError('request_too_large')
+            # The session timeout starts after local admission, and the owning
+            # response/session are closed before the permit is released.
+            async with self._session_factory(timeout=aiohttp.ClientTimeout(total=attempt_timeout),
+                    trust_env=False, auto_decompress=False) as session:
+                async with session.post(self.endpoint, data=body, allow_redirects=False,
+                        headers={'Authorization': 'Bearer ' + self._token,
+                                 'Content-Type': 'application/json',
+                                 'Accept-Encoding': 'identity'}) as response:
+                    if response.status != 200:
+                        codes = {400: 'invalid_request', 401: 'unauthorized', 403: 'unauthorized',
+                                 413: 'request_too_large', 429: 'busy', 503: 'unavailable'}
+                        retry_after = response.headers.get('Retry-After', '')
+                        retry_after = min(int(retry_after), 86400) if retry_after.isdigit() else None
+                        raise ExtractionServiceError(codes.get(response.status, 'http_error'),
+                            response.status in {429, 502, 503, 504}, retry_after)
+                    if response.headers.get('Content-Encoding', 'identity').lower() != 'identity':
+                        raise ExtractionServiceError('invalid_payload')
+                    data = bytearray()
+                    async for chunk in response.content.iter_chunked(16384):
+                        if len(data) + len(chunk) > self.max_bytes:
+                            raise ExtractionServiceError('response_too_large')
+                        data.extend(chunk)
+                    try:
+                        result = json.loads(data)
+                    except (ValueError, UnicodeError, RecursionError):
+                        raise ExtractionServiceError('invalid_payload') from None
+                    return self._validate(result, request_id, url)
+
         try:
-            # One request owns one session: completion/cancellation always closes it.
-            async with asyncio.timeout(timeout_seconds):
-                async with self._session_factory(timeout=aiohttp.ClientTimeout(total=timeout_seconds),
-                        trust_env=False, auto_decompress=False) as session:
-                    async with session.post(self.endpoint, data=body, allow_redirects=False,
-                            headers={'Authorization': 'Bearer ' + self._token,
-                                     'Content-Type': 'application/json',
-                                     'Accept-Encoding': 'identity'}) as response:
-                        if response.status != 200:
-                            codes = {400: 'invalid_request', 401: 'unauthorized', 403: 'unauthorized',
-                                     413: 'request_too_large', 429: 'busy', 503: 'unavailable'}
-                            retry_after = response.headers.get('Retry-After', '')
-                            retry_after = min(int(retry_after), 86400) if retry_after.isdigit() else None
-                            raise ExtractionServiceError(codes.get(response.status, 'http_error'),
-                                response.status in {429, 502, 503, 504}, retry_after)
-                        if response.headers.get('Content-Encoding', 'identity').lower() != 'identity':
-                            raise ExtractionServiceError('invalid_payload')
-                        data = bytearray()
-                        async for chunk in response.content.iter_chunked(16384):
-                            if len(data) + len(chunk) > self.max_bytes:
-                                raise ExtractionServiceError('response_too_large')
-                            data.extend(chunk)
-                        try:
-                            result = json.loads(data)
-                        except (ValueError, UnicodeError, RecursionError):
-                            raise ExtractionServiceError('invalid_payload') from None
-                        return self._validate(result, request_id, url)
-        except TimeoutError:
-            raise ExtractionServiceError('deadline_exceeded', True) from None
+            return await run_admitted(self.endpoint, timeout_seconds, request, ExtractionServiceError,
+                                      admission_timeout_seconds=admission_timeout_seconds,
+                                      phase=admission_phase)
         except aiohttp.ClientError:
             raise ExtractionServiceError('transport_error', True) from None
 

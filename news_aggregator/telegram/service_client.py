@@ -1,12 +1,12 @@
 """Bounded client for the private Go Telegram channel fetch API."""
 
-import asyncio
 import json
 import math
 from uuid import uuid4
 from urllib.parse import urlsplit
 
 import aiohttp
+from ..extraction.admission import run_admitted
 
 
 MAX_REQUEST_BYTES = 16 * 1024
@@ -29,10 +29,11 @@ TELEGRAM_ERROR_CODES = {
 class TelegramServiceError(Exception):
     """Finite error classification safe to log without remote response data."""
 
-    def __init__(self, code, retryable=False):
+    def __init__(self, code, retryable=False, retry_after_seconds=None):
         super().__init__(code)
         self.code = code
         self.retryable = retryable
+        self.retry_after_seconds = retry_after_seconds
 
 
 class TelegramServiceClient:
@@ -49,7 +50,8 @@ class TelegramServiceClient:
         self.max_bytes = min(max_bytes, MAX_RESPONSE_BYTES)
         self._session_factory = session_factory
 
-    async def fetch(self, channel_url, source_name, *, limit, timeout_seconds):
+    async def fetch(self, channel_url, source_name, *, limit, timeout_seconds,
+                    admission_timeout_seconds=None):
         if type(limit) is not int or not 1 <= limit <= MAX_ARTICLES:
             raise ValueError('invalid_telegram_limit')
         if not isinstance(source_name, str) or not source_name.strip():
@@ -61,53 +63,54 @@ class TelegramServiceClient:
             raise TelegramServiceError('deadline_exceeded', True)
 
         request_id = str(uuid4())
-        payload = {
-            'contract_version': '1',
-            'request_id': request_id,
-            'channel_url': channel_url,
-            'source_name': source_name,
-            'limit': limit,
-            'budget_ms': max(1, min(30_000, int(timeout_seconds * 1000))),
-        }
+
+        async def request(attempt_timeout):
+            payload = {
+                'contract_version': '1', 'request_id': request_id,
+                'channel_url': channel_url, 'source_name': source_name, 'limit': limit,
+                'budget_ms': max(1, min(30_000, int(attempt_timeout * 1000))),
+            }
+            try:
+                body = json.dumps(payload, ensure_ascii=False, separators=(',', ':')).encode('utf-8')
+            except UnicodeEncodeError:
+                raise TelegramServiceError('invalid_request') from None
+            if len(body) > MAX_REQUEST_BYTES:
+                raise TelegramServiceError('request_too_large')
+            async with self._session_factory(
+                    timeout=aiohttp.ClientTimeout(total=attempt_timeout),
+                    trust_env=False, auto_decompress=False) as session:
+                async with session.post(
+                        self.endpoint, data=body, allow_redirects=False,
+                        headers={'Authorization': 'Bearer ' + self._token,
+                                 'Content-Type': 'application/json',
+                                 'Accept-Encoding': 'identity'}) as response:
+                    if response.status != 200:
+                        status_codes = {
+                            400: 'invalid_request', 401: 'unauthorized', 403: 'unauthorized',
+                            413: 'request_too_large', 429: 'busy', 503: 'unavailable',
+                        }
+                        retry_after = response.headers.get('Retry-After', '')
+                        retry_after = min(int(retry_after), 86400) if retry_after.isdigit() else None
+                        raise TelegramServiceError(
+                            status_codes.get(response.status, 'http_error'),
+                            response.status in {429, 502, 503, 504}, retry_after)
+                    if response.headers.get('Content-Encoding', 'identity').lower() != 'identity':
+                        raise TelegramServiceError('invalid_payload')
+                    data = bytearray()
+                    async for chunk in response.content.iter_chunked(16_384):
+                        if len(data) + len(chunk) > self.max_bytes:
+                            raise TelegramServiceError('response_too_large')
+                        data.extend(chunk)
+                    try:
+                        result = json.loads(data)
+                    except (ValueError, UnicodeError, RecursionError):
+                        raise TelegramServiceError('invalid_payload') from None
+                    return self._validate(result, request_id, channel_url, source_name, limit)
+
         try:
-            body = json.dumps(payload, ensure_ascii=False, separators=(',', ':')).encode('utf-8')
-        except UnicodeEncodeError:
-            raise TelegramServiceError('invalid_request') from None
-        if len(body) > MAX_REQUEST_BYTES:
-            raise TelegramServiceError('request_too_large')
-        timeout_seconds = min(float(timeout_seconds), 30.0)
-        try:
-            async with asyncio.timeout(timeout_seconds):
-                async with self._session_factory(
-                        timeout=aiohttp.ClientTimeout(total=timeout_seconds),
-                        trust_env=False, auto_decompress=False) as session:
-                    async with session.post(
-                            self.endpoint, data=body, allow_redirects=False,
-                            headers={'Authorization': 'Bearer ' + self._token,
-                                     'Content-Type': 'application/json',
-                                     'Accept-Encoding': 'identity'}) as response:
-                        if response.status != 200:
-                            status_codes = {
-                                400: 'invalid_request', 401: 'unauthorized', 403: 'unauthorized',
-                                413: 'request_too_large', 429: 'busy', 503: 'unavailable',
-                            }
-                            raise TelegramServiceError(
-                                status_codes.get(response.status, 'http_error'),
-                                response.status in {429, 502, 503, 504})
-                        if response.headers.get('Content-Encoding', 'identity').lower() != 'identity':
-                            raise TelegramServiceError('invalid_payload')
-                        data = bytearray()
-                        async for chunk in response.content.iter_chunked(16_384):
-                            if len(data) + len(chunk) > self.max_bytes:
-                                raise TelegramServiceError('response_too_large')
-                            data.extend(chunk)
-                        try:
-                            result = json.loads(data)
-                        except (ValueError, UnicodeError, RecursionError):
-                            raise TelegramServiceError('invalid_payload') from None
-                        return self._validate(result, request_id, channel_url, source_name, limit)
-        except TimeoutError:
-            raise TelegramServiceError('deadline_exceeded', True) from None
+            return await run_admitted(self.endpoint, min(float(timeout_seconds), 30.0), request,
+                                       TelegramServiceError,
+                                       admission_timeout_seconds=admission_timeout_seconds)
         except aiohttp.ClientError:
             raise TelegramServiceError('transport_error', True) from None
 

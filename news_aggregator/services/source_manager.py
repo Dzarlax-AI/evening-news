@@ -376,9 +376,13 @@ class SourceManager:
         while pending and loop.time() < deadline:
             batch = pending[:8]
             pending = pending[8:]
-            remaining = max(0.001, deadline - loop.time())
+            remaining = max(0.0, deadline - loop.time())
+            if remaining <= 0:
+                break
             try:
-                response = await client.collect(batch, timeout_seconds=min(120.0, remaining))
+                response = await client.collect(
+                    batch, timeout_seconds=min(120.0, remaining),
+                    admission_timeout_seconds=remaining)
             except (SourceManagerServiceError, ValueError) as exc:
                 code = exc.code if isinstance(exc, SourceManagerServiceError) else 'invalid_configuration'
                 logger.warning('Go SourceManager batch failed code=%s sources=%d', code, len(batch))
