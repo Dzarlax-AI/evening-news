@@ -5,7 +5,9 @@ import json
 from http.server import ThreadingHTTPServer
 from pathlib import Path
 import subprocess
+import sys
 import threading
+from types import ModuleType
 import time
 from urllib.error import HTTPError
 from urllib.request import urlopen
@@ -27,6 +29,8 @@ def load_module(name: str, path: Path):
 gate = load_module("native_cloak_concurrency_gate", ROOT / "scripts/native_cloak_concurrency_gate.py")
 client = load_module("native_cloak_concurrency_client", ROOT / "scripts/native_cloak_concurrency_client.py")
 origin = load_module("native_cloak_concurrency_origin", ROOT / "tests/fixtures/native-cloak/concurrency_origin.py")
+diagnostic_relay = load_module("native_cloak_diagnostic_relay", ROOT / "scripts/native_cloak_diagnostic_relay.py")
+relay_source = load_module("shadow_cdp_relay_for_diagnostics_test", ROOT / "scripts/shadow_cdp_relay.py")
 
 
 def test_memory_parser_handles_docker_units():
@@ -260,6 +264,72 @@ def test_cgroup_snapshot_shell_prints_parseable_newline_markers(tmp_path):
 def test_cgroup_oom_observation_does_not_claim_acceptance_when_metrics_unavailable():
     assert gate._cgroup_oom_observation({"cloak": {"cgroup_available": False}}) == "unavailable"
     assert gate._cgroup_oom_observation({"cloak": {"cgroup_available": True}}) == "available_no_oom_events"
+
+
+def test_relay_diagnostic_wrapper_preserves_normal_forwarding_mode_and_reports_safe_counters(tmp_path):
+    report = tmp_path / "relay.json"
+    instrumented = diagnostic_relay.instrumented_relay(relay_source.Relay, report)
+    relay = instrumented(["127.0.0.1"], allow_loopback_test_peer=True)
+    assert relay.synthetic is False
+    relay.diagnostic_counts["capacity_rejected"] = 2
+    relay.peak_active = 4
+    relay._write_diagnostics()
+    assert gate.read_relay_diagnostics(report) == {
+        "available": True, "active": 0, "peak_active": 4,
+        "counters": {name: value for name, value in relay.diagnostic_counts.items()},
+    }
+    report.write_text(json.dumps({"schema_version": 1, "active": 0, "peak_active": 1,
+                                  "counters": {"accepted": 3, "token": "secret"},
+                                  "unreviewed_payload": "must-not-escape"}))
+    safe = gate.read_relay_diagnostics(report)
+    assert safe == {"available": True, "active": 0, "peak_active": 1, "counters": {"accepted": 3}}
+    assert "secret" not in json.dumps(safe)
+    assert "unreviewed_payload" not in json.dumps(safe)
+
+
+def test_diagnostic_relay_main_replaces_class_in_module_globals(monkeypatch, tmp_path):
+    fake_module = ModuleType("fake_relay_source")
+    exec(
+        "class Relay:\n"
+        "    def __init__(self, controllers, *, arm_dir=None, diagnostics_report=None):\n"
+        "        self.synthetic = arm_dir is not None\n"
+        "        self.diagnostics_report = diagnostics_report\n"
+        "def private_controller_ips(values):\n"
+        "    return tuple(values)\n"
+        "async def serve(controllers, arm_dir=None, report=None, diagnostics_report=None):\n"
+        "    global instance\n"
+        "    instance = Relay(controllers, arm_dir=arm_dir, diagnostics_report=diagnostics_report)\n",
+        fake_module.__dict__)
+    monkeypatch.setattr(diagnostic_relay, "load_relay_module", lambda _path: fake_module)
+    monkeypatch.setattr(sys, "argv", ["native_cloak_diagnostic_relay.py", "--source", str(tmp_path / "relay.py"),
+                                       "--diagnostics-report", str(tmp_path / "relay.json"),
+                                       "--controller-ip", "172.29.20.3"])
+    diagnostic_relay.main()
+    assert fake_module.instance.synthetic is False
+    assert fake_module.instance.diagnostics_report == tmp_path / "relay.json"
+
+
+def test_wait_command_preserves_failure_receipt_if_observer_exits_first(monkeypatch, tmp_path):
+    (tmp_path / "commands").mkdir()
+    (tmp_path / "results").mkdir()
+    instance = gate.DockerGate.__new__(gate.DockerGate)
+    instance.stage = tmp_path
+    instance.phase = "profile_two"
+    instance.partial_results = {}
+    monkeypatch.setattr(gate.secrets, "token_hex", lambda _count: "f" * 32)
+
+    def observer_exits_after_receipt():
+        receipt = {"command_id": "f" * 32, "ok": False,
+                   "error": "native_browser_discovery_transport_error"}
+        gate._write_private(tmp_path / "results" / ("f" * 32 + ".json"), receipt)
+        raise gate.GateError("runtime_stopped_restarted_or_oom", phase="profile_two")
+
+    instance._all_runtime_ok = observer_exits_after_receipt
+    with pytest.raises(gate.GateError, match="native_browser_discovery_transport_error") as failure:
+        instance._wait_command("observer", "profile_two", timeout=1)
+    assert failure.value.phase == "profile_two"
+    assert instance.partial_results == {"profile_two": {"ok": False,
+        "error": "native_browser_discovery_transport_error"}}
 
 
 def fixture_server(tmp_path):

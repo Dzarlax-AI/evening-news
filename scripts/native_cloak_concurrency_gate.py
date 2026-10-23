@@ -48,6 +48,11 @@ CDP_TIMEOUT_REASONS = {
     "cdp_timeout_target_get_targets", "cdp_timeout_target_get_browser_contexts",
     "cdp_timeout_runtime_evaluate", "cdp_timeout_target_dispose_browser_context", "cdp_timeout_other",
 }
+RELAY_COUNTER_NAMES = {
+    "accepted", "peer_rejected", "capacity_rejected", "connect_attempted", "connected",
+    "connect_timeout", "connect_error", "protocol_error", "stream_timeout", "transport_error",
+    "relay_error", "websocket_upgrade", "websocket_rejected", "closed",
+}
 STARTUP_FAILURES = {
     "native browser capability probe failed": "native_browser_capability_probe_failed",
     "experimental browser backend must be selected explicitly": "native_backend_not_selected",
@@ -199,6 +204,29 @@ def _cgroup_oom_observation(metrics: dict[str, dict[str, Any]]) -> str:
     return "available_no_oom_events"
 
 
+def read_relay_diagnostics(path: Path) -> dict[str, Any]:
+    unavailable = {"available": False}
+    try:
+        if path.is_symlink() or not path.is_file() or path.stat().st_size > 16384:
+            return unavailable
+        raw = json.loads(path.read_text())
+    except (OSError, ValueError):
+        return unavailable
+    if not isinstance(raw, dict) or raw.get("schema_version") != 1:
+        return unavailable
+    counters = raw.get("counters")
+    if not isinstance(counters, dict):
+        return unavailable
+    safe_counters = {name: counters[name] for name in RELAY_COUNTER_NAMES
+                     if type(counters.get(name)) is int and counters[name] >= 0}
+    peak_active = raw.get("peak_active")
+    active = raw.get("active")
+    if type(peak_active) is not int or peak_active < 0 or type(active) is not int or active < 0:
+        return unavailable
+    return {"available": True, "active": active, "peak_active": peak_active,
+            "counters": safe_counters}
+
+
 def _run(args: list[str], *, timeout: int = 30, input_text: str | None = None) -> str:
     try:
         result = subprocess.run(args, capture_output=True, text=True, timeout=timeout,
@@ -335,6 +363,8 @@ class DockerGate:
         self.started = time.monotonic()
         self.max_memory: dict[str, int] = {}
         self.cgroup_metrics: dict[str, dict[str, int | None]] = {}
+        self.partial_results: dict[str, dict[str, Any]] = {}
+        self.relay_diagnostics_path = stage / "relay-diagnostics" / "relay.json"
         self.control_subnet = self._choose_control_subnet()
         self.phase = "setup"
         self.control_ip = lambda host: str(self.control_subnet.network_address + host)
@@ -462,17 +492,38 @@ class DockerGate:
         result_path = self.stage / "results" / (command_id + ".json")
         _write_private(command_path, {"action": action})
         deadline = time.monotonic() + timeout
+
+        def read_receipt() -> dict[str, Any] | None:
+            if not result_path.exists() or result_path.is_symlink():
+                return None
+            try:
+                if result_path.stat().st_size > 4096 or result_path.stat().st_mode & 0o077:
+                    raise ValueError
+                value = json.loads(result_path.read_text())
+            except (OSError, ValueError):
+                raise GateError("client_receipt_invalid", phase=self.phase) from None
+            result_path.unlink()
+            try:
+                result = validate_receipt(value, command_id)
+            except GateError as exc:
+                self.partial_results[action] = {"ok": False, "error": exc.code}
+                raise GateError(exc.code, phase=self.phase) from None
+            self.partial_results[action] = {"ok": True, "result": result}
+            return result
+
         while time.monotonic() < deadline:
-            if result_path.exists() and not result_path.is_symlink():
-                try:
-                    if result_path.stat().st_size > 4096 or result_path.stat().st_mode & 0o077:
-                        raise ValueError
-                    value = json.loads(result_path.read_text())
-                except (OSError, ValueError):
-                    raise GateError("client_receipt_invalid") from None
-                result_path.unlink()
-                return validate_receipt(value, command_id)
-            self._all_runtime_ok()
+            result = read_receipt()
+            if result is not None:
+                return result
+            try:
+                self._all_runtime_ok()
+            except GateError:
+                # A command receipt is the more specific outcome when the
+                # observer exits immediately after publishing it.
+                result = read_receipt()
+                if result is not None:
+                    return result
+                raise
             time.sleep(.1)
         raise GateError("client_gate_timeout")
 
@@ -558,9 +609,14 @@ class DockerGate:
         self._wait_cloak_launch(info / "launch-info.json")
 
         self.phase = "relay_startup"
+        self.relay_diagnostics_path.parent.mkdir(mode=0o700)
         relay = self._run_container("relay", PYTHON_IMAGE, network_mode="container:" + cloak,
-            command=["python", "/relay.py", "--controller-ip", self.control_ip(3), "--controller-ip", self.control_ip(4)],
-            mounts=(str(ROOT / "scripts/shadow_cdp_relay.py") + ":/relay.py:ro",), memory="64m", cpu="0.25", pids=32)
+            command=["python", "/relay.py", "--source", "/relay-source.py", "--diagnostics-report",
+                     "/diagnostics/relay.json", "--controller-ip", self.control_ip(3), "--controller-ip", self.control_ip(4)],
+            mounts=(str(ROOT / "scripts/native_cloak_diagnostic_relay.py") + ":/relay.py:ro",
+                    str(ROOT / "scripts/shadow_cdp_relay.py") + ":/relay-source.py:ro",
+                    str(self.relay_diagnostics_path.parent) + ":/diagnostics:rw"),
+            memory="64m", cpu="0.25", pids=32)
 
         self.phase = "egress_startup"
         gateway_ip = self.control_ip(5)
@@ -647,6 +703,7 @@ class DockerGate:
             "sampled_max_memory_bytes": dict(self.max_memory),
             "container_cgroup_metrics": dict(self.cgroup_metrics),
             "cgroup_oom_observation": _cgroup_oom_observation(self.cgroup_metrics),
+            "relay_diagnostics": read_relay_diagnostics(self.relay_diagnostics_path),
             "resource_state": self._resource_state(),
             "network_scope": "isolated_internal_docker_networks_with_no_published_ports",
             "platform_note": ("linux/amd64 emulated on ARM64 host" if self._docker("info", "--format", "{{.Architecture}}") in {"aarch64", "arm64"}
@@ -867,7 +924,9 @@ def main() -> int:
                   "runtime_diagnostics": runtime_diagnostics,
                   "sampled_max_memory_bytes": dict(gate.max_memory),
                   "container_cgroup_metrics": dict(gate.cgroup_metrics),
-                  "cgroup_oom_observation": _cgroup_oom_observation(gate.cgroup_metrics)}
+                  "cgroup_oom_observation": _cgroup_oom_observation(gate.cgroup_metrics),
+                  "relay_diagnostics": read_relay_diagnostics(gate.relay_diagnostics_path),
+                  "partial_results": dict(gate.partial_results)}
         _write_private(args.output.resolve(), report)
         return 1
     assert result is not None
