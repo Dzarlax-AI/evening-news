@@ -214,6 +214,9 @@ func (s *Server) fetchTelegram(w http.ResponseWriter, r *http.Request) {
 		code, retryable := "cancelled", false
 		if errors.Is(ctx.Err(), context.DeadlineExceeded) {
 			code, retryable = "deadline_exceeded", true
+			if s.cfg.NativeBrowser && validTelegramAdmissionBusy(resp) {
+				code = "native_browser_busy"
+			}
 		}
 		resp = TelegramResponse{Outcome: "failed", Articles: []extractor.TelegramArticle{}, Error: &Failure{Code: code, Retryable: retryable}}
 	}
@@ -352,10 +355,14 @@ func (s *Server) extract(w http.ResponseWriter, r *http.Request) {
 		if errors.Is(ctx.Err(), context.DeadlineExceeded) {
 			code = "deadline_exceeded"
 			if s.cfg.NativeBrowser && req.UseBrowser != nil && *req.UseBrowser {
-				code = "native_browser_timeout"
+				if validArticleAdmissionBusy(resp) {
+					code = "native_browser_busy"
+				} else {
+					code = "native_browser_timeout"
+				}
 			}
 		}
-		resp = Response{Outcome: "failed", Error: &Failure{Code: code, Retryable: code == "deadline_exceeded" || code == "native_browser_timeout"}}
+		resp = Response{Outcome: "failed", Error: &Failure{Code: code, Retryable: code == "deadline_exceeded" || code == "native_browser_timeout" || code == "native_browser_busy"}}
 	}
 	resp.ContractVersion = ContractVersion
 	resp.BuildVersion = s.cfg.BuildVersion
@@ -385,6 +392,16 @@ func (s *Server) extract(w http.ResponseWriter, r *http.Request) {
 		}
 	}
 	s.write(w, 200, resp)
+}
+
+func validArticleAdmissionBusy(resp Response) bool {
+	return resp.Outcome == "rejected" && resp.Result.State == "failed" && resp.Result.Error == "native_browser_busy" &&
+		resp.Error != nil && resp.Error.Code == "native_browser_busy" && resp.Error.Retryable
+}
+
+func validTelegramAdmissionBusy(resp TelegramResponse) bool {
+	return resp.Outcome == "failed" && len(resp.Articles) == 0 && resp.Error != nil &&
+		resp.Error.Code == "native_browser_busy" && resp.Error.Retryable
 }
 
 func requiresBrowser(r Request) bool {

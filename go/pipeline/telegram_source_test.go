@@ -23,6 +23,7 @@ func telegramPage(content string) string {
 func TestTelegram429DoesNotFallback(t *testing.T) {
 	var renders int
 	source := TelegramSource{
+		Admit: func(context.Context, string) error { return nil },
 		Fetch: func(context.Context, string, transport.Options) (transport.Document, error) {
 			return transport.Document{}, &transport.PublicHTTPStatusError{StatusCode: 429}
 		},
@@ -34,6 +35,25 @@ func TestTelegram429DoesNotFallback(t *testing.T) {
 	got := source.FetchChannel(context.Background(), testTelegramURL, "News", 10)
 	if got.Outcome != "failed" || got.Error != "upstream_rate_limited" || !got.Retryable || renders != 0 {
 		t.Fatalf("429 fallback policy failed: outcome=%s error=%s retry=%v renders=%d", got.Outcome, got.Error, got.Retryable, renders)
+	}
+}
+
+func TestTelegramPreservesAdmissionBusyWhenSourceBudgetExpires(t *testing.T) {
+	ctx, cancel := context.WithTimeout(context.Background(), 15*time.Millisecond)
+	defer cancel()
+	source := TelegramSource{
+		Admit: func(context.Context, string) error { return nil },
+		Fetch: func(context.Context, string, transport.Options) (transport.Document, error) {
+			return transport.Document{}, errors.New("temporary network failure")
+		},
+		Render: func(ctx context.Context, _ string, _ transport.BrowserOptions, _ string) (transport.RenderedDocument, error) {
+			<-ctx.Done()
+			return transport.RenderedDocument{}, transport.ErrNativeAdmissionDeadline
+		},
+	}
+	got := source.FetchChannel(ctx, testTelegramURL, "News", 10)
+	if got.Outcome != "failed" || got.Error != "native_browser_busy" || !got.Retryable {
+		t.Fatalf("queued native render timeout was reclassified: %+v", got)
 	}
 }
 

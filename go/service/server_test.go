@@ -11,6 +11,8 @@ import (
 	"sync/atomic"
 	"testing"
 	"time"
+
+	"github.com/Dzarlax-AI/evening-news/go/extractor"
 )
 
 const testToken = "test-token-with-32-secret-bytes"
@@ -53,6 +55,67 @@ func TestNativeOuterDeadlineCannotEnablePythonFallback(t *testing.T) {
 	}
 	if w.Code != 200 || resp.Error == nil || resp.Error.Code != "native_browser_timeout" || !resp.Error.Retryable {
 		t.Fatalf("native timeout lost policy: %s", w.Body.String())
+	}
+}
+
+func TestNativeAdmissionBusySurvivesOuterDeadlineOnlyForValidRunnerResponse(t *testing.T) {
+	busy := Response{Outcome: "rejected", Result: extractor.Result{State: "failed", Error: "native_browser_busy"}, Error: &Failure{Code: "native_browser_busy", Retryable: true}}
+	for _, tc := range []struct {
+		name string
+		resp Response
+		want string
+	}{
+		{name: "valid admission busy", resp: busy, want: "native_browser_busy"},
+		{name: "arbitrary failed response", resp: Response{Outcome: "failed", Error: &Failure{Code: "native_browser_busy", Retryable: true}}, want: "native_browser_timeout"},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			s, err := New(Config{Token: testToken, MaxConcurrent: 1, NativeBrowser: true, BrowserAvailable: func() bool { return true }}, RunnerFunc(func(ctx context.Context, _ Request) Response {
+				<-ctx.Done()
+				return tc.resp
+			}))
+			if err != nil {
+				t.Fatal(err)
+			}
+			w := post(s, `{"request_id":"native-wait","url":"https://example.org/article","use_browser":true,"budget_ms":10}`)
+			var resp Response
+			if err := json.Unmarshal(w.Body.Bytes(), &resp); err != nil {
+				t.Fatal(err)
+			}
+			if resp.Error == nil || resp.Error.Code != tc.want || !resp.Error.Retryable {
+				t.Fatalf("deadline mapping = %+v, want %s retryable", resp.Error, tc.want)
+			}
+		})
+	}
+}
+
+func TestExternalCancellationDoesNotPreserveAdmissionBusy(t *testing.T) {
+	started := make(chan struct{})
+	s, err := New(Config{Token: testToken, MaxConcurrent: 1, NativeBrowser: true, BrowserAvailable: func() bool { return true }}, RunnerFunc(func(ctx context.Context, _ Request) Response {
+		close(started)
+		<-ctx.Done()
+		return Response{Outcome: "rejected", Result: extractor.Result{State: "failed", Error: "native_browser_busy"}, Error: &Failure{Code: "native_browser_busy", Retryable: true}}
+	}))
+	if err != nil {
+		t.Fatal(err)
+	}
+	ctx, cancel := context.WithCancel(context.Background())
+	req := httptest.NewRequest(http.MethodPost, "/v1/extract", strings.NewReader(`{"request_id":"native-cancel","url":"https://example.org/article","use_browser":true,"budget_ms":1000}`)).WithContext(ctx)
+	req.Header.Set("Authorization", "Bearer "+testToken)
+	response := httptest.NewRecorder()
+	done := make(chan struct{})
+	go func() {
+		s.ServeHTTP(response, req)
+		close(done)
+	}()
+	<-started
+	cancel()
+	<-done
+	var resp Response
+	if err := json.Unmarshal(response.Body.Bytes(), &resp); err != nil {
+		t.Fatal(err)
+	}
+	if resp.Error == nil || resp.Error.Code != "cancelled" || resp.Error.Retryable {
+		t.Fatalf("external cancellation was reclassified: %+v", resp.Error)
 	}
 }
 

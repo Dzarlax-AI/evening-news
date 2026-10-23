@@ -95,6 +95,19 @@ func TestSourceManagerStartsBudgetAfterQueueWait(t *testing.T) {
 	}
 }
 
+func TestSourceManagerPreservesNativeAdmissionBusyAtDeadline(t *testing.T) {
+	results := (SourceManager{MaxWorkers: 1}).Collect(context.Background(), []SourceJob{{
+		SourceID: 1, Budget: 15 * time.Millisecond,
+		Run: func(ctx context.Context) SourceJobResult {
+			<-ctx.Done()
+			return SourceJobResult{Outcome: "failed", Error: "native_browser_busy", Retryable: true}
+		},
+	}})
+	if len(results) != 1 || results[0].Error != "native_browser_busy" || !results[0].Retryable {
+		t.Fatalf("admission deadline was reclassified as a render timeout: %+v", results)
+	}
+}
+
 func TestSourceManagerDefersQueuedWorkAndDrainsActiveWorkOnCancel(t *testing.T) {
 	ctx, cancel := context.WithCancel(context.Background())
 	started := make(chan struct{})

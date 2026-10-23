@@ -1375,6 +1375,53 @@ func TestNativeBrowserWaiterIsBoundedAndCancelable(t *testing.T) {
 	}
 }
 
+func TestNativeBrowserAdmissionDeadlineDoesNotCreateTarget(t *testing.T) {
+	f := newNativeFixture(t)
+	w, err := NewNativeBrowser(NativeBrowserConfig{Endpoint: f.server.URL, ProxyURL: "http://gateway.test:3128", ProxyToken: "sixteen-byte-token", NetworkIsolationVerified: true, MaxConcurrent: 1, MaxWaiters: 1})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := w.Probe(context.Background()); err != nil {
+		t.Fatal(err)
+	}
+	f.mu.Lock()
+	f.navigateDelay = 200 * time.Millisecond
+	f.mu.Unlock()
+	active := make(chan error, 1)
+	go func() {
+		_, err := w.Fetch(context.Background(), "https://origin.example/active", NativeBrowserOptions{BrowserOptions: BrowserOptions{Timeout: time.Second}})
+		active <- err
+	}()
+	select {
+	case <-f.navigateStarts:
+	case <-time.After(time.Second):
+		t.Fatal("active render did not reach navigation")
+	}
+	waitCtx, cancel := context.WithTimeout(context.Background(), 20*time.Millisecond)
+	defer cancel()
+	_, err = w.Fetch(waitCtx, "https://origin.example/waiting", NativeBrowserOptions{BrowserOptions: BrowserOptions{Timeout: time.Second}})
+	if !errors.Is(err, ErrNativeBusy) || !errors.Is(err, ErrNativeAdmissionDeadline) || errors.Is(err, context.DeadlineExceeded) {
+		t.Fatalf("admission-only deadline was not retryable busy: %v", err)
+	}
+	if err := <-active; err != nil {
+		t.Fatalf("active render was affected by sibling admission timeout: %v", err)
+	}
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	createContexts := 0
+	for _, method := range f.methods {
+		if method == "Target.createBrowserContext" {
+			createContexts++
+		}
+	}
+	if createContexts != 2 { // one startup probe and one actual render
+		t.Fatalf("waiter created a browser context before admission: create contexts=%d methods=%v", createContexts, f.methods)
+	}
+	if len(f.contexts) != 0 || len(f.targets) != 1 || !f.targets["foreign-sentinel"] {
+		t.Fatalf("admission timeout leaked a resource or changed a foreign target: %v %v", f.contexts, f.targets)
+	}
+}
+
 func TestNativeBrowserGenerationTaintCancelsEveryActiveOperation(t *testing.T) {
 	f := newNativeFixture(t)
 	w, err := NewNativeBrowser(NativeBrowserConfig{Endpoint: f.server.URL, ProxyURL: "http://gateway.test:3128", ProxyToken: "sixteen-byte-token", NetworkIsolationVerified: true, MaxConcurrent: 2})

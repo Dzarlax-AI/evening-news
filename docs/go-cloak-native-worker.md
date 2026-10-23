@@ -65,6 +65,9 @@ for a slot, bounded by their original caller contexts. The navigation timeout
 starts after admission, while the source/RPC deadline continues to bound the
 whole operation. A slot remains occupied through owned-resource cleanup.
 Excess waiters receive `native_browser_busy`; normal slot contention waits.
+A deadline that expires before render admission also returns retryable
+`native_browser_busy`, preserving the application's attempt refund. Deadlines
+after admission remain render timeouts; external cancellation stays canceled.
 
 Each active operation has its own CDP connection, disposable context, target,
 and cancellation. Shutdown cancels all owned operations; generation/ownership

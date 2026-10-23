@@ -15,6 +15,7 @@ import os
 from pathlib import Path
 import re
 import secrets
+import shlex
 import shutil
 import subprocess
 import tempfile
@@ -124,6 +125,78 @@ def _docker_failure_reason(stderr: str) -> str:
     if "cannot connect to the docker daemon" in error or "is the docker daemon running" in error:
         return "daemon_unavailable"
     return "unknown"
+
+
+def parse_image_identity(raw: str) -> dict[str, Any]:
+    try:
+        decoded = json.loads(raw)
+    except (TypeError, json.JSONDecodeError):
+        raise GateError("cached_image_identity_invalid") from None
+    if isinstance(decoded, list) and len(decoded) == 1:
+        item = decoded[0]
+    elif isinstance(decoded, dict):
+        item = decoded
+    else:
+        raise GateError("cached_image_identity_invalid")
+    if not isinstance(item, dict):
+        raise GateError("cached_image_identity_invalid")
+
+    image_id = item.get("Id")
+    if not isinstance(image_id, str) or not re.fullmatch(r"sha256:[a-fA-F0-9]{64}", image_id):
+        raise GateError("cached_image_identity_invalid")
+    repo_digests = item.get("RepoDigests", [])
+    if not isinstance(repo_digests, list):
+        repo_digests = []
+    repo_digests = [value for value in repo_digests
+                    if isinstance(value, str) and re.fullmatch(r"[^\s@]+@sha256:[a-fA-F0-9]{64}", value)]
+
+    os_name, architecture, variant = item.get("Os"), item.get("Architecture"), item.get("Variant")
+    platform_source = "top_level" if isinstance(os_name, str) and isinstance(architecture, str) else None
+    if platform_source is None:
+        candidates = []
+        for key in ("Platform", "platform"):
+            candidates.append(item.get(key))
+        for key in ("Descriptor", "descriptor"):
+            descriptor = item.get(key)
+            if isinstance(descriptor, dict):
+                candidates.extend((descriptor.get("Platform"), descriptor.get("platform")))
+        for candidate in candidates:
+            if not isinstance(candidate, dict):
+                continue
+            candidate_os = candidate.get("Os", candidate.get("os"))
+            candidate_arch = candidate.get("Architecture", candidate.get("architecture"))
+            if isinstance(candidate_os, str) and isinstance(candidate_arch, str):
+                os_name, architecture = candidate_os, candidate_arch
+                variant = candidate.get("Variant", candidate.get("variant"))
+                platform_source = "platform_descriptor"
+                break
+    if not isinstance(os_name, str) or not re.fullmatch(r"[a-z0-9_.-]{1,32}", os_name.lower()):
+        os_name = None
+    if not isinstance(architecture, str) or not re.fullmatch(r"[a-z0-9_.-]{1,32}", architecture.lower()):
+        architecture = None
+    if not (os_name and architecture):
+        os_name = architecture = None
+        variant = None
+        platform_source = None
+    elif not isinstance(variant, str) or not re.fullmatch(r"[a-z0-9_.-]{1,32}", variant.lower()):
+        variant = None
+
+    platform = f"{os_name.lower()}/{architecture.lower()}" if os_name else None
+    return {"image_id": image_id, "repo_digests": repo_digests, "platform": platform,
+            "platform_variant": variant.lower() if isinstance(variant, str) else None,
+            "platform_source": platform_source,
+            "platform_status": "available" if platform else "unavailable"}
+
+
+def _cgroup_snapshot_script(root: str = "/sys/fs/cgroup") -> str:
+    return ("for f in memory.current memory.peak memory.stat memory.events pids.current; do "
+            "printf '%s\\n' ===$f; cat " + shlex.quote(root) + "/$f 2>/dev/null || true; done")
+
+
+def _cgroup_oom_observation(metrics: dict[str, dict[str, Any]]) -> str:
+    if not metrics or not all(item.get("cgroup_available") is True for item in metrics.values()):
+        return "unavailable"
+    return "available_no_oom_events"
 
 
 def _run(args: list[str], *, timeout: int = 30, input_text: str | None = None) -> str:
@@ -331,14 +404,11 @@ class DockerGate:
 
     def _snapshot_cgroup(self, name: str, label: str | None = None) -> None:
         key = label or name.removeprefix(self.prefix + "-")
-        names = ("memory.current", "memory.peak", "memory.stat", "memory.events", "pids.current")
-        result: dict[str, int | None] = {"memory_current_bytes": None, "memory_peak_bytes": None,
+        result: dict[str, Any] = {"memory_current_bytes": None, "memory_peak_bytes": None,
             "memory_anon_bytes": None, "memory_file_bytes": None, "oom_events": None,
             "oom_kill_events": None, "pids_current": None}
         try:
-            raw = self._docker("exec", name, "sh", "-c",
-                "for f in memory.current memory.peak memory.stat memory.events pids.current; do "
-                "printf '%s\\n' ===$f; cat /sys/fs/cgroup/$f 2>/dev/null || true; done", timeout=5)
+            raw = self._docker("exec", name, "sh", "-c", _cgroup_snapshot_script(), timeout=5)
             current = None
             for line in raw.splitlines():
                 if line.startswith("==="):
@@ -355,6 +425,9 @@ class DockerGate:
                     result["oom_events" if fields[0] == "oom" else "oom_kill_events"] = int(fields[1])
         except (GateError, ValueError):
             pass
+        result["cgroup_available"] = all(result[field] is not None for field in (
+            "memory_current_bytes", "memory_peak_bytes", "memory_anon_bytes", "memory_file_bytes",
+            "oom_events", "oom_kill_events", "pids_current"))
         self.cgroup_metrics[key] = result
         if result["oom_events"] not in (None, 0) or result["oom_kill_events"] not in (None, 0):
             raise GateError("container_oom_event_detected", phase=self.phase)
@@ -443,14 +516,14 @@ class DockerGate:
         self._create_network(self.prefix + "-control", str(self.control_subnet))
         image_details = {}
         for image in (CLOAK_IMAGE, PYTHON_IMAGE, ALPINE_IMAGE):
-            output = self._docker("image", "inspect", "--format",
-                                  '{{.Os}}/{{.Architecture}} {{.Id}} {{join .RepoDigests ";"}}', image)
-            fields = output.split(maxsplit=2)
-            if len(fields) < 2:
-                raise GateError("cached_image_identity_unavailable", phase=self.phase)
-            image_details[image] = {"platform": fields[0], "image_id": fields[1],
-                                    "repo_digests": fields[2].split(";") if len(fields) > 2 and fields[2] else []}
+            output = self._docker("image", "inspect", image)
+            try:
+                image_details[image] = parse_image_identity(output)
+            except GateError as exc:
+                raise GateError(exc.code, phase=self.phase) from None
         images = {image: details["platform"] for image, details in image_details.items()}
+        if images[CLOAK_IMAGE] is None:
+            raise GateError("pinned_cloak_image_platform_unavailable", phase=self.phase)
         if images[CLOAK_IMAGE] != "linux/amd64":
             raise GateError("pinned_cloak_image_architecture_mismatch")
         if self.worker_binary == self.egress_binary:
@@ -567,6 +640,7 @@ class DockerGate:
                              "closed_cleanly": closed.get("peer_closed") is True},
             "sampled_max_memory_bytes": dict(self.max_memory),
             "container_cgroup_metrics": dict(self.cgroup_metrics),
+            "cgroup_oom_observation": _cgroup_oom_observation(self.cgroup_metrics),
             "resource_state": self._resource_state(),
             "network_scope": "isolated_internal_docker_networks_with_no_published_ports",
             "platform_note": ("linux/amd64 emulated on ARM64 host" if self._docker("info", "--format", "{{.Architecture}}") in {"aarch64", "arm64"}
@@ -786,7 +860,8 @@ def main() -> int:
                   "runtime_state": runtime_state,
                   "runtime_diagnostics": runtime_diagnostics,
                   "sampled_max_memory_bytes": dict(gate.max_memory),
-                  "container_cgroup_metrics": dict(gate.cgroup_metrics)}
+                  "container_cgroup_metrics": dict(gate.cgroup_metrics),
+                  "cgroup_oom_observation": _cgroup_oom_observation(gate.cgroup_metrics)}
         _write_private(args.output.resolve(), report)
         return 1
     assert result is not None

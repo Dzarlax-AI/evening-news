@@ -249,6 +249,9 @@ func pageMonitorNeedsStudy(items []extractor.PageMonitorItem, raw string) bool {
 }
 func pageMonitorTransportFailure(out PageMonitorOutcome, err error) PageMonitorOutcome {
 	switch {
+	case errors.Is(err, transport.ErrNativeBusy):
+		out.Error = "native_browser_busy"
+		out.Retryable = true
 	case errors.Is(err, context.DeadlineExceeded):
 		out.Error = "deadline_exceeded"
 		out.Retryable = true
@@ -257,7 +260,7 @@ func pageMonitorTransportFailure(out PageMonitorOutcome, err error) PageMonitorO
 	case errors.Is(err, transport.ErrBrowserEventOverflow):
 		out.Error = "event_overflow"
 		out.Retryable = true
-	case errors.Is(err, transport.ErrNativeOwnershipLost), errors.Is(err, transport.ErrNativeNotReady), errors.Is(err, transport.ErrNativeBusy):
+	case errors.Is(err, transport.ErrNativeOwnershipLost), errors.Is(err, transport.ErrNativeNotReady):
 		out.Error = "unavailable"
 		out.Retryable = true
 	case errors.Is(err, transport.ErrNativePolicy):

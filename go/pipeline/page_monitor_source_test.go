@@ -70,6 +70,7 @@ func TestPageMonitorTransportFailureClasses(t *testing.T) {
 		{"public_url_denied", transport.ErrUnsafePublicURL, "public_url_denied", false},
 		{"native_policy", transport.ErrNativePolicy, "native_browser_policy_denied", false},
 		{"deadline", context.DeadlineExceeded, "deadline_exceeded", true},
+		{"native admission busy", transport.ErrNativeAdmissionDeadline, "native_browser_busy", true},
 		{"cancelled", context.Canceled, "cancelled", false},
 	}
 	for _, tc := range tests {

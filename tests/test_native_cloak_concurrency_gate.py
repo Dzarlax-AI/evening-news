@@ -4,6 +4,7 @@ import importlib.util
 import json
 from http.server import ThreadingHTTPServer
 from pathlib import Path
+import subprocess
 import threading
 import time
 from urllib.error import HTTPError
@@ -67,6 +68,40 @@ def test_receipt_contract_correlates_commands_and_preserves_finite_failure_code(
     with pytest.raises(gate.GateError, match="client_gate_failed"):
         gate.validate_receipt({"command_id": command_id, "ok": False,
                                "error": "token=private"}, command_id)
+
+
+def test_image_identity_parser_accepts_classic_flattened_inspect_and_omits_config():
+    image_id = "sha256:" + "a" * 64
+    repo_digest = "python@sha256:" + "b" * 64
+    result = gate.parse_image_identity(json.dumps([{
+        "Id": image_id, "RepoDigests": [repo_digest], "Os": "linux", "Architecture": "amd64",
+        "Config": {"Env": ["SECRET=must-not-escape"]},
+    }]))
+    assert result == {"image_id": image_id, "repo_digests": [repo_digest], "platform": "linux/amd64",
+                      "platform_variant": None, "platform_source": "top_level", "platform_status": "available"}
+    assert "SECRET" not in json.dumps(result)
+
+
+def test_image_identity_parser_accepts_nested_platform_descriptor():
+    image_id = "sha256:" + "c" * 64
+    result = gate.parse_image_identity(json.dumps([{
+        "Id": image_id,
+        "Descriptor": {"platform": {"os": "linux", "architecture": "arm64", "variant": "v8"}},
+    }]))
+    assert result["image_id"] == image_id
+    assert result["platform"] == "linux/arm64"
+    assert result["platform_variant"] == "v8"
+    assert result["platform_source"] == "platform_descriptor"
+
+
+def test_image_identity_parser_reports_missing_aux_platform_and_rejects_invalid_identity():
+    image_id = "sha256:" + "d" * 64
+    result = gate.parse_image_identity(json.dumps({"Id": image_id, "Config": {"Env": ["SECRET=x"]}}))
+    assert result["platform"] is None
+    assert result["platform_status"] == "unavailable"
+    for raw in ("not-json", "[]", json.dumps([{"Id": "not-an-image-id"}])):
+        with pytest.raises(gate.GateError, match="cached_image_identity_invalid"):
+            gate.parse_image_identity(raw)
 
 
 def test_runtime_log_classifier_keeps_only_finite_safe_codes():
@@ -197,6 +232,27 @@ def test_cgroup_oom_event_fails_gate_and_keeps_safe_resource_metrics():
     assert failure.value.phase == "profile_two"
     assert instance.cgroup_metrics["worker"]["memory_peak_bytes"] == 2048
     assert instance.cgroup_metrics["worker"]["oom_events"] == 1
+    assert instance.cgroup_metrics["worker"]["cgroup_available"] is True
+
+
+def test_cgroup_snapshot_shell_prints_parseable_newline_markers(tmp_path):
+    values = {
+        "memory.current": "1024\n", "memory.peak": "2048\n",
+        "memory.stat": "anon 512\nfile 128\n", "memory.events": "oom 0\noom_kill 0\n",
+        "pids.current": "4\n",
+    }
+    for filename, content in values.items():
+        (tmp_path / filename).write_text(content)
+    result = subprocess.run(["sh", "-c", gate._cgroup_snapshot_script(str(tmp_path))],
+                            check=True, capture_output=True, text=True)
+    assert result.stdout == (
+        "===memory.current\n1024\n===memory.peak\n2048\n===memory.stat\n"
+        "anon 512\nfile 128\n===memory.events\noom 0\noom_kill 0\n===pids.current\n4\n")
+
+
+def test_cgroup_oom_observation_does_not_claim_acceptance_when_metrics_unavailable():
+    assert gate._cgroup_oom_observation({"cloak": {"cgroup_available": False}}) == "unavailable"
+    assert gate._cgroup_oom_observation({"cloak": {"cgroup_available": True}}) == "available_no_oom_events"
 
 
 def fixture_server(tmp_path):

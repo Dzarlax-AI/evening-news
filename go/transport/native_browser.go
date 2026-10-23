@@ -18,16 +18,32 @@ import (
 )
 
 var (
-	ErrNativeNotReady           = errors.New("native_browser_not_ready")
-	ErrNativeBusy               = errors.New("native_browser_busy")
-	ErrNativePolicy             = errors.New("native_browser_policy_denied")
-	ErrNativeUnsupported        = errors.New("native_browser_unsupported")
-	ErrNativeTargetCrashed      = errors.New("native_browser_target_crashed")
-	ErrNativeWorkerFatal        = errors.New("native_browser_worker_fatal")
-	errNativeClientDisconnected = errors.New("native_browser_client_disconnected")
-	errNativeMalformedDetach    = errors.New("native_browser_malformed_detach")
-	errNativeOwnedDetach        = errors.New("native_browser_owned_detach")
+	ErrNativeNotReady                 = errors.New("native_browser_not_ready")
+	ErrNativeBusy                     = errors.New("native_browser_busy")
+	ErrNativeAdmissionDeadline  error = nativeAdmissionDeadlineError{}
+	ErrNativePolicy                   = errors.New("native_browser_policy_denied")
+	ErrNativeUnsupported              = errors.New("native_browser_unsupported")
+	ErrNativeTargetCrashed            = errors.New("native_browser_target_crashed")
+	ErrNativeWorkerFatal              = errors.New("native_browser_worker_fatal")
+	errNativeClientDisconnected       = errors.New("native_browser_client_disconnected")
+	errNativeMalformedDetach          = errors.New("native_browser_malformed_detach")
+	errNativeOwnedDetach              = errors.New("native_browser_owned_detach")
 )
+
+// nativeAdmissionDeadlineError reports that a request's budget expired while
+// waiting for render admission. It matches ErrNativeBusy but deliberately does
+// not match context.DeadlineExceeded: navigation never started in this case.
+type nativeAdmissionDeadlineError struct{}
+
+func (nativeAdmissionDeadlineError) Error() string        { return ErrNativeBusy.Error() }
+func (nativeAdmissionDeadlineError) Is(target error) bool { return target == ErrNativeBusy }
+
+func nativeAdmissionWaitError(err error) error {
+	if errors.Is(err, context.DeadlineExceeded) {
+		return ErrNativeAdmissionDeadline
+	}
+	return err
+}
 
 // NativeBrowserConfig is server configuration, never part of an article payload.
 // NetworkIsolationVerified attests an independently verified network namespace:
@@ -268,7 +284,7 @@ func (w *NativeBrowser) CheckReady(ctx context.Context) bool {
 // The caller applies any navigation timeout only after this returns.
 func (w *NativeBrowser) begin(ctx context.Context, probe bool) (context.Context, func(), error) {
 	if err := ctx.Err(); err != nil {
-		return nil, nil, err
+		return nil, nil, nativeAdmissionWaitError(err)
 	}
 	w.mu.Lock()
 	if probe {
@@ -297,7 +313,7 @@ func (w *NativeBrowser) begin(ctx context.Context, probe bool) (context.Context,
 				w.probing = false
 			}
 			w.mu.Unlock()
-			return nil, nil, ctx.Err()
+			return nil, nil, nativeAdmissionWaitError(ctx.Err())
 		default:
 			if probe {
 				w.probing = false
@@ -315,7 +331,7 @@ func (w *NativeBrowser) begin(ctx context.Context, probe bool) (context.Context,
 				w.probing = false
 				w.mu.Unlock()
 			}
-			return nil, nil, ctx.Err()
+			return nil, nil, nativeAdmissionWaitError(ctx.Err())
 		case <-w.stopped:
 			<-w.waiters
 			w.mu.Lock()
@@ -336,7 +352,7 @@ func (w *NativeBrowser) begin(ctx context.Context, probe bool) (context.Context,
 				w.mu.Unlock()
 			}
 			<-w.slots
-			return nil, nil, err
+			return nil, nil, nativeAdmissionWaitError(err)
 		}
 		w.mu.Lock()
 		if err := w.admissionErrorLocked(probe); err != nil {
