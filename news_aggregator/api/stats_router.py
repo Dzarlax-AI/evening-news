@@ -127,10 +127,25 @@ async def get_dashboard_stats(
             # Table might not exist yet
             pass
         
-        # Get queue stats
+        # In worker mode, persisted state replaces process-local orchestrator metrics.
         try:
-            orchestrator = NewsOrchestrator()
-            queue_stats = orchestrator.get_queue_stats()
+            from ..config import settings
+            if settings.background_execution_mode == "worker":
+                from ..models import BackgroundJob
+                from ..services.background_jobs import read_worker_status
+                worker = await read_worker_status(db)
+                queued_count = await db.scalar(select(func.count()).select_from(BackgroundJob).where(
+                    BackgroundJob.state.in_(("queued", "interrupted"))))
+                active_count = await db.scalar(select(func.count()).select_from(BackgroundJob).where(
+                    BackgroundJob.state == "running"))
+                queue_stats = {
+                    "worker_available": bool(worker and worker["healthy"]),
+                    "queued_jobs": int(queued_count or 0),
+                    "active_jobs": int(active_count or 0),
+                }
+            else:
+                orchestrator = NewsOrchestrator()
+                queue_stats = orchestrator.get_queue_stats()
         except Exception as e:
             queue_stats = {"error": str(e)}
         
@@ -172,6 +187,19 @@ async def get_dashboard_stats(
 async def get_queue_stats():
     """Get database queue statistics."""
     try:
+        from ..config import settings
+        if settings.background_execution_mode == "worker":
+            from ..database import AsyncSessionLocal
+            from ..models import BackgroundJob
+            from ..services.background_jobs import read_worker_status
+            async with AsyncSessionLocal() as session:
+                worker = await read_worker_status(session)
+                queued = await session.scalar(select(func.count()).select_from(BackgroundJob).where(
+                    BackgroundJob.state.in_(("queued", "interrupted"))))
+                active = await session.scalar(select(func.count()).select_from(BackgroundJob).where(
+                    BackgroundJob.state == "running"))
+            return {"worker_available": bool(worker and worker["healthy"]),
+                    "queued_jobs": int(queued or 0), "active_jobs": int(active or 0)}
         orchestrator = NewsOrchestrator()
         return orchestrator.get_queue_stats()
     except Exception as e:

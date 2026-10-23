@@ -76,6 +76,12 @@ class Settings(BaseSettings):
     jwt_secret: Optional[str] = Field(default=None, alias="JWT_SECRET")
     trust_forward_auth: bool = Field(default=False, alias="TRUST_FORWARD_AUTH")
     scheduler_enabled: bool = Field(default=True, alias="SCHEDULER_ENABLED")
+    background_execution_mode: Literal["embedded", "worker"] = Field(
+        default="embedded", alias="BACKGROUND_EXECUTION_MODE"
+    )
+    worker_poll_interval_seconds: int = Field(default=1, ge=1, le=10, alias="WORKER_POLL_INTERVAL_SECONDS")
+    worker_shutdown_drain_seconds: int = Field(default=20, ge=0, le=120, alias="WORKER_SHUTDOWN_DRAIN_SECONDS")
+    worker_job_retention_days: int = Field(default=7, ge=1, le=90, alias="WORKER_JOB_RETENTION_DAYS")
 
     # Local/regional category isolation
     # When set, articles matching this category are isolated from other feeds

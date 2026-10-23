@@ -378,7 +378,7 @@ async def reprocess_public_article(
     if not _has_public_admin_access(request):
         raise HTTPException(status_code=401, detail="Admin access required")
 
-    return await reprocess_article(article_id, payload, db)
+    return await reprocess_article(article_id, payload, request, db)
 
 
 @router.get("/api/public/categories/config")

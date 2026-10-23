@@ -3,6 +3,7 @@
 import asyncio
 import json
 import logging
+import os
 import re
 import tarfile
 from datetime import datetime, timedelta
@@ -48,30 +49,36 @@ class BackupService:
 
     async def _run_pg_dump(self, backup_file: Path) -> bool:
         """Run pg_dump via Docker container to create database backup."""
+        process = None
         try:
             host, port, username, password, database = self._parse_database_url()
 
             logger.info(f"Creating database backup: {database} @ {host}:{port}")
 
-            # Build pg_dump command
-            cmd = [
-                "docker", "exec",
-                "-e", f"PGPASSWORD={password}",
-                self.container_name,
-                "pg_dump",
-                "-h", host,
-                "-p", port,
-                "-U", username,
-                "--no-owner",
-                "--no-acl",
-                database
-            ]
+            if settings.background_execution_mode == "worker":
+                # The worker shares the application image, so it runs pg_dump
+                # locally and passes the password through the child environment.
+                cmd = [
+                    "pg_dump", "-h", host, "-p", port, "-U", username,
+                    "--no-owner", "--no-acl", database,
+                ]
+                child_env = os.environ.copy()
+                child_env["PGPASSWORD"] = password
+            else:
+                # Keep the existing embedded deployment behavior unchanged.
+                cmd = [
+                    "docker", "exec", "-e", f"PGPASSWORD={password}",
+                    self.container_name, "pg_dump", "-h", host, "-p", port,
+                    "-U", username, "--no-owner", "--no-acl", database,
+                ]
+                child_env = None
 
             # Run pg_dump and redirect output to file
             process = await asyncio.create_subprocess_exec(
                 *cmd,
                 stdout=asyncio.subprocess.PIPE,
-                stderr=asyncio.subprocess.PIPE
+                stderr=asyncio.subprocess.PIPE,
+                env=child_env,
             )
 
             stdout, stderr = await process.communicate()
@@ -90,6 +97,41 @@ class BackupService:
         except Exception as e:
             logger.error(f"Error running pg_dump: {e}")
             return False
+        finally:
+            if process is not None and process.returncode is None:
+                cleanup = asyncio.create_task(self._stop_pg_dump_process(process))
+                try:
+                    await asyncio.shield(cleanup)
+                except asyncio.CancelledError:
+                    # Finish bounded child cleanup even if the worker is draining.
+                    await cleanup
+                    raise
+
+    async def _stop_pg_dump_process(self, process) -> None:
+        """Terminate and reap a pg_dump child after cancellation or timeout."""
+        try:
+            process.terminate()
+        except ProcessLookupError:
+            pass
+        except Exception:
+            logger.warning("Could not request pg_dump termination")
+        try:
+            await asyncio.wait_for(process.wait(), timeout=2)
+            return
+        except asyncio.TimeoutError:
+            pass
+        except Exception:
+            logger.warning("Could not wait for pg_dump shutdown")
+        try:
+            process.kill()
+        except ProcessLookupError:
+            pass
+        except Exception:
+            logger.warning("Could not force-stop pg_dump")
+        try:
+            await asyncio.wait_for(process.wait(), timeout=2)
+        except Exception:
+            logger.warning("Could not reap pg_dump child after force-stop")
 
     async def create_backup(self) -> Path:
         """Create a complete backup including database, config, and data.
@@ -428,4 +470,4 @@ def get_backup_service() -> BackupService:
     global _backup_service
     if _backup_service is None:
         _backup_service = BackupService()
-    return _backup_service 
+    return _backup_service

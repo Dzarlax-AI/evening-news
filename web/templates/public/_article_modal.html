@@ -886,22 +886,53 @@ window.refreshArticle = async function() {
             })
         });
         
-        if (!response.ok) {
-            const errorText = await response.text();
-            throw new Error(`Ошибка ${response.status}: ${errorText}`);
-        }
-        
-        const result = await response.json();
+        const data = await response.json();
+        if (!response.ok) throw new Error(data.detail || `Ошибка ${response.status}`);
+        const result = await window.resolveBackgroundResponse(response, data, job => {
+            refreshBtn.innerHTML = job.status === 'queued'
+                ? (job.worker_available === false ? '⏳ В очереди, обработчик недоступен' : '⏳ В очереди...')
+                : job.status === 'interrupted' ? '⏸️ Ожидает восстановления...' : '⏳ Обрабатываем...';
+        });
         console.log('Refresh result:', result);
         
-        if (result.success) {
-            if (result.status === 'rejected') {
-                refreshBtn.innerHTML = result.reason === 'advertisement' ? '🚫 Реклама' : '⛔ Обработка остановлена';
-                alert(result.message);
-            } else {
+        let shouldRefreshArticle = false;
+        if (result.status === 'delivery_unknown') {
+            refreshBtn.innerHTML = '⚠️ Результат неизвестен';
+            alert('Результат операции неизвестен. Повторная обработка не запускалась автоматически.');
+        } else if (result.status === 'interrupted') {
+            refreshBtn.innerHTML = '⏸️ Прервано';
+            alert('Задание прервано и сохранено для восстановления.');
+        } else {
+            const details = result.result || result.stats || result;
+            const outcome = (details.article_outcomes || [])[0];
+            const articleState = outcome?.state || details.status || result.status;
+            const articleReason = outcome?.reason || details.reason || result.reason;
+            if (articleState === 'rejected') {
+                refreshBtn.innerHTML = articleReason === 'advertisement' ? '🚫 Реклама' : '⛔ Обработка остановлена';
+                alert(articleReason === 'resource_limit'
+                    ? 'Страница превышает допустимый размер.'
+                    : 'Статья исключена из обработки.');
+                shouldRefreshArticle = true;
+            } else if (articleState === 'exhausted') {
+                refreshBtn.innerHTML = '⛔ Лимит попыток';
+                alert('Лимит попыток обработки исчерпан.');
+                shouldRefreshArticle = true;
+            } else if (['pending', 'retry_wait', 'processing'].includes(articleState)) {
+                refreshBtn.innerHTML = '⏳ Повтор запланирован';
+                alert('Обработка временно не завершена. Повторная попытка запланирована.');
+                shouldRefreshArticle = true;
+            } else if (result.success === true || details.success === true
+                || ['success', 'completed', 'settled'].includes(details.status)
+                || articleState === 'completed') {
                 refreshBtn.innerHTML = '✅ Обновлено!';
+                shouldRefreshArticle = true;
+            } else {
+                refreshBtn.innerHTML = '⚠️ Не завершено';
+                throw new Error(result.message || 'Обработка статьи не завершена.');
             }
-            
+        }
+
+        if (shouldRefreshArticle) {
             // Auto-reload the article in modal after a short delay
             setTimeout(async () => {
                 refreshBtn.innerHTML = originalText;
@@ -910,9 +941,6 @@ window.refreshArticle = async function() {
                 // Reload article data in modal
                 await window.openArticleModal(currentArticleId);
             }, 2000);
-            
-        } else {
-            throw new Error(result.message || 'Неизвестная ошибка');
         }
         
     } catch (error) {

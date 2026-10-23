@@ -3,7 +3,7 @@
 from datetime import datetime, date
 from typing import List, Optional
 
-from fastapi import APIRouter, Depends, Query
+from fastapi import APIRouter, Depends, Query, Request
 from pydantic import BaseModel
 from sqlalchemy.ext.asyncio import AsyncSession
 from sqlalchemy import select, func, desc, and_
@@ -118,8 +118,13 @@ async def get_summary_categories(db: AsyncSession = Depends(get_db)):
 
 
 @router.post("/generate")
-async def generate_daily_summaries(db: AsyncSession = Depends(get_db)):
+async def generate_daily_summaries(request: Request, db: AsyncSession = Depends(get_db)):
     """Generate daily summaries for today."""
+    from ..config import settings
+    if settings.background_execution_mode == "worker":
+        from .background_jobs_router import accepted_response, enqueue_from_request
+        accepted = await enqueue_from_request("summaries_generate", {}, request)
+        return accepted_response(accepted)
     try:
         from ..orchestrator import NewsOrchestrator
         

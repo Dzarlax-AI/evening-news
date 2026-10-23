@@ -14,6 +14,7 @@ from .articles_router import router as articles_router
 from .system_router import router as system_router
 from .scheduler_router import router as scheduler_router
 from .summaries_router import router as summaries_router
+from .background_jobs_router import router as background_jobs_router
 
 
 def create_api_router() -> APIRouter:
@@ -32,6 +33,7 @@ def create_api_router() -> APIRouter:
     router.include_router(system_router, prefix="/system", tags=["system"], dependencies=[Depends(require_admin)])
     router.include_router(scheduler_router, prefix="/schedule", tags=["scheduler"], dependencies=[Depends(require_admin)])
     router.include_router(summaries_router, prefix="/summaries", tags=["summaries"], dependencies=[Depends(require_admin)])
+    router.include_router(background_jobs_router, prefix="/jobs", tags=["jobs"], dependencies=[Depends(require_admin)])
     
     # Add category-mappings alias endpoints for frontend compatibility
     @router.get("/category-mappings", tags=["category-mappings"], dependencies=[Depends(require_admin)])

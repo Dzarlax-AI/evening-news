@@ -37,8 +37,6 @@ def cli():
 def process(verbose: bool):
     """Run the main news processing cycle."""
     async def _process():
-        orchestrator = NewsOrchestrator()
-        
         with Progress(
             SpinnerColumn(),
             TextColumn("[progress.description]{task.description}"),
@@ -48,6 +46,14 @@ def process(verbose: bool):
             task = progress.add_task("Processing news...", total=None)
             
             try:
+                if settings.background_execution_mode == "worker":
+                    import secrets
+                    from .services.background_jobs import enqueue_job
+                    job = await enqueue_job("news_processing", {}, secrets.token_hex(24))
+                    progress.update(task, description="✅ Processing queued")
+                    console.print(f"Background job accepted: {job.id} (status: {job.state})")
+                    return
+                orchestrator = NewsOrchestrator()
                 stats = await orchestrator.run_full_cycle()
                 progress.update(task, description="✅ Processing completed!")
             
@@ -150,9 +156,14 @@ async def add_source(name: str, source_type: str, url: str):
     
     try:
         async with AsyncSessionLocal() as db:
-            source = await source_manager.create_source(db, name, source_type, url)
+            worker_mode = settings.background_execution_mode == "worker"
+            source = await source_manager.create_source(
+                db, name, source_type, url, skip_connection_test=worker_mode
+            )
             
-            if source.enabled:
+            if worker_mode:
+                console.print(f"[green]✅ Added source '{name}'. Use `news test-source {source.id}` to queue its connection test.[/green]")
+            elif source.enabled:
                 console.print(f"[green]✅ Added source '{name}' successfully![/green]")
             else:
                 console.print(f"[yellow]⚠️ Added source '{name}' but connection test failed.[/yellow]")
@@ -167,6 +178,19 @@ async def add_source(name: str, source_type: str, url: str):
 @click.argument('source_id', type=int)
 async def test_source(source_id: int):
     """Test connection to a source."""
+    if settings.background_execution_mode == "worker":
+        from sqlalchemy import select
+        from .models import Source
+        from .services.background_jobs import enqueue_job
+        async with AsyncSessionLocal() as db:
+            exists = await db.scalar(select(Source.id).where(Source.id == source_id))
+        if exists is None:
+            console.print(f"[red]Source {source_id} was not found.[/red]")
+            sys.exit(1)
+        import secrets
+        job = await enqueue_job("source_test", {"source_id": source_id}, secrets.token_hex(24))
+        console.print(f"Source test queued: {job.id}")
+        return
     source_manager = SourceManager()
     
     try:
@@ -196,10 +220,14 @@ async def test_source(source_id: int):
 @click.option('--days', '-d', default=7, help='Number of days to show stats for')
 async def stats(days: int):
     """Show processing statistics."""
-    orchestrator = NewsOrchestrator()
+    orchestrator = None if settings.background_execution_mode == "worker" else NewsOrchestrator()
     
     try:
-        stats_data = await orchestrator.get_processing_stats(days)
+        if orchestrator is not None:
+            stats_data = await orchestrator.get_processing_stats(days)
+        else:
+            from .processing.processing_stats_service import get_processing_stats_service
+            stats_data = await get_processing_stats_service().get_processing_stats(days)
         
         # Show totals
         totals = stats_data['totals']
@@ -272,6 +300,14 @@ async def config():
 @click.option('--dry-run', is_flag=True, help='Only show candidates without processing')
 async def reprocess_failed(limit: int, dry_run: bool):
     """Process due pending and retry-wait articles through the bounded pipeline."""
+    if settings.background_execution_mode == "worker":
+        import secrets
+        from .services.background_jobs import enqueue_job
+        job = await enqueue_job(
+            "reprocess_failed", {"limit": limit, "dry_run": bool(dry_run)}, secrets.token_hex(24)
+        )
+        console.print(f"Failed article reprocessing queued: {job.id}")
+        return
     orchestrator = NewsOrchestrator()
     
     try:

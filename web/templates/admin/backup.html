@@ -302,12 +302,20 @@ async function createBackup() {
             headers: { 'Content-Type': 'application/json' },
             body: JSON.stringify({ description: 'Manual backup from web interface' })
         });
-        const result = await response.json();
-        if (response.ok) {
-            showOpStatus('success', 'Создаётся в фоне...');
-            setTimeout(() => { loadBackups(); hideOpStatus(); }, 5000);
+        const data = await response.json();
+        if (!response.ok) {
+            showOpStatus('error', data.detail || data.message || 'Ошибка');
+            return;
+        }
+        const result = await window.resolveBackgroundResponse(response, data, job => {
+            if (job.status === 'queued') showOpStatus('running', 'Резервная копия ожидает обработчик...');
+            else if (job.status === 'running') showOpStatus('running', 'Создание резервной копии...');
+        });
+        if (result.success || response.status !== 202) {
+            showOpStatus('success', 'Резервная копия создана.');
+            await loadBackups();
         } else {
-            showOpStatus('error', result.detail || result.message || 'Ошибка');
+            showOpStatus('error', result.message || result.error_code || `Задание завершилось: ${result.status || 'ошибка'}`);
         }
     } catch (error) {
         showOpStatus('error', error.message);

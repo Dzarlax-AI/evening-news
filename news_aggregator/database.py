@@ -7,6 +7,23 @@ from sqlalchemy import text
 
 from .config import settings
 
+
+class FencedAsyncSession(AsyncSession):
+    """Keep the worker lease and job attempt locked through every commit."""
+
+    async def commit(self):
+        from .services.job_fence import current_job_fence
+
+        fence = current_job_fence.get()
+        if fence is None:
+            return await super().commit()
+        if not fence.active:
+            raise RuntimeError("background job attempt is no longer active")
+        async with fence.lease.transaction_fence(
+            self, fence.job_id, fence.attempt_generation
+        ):
+            return await super().commit()
+
 # Create async engine with enhanced connection pool settings
 db_url = settings.database_url
 
@@ -25,7 +42,7 @@ engine = create_async_engine(
 # Create async session factory with enhanced settings
 AsyncSessionLocal = sessionmaker(
     bind=engine,
-    class_=AsyncSession,
+    class_=FencedAsyncSession,
     expire_on_commit=False,
     # Enhanced session settings to prevent connection leaks
     autoflush=True,

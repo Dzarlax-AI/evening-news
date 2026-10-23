@@ -444,7 +444,8 @@ class NewsOrchestrator:
         }
 
     async def _process_unprocessed_articles(self, stats: Dict[str, Any], selected_ids=None,
-                                          max_articles=None, force_refresh=False) -> Dict[str, Any]:
+                                          max_articles=None, force_refresh=False,
+                                          preserve_completed_stages=False) -> Dict[str, Any]:
         """Walk due articles by stable ID in bounded batches, persisting each outcome."""
         counters = {'articles_processed': 0, 'articles_summarized': 0,
                     'articles_categorized': 0}
@@ -525,9 +526,13 @@ class NewsOrchestrator:
                         if not await self.db_queue_manager.execute_write(claim):
                             return
                         try:
+                            article_force_refresh = force_refresh and not (
+                                preserve_completed_stages and any(article.get(flag) for flag in (
+                                    'summary_processed', 'category_processed', 'ad_processed'))
+                            )
                             processing = (
                                 self.ai_processor.process_article_outcome(article, stats, force_refresh=True)
-                                if force_refresh else self.ai_processor.process_article_outcome(article, stats)
+                                if article_force_refresh else self.ai_processor.process_article_outcome(article, stats)
                             )
                             outcome = await asyncio.wait_for(
                                 processing,
@@ -602,7 +607,8 @@ class NewsOrchestrator:
             return result.rowcount
         return await self.db_queue_manager.execute_write(reset)
 
-    async def process_selected_articles(self, article_ids, reservation=None, force=False):
+    async def process_selected_articles(self, article_ids, reservation=None, force=False, reset=True,
+                                        preserve_completed_stages=False):
         """Retry an explicit selection through the same guarded, durable pipeline."""
         token = reservation or reserve_processing_cycle()
         if token is None:
@@ -613,10 +619,12 @@ class NewsOrchestrator:
         try:
             from .core.browser_pool import acquire_browser_cycle
             browser_lease = await acquire_browser_cycle()
-            await self._reset_selected_articles(article_ids, force=force)
+            if reset:
+                await self._reset_selected_articles(article_ids, force=force)
             stats = {'api_calls_made': 0, 'errors': []}
             stats.update(await self._process_unprocessed_articles(
-                stats, selected_ids=article_ids, force_refresh=force))
+                stats, selected_ids=article_ids, force_refresh=force,
+                preserve_completed_stages=preserve_completed_stages))
             # Selected requests report durable outcomes, while cycle counters
             # continue to count completed news articles only.
             async def read_outcomes(db):
@@ -795,7 +803,8 @@ class NewsOrchestrator:
         """Get processing statistics."""
         return await self.stats_collector.get_processing_stats(days)
     
-    async def reprocess_failed_extractions(self, limit: int = 50, dry_run: bool = False) -> Dict[str, Any]:
+    async def reprocess_failed_extractions(self, limit: int = 50, dry_run: bool = False,
+                                           reservation=None) -> Dict[str, Any]:
         """Retry due bounded work without resetting terminal historical articles."""
         if dry_run:
             async def count_candidates(db):
@@ -810,9 +819,11 @@ class NewsOrchestrator:
             count = await self.db_queue_manager.execute_read(count_candidates)
             return {'status': 'dry_run', 'total_candidates': count,
                     'found_candidates': count, 'processed': 0, 'improved': 0, 'errors': []}
-        token = reserve_processing_cycle()
+        token = reservation or reserve_processing_cycle()
         if token is None:
             return {'status': 'busy', 'processed': 0, 'improved': 0, 'errors': []}
+        if token is not _processing_cycle_token:
+            raise ValueError('Invalid processing cycle reservation')
         browser_lease = None
         try:
             from .core.browser_pool import acquire_browser_cycle
@@ -826,7 +837,8 @@ class NewsOrchestrator:
                 if browser_lease is not None:
                     await _release_browser_lease(browser_lease)
             finally:
-                release_processing_cycle(token)
+                if reservation is None:
+                    release_processing_cycle(token)
     
     # Legacy method compatibility (delegate to processors)
     async def _get_summary_by_source_type(self, article: Article, source_type: str, stats: Dict[str, Any]) -> str:

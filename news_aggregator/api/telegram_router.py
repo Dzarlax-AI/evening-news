@@ -4,7 +4,7 @@ import logging
 from datetime import datetime
 from typing import Optional
 
-from fastapi import APIRouter, Depends, HTTPException
+from fastapi import APIRouter, Depends, HTTPException, Request
 from fastapi.responses import JSONResponse
 from pydantic import BaseModel
 from sqlalchemy.ext.asyncio import AsyncSession
@@ -122,8 +122,12 @@ async def test_telegram_connection(db: AsyncSession = Depends(get_db)):
 
 
 @router.post("/send-digest")
-async def send_telegram_digest():
+async def send_telegram_digest(request: Request = None):
     """Generate and send Telegram digest."""
+    if app_settings.background_execution_mode == "worker":
+        from .background_jobs_router import accepted_response, enqueue_from_request
+        accepted = await enqueue_from_request("telegram_digest", {}, request)
+        return accepted_response(accepted)
     reservation = reserve_processing_cycle()
     if reservation is None:
         return JSONResponse(status_code=409, content={

@@ -25,7 +25,8 @@ class SourceManager:
         self._source_instances: Dict[int, BaseSource] = {}
     
     async def create_source(self, db: AsyncSession, name: str, source_type: str, 
-                           url: str, config: Optional[Dict[str, Any]] = None) -> Source:
+                           url: str, config: Optional[Dict[str, Any]] = None,
+                           skip_connection_test: bool = False) -> Source:
         """Create new source in database."""
         try:
             # Validate source type
@@ -46,13 +47,14 @@ class SourceManager:
             await db.commit()
             await db.refresh(source)
             
-            # Test connection
-            source_instance = self._create_source_instance(source)
-            if not await source_instance.test_connection():
-                source.enabled = False
-                source.last_error = "Failed connection test"
-                source.error_count = 1
-                await db.commit()
+            # Worker-mode web requests save the source without network/browser work.
+            if not skip_connection_test:
+                source_instance = self._create_source_instance(source)
+                if not await source_instance.test_connection():
+                    source.enabled = False
+                    source.last_error = "Failed connection test"
+                    source.error_count = 1
+                    await db.commit()
             
             return source
         

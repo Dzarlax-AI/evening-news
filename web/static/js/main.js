@@ -3,34 +3,129 @@
 // Простая функция для AJAX запросов (make it global)
 async function apiRequest(url, options = {}) {
     try {
+        const onJobUpdate = options.onJobUpdate;
+        const requestOptions = {...options};
+        delete requestOptions.onJobUpdate;
         const response = await fetch(url, {
             headers: {
                 'Content-Type': 'application/json',
-                ...options.headers
+                ...requestOptions.headers
             },
-            ...options
+            ...requestOptions
         });
         
+        const data = await response.json();
         if (!response.ok) {
-            throw new Error(`HTTP error! status: ${response.status}`);
+            throw new Error(data.detail || `HTTP error! status: ${response.status}`);
         }
-        
-        return await response.json();
+        return await resolveBackgroundResponse(response, data, onJobUpdate);
     } catch (error) {
         console.error('API request failed:', error);
         throw error;
     }
 }
 
+const backgroundPollControllers = new Set();
+window.addEventListener('pagehide', () => {
+    for (const controller of backgroundPollControllers) controller.abort();
+    backgroundPollControllers.clear();
+});
+
+function updateWorkerNotice(available) {
+    let notice = document.getElementById('background-worker-notice');
+    if (!notice) {
+        notice = document.createElement('div');
+        notice.id = 'background-worker-notice';
+        notice.style.cssText = 'display:none;margin:0 0 1rem;padding:.75rem 1rem;border:1px solid #d4a72c;border-radius:8px;background:#fff8c5;color:#5c4813';
+        const main = document.querySelector('.admin-main');
+        if (main) main.prepend(notice);
+    }
+    notice.textContent = available
+        ? 'Фоновый обработчик доступен.'
+        : 'Фоновый обработчик не отвечает. Принятые задания останутся в очереди до его восстановления.';
+    notice.style.display = available ? 'none' : 'block';
+}
+
+async function resolveBackgroundResponse(response, data, onUpdate) {
+    if (data && typeof data.worker_available === 'boolean') updateWorkerNotice(data.worker_available);
+    if (response.status !== 202 || !data || !data.job_id || !data.status_url) return data;
+
+    let delay = 1200;
+    onUpdate?.({status: 'queued', worker_available: null});
+    while (!window.__eveningNewsLeaving) {
+        await new Promise(resolve => setTimeout(resolve, delay));
+        const controller = new AbortController();
+        backgroundPollControllers.add(controller);
+        let poll;
+        try {
+            poll = await fetch(data.status_url, {credentials: 'include', signal: controller.signal});
+            if (poll.status === 401 || poll.status === 403) throw new Error('Your admin session expired while checking this job.');
+            const job = await poll.json();
+            if (!poll.ok) throw new Error(job.detail || `Job status request failed (${poll.status}).`);
+            if (typeof job.worker_available === 'boolean') updateWorkerNotice(job.worker_available);
+            if (job.status === 'interrupted') {
+                onUpdate?.({...job, message: 'Waiting for the worker to recover this job...'});
+                delay = Math.min(8000, Math.round(delay * 1.5));
+                continue;
+            }
+            onUpdate?.(job);
+            if (['succeeded', 'failed', 'delivery_unknown'].includes(job.status)) {
+        const resultStatus = job.result && job.result.status;
+        const articleOutcomes = job.result && job.result.article_outcomes;
+        const articleFailure = Array.isArray(articleOutcomes) && articleOutcomes.some(
+            item => item && item.state !== 'completed'
+        );
+        const nonSuccess = ['warning', 'deferred', 'rejected', 'exhausted', 'incomplete'];
+        let message;
+        if (job.status === 'delivery_unknown') {
+            message = 'The delivery outcome is unknown; the message was not resent.';
+        } else if (job.status === 'interrupted') {
+            message = 'The job was interrupted and is waiting for worker recovery.';
+        } else if (resultStatus === 'deferred') {
+            message = 'The work was deferred and will be retried later.';
+        } else if (resultStatus === 'dry_run') {
+            message = 'The dry run completed without changing articles.';
+        } else if (resultStatus === 'rejected' || resultStatus === 'exhausted' || articleFailure) {
+            message = 'The job finished with article-level outcomes; see the returned details.';
+        } else if (resultStatus === 'warning' || resultStatus === 'incomplete') {
+            message = 'The job finished with warnings or incomplete work.';
+        }
+        return {
+                    ...job,
+            success: job.status === 'succeeded' && !nonSuccess.includes(resultStatus) && !articleFailure,
+            message,
+                };
+            }
+        } catch (error) {
+            if (error.name === 'AbortError' && window.__eveningNewsLeaving) return data;
+            throw error;
+        } finally {
+            backgroundPollControllers.delete(controller);
+        }
+        delay = Math.min(8000, Math.round(delay * 1.5));
+    }
+    return {...data, success: true, status: 'queued', worker_available: false, left_while_running: true};
+}
+
+window.resolveBackgroundResponse = resolveBackgroundResponse;
+window.addEventListener('pagehide', () => { window.__eveningNewsLeaving = true; });
+
 // Global NewsAggregator object
 window.NewsAggregator = {
     apiRequest: apiRequest,
+    resolveBackgroundResponse: resolveBackgroundResponse,
     showNotification: null, // Will be set after initialization
     showLoading: null,
     hideLoading: null,
     validateForm: null,
     animateNumber: null
 };
+
+document.addEventListener('DOMContentLoaded', () => {
+    if (document.querySelector('.admin-shell')) {
+        apiRequest('/api/v1/process/status').catch(() => {});
+    }
+});
 
 document.addEventListener('DOMContentLoaded', function() {
     console.log('Evening News v2 Enhanced Admin loaded');

@@ -44,6 +44,11 @@ from .migrations.article_processing_state import (
     ensure_article_processing_migration,
 )
 migration_manager.register_migration(ArticleProcessingStateMigration())
+from .migrations.background_jobs import (
+    BackgroundJobsMigration,
+    ensure_background_jobs_migration,
+)
+migration_manager.register_migration(BackgroundJobsMigration())
 
 
 
@@ -56,6 +61,7 @@ async def lifespan(app: FastAPI):
         raise RuntimeError("ADMIN_PASSWORD environment variable is required for secure startup.")
     # Record application start time for health endpoints
     app.state.started_at = datetime.utcnow()
+    worker_mode = settings.background_execution_mode == "worker"
     await init_db()
     
     # Run automatic migrations
@@ -64,6 +70,7 @@ async def lifespan(app: FastAPI):
         migration_results = await migration_manager.check_and_run_migrations()
         ensure_scheduler_outcome_migration(migration_results)
         ensure_article_processing_migration(migration_results)
+        ensure_background_jobs_migration(migration_results)
         
         if migration_results['migrations_run']:
             logger.info(f"✅ Applied {len(migration_results['migrations_run'])} migrations")
@@ -100,7 +107,7 @@ async def lifespan(app: FastAPI):
         # Don't prevent app startup
     
     # Start task scheduler
-    if settings.scheduler_enabled:
+    if settings.scheduler_enabled and not worker_mode:
         from .services.scheduler import start_scheduler
         try:
             logger.info("🔄 Starting task scheduler...")
@@ -115,13 +122,14 @@ async def lifespan(app: FastAPI):
         logger.info("⏸️ Task scheduler disabled (SCHEDULER_ENABLED=false)")
     
     # Start process monitor for browser health checks
-    from .services.process_monitor import start_process_monitor
-    try:
-        logger.info("🔍 Starting process monitor...")
-        await start_process_monitor()
-        logger.info("✅ Process monitor started successfully")
-    except Exception as e:
-        logger.error(f"❌ Process monitor startup error: {e}")
+    if not worker_mode:
+        from .services.process_monitor import start_process_monitor
+        try:
+            logger.info("🔍 Starting process monitor...")
+            await start_process_monitor()
+            logger.info("✅ Process monitor started successfully")
+        except Exception as e:
+            logger.error(f"❌ Process monitor startup error: {e}")
     # Start pool cleanup task to prevent connection leaks
     import asyncio
     async def pool_cleanup_task():
@@ -148,20 +156,23 @@ async def lifespan(app: FastAPI):
         except asyncio.CancelledError:
             pass
     
-    from .services.scheduler import stop_scheduler
-    await stop_scheduler()
+    if not worker_mode:
+        from .services.scheduler import stop_scheduler
+        await stop_scheduler()
     
     # Stop process monitor
-    from .services.process_monitor import stop_process_monitor
-    await stop_process_monitor()
+    if not worker_mode:
+        from .services.process_monitor import stop_process_monitor
+        await stop_process_monitor()
     
     # Force cleanup ContentExtractor on shutdown
-    from .extraction import cleanup_content_extractor
-    try:
-        await cleanup_content_extractor()
-        logger.info("✅ ContentExtractor cleanup completed")
-    except Exception as e:
-        logger.warning(f"⚠️ ContentExtractor cleanup error: {e}")
+    if not worker_mode:
+        from .extraction import cleanup_content_extractor
+        try:
+            await cleanup_content_extractor()
+            logger.info("✅ ContentExtractor cleanup completed")
+        except Exception as e:
+            logger.warning(f"⚠️ ContentExtractor cleanup error: {e}")
     # Stop database queue system
     await db_queue.stop()
     
