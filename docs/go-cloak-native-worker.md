@@ -90,6 +90,25 @@ files are accessible to root-owned containers with all capabilities dropped.
 The report is returned to the CI user before artifact upload. Container memory
 caps and private file permissions remain unchanged.
 
+Native discovery requests explicitly close their HTTP connection. Read-only
+`/json/version` discovery and the initial CDP WebSocket handshake can retry
+transient EOF/reset/broken-pipe errors at most three times with 20-ms backoff,
+within the original caller context. This handles short relay connection-capacity
+collisions without changing the relay limit. DNS, HTTP/upgrade rejection, policy,
+ownership, cancellation, and deadline errors are not retried. No CDP command,
+context/target allocation, navigation, or article RPC is replayed.
+
+Native Linux/amd64 synthetic acceptance passed twice on code revision
+`920149d` (Actions runs `39967254841` and `39967260396`). Both confirmed one/two
+active origins, a waiting third render, cancellation without losing the sibling
+or independent CDP peer, upstream 503 classification, and owned cleanup. Browser
+cgroup peaks were 342–346 MiB, including the peer and both profiles; worker peaks
+were 15.4–15.7 MiB. No OOM/kill or restarts occurred, under unchanged 768/256-MiB
+caps. Each run recovered two transient relay capacity rejections during setup;
+all relay connections closed. These fixture measurements are not production
+sizing or a full Readeck user-path test. Local amd64 Cloak emulation on ARM64 did
+not complete peer setup; native Linux acceptance is reported separately.
+
 Startup runs an owned-resource capability probe. Health checks additionally
 verify discovery/generation with a maximum 500-ms budget and allocate no targets.
 Health exposes a hash of the configured readiness selector so a benchmark can
