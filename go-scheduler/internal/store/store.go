@@ -242,7 +242,11 @@ func (s *Store) PutSchedule(ctx context.Context, key string, mutation model.Muta
 	if mutation.ExpectedRevision != current.Revision {
 		return model.Schedule{}, false, ErrConflict
 	}
-	if sameConfig(current, mutation) {
+	same, err := sameConfig(ctx, tx, s.schedules, current, mutation)
+	if err != nil {
+		return model.Schedule{}, false, err
+	}
+	if same {
 		return current, false, tx.Commit(ctx)
 	}
 	_, err = tx.Exec(ctx, `UPDATE `+s.schedules+` SET revision=revision+1,enabled=$2,calendar=$3::jsonb,target_alias=$4,operation=$5,payload=$6::jsonb,next_due_at=$7,updated_at=$8 WHERE schedule_key=$1`, key, mutation.Enabled, string(calJSON), mutation.Target, mutation.Operation, string(payloadJSON), next, now.UTC())
@@ -396,7 +400,11 @@ func (s *Store) Import(ctx context.Context, expectedControl int64, items []Impor
 			return ImportResult{}, readErr
 		}
 		m := model.Mutation{Enabled: item.Enabled, Calendar: item.Calendar, Target: item.Target, Operation: item.Operation, Payload: item.Payload}
-		if !sameConfig(current, m) || !sameTime(current.NextDueAt, item.NextDueAt) {
+		same, err := sameConfig(ctx, tx, s.schedules, current, m)
+		if err != nil {
+			return ImportResult{}, err
+		}
+		if !same || !sameTime(current.NextDueAt, item.NextDueAt) {
 			return ImportResult{}, ErrImportConflict
 		}
 		result.Unchanged = append(result.Unchanged, item.Key)
@@ -506,8 +514,7 @@ func (s *Store) GenerateDue(ctx context.Context, now time.Time, limit, maxOutbox
 	return len(dueRows), nil
 }
 
-func (s *Store) Claim(ctx context.Context, now time.Time, lease time.Duration, limit int) ([]Claimed, error) {
-	now = now.UTC().Truncate(time.Microsecond)
+func (s *Store) Claim(ctx context.Context, _ time.Time, lease time.Duration, limit int) ([]Claimed, error) {
 	tx, err := s.Pool.Begin(ctx)
 	if err != nil {
 		return nil, err
@@ -520,7 +527,12 @@ func (s *Store) Claim(ctx context.Context, now time.Time, lease time.Duration, l
 	if paused {
 		return []Claimed{}, tx.Commit(ctx)
 	}
-	rows, err := tx.Query(ctx, `SELECT occurrence_id::text,schedule_key,schedule_revision,scheduled_for,target_alias,operation,payload,attempts FROM `+s.outbox+` WHERE ((status='pending' AND available_at<=$1) OR (status='leased' AND lease_until<=$1)) ORDER BY available_at,created_at,occurrence_id LIMIT $2 FOR UPDATE SKIP LOCKED`, now.UTC(), limit)
+	var dbNow time.Time
+	if err := tx.QueryRow(ctx, `SELECT clock_timestamp()`).Scan(&dbNow); err != nil {
+		return nil, err
+	}
+	dbNow = dbNow.UTC().Truncate(time.Microsecond)
+	rows, err := tx.Query(ctx, `SELECT occurrence_id::text,schedule_key,schedule_revision,scheduled_for,target_alias,operation,payload,attempts FROM `+s.outbox+` WHERE ((status='pending' AND available_at<=$1) OR (status='leased' AND lease_until<=$1)) ORDER BY available_at,created_at,occurrence_id LIMIT $2 FOR UPDATE SKIP LOCKED`, dbNow, limit)
 	if err != nil {
 		return nil, err
 	}
@@ -552,7 +564,7 @@ func (s *Store) Claim(ctx context.Context, now time.Time, lease time.Duration, l
 		if err != nil {
 			return nil, err
 		}
-		if _, err = tx.Exec(ctx, `UPDATE `+s.outbox+` SET status='leased',lease_token=$2,lease_until=$3,attempts=attempts+1,updated_at=$4 WHERE occurrence_id=$1::uuid`, c.id, token, now.UTC().Add(lease), now.UTC()); err != nil {
+		if _, err = tx.Exec(ctx, `UPDATE `+s.outbox+` SET status='leased',lease_token=$2,lease_until=$3,attempts=attempts+1,updated_at=$4 WHERE occurrence_id=$1::uuid`, c.id, token, dbNow.Add(lease), dbNow); err != nil {
 			return nil, err
 		}
 		var payload map[string]any
@@ -761,8 +773,17 @@ func decodeJSONMap(data []byte, dst *map[string]any) error {
 	return decoder.Decode(dst)
 }
 
-func sameConfig(current model.Schedule, m model.Mutation) bool {
-	return current.Enabled == m.Enabled && reflect.DeepEqual(calendar.Normalize(current.Calendar), calendar.Normalize(m.Calendar)) && current.Target == m.Target && current.Operation == m.Operation && reflect.DeepEqual(current.Payload, m.Payload)
+func sameConfig(ctx context.Context, tx pgx.Tx, schedules string, current model.Schedule, m model.Mutation) (bool, error) {
+	if current.Enabled != m.Enabled || !reflect.DeepEqual(calendar.Normalize(current.Calendar), calendar.Normalize(m.Calendar)) || current.Target != m.Target || current.Operation != m.Operation {
+		return false, nil
+	}
+	payloadJSON, err := json.Marshal(m.Payload)
+	if err != nil {
+		return false, err
+	}
+	var payloadEqual bool
+	err = tx.QueryRow(ctx, `SELECT payload=$2::jsonb FROM `+schedules+` WHERE schedule_key=$1`, current.Key, string(payloadJSON)).Scan(&payloadEqual)
+	return payloadEqual, err
 }
 func sameTime(a, b *time.Time) bool {
 	if a == nil || b == nil {

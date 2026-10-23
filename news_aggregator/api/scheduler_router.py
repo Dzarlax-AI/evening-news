@@ -23,6 +23,10 @@ SERVICE_OPERATIONS = frozenset({
 })
 
 
+class SchedulerServiceConfigurationError(Exception):
+    """The local API client could not be configured from application settings."""
+
+
 def _is_news_service_resource(resource):
     if not isinstance(resource, dict):
         return False
@@ -40,14 +44,21 @@ def _is_news_service_resource(resource):
 def _scheduler_client():
     token = settings.scheduler_api_token
     token = token.get_secret_value() if token else None
-    return SchedulerServiceClient(
-        settings.scheduler_api_url, token,
-        allow_http=settings.scheduler_api_allow_http,
-        timeout_seconds=settings.scheduler_http_timeout_seconds,
-    )
+    try:
+        return SchedulerServiceClient(
+            settings.scheduler_api_url, token,
+            allow_http=settings.scheduler_api_allow_http,
+            timeout_seconds=settings.scheduler_http_timeout_seconds,
+        )
+    except ValueError:
+        raise SchedulerServiceConfigurationError from None
 
 
 def _raise_scheduler_error(exc):
+    if getattr(exc, "code", None) == "invalid_response":
+        raise HTTPException(
+            status_code=502, detail="Scheduler service returned an invalid response"
+        ) from None
     status_code = getattr(exc, "status", None)
     if status_code not in {401, 403, 404, 409, 422, 429, 503}:
         status_code = 503
@@ -283,7 +294,7 @@ async def get_schedule_settings(db: AsyncSession = Depends(get_db)):
                     "timestamp": datetime.utcnow().isoformat()}
         except SchedulerServiceError as exc:
             _raise_scheduler_error(exc)
-        except ValueError:
+        except SchedulerServiceConfigurationError:
             raise HTTPException(status_code=503, detail="Scheduler service is not configured") from None
     try:
         result = await db.execute(select(ScheduleSettings))
@@ -346,7 +357,7 @@ async def create_schedule_setting(
             raise
         except SchedulerServiceError as exc:
             _raise_scheduler_error(exc)
-        except ValueError:
+        except SchedulerServiceConfigurationError:
             raise HTTPException(status_code=503, detail="Scheduler service is not configured") from None
     try:
         # Check if task with this name already exists
@@ -452,7 +463,7 @@ async def update_schedule_setting(
             raise
         except SchedulerServiceError as exc:
             _raise_scheduler_error(exc)
-        except ValueError:
+        except SchedulerServiceConfigurationError:
             raise HTTPException(status_code=503, detail="Scheduler service is not configured") from None
     try:
         # Get existing setting
@@ -586,7 +597,7 @@ async def delete_schedule_setting(
             raise
         except SchedulerServiceError as exc:
             _raise_scheduler_error(exc)
-        except ValueError:
+        except SchedulerServiceConfigurationError:
             raise HTTPException(status_code=503, detail="Scheduler service is not configured") from None
     try:
         # Check if task exists
@@ -640,7 +651,7 @@ async def get_schedule_status(db: AsyncSession = Depends(get_db)):
                     }}
         except SchedulerServiceError as exc:
             _raise_scheduler_error(exc)
-        except ValueError:
+        except SchedulerServiceConfigurationError:
             raise HTTPException(status_code=503, detail="Scheduler service is not configured") from None
     try:
         # Get all enabled tasks

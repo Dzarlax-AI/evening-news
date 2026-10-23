@@ -61,3 +61,14 @@ func TestValidateRejectsInvalidCalendar(t *testing.T) {
 		t.Fatal("expected invalid minute to be rejected")
 	}
 }
+
+func TestValidateRejectsNonIanaTimezoneAliases(t *testing.T) {
+	hour, minute := 18, 30
+	for _, timezone := range []string{"", "Local"} {
+		t.Run("timezone="+timezone, func(t *testing.T) {
+			if err := Validate(model.Calendar{Type: "daily", Timezone: timezone, Hour: &hour, Minute: &minute}); err == nil {
+				t.Fatalf("expected timezone %q to be rejected", timezone)
+			}
+		})
+	}
+}

@@ -228,9 +228,10 @@ def validate_schedule_resource(value):
             or not isinstance(value.get("target_alias"), str)
             or not isinstance(value.get("operation"), str)
             or not isinstance(value.get("payload"), dict)
-            or (value.get("next_due_at") is not None and not isinstance(value["next_due_at"], str))
-            or not isinstance(value.get("created_at"), str)
-            or not isinstance(value.get("updated_at"), str)):
+            or (value.get("next_due_at") is not None
+                and not _is_utc_timestamp(value["next_due_at"]))
+            or not _is_utc_timestamp(value.get("created_at"))
+            or not _is_utc_timestamp(value.get("updated_at"))):
         raise SchedulerServiceError("invalid_response")
     calendar = value["calendar"]
     if calendar["type"] in {"daily", "weekly"}:

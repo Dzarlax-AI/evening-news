@@ -106,7 +106,13 @@ async def receive_scheduled_job(request: Request):
     supplied_token = authorization[7:] if authorization.startswith("Bearer ") else ""
     if not configured_token:
         raise HTTPException(status_code=503, detail="scheduled job receiver unavailable")
-    if not supplied_token or not hmac.compare_digest(supplied_token, configured_token):
+    try:
+        supplied_token_bytes = supplied_token.encode("utf-8")
+        configured_token_bytes = configured_token.encode("utf-8")
+    except UnicodeEncodeError:
+        raise HTTPException(status_code=401, detail="unauthorized") from None
+    if not supplied_token_bytes or not hmac.compare_digest(
+            supplied_token_bytes, configured_token_bytes):
         raise HTTPException(status_code=401, detail="unauthorized")
     if request.headers.get("content-type", "").split(";", 1)[0].strip().lower() != "application/json":
         raise HTTPException(status_code=415, detail="application/json required")

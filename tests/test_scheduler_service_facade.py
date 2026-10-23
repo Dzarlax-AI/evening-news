@@ -173,6 +173,50 @@ def test_settings_get_route_works_in_python_and_service_modes(monkeypatch):
     asyncio.run(run())
 
 
+def test_service_facade_reports_missing_client_configuration_as_503(monkeypatch):
+    monkeypatch.setattr(settings, "schedule_dispatch_mode", "service")
+    monkeypatch.setattr(settings, "scheduler_api_url", None)
+    monkeypatch.setattr(settings, "scheduler_api_token", None)
+
+    async def run():
+        with pytest.raises(HTTPException) as caught:
+            await module.get_schedule_settings(None)
+        assert caught.value.status_code == 503
+        assert caught.value.detail == "Scheduler service is not configured"
+
+    asyncio.run(run())
+
+
+@pytest.mark.parametrize("timestamp_field", ["next_due_at", "created_at", "updated_at"])
+def test_service_facade_maps_malformed_service_timestamps_to_502(monkeypatch, timestamp_field):
+    from news_aggregator.services.scheduler_service_client import SchedulerServiceClient
+
+    monkeypatch.setattr(settings, "schedule_dispatch_mode", "service")
+    resource = {
+        "schedule_key": "news:news_digest", "revision": 1, "enabled": True,
+        "calendar": {"type": "daily", "timezone": "UTC", "hour": 18, "minute": 30},
+        "target_alias": "news-worker", "operation": "news_digest", "payload": {},
+        "next_due_at": None, "created_at": "2026-10-23T10:00:00Z",
+        "updated_at": "2026-10-23T10:00:00Z",
+    }
+    resource[timestamp_field] = "not-an-utc-timestamp"
+    client = SchedulerServiceClient("https://scheduler.example", "fixture-token")
+
+    async def response(_method, _path):
+        return {"schedules": [resource], "next_cursor": None}
+
+    monkeypatch.setattr(client, "request", response)
+    monkeypatch.setattr(module, "_scheduler_client", lambda: client)
+
+    async def run():
+        with pytest.raises(HTTPException) as caught:
+            await module.get_schedule_settings(None)
+        assert caught.value.status_code == 502
+        assert caught.value.detail == "Scheduler service returned an invalid response"
+
+    asyncio.run(run())
+
+
 def test_service_status_reports_older_running_job_when_newer_job_is_queued(monkeypatch):
     from news_aggregator.api import create_api_router
     from news_aggregator.database import get_db

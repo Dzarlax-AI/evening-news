@@ -436,7 +436,7 @@ class DockerGate:
                 raise GateFailure(f"{role} has an unexpected filesystem mount")
             if mounts[0]["Destination"] != "/fixtures" or mounts[0]["RW"]:
                 raise GateFailure(f"{role} fixture mount is not read-only")
-        for role in ("scheduler",):
+        for role in ("scheduler", "postgres"):
             output = self.docker("inspect", "--format", "{{json .Mounts}}", self.container_names[role]).stdout.strip()
             mounts = json.loads(output)
             if role == "postgres":

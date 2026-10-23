@@ -360,3 +360,35 @@ def test_internal_receiver_uses_scoped_bearer_outside_admin_dependency(monkeypat
     assert status == 202
     assert json.loads(response)["status"] == "accepted"
     assert calls["db"] == 1
+
+
+@pytest.mark.asyncio
+async def test_non_ascii_bearer_token_is_rejected_before_body_or_database(monkeypatch):
+    from news_aggregator.config import settings
+    from news_aggregator.api import scheduled_jobs_router as module
+    from starlette.requests import Request
+
+    monkeypatch.setattr(settings, "scheduled_jobs_token", SecretStr("target-secret"))
+    reads = {"body": 0, "database": 0}
+
+    async def receive():
+        reads["body"] += 1
+        return {"type": "http.request", "body": b"{}", "more_body": False}
+
+    request = Request({
+        "type": "http", "method": "POST", "path": "/api/v1/internal/scheduled-jobs",
+        "query_string": b"", "headers": [
+            (b"authorization", "Bearer café".encode("latin-1")),
+            (b"content-type", b"application/json"),
+        ],
+    }, receive)
+
+    def forbidden_db():
+        reads["database"] += 1
+        raise AssertionError("unauthorized request must not access the database")
+
+    monkeypatch.setattr(module, "get_database_queue", forbidden_db)
+    with pytest.raises(HTTPException) as caught:
+        await module.receive_scheduled_job(request)
+    assert caught.value.status_code == 401
+    assert reads == {"body": 0, "database": 0}

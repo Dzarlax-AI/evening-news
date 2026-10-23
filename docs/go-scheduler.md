@@ -32,6 +32,14 @@ the work succeeded. News reports execution results from its own job records.
 The Python worker retains article processing, AI, job ownership/recovery, and
 conservative handling of ambiguous digest delivery.
 
+Legacy calendar compatibility is retained in this PR. Daily and hourly schedules
+mirror Python's fixed-offset `pytz` arithmetic around DST changes. This includes
+a known autumn edge: Belgrade daily 02:15 can be scheduled for October 26, 2026
+at 00:15 UTC and then 01:15 UTC, producing two runs on the same local date.
+The migration does not silently correct that behavior. A civil-time daily
+policy is documented as a separate decision in the approval plan; settle it
+before a production cutover involving affected schedules.
+
 The services may share one PostgreSQL server. Use different database roles and
 schemas: the scheduler role must not read or write the News schema, and the News
 role must not write scheduler tables. The scheduler creates only its own schema
@@ -137,7 +145,7 @@ liveness; `/readyz` additionally checks schema/DB readiness and loop freshness.
 An open port or a successful acceptance receipt alone is not execution acceptance.
 Local verification on October 23, 2026:
 
-- Python regression suite against isolated PostgreSQL 16: 1,256 passed, five
+- Python regression suite against isolated PostgreSQL 16: 1,261 passed, five
   explicit real-browser/network checks skipped, and 22 subtests passed.
 - Go unit and PostgreSQL integration tests passed with the race detector;
   `go vet` and Linux amd64 / macOS ARM64 cross-compilation passed.
@@ -160,15 +168,15 @@ Synthetic Docker resource snapshots (MiB; CPU percent in parentheses):
 
 | Process | Slow target in flight | News queue at capacity | Final |
 |---|---:|---:|---:|
-| Scheduler | 8.27 (0.55%) | 8.89 (0.80%) | 4.80 (1.05%) |
-| News web | 102.00 (0.30%) | 102.20 (0.29%) | 96.34 (0.23%) |
-| News worker | 81.46 (0.65%) | 81.75 (0.00%) | 77.02 (0.69%) |
-| PostgreSQL | 97.89 (0.85%) | 101.60 (0.85%) | 92.58 (0.97%) |
-| Fake consumers/providers | 14.07 (0.04%) | 14.55 (0.08%) | 12.87 (0.05%) |
-| Total | 303.69 (2.39%) | 308.99 (2.02%) | 283.61 (2.99%) |
+| Scheduler | 6.62 (0.75%) | 7.24 (1.11%) | 7.37 (1.03%) |
+| News web | 101.30 (0.25%) | 101.80 (0.25%) | 96.45 (0.23%) |
+| News worker | 81.93 (0.66%) | 82.65 (0.00%) | 76.75 (0.71%) |
+| PostgreSQL | 97.97 (0.81%) | 101.40 (1.12%) | 92.16 (1.28%) |
+| Fake consumers/providers | 13.11 (0.05%) | 12.86 (0.04%) | 12.04 (0.05%) |
+| Total | 300.93 (2.52%) | 305.95 (2.52%) | 284.77 (3.30%) |
 
-The scheduler used 5.18 MiB before dispatch; that idle sample was captured
-before starting the worker, so its 203.41 MiB total is not comparable with the
+The scheduler used 5.39 MiB before dispatch; that idle sample was captured
+before starting the worker, so its 203.19 MiB total is not comparable with the
 full five-process samples. These are point-in-time observations from a small
 synthetic workload, not peak measurements or production sizing evidence.
 The capacity check observed 32 queued jobs and one running job with a live

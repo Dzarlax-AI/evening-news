@@ -17,6 +17,9 @@ var (
 )
 
 func Validate(s model.Calendar) error {
+	if s.Timezone == "" || s.Timezone == "Local" {
+		return errors.New("timezone must be an IANA timezone")
+	}
 	if _, err := time.LoadLocation(s.Timezone); err != nil {
 		return errors.New("timezone must be an IANA timezone")
 	}

@@ -221,8 +221,8 @@ def validate_import_item(item):
     payload = safe_payload(item["operation"], item["payload"])
     if payload != item["payload"]:
         raise ValueError("snapshot schedule payload is invalid")
+    from news_aggregator.services.background_jobs import validate_payload
     try:
-        from news_aggregator.services.background_jobs import validate_payload
         if validate_payload(item["operation"], payload) != payload:
             raise ValueError("snapshot schedule payload is invalid")
     except (TypeError, ValueError):

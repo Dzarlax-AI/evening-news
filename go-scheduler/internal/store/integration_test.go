@@ -89,7 +89,7 @@ func TestPostgresPersistenceAndFencing(t *testing.T) {
 		Calendar:         model.Calendar{Type: "interval", Timezone: "UTC", IntervalMinutes: intPtr(60)},
 		Target:           "worker",
 		Operation:        "opaque.operation",
-		Payload:          map[string]any{"nested": map[string]any{"large": numeric, "decimal": json.Number("0.1234567890123456789")}},
+		Payload:          map[string]any{"nested": map[string]any{"large": numeric, "decimal": json.Number("0.1234567890123456789"), "exponent": json.Number("1e2"), "small": json.Number("1e-7")}},
 	}
 	targets := map[string]model.Target{"worker": {URL: "https://fixture.invalid", Token: "fixture-secret"}}
 	_, err = db.Import(ctx, 0, []ImportItem{{Key: "test:enabled-without-due", Enabled: true, Calendar: mutation.Calendar, Target: "worker", Operation: "opaque.operation", Payload: map[string]any{}}}, targets, now)
@@ -113,6 +113,10 @@ func TestPostgresPersistenceAndFencing(t *testing.T) {
 	if _, changed, err := db.PutSchedule(ctx, "test:numeric", model.Mutation{ExpectedRevision: 1, Enabled: mutation.Enabled, Calendar: mutation.Calendar, Target: mutation.Target, Operation: mutation.Operation, Payload: got.Payload}, targets, now.Add(time.Second)); err != nil || changed {
 		t.Fatal("identical schedule update should be idempotent")
 	}
+	semanticPayload := map[string]any{"nested": map[string]any{"large": numeric, "decimal": json.Number("0.1234567890123456789"), "exponent": json.Number("100.0"), "small": json.Number("0.0000001")}}
+	if _, changed, err := db.PutSchedule(ctx, "test:numeric", model.Mutation{ExpectedRevision: 1, Enabled: mutation.Enabled, Calendar: mutation.Calendar, Target: mutation.Target, Operation: mutation.Operation, Payload: semanticPayload}, targets, now.Add(2*time.Second)); err != nil || changed {
+		t.Fatal("JSONB-equivalent number spellings must not create a new schedule revision")
+	}
 
 	control, err := db.GetControl(ctx)
 	if err != nil || !control.Paused {
@@ -120,7 +124,7 @@ func TestPostgresPersistenceAndFencing(t *testing.T) {
 	}
 	due := now.Add(-time.Second)
 	importMutation := mutation
-	importMutation.Payload = map[string]any{"n": json.Number("9007199254740993")}
+	importMutation.Payload = map[string]any{"n": json.Number("9007199254740993"), "exponent": json.Number("1e2"), "small": json.Number("1e-7")}
 	importItem := ImportItem{Key: "news:legacy", Enabled: true, Calendar: importMutation.Calendar, Target: "worker", Operation: "news_digest", Payload: importMutation.Payload, NextDueAt: &due}
 	imported, err := db.Import(ctx, control.Revision, []ImportItem{importItem}, targets, now)
 	if err != nil || len(imported.Created) != 1 {
@@ -130,8 +134,10 @@ func TestPostgresPersistenceAndFencing(t *testing.T) {
 	if err != nil || importedSchedule.NextDueAt == nil || !importedSchedule.NextDueAt.Equal(due) {
 		t.Fatal("import did not preserve the exact due instant")
 	}
-	if _, err = db.Import(ctx, control.Revision, []ImportItem{importItem}, targets, now.Add(time.Second)); err != nil {
-		t.Fatal("identical import was not idempotent")
+	semanticImport := importItem
+	semanticImport.Payload = map[string]any{"n": json.Number("9.007199254740993e15"), "exponent": json.Number("100.0"), "small": json.Number("0.0000001")}
+	if _, err = db.Import(ctx, control.Revision, []ImportItem{semanticImport}, targets, now.Add(time.Second)); err != nil {
+		t.Fatal("JSONB-equivalent import payload should remain idempotent")
 	}
 	if err = db.Pool.QueryRow(ctx, `SELECT next_due_at FROM `+db.schedules+` WHERE schedule_key=$1`, importItem.Key).Scan(&due); err != nil {
 		t.Fatal("could not check microsecond due timestamp")
@@ -158,6 +164,10 @@ func TestPostgresPersistenceAndFencing(t *testing.T) {
 	if _, err := db.Pool.Exec(ctx, `UPDATE `+db.outbox+` SET lease_until=clock_timestamp()+interval '1 hour' WHERE occurrence_id=$1::uuid`, claimed[0].Envelope.OccurrenceID); err != nil {
 		t.Fatal("could not prepare active lease inventory")
 	}
+	clockSkewClaims, err := db.Claim(ctx, time.Now().UTC().Add(24*time.Hour), 10*time.Second, 10)
+	if err != nil || len(clockSkewClaims) != 0 {
+		t.Fatal("future application clock stole a lease that was live according to PostgreSQL")
+	}
 	if _, err := db.SetPaused(ctx, 1, true, now.Add(10*time.Second)); err != nil {
 		t.Fatal("could not pause scheduler with a live lease")
 	}
@@ -182,6 +192,10 @@ func TestPostgresPersistenceAndFencing(t *testing.T) {
 	if _, err := db.SetPaused(ctx, 2, false, now.Add(13*time.Second)); err != nil {
 		t.Fatal("could not resume scheduler after lease inspection")
 	}
+	reclaimed, err := db.Claim(ctx, time.Now().UTC().Add(-24*time.Hour), 10*time.Second, 1)
+	if err != nil || len(reclaimed) != 1 || reclaimed[0].Envelope.OccurrenceID != claimed[0].Envelope.OccurrenceID {
+		t.Fatal("past application clock prevented reclaiming a lease that had expired according to PostgreSQL")
+	}
 	if generated, err = db.GenerateDue(ctx, now.Add(9*time.Second), 100, 10); err != nil || generated != 1 {
 		t.Fatal("a separate due schedule was not allowed while the first remains leased")
 	}
@@ -195,6 +209,9 @@ func TestPostgresPersistenceAndFencing(t *testing.T) {
 	newClaims, err = db.Claim(ctx, now.Add(15*time.Second), 10*time.Second, 10)
 	if err != nil || len(newClaims) != 0 {
 		t.Fatal("paused scheduler claimed new dispatch work")
+	}
+	if _, err := db.Pool.Exec(ctx, `UPDATE `+db.outbox+` SET lease_until=clock_timestamp()-interval '1 microsecond' WHERE occurrence_id=$1::uuid`, claimed[0].Envelope.OccurrenceID); err != nil {
+		t.Fatal("could not expire retained lease before schedule deletion")
 	}
 	if err := db.DeleteSchedule(ctx, importItem.Key, 1); err != nil {
 		t.Fatal("could not delete schedule with retained occurrence")
