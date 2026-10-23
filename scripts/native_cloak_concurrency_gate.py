@@ -67,10 +67,63 @@ STARTUP_FAILURES = {
 
 
 class GateError(RuntimeError):
-    def __init__(self, code: str, *, phase: str = "setup"):
+    def __init__(self, code: str, *, phase: str = "setup", operation: str | None = None,
+                 reason: str | None = None):
         self.code = code if re.fullmatch(r"[a-z0-9_]{1,64}", code) else "gate_failed"
         self.phase = phase if re.fullmatch(r"[a-z0-9_-]{1,48}", phase) else "unknown"
+        self.operation = operation if operation in DOCKER_OPERATIONS else None
+        self.reason = reason if reason in DOCKER_FAILURE_REASONS else None
         super().__init__(self.code)
+
+
+DOCKER_OPERATIONS = {
+    "container_inspect", "container_run", "container_logs", "container_stats",
+    "image_inspect", "network_create", "network_connect", "network_inspect", "network_remove",
+}
+DOCKER_FAILURE_REASONS = {
+    "address_overlap", "template_incompatible", "image_missing", "object_missing",
+    "permission_denied", "invalid_argument", "daemon_unavailable", "unknown",
+}
+
+
+def _docker_operation(args: list[str]) -> str | None:
+    if not args or args[0] != "docker" or len(args) < 2:
+        return None
+    if args[1] == "network" and len(args) > 2:
+        operation = {"create": "network_create", "connect": "network_connect",
+                     "inspect": "network_inspect", "rm": "network_remove"}.get(args[2])
+    elif args[1] == "image" and len(args) > 2 and args[2] == "inspect":
+        operation = "image_inspect"
+    elif args[1] == "inspect":
+        operation = "container_inspect"
+    elif args[1] == "run":
+        operation = "container_run"
+    elif args[1] == "logs":
+        operation = "container_logs"
+    elif args[1] == "stats":
+        operation = "container_stats"
+    else:
+        operation = None
+    return operation if operation in DOCKER_OPERATIONS else None
+
+
+def _docker_failure_reason(stderr: str) -> str:
+    error = stderr.lower()
+    if "overlap" in error or "already allocated" in error:
+        return "address_overlap"
+    if "template" in error or "can't evaluate field" in error or "cannot evaluate field" in error:
+        return "template_incompatible"
+    if "no such image" in error or "image not known" in error:
+        return "image_missing"
+    if "no such network" in error or "no such container" in error or "no such object" in error:
+        return "object_missing"
+    if "permission denied" in error or "operation not permitted" in error:
+        return "permission_denied"
+    if "invalid argument" in error or "invalid reference format" in error or "bad parameter" in error:
+        return "invalid_argument"
+    if "cannot connect to the docker daemon" in error or "is the docker daemon running" in error:
+        return "daemon_unavailable"
+    return "unknown"
 
 
 def _run(args: list[str], *, timeout: int = 30, input_text: str | None = None) -> str:
@@ -81,11 +134,13 @@ def _run(args: list[str], *, timeout: int = 30, input_text: str | None = None) -
         raise GateError("command_unavailable_or_timeout") from None
     if result.returncode != 0:
         error = result.stderr.lower()
+        operation = _docker_operation(args)
+        reason = _docker_failure_reason(result.stderr) if operation else None
         if "no such network" in error:
-            raise GateError("network_not_found")
+            raise GateError("network_not_found", operation=operation, reason=reason)
         if "no such container" in error or "no such object" in error:
-            raise GateError("container_not_found")
-        raise GateError("container_operation_failed")
+            raise GateError("container_not_found", operation=operation, reason=reason)
+        raise GateError("container_operation_failed", operation=operation, reason=reason)
     return result.stdout.strip()
 
 
@@ -219,7 +274,7 @@ class DockerGate:
         try:
             return _run(["docker", *args], timeout=timeout)
         except GateError as exc:
-            raise GateError(exc.code, phase=self.phase) from None
+            raise GateError(exc.code, phase=self.phase, operation=exc.operation, reason=exc.reason) from None
 
     def _verify_container(self, name: str) -> None:
         labels = self._docker("inspect", "--format", '{{index .Config.Labels "' + RUN_LABEL + '"}}', name)
@@ -707,7 +762,8 @@ def main() -> int:
     try:
         result = gate.execute()
     except GateError as exc:
-        failure = GateError(exc.code, phase=gate.phase if exc.phase == "setup" else exc.phase)
+        failure = GateError(exc.code, phase=gate.phase if exc.phase == "setup" else exc.phase,
+                            operation=exc.operation, reason=exc.reason)
     except (subprocess.CalledProcessError, OSError):
         failure = GateError("helper_operation_failed", phase=gate.phase)
     except Exception:
@@ -724,6 +780,8 @@ def main() -> int:
         report = {"schema_version": 1, "state": "failed",
                   "failure_code": failure.code if failure else "cleanup_failed",
                   "phase": failure.phase if failure else gate.phase,
+                  "failure_operation": failure.operation if failure else None,
+                  "failure_reason": failure.reason if failure else None,
                   "cleanup_failures": cleanup_failures,
                   "runtime_state": runtime_state,
                   "runtime_diagnostics": runtime_diagnostics,

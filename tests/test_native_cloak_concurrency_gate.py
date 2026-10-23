@@ -158,6 +158,32 @@ def test_container_launch_never_pulls_and_registers_name_before_ambiguous_failur
     assert "/run:rw,noexec,nosuid,size=32m" in commands[0]
 
 
+@pytest.mark.parametrize(("command", "stderr", "operation", "reason"), [
+    (("network", "create", "--internal", "--subnet", "172.29.20.0/24", "owned"),
+     "Pool overlaps with other one on this address space", "network_create", "address_overlap"),
+    (("image", "inspect", "--format", "{{.Os}}/{{.Architecture}}", "python:3.12-alpine"),
+     "template: :1:3: executing at <.Os>: can't evaluate field Os in type *image.inspectResponse",
+     "image_inspect", "template_incompatible"),
+])
+def test_docker_preflight_failure_reports_finite_operation_and_reason(
+        monkeypatch, command, stderr, operation, reason):
+    instance = gate.DockerGate.__new__(gate.DockerGate)
+    instance.phase = "preflight"
+
+    def failed_run(args, **_kwargs):
+        assert args[0] == "docker"
+        return __import__("subprocess").CompletedProcess(args, 1, stdout="", stderr=stderr)
+
+    monkeypatch.setattr(gate.subprocess, "run", failed_run)
+    with pytest.raises(gate.GateError) as failure:
+        instance._docker(*command)
+    assert failure.value.phase == "preflight"
+    assert failure.value.operation == operation
+    assert failure.value.reason == reason
+    assert str(failure.value) == "container_operation_failed"
+    assert stderr not in str(failure.value)
+
+
 def test_cgroup_oom_event_fails_gate_and_keeps_safe_resource_metrics():
     instance = gate.DockerGate.__new__(gate.DockerGate)
     instance.prefix = "news-cloak-concurrency-test"
