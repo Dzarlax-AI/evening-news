@@ -27,6 +27,16 @@ separate healthcheck reads nft policy and checks real child identity, listener
 and loopback CDP. Worker/proxy retain their Go URL, DNS and numeric-dial guards;
 they do not use the removed host role policies.
 
+The runtime supervisor tolerates one or two consecutive loopback HTTP/CDP
+probe failures and resets the count after a successful probe; the third
+consecutive failure exits with `browser_cdp_unavailable`. Identity, child
+command/exit, FD threshold, listener, heartbeat, and nft policy failures remain
+immediate. Probe logs use finite reasons: `http_timeout`, `invalid_json`,
+`invalid_payload`, `connection_error`, `http_error`, `subprocess_timeout`, or
+`subprocess_error`, followed by one recovery event when a probe succeeds.
+Historical `browser_cdp_unavailable` logs combined listener and probe failures,
+so they do not identify the actual cause of the earlier browser restarts.
+
 ## Acceptance before production
 
 Use CI-built images in a fresh isolated Compose project with bounded memory,

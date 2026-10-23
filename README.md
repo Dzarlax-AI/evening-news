@@ -22,7 +22,9 @@ Everything runs on a schedule you control, or you can trigger any step manually 
 
 ## Architecture
 
-Project roadmap: [Go backend migration plan](docs/ai-plans/2026-10-16-go-backend-migration-roadmap.html). This is a proposed long-term direction; implementation of the full migration requires separate approval. The [native Go/Cloak worker plan](docs/ai-plans/2026-10-16-go-cloak-native-worker.html) tracks the already approved extractor work.
+Python remains the application and orchestration layer: it owns RSS collection, scheduling, AI processing, selector memory, database writes, and digest delivery. The private Go extractor service handles article extraction and can also collect Telegram and Page Monitor sources. These routes are selected independently; each Python mode remains the default, and Go routes require the private service URL and bearer token. A Python fallback for article extraction is available only when explicitly enabled.
+
+The production Compose profile selects Go for article extraction, Telegram, and Page Monitor. Go browser requests use the shared Cloak browser through the private control network and egress gateway; Readeck also uses that browser. The Python app retains its browser pool for paths that remain in Python mode. See the [Page Monitor guide](docs/go-page-monitor.md), [Telegram guide](docs/go-telegram-source.md), and [production deployment handoff](deploy/news-extractor/HANDOFF.md).
 
 ```mermaid
 flowchart TD
@@ -32,71 +34,68 @@ flowchart TD
         WEB[Custom pages<br/>Page Monitor]
     end
 
-    subgraph fetch["1 · Fetch"]
-        Fetcher[Source fetcher<br/>feedparser · nodriver · HTTP]
-    end
-
-    subgraph extract["2 · Extract"]
-        Ext[Content extractor]
-        Ext1[Learned patterns]
-        Ext2[Enhanced selectors]
-        Ext3[Readability]
-        Ext4[Browser / nodriver CDP]
-        Ext1 --> Ext2 --> Ext3 --> Ext4
-    end
-
-    subgraph db["Storage"]
+    subgraph app["Python application"]
+        Scheduler[Scheduler]
+        SourceManager[Python source manager]
+        Memory[Page Monitor selector memory]
         DB[(PostgreSQL)]
-    end
-
-    subgraph process["3 · Process"]
-        Filter[Smart Filter<br/>dedup · quality check]
+        Filter[Content quality and deduplication]
         Proc[Article processor]
         AI1[Google Gemini<br/>summarize + categorize]
-        DLQ[Dead Letter Queue<br/>failed → retry]
-    end
-
-    subgraph digest["4 · Digest"]
-        DGen[Daily summary<br/>generator]
+        DGen[Daily summary generator]
         AI2[Google Gemini<br/>per-category summary]
+        UI[FastAPI admin and public site]
+        TGBot[Telegram digest publisher]
     end
 
-    subgraph delivery["5 · Deliver"]
-        Site[Public site<br/>daily digest page]
-        TGBot[Telegram Bot<br/>rich digest message]
-        Channel[Your Telegram<br/>channel]
+    subgraph go["Private Go extractor service"]
+        GoArticle[Article extraction]
+        GoTelegram[Telegram source route]
+        GoPage[Page Monitor source route]
     end
 
-    subgraph admin["Admin panel  /admin"]
-        UI[FastAPI web UI]
-        Scheduler[Scheduler]
+    subgraph browser["Shared browser infrastructure"]
+        Cloak[Cloak browser]
+        Readeck[Readeck]
+        Egress[HTTP/S egress gateway]
     end
 
-    RSS --> Fetcher
-    TGS --> Fetcher
-    WEB --> Fetcher
-    Fetcher --> DB
-    DB --> Ext
-    Ext --> Ext1
-    Ext --> DB
+    Channel[Your Telegram channel]
+    WebOrigins[Public websites]
+
+    RSS --> SourceManager
+    TGS --> SourceManager
+    WEB --> SourceManager
+    Scheduler --> SourceManager
+    SourceManager <--> Memory
+    SourceManager <-->|private API when Go mode is enabled| GoTelegram
+    SourceManager <-->|private API when Go mode is enabled| GoPage
+    Proc <-->|article extraction when Go mode is enabled| GoArticle
+    GoArticle -->|CDP control| Cloak
+    GoTelegram -->|CDP control when needed| Cloak
+    GoPage -->|CDP control when needed| Cloak
+    GoArticle -->|guarded HTTP| WebOrigins
+    GoTelegram -->|guarded HTTP| WebOrigins
+    GoPage -->|guarded HTTP| WebOrigins
+    Cloak -->|browser HTTP/S| Egress
+    Egress --> WebOrigins
+    Readeck -->|CDP control| Cloak
+    SourceManager --> DB
+    GoTelegram -->|posts| SourceManager
+    GoPage -->|items| SourceManager
     DB --> Filter
     Filter -->|passes| Proc
-    Filter -->|duplicate / junk| DLQ
     Proc <--> AI1
     Proc --> DB
-    Proc -->|on failure| DLQ
-    DLQ -->|retry| Proc
     DB --> DGen
     DGen <--> AI2
     DGen --> DB
-    DB --> Site
-    Site --> TGBot
     TGBot --> Channel
-    UI --> DB
-    Scheduler -->|triggers| Fetcher
-    Scheduler -->|triggers| Proc
-    Scheduler -->|triggers| DGen
+    DB --> UI
+    UI --> TGBot
 ```
+
+The diagram shows the production route choices. Settings default to Python: `EXTRACTION_SERVICE_MODE=python`, `TELEGRAM_SOURCE_MODE=python`, and `PAGE_MONITOR_SOURCE_MODE=python`. The production overlays are merged with the existing infrastructure and News Compose projects, not run as a standalone stack; see the [deployment handoff](deploy/news-extractor/HANDOFF.md).
 
 ---
 
@@ -132,23 +131,31 @@ Design follows the [dzarlax.dev](https://dzarlax.dev) brand system: warm ivory b
 
 **RSS / Atom** — any standard feed URL. When the feed provides only a snippet, the full article is fetched automatically using the article extraction pipeline below.
 
-**Telegram** — public channels via web preview. The parser strips UI chrome (forwarded headers, reactions, buttons) and follows external links to fetch full article text.
+**Telegram** — public channels via web preview. The parser strips UI chrome (forwarded headers, reactions, buttons) and follows external links to fetch full article text. The production profile routes collection and parsing through Go; Python remains the default mode.
 
-**Custom (Page Monitor)** — for sites without RSS. Point it at a URL and it finds new articles using a cascade of CSS selectors. If the built-in selectors don't match the page, the browser renders the page and AI analyzes its structure to generate working selectors. Learned selectors are saved and reused on the next fetch. You can also provide your own selectors as a fixed override.
+**Custom (Page Monitor)** — for sites without RSS. Point it at a URL and it finds new articles using CSS selectors. If selectors need learning, Python analyzes the captured page and saves learned selectors for the next fetch. The production profile sends page capture and parsing to Go while Python retains selector memory and optional AI learning. You can also provide your own selectors as a fixed override.
 
 ---
 
 ## Article extraction
 
-When a source yields a link rather than full text, the app extracts article content using a cascade of strategies — moving to the next only if the previous one produces low-quality output:
+When a source yields a link rather than full text, the Python app sends it to the private Go extractor when `EXTRACTION_SERVICE_MODE=go`. The service applies its guarded extraction pipeline and, in the production profile, can use the shared Cloak browser for eligible pages. `EXTRACTION_SERVICE_PYTHON_FALLBACK` defaults to false; enabling a Python fallback is an explicit configuration choice. In Python mode, the existing Python extraction path remains in use.
 
-1. **Learned patterns** — CSS selectors that worked before on the same domain, stored in the database with usage counts. Fastest path; gets better the more articles you process.
-2. **Enhanced selectors** — a set of common structural CSS selectors (`article`, `[class*=content]`, `[class*=article-body]`, etc.) tried heuristically.
-3. **Readability** — Mozilla's Readability algorithm, which strips navigation and boilerplate and extracts the main content block.
-4. **Browser rendering** — Alpine Chrome via CDP (nodriver) for JS-heavy pages that don't render without JavaScript. Runs in a separate Docker container.
-5. **Fallback** — generic text extraction from the raw HTML as a last resort.
+---
 
-Successful extractions are recorded per domain. The method that worked best gets promoted and tried first on the next request to the same domain. Domains with repeated failures get exponential backoff — delays double up to 6 hours before retrying.
+## Tests
+
+Run the Python suite from the repository root and the Go checks from `go/`:
+
+```bash
+python -m pytest tests -q
+cd go
+go test -race -count=1 ./...
+go vet ./...
+go mod verify
+```
+
+CI runs the Python suite and race-enabled Go tests, vet, and module verification. Some integration tests need their configured PostgreSQL or browser test environment.
 
 ---
 
@@ -178,21 +185,27 @@ AI calls are the main operating cost. Several mechanisms keep them in check:
 
 ### With Docker (recommended)
 
+This standalone example is for local use. It starts the app with its own PostgreSQL and browser containers; it is separate from the production shared-browser topology.
+
+Configure the example's credentials before starting it.
+
 ```bash
-cp docker-compose.example.yml docker-compose.yml
-# Edit docker-compose.yml — fill in your API keys and passwords
-docker-compose up -d
+docker compose -f docker-compose.example.yml up -d
 ```
 
-The app will be available at `http://localhost:8000`. The admin panel is at `/admin`.
+The app will be available at `http://localhost:8000`, with the admin panel at `/admin`.
 
 ### For local development
 
 ```bash
-docker-compose -f docker-compose.dev.yml up -d
+docker compose -f docker-compose.dev.yml up -d
 ```
 
-This mounts your local code into the container so changes take effect without rebuilding.
+This mounts local application code into the container so changes take effect without rebuilding. It expects a configured PostgreSQL endpoint; it does not start the production Go extractor or shared Cloak browser.
+
+### Production topology
+
+Production combines the existing News Compose project with [`compose.native.yml`](deploy/news-extractor/compose.native.yml) and the infrastructure overlay [`compose.shared-browser.yml`](deploy/news-extractor/compose.shared-browser.yml). The News overlay configures the private Go service, selects Go for article extraction, Telegram, and Page Monitor, and connects the app and worker to the shared Cloak browser through private control and egress networks. Readeck uses that shared browser as well. Follow the [deployment handoff](deploy/news-extractor/HANDOFF.md) for the actual merge order and runtime checks; these overlay files are not standalone Compose projects.
 
 ---
 
@@ -221,17 +234,18 @@ JWT_SECRET=your_jwt_secret
 
 Everything else has sensible defaults. Full reference is in `docker-compose.example.yml`.
 
+The source routing settings default to Python. Set `EXTRACTION_SERVICE_MODE=go`, `TELEGRAM_SOURCE_MODE=go`, or `PAGE_MONITOR_SOURCE_MODE=go` only when the private Go service URL and bearer token are configured. The production Compose overlay sets all three to Go and disables article-extraction fallback. The Go Telegram and Page Monitor clients do not silently retry through Python.
+
 ---
 
 ## API
 
-The app exposes a REST API at `/api/v1/`. Full documentation: [`docs/PUBLIC_API_DOCS_EN.md`](docs/PUBLIC_API_DOCS_EN.md).
+The authenticated application API is under `/api/v1/`; public feed data endpoints are under `/api/public/`. Full public API documentation: [`docs/PUBLIC_API_DOCS_EN.md`](docs/PUBLIC_API_DOCS_EN.md).
 
-Health endpoints: `GET /health/db` — database pool status, `GET /process-monitor` — background process status.
+Health endpoints include `GET /health`, `GET /health/app`, `GET /api/v1/system/health/db`, and `GET /api/v1/system/process-monitor`.
 
 ---
 
 ## Known limitations
 
-- No automated tests
 - Prometheus metrics are partially wired up but not complete
