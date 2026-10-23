@@ -217,8 +217,12 @@ class NewsOrchestrator:
                 result = await db.execute(source_query)
                 sources_db = result.scalars().all()
 
-                # Create source name -> source mapping
-                source_map = {s.name: s for s in sources_db}
+                # Go collection is correlated and persisted by stable source ID;
+                # Python mode keeps its historical name keyed return shape.
+                if settings.source_manager_mode == 'go':
+                    source_map = {s.id: s for s in sources_db}
+                else:
+                    source_map = {s.name: s for s in sources_db}
 
                 return await self.source_manager.save_fetched_articles_with_sources(raw_articles, source_map, db)
 

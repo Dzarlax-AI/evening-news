@@ -22,7 +22,7 @@ Everything runs on a schedule you control, or you can trigger any step manually 
 
 ## Architecture
 
-Python remains the application and orchestration layer: it owns RSS collection, scheduling, AI processing, selector memory, database writes, and digest delivery. The private Go extractor service handles article extraction and can also collect Telegram and Page Monitor sources. These routes are selected independently; each Python mode remains the default, and Go routes require the private service URL and bearer token. A Python fallback for article extraction is available only when explicitly enabled.
+Python remains the application and orchestration layer: it owns scheduling, AI processing, selector memory, database writes, and digest delivery. The private Go extractor service handles article extraction, Telegram, and Page Monitor. Opt-in `SOURCE_MANAGER_MODE=go` also moves RSS/Atom collection and runtime source dispatch into that service; Python retains source configuration and persistence. Each mode defaults to Python, and Go routes require the private service URL and bearer token. See the [Go source collection guide](docs/go-source-manager.md) for the batch contract, limits, and local fixture checks.
 
 The production Compose profile selects Go for article extraction, Telegram, and Page Monitor. Go browser requests use the shared Cloak browser through the private control network and egress gateway. The Python app retains its browser pool for paths that remain in Python mode. See the [Page Monitor guide](docs/go-page-monitor.md), [Telegram guide](docs/go-telegram-source.md), and [production deployment handoff](deploy/news-extractor/HANDOFF.md).
 
@@ -49,6 +49,7 @@ flowchart TD
     end
 
     subgraph go["Private Go extractor service"]
+        GoCollect[Optional source manager + RSS collector]
         GoArticle[Article extraction]
         GoTelegram[Telegram source route]
         GoPage[Page Monitor source route]
@@ -67,6 +68,10 @@ flowchart TD
     WEB --> SourceManager
     Scheduler --> SourceManager
     SourceManager <--> Memory
+    SourceManager <-->|SOURCE_MANAGER_MODE=go| GoCollect
+    GoCollect --> GoTelegram
+    GoCollect --> GoPage
+    GoCollect -->|guarded RSS HTTP| WebOrigins
     SourceManager <-->|private API when Go mode is enabled| GoTelegram
     SourceManager <-->|private API when Go mode is enabled| GoPage
     Proc <-->|article extraction when Go mode is enabled| GoArticle
@@ -93,7 +98,7 @@ flowchart TD
     UI --> TGBot
 ```
 
-The diagram shows the production route choices. Settings default to Python: `EXTRACTION_SERVICE_MODE=python`, `TELEGRAM_SOURCE_MODE=python`, and `PAGE_MONITOR_SOURCE_MODE=python`. The production overlays are merged with the existing infrastructure and News Compose projects, not run as a standalone stack; see the [deployment handoff](deploy/news-extractor/HANDOFF.md).
+The diagram shows current source routes and the opt-in Go collection path. The production overlay does not enable `SOURCE_MANAGER_MODE=go`. Settings default to Python: `EXTRACTION_SERVICE_MODE=python`, `TELEGRAM_SOURCE_MODE=python`, and `PAGE_MONITOR_SOURCE_MODE=python`. The production overlays are merged with the existing infrastructure and News Compose projects, not run as a standalone stack; see the [deployment handoff](deploy/news-extractor/HANDOFF.md).
 
 ---
 
@@ -127,7 +132,7 @@ Design follows the [dzarlax.dev](https://dzarlax.dev) brand system: warm ivory b
 
 ## Sources
 
-**RSS / Atom** — any standard feed URL. When the feed provides only a snippet, the full article is fetched automatically using the article extraction pipeline below.
+**RSS / Atom** — feed URLs collected by Python by default, or by the guarded Go collector with `SOURCE_MANAGER_MODE=go`. When the feed provides only a snippet, the full article is fetched automatically using the article extraction pipeline below.
 
 **Telegram** — public channels via web preview. The parser strips UI chrome (forwarded headers, reactions, buttons) and follows external links to fetch full article text. The production profile routes collection and parsing through Go; Python remains the default mode.
 
@@ -232,7 +237,7 @@ JWT_SECRET=your_jwt_secret
 
 Everything else has sensible defaults. Full reference is in `docker-compose.example.yml`.
 
-The source routing settings default to Python. Set `EXTRACTION_SERVICE_MODE=go`, `TELEGRAM_SOURCE_MODE=go`, or `PAGE_MONITOR_SOURCE_MODE=go` only when the private Go service URL and bearer token are configured. The production Compose overlay sets all three to Go and disables article-extraction fallback. The Go Telegram and Page Monitor clients do not silently retry through Python.
+The source routing settings default to Python. Set `EXTRACTION_SERVICE_MODE=go`, `TELEGRAM_SOURCE_MODE=go`, or `PAGE_MONITOR_SOURCE_MODE=go` only when the private Go service URL and bearer token are configured. The production Compose overlay sets all three to Go and disables article-extraction fallback. The Go Telegram and Page Monitor clients do not silently retry through Python. `SOURCE_MANAGER_MODE=go` additionally selects Go batch dispatch and RSS collection, requires both source modes to be Go, and remains opt-in; see the [source collection guide](docs/go-source-manager.md).
 
 ---
 

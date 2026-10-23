@@ -1,0 +1,33 @@
+{
+  "contract_version": "1",
+  "build_version": "test-build",
+  "request_id": "batch-actual-wire",
+  "results": [
+    {
+      "source_id": 10,
+      "type": "rss",
+      "outcome": "failed",
+      "error": {"code": "upstream_timeout", "retryable": true},
+      "rss_articles": null
+    },
+    {
+      "source_id": 11,
+      "type": "rss",
+      "outcome": "success",
+      "final_url": "https://example.test/feed",
+      "rss_articles": [
+        {
+          "title": "",
+          "url": "https://example.test/story",
+          "content": null,
+          "summary": null,
+          "image_url": null,
+          "published_at": "2026-10-23T10:00:00Z",
+          "source_type": "rss",
+          "source_name": "Empty-title feed",
+          "raw_data": {"guid": "story-guid", "author": null, "tags": []}
+        }
+      ]
+    }
+  ]
+}

@@ -275,7 +275,43 @@ class PageMonitorSource(BaseSource):
             raise ValueError('invalid_page_monitor_limit')
         return min(limit, self.config.max_articles_per_check)
 
-    async def _fetch_articles_go(self, limit, deadline):
+    async def prepare_go_collection(self):
+        """Load learned selectors and return the bounded Go manager descriptor config."""
+        await self._load_learned_structure()
+        config = self._service_config()
+        scan_limit = max(1, min(self.config.max_articles_per_check, 100))
+        offset = self._go_offset if self._go_scan_active else 0
+        if offset >= scan_limit:
+            offset = 0
+        return {
+            'use_browser': config.use_browser,
+            'wait_for_js': config.wait_for_js,
+            'min_title_length': config.min_title_length,
+            'article_selectors': config.article_selectors,
+            'title_selectors': config.title_selectors,
+            'date_selectors': config.date_selectors,
+            'link_selectors': config.link_selectors,
+            'learned_container_selectors': config.learned_container_selectors,
+            'learned_title_selectors': config.learned_title_selectors,
+            'learned_link_selectors': config.learned_link_selectors,
+            'learned_date_selectors': config.learned_date_selectors,
+            'learned_general_selectors': [
+                {'selector': selector, 'confidence': confidence}
+                for selector, confidence in config.learned_selectors
+            ],
+            'limit': scan_limit,
+            'offset': offset,
+        }
+
+    async def finalize_go_collection(self, result, limit=None, deadline=None):
+        """Normalize one already-collected Page Monitor payload; this never fetches its page."""
+        if deadline is None:
+            from ..config import get_settings
+            total_budget = min(float(get_settings().extraction_service_total_budget_seconds), 120.0)
+            deadline = asyncio.get_running_loop().time() + total_budget
+        return await self._fetch_articles_go(limit, deadline, captured_result=result)
+
+    async def _fetch_articles_go(self, limit, deadline, captured_result=None):
         from ..config import get_settings
         from .page_monitor_service_client import PageMonitorServiceClient, PageMonitorServiceError
 
@@ -329,15 +365,21 @@ class PageMonitorSource(BaseSource):
                                 timestamp, result['selectors_used'])
 
         try:
-            async with asyncio.timeout_at(usable_deadline):
-                await self._load_learned_structure()
-                fetch_budget = remaining()
-                if fetch_budget <= 0:
-                    raise TimeoutError
-                result = await client.fetch(self._service_config(), limit=scan_limit,
-                                            offset=offset,
-                                            timeout_seconds=min(30.0, fetch_budget,
-                                                                self.config.wait_timeout_ms / 1000.0))
+            if captured_result is None:
+                async with asyncio.timeout_at(usable_deadline):
+                    await self._load_learned_structure()
+                    fetch_budget = remaining()
+                    if fetch_budget <= 0:
+                        raise TimeoutError
+                    result = await client.fetch(self._service_config(), limit=scan_limit,
+                                                offset=offset,
+                                                timeout_seconds=min(30.0, fetch_budget,
+                                                                    self.config.wait_timeout_ms / 1000.0))
+            else:
+                # The Go batch already collected this response. Its prefix is
+                # valid even if the pass deadline has expired; that deadline only
+                # suppresses optional study and same-snapshot reparsing.
+                result = captured_result
             if result['outcome'] == 'partial':
                 logger.warning("Page Monitor Go returned a partial prefix: %s",
                                result['error']['code'])

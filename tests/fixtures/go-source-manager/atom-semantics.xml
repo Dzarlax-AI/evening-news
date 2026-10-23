@@ -1,0 +1,24 @@
+<?xml version="1.0" encoding="utf-8"?>
+<feed xmlns="http://www.w3.org/2005/Atom" xmlns:media="http://search.yahoo.com/mrss/">
+  <title>Atom semantics fixture</title>
+  <id>urn:feed:atom</id>
+  <updated>2022-02-02T00:00:00Z</updated>
+  <entry>
+    <title>Атомная статья</title>
+    <id>urn:atom:1</id>
+    <link rel="enclosure" href="https://publisher.example/file.pdf" type="application/pdf"/>
+    <link rel="alternate" href="https://publisher.example/atom/1" type="text/html"/>
+    <author><name>Редакция</name></author>
+    <category term="Технологии"/>
+    <summary type="html">Краткий &lt;strong&gt;текст&lt;/strong&gt;</summary>
+    <content type="html"><![CDATA[Полный <strong>текст</strong>]]></content>
+    <published>2022-02-01T20:00:00-04:00</published>
+    <media:thumbnail url="https://publisher.example/atom-thumb.png"/>
+  </entry>
+  <entry>
+    <id>urn:atom:2</id>
+    <link href="https://publisher.example/atom/2"/>
+    <updated>2022-02-02T00:00:00Z</updated>
+    <summary>Summary only</summary>
+  </entry>
+</feed>

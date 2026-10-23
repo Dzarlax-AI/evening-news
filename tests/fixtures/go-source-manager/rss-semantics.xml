@@ -1,0 +1,42 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<rss version="2.0" xmlns:content="http://purl.org/rss/1.0/modules/content/" xmlns:media="http://search.yahoo.com/mrss/" xmlns:dc="http://purl.org/dc/elements/1.1/" xmlns:dcterms="http://purl.org/dc/terms/">
+  <channel>
+    <title>RSS semantics fixture</title>
+    <item>
+      <title>Новости: café</title>
+      <link>https://publisher.example/story/1</link>
+      <guid>urn:story:1</guid>
+      <author>Иван Иванов</author>
+      <category>World</category>
+      <category>Serbia</category>
+      <pubDate>Wed, 02 Oct 2002 13:00:00 +0200</pubDate>
+      <description>Краткое описание</description>
+      <content:encoded><![CDATA[Полный <em>текст</em> &amp; details]]></content:encoded>
+      <enclosure url="https://publisher.example/cover.jpg" type="image/jpeg" length="12"/>
+      <media:content url="https://publisher.example/media.png" type="image/png"/>
+    </item>
+    <item>
+      <title>Updated date fallback</title>
+      <link>https://publisher.example/story/2</link>
+      <guid isPermaLink="false">urn:story:2</guid>
+      <dc:date>2021-04-05T06:07:08Z</dc:date>
+      <media:content url="https://publisher.example/content.webp" medium="image"/>
+      <media:thumbnail url="https://publisher.example/thumb.jpg"/>
+    </item>
+    <item>
+      <title>HTML image fallback</title>
+      <link>https://publisher.example/story/3</link>
+      <description><![CDATA[<p>Summary<img src="https://publisher.example/inline.png?size=large"></p>]]></description>
+    </item>
+    <item>
+      <title>Skip because link is absent</title>
+      <description>no link</description>
+    </item>
+    <item>
+      <title>Created date fallback</title>
+      <link>https://publisher.example/story/4</link>
+      <guid>urn:story:4</guid>
+      <dcterms:created>Thu, 07 Sep 2017 10:00:00 +0000</dcterms:created>
+    </item>
+  </channel>
+</rss>

@@ -138,6 +138,32 @@ func TestRetryAfterDeltaAndHTTPDateAreBounded(t *testing.T) {
 	}
 }
 
+func TestPublicTimeoutBoundsKeepDefaultAndRSSPathsSeparate(t *testing.T) {
+	if err := validatePublicTimeout(30*time.Second, 30*time.Second); err != nil {
+		t.Fatalf("default public maximum should remain 30s: %v", err)
+	}
+	if err := validatePublicTimeout(31*time.Second, 30*time.Second); err == nil {
+		t.Fatal("default public path accepted a timeout above 30s")
+	}
+	if err := validatePublicTimeout(60*time.Second, 60*time.Second); err != nil {
+		t.Fatalf("RSS path should accept its 60s bound: %v", err)
+	}
+	if err := validatePublicTimeout(61*time.Second, 60*time.Second); err == nil {
+		t.Fatal("RSS path accepted a timeout above 60s")
+	}
+}
+
+func TestFetchPublicRSSStillRejectsPrivateDestinations(t *testing.T) {
+	_, err := FetchPublicRSS(context.Background(), "http://192.168.1.2/feed.xml", Options{Timeout: 60 * time.Second})
+	if !errors.Is(err, ErrUnsafePublicURL) {
+		t.Fatalf("RSS public fetch error = %v, want private URL rejection", err)
+	}
+	_, err = FetchPublic(context.Background(), "http://192.168.1.2/feed.xml", Options{Timeout: 31 * time.Second})
+	if !errors.Is(err, ErrUnsafePublicURL) {
+		t.Fatalf("default public fetch error = %v, want private URL rejection before any connection", err)
+	}
+}
+
 func TestChallengeDetectionUsesInterstitialMarkup(t *testing.T) {
 	if !IsChallengePage([]byte(`<html><title>Just a moment...</title><form id="challenge-form"></form></html>`)) {
 		t.Fatal("known challenge not recognized")
