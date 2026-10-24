@@ -9,6 +9,27 @@ sys.path.insert(0, str(ROOT / "scripts"))
 from run_go_ingestion_fixture_gate import has_host_port_binding, sanitize_fixture_log
 
 
+def _runtime_article_select_grant_present(sql):
+    uncommented = re.sub(r"/\*.*?\*/", " ", sql, flags=re.DOTALL)
+    uncommented = re.sub(r"--[^\r\n]*", " ", uncommented)
+    expected_columns = {
+        "id", "source_id", "title", "url", "content", "summary", "image_url",
+        "published_at", "fetched_at", "processed", "hash_content",
+    }
+    grant = re.compile(
+        r'GRANT\s+SELECT\s*\(([^()]*)\)\s+'
+        r'ON\s+:"news_schema"\.articles\s+TO\s+news_ingestion_runtime',
+        re.IGNORECASE | re.DOTALL,
+    )
+    for statement in uncommented.split(";")[:-1]:
+        match = grant.fullmatch(statement.strip())
+        if match:
+            columns = [column.strip().lower() for column in match.group(1).split(",")]
+            if len(columns) == len(set(columns)) and set(columns) == expected_columns:
+                return True
+    return False
+
+
 def test_runtime_role_sql_is_manual_and_separates_function_owner():
     sql = (ROOT / "deploy/news-ingestion/provision-runtime-role.sql").read_text()
     assert "Operator-run once after migration" in sql
@@ -21,6 +42,41 @@ def test_runtime_role_sql_is_manual_and_separates_function_owner():
     assert "\\password news_ingestion_runtime" in sql
     assert re.search(r"(?<!NO)SUPERUSER", sql, re.IGNORECASE) is None
     assert "GRANT ALL" not in sql.upper()
+    assert _runtime_article_select_grant_present(sql)
+    assert not _runtime_article_select_grant_present(
+        "GRANT SELECT (id, source_id, title, url, content, summary, image_url, "
+        "published_at, fetched_at, processed) ON :\"news_schema\".articles "
+        "TO news_ingestion_runtime;"
+    )
+    assert not _runtime_article_select_grant_present(
+        'GRANT SELECT (hash_content) ON :"news_schema".articles TO news_ingestion_runtime;'
+    )
+    complete_columns = (
+        "id, source_id, title, url, content, summary, image_url, published_at, "
+        "fetched_at, processed, hash_content"
+    )
+    commented_grant = (
+        f'GRANT SELECT ({complete_columns}) ON :"news_schema".articles '
+        "TO news_ingestion_runtime;"
+    )
+    assert not _runtime_article_select_grant_present("-- " + commented_grant)
+    assert not _runtime_article_select_grant_present("/* " + commented_grant + " */")
+    assert not _runtime_article_select_grant_present(
+        f'GRANT SELECT ({complete_columns}) ON :"news_schema".other '
+        "TO news_ingestion_runtime;"
+    )
+    assert not _runtime_article_select_grant_present(
+        f"GRANT SELECT ({complete_columns}) ON public.articles "
+        "TO news_ingestion_runtime;"
+    )
+    assert not _runtime_article_select_grant_present(
+        f'GRANT SELECT ({complete_columns}) ON :"news_schema".articles '
+        "TO another_runtime_role;"
+    )
+    assert not _runtime_article_select_grant_present(
+        f'GRANT SELECT ({complete_columns}) ON :"news_schema".articles '
+        "TO news_ingestion_runtime"
+    )
     assert "FROM PUBLIC" in sql
     migration = (ROOT / "news_aggregator/migrations/article_ingestion.py").read_text()
     assert "CREATE ROLE" not in migration.upper()
@@ -87,6 +143,18 @@ def test_selector_learning_fixture_requires_learned_selectors_and_same_snapshot_
     assert 're.fullmatch(r"[0-9a-f]{64}"' in gate
     assert 'origin_counters.get("page_fetches") == 1' in gate
     assert 'counters.get("selector_study", 0) == 1' in gate
+
+
+def test_gate_exercises_unprocessed_duplicate_metadata_update_as_runtime_role():
+    seed = (ROOT / "tests/fixtures/go-ingestion/gate_seed.py").read_text()
+    probe = (ROOT / "tests/fixtures/go-ingestion/gate_probe.py").read_text()
+    gate = (ROOT / "scripts/run_go_ingestion_fixture_gate.py").read_text()
+    assert 'duplicate_url = "http://rss.fixture.test/story/one/1"' in seed
+    assert 'content="Pre-existing fixture content"' in seed
+    assert "hash_content=None" in seed and "processed=False" in seed
+    assert '"hash_content_present"' in probe
+    assert 'rss_receipt.get("updated", 0) == 1' in gate
+    assert '"runtime_duplicate_article_metadata_update"' in gate
 
 
 def test_fixture_postgres_runs_unprivileged_and_reports_sanitized_startup_failure():

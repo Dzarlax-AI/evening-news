@@ -35,6 +35,7 @@ async def snapshot():
                                                     ArticleIngestionSourceRun.state,
                                                     ArticleIngestionSourceRun.candidates,
                                                     ArticleIngestionSourceRun.saved,
+                                                    ArticleIngestionSourceRun.updated,
                                                     ArticleIngestionSourceRun.error_code,
                                                     ArticleIngestionSourceRun.selector_study_sha256))).all()
         cursors = (await session.execute(select(SourceCollectionState.source_id,
@@ -42,15 +43,26 @@ async def snapshot():
                                                 SourceCollectionState.snapshot_at))).all()
         sources = (await session.execute(select(Source.id, Source.name)
                                          .where(Source.name.like("Go Ingestion Gate %")))).all()
+        duplicate = await session.scalar(select(Article).where(
+            Article.url == "http://rss.fixture.test/story/one/1"))
         enabled_source_count = len((await session.scalars(select(Source.id).where(Source.enabled.is_(True)))).all())
         return {"articles": [{"id": row.id, "source_id": row.source_id, "title": row.title,
                               "url": row.url,
                               "processing_state": row.processing_state,
                               "summary_processed": row.summary_processed} for row in articles],
+                "duplicate_article": (None if duplicate is None else {
+                    "id": duplicate.id,
+                    "title": duplicate.title,
+                    "content_replaced": duplicate.content != "Pre-existing fixture content",
+                    "hash_content_present": isinstance(duplicate.hash_content, str)
+                    and len(duplicate.hash_content) == 64
+                    and all(char in "0123456789abcdef" for char in duplicate.hash_content),
+                }),
                 "runs": [{"state": row.state, "result": row.result, "error_code": row.error_code}
                          for row in runs],
                 "source_runs": [{"source_id": row.source_id, "state": row.state,
                                  "candidates": row.candidates, "saved": row.saved,
+                                 "updated": row.updated,
                                  "error_code": row.error_code,
                                  "selector_study_sha256": row.selector_study_sha256}
                                 for row in source_runs],
