@@ -263,8 +263,12 @@ func (s *fakeQueueStore) ActiveJobs(context.Context) ([]store.Job, error) { retu
 func (s *fakeQueueStore) TerminalJobsNeedingEvents(context.Context, int) ([]store.Job, error) {
 	return nil, nil
 }
-func (s *fakeQueueStore) DatabaseNow(context.Context) (time.Time, error) { return s.now, nil }
-func (s *fakeQueueStore) Info() store.LeaseInfo                          { return s.info }
+func (s *fakeQueueStore) DatabaseNow(context.Context) (time.Time, error) {
+	// PostgreSQL timestamp/timestamptz values are stored at microsecond
+	// precision; model that boundary even when fixtures use time.Now().
+	return s.now.Truncate(time.Microsecond), nil
+}
+func (s *fakeQueueStore) Info() store.LeaseInfo { return s.info }
 func (s *fakeQueueStore) Finish(_ context.Context, _ store.Job, state string, result map[string]any, code *string) error {
 	s.finishCount++
 	s.finishState, s.finishResult, s.finishCode = state, result, code
@@ -339,6 +343,46 @@ func TestRunJobRetriesTransientPolicyReadWithoutChangingAttempt(t *testing.T) {
 	}
 	if db.finishState != "succeeded" || db.finishCount != 1 || db.finishCode != nil {
 		t.Fatalf("finish state/count/code = %q/%d/%v; want succeeded/1/NULL", db.finishState, db.finishCount, db.finishCode)
+	}
+}
+
+func TestRunJobMatchesReceiptDeadlineAtPostgresTimestampPrecision(t *testing.T) {
+	job := store.Job{ID: "34ceaf1d-d7b4-4320-baad-bf9a45ac33e8", Kind: "news_processing", AttemptGeneration: 1}
+	// Explicitly include sub-microsecond nanoseconds to reproduce Linux CI's
+	// clock behavior rather than relying on the host's wall-clock resolution.
+	now := time.Date(2026, time.October, 24, 12, 0, 0, 123456789, time.UTC)
+	db := &fakeQueueStore{
+		now: now, info: store.LeaseInfo{OwnerID: "e3a30b7c-6f56-4e8d-a267-87a1a0d4fe5a", Generation: 12},
+	}
+	deadline := now.Truncate(time.Microsecond).Add(time.Minute)
+	envelope := executor.Envelope{Version: 1, JobID: job.ID, OwnerID: db.info.OwnerID,
+		Generation: db.info.Generation, AttemptGeneration: job.AttemptGeneration, DeadlineAt: deadline}
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		switch {
+		case r.Method == http.MethodGet && r.URL.Path == "/internal/v1/job-executions/"+job.ID+"/policy":
+			_ = json.NewEncoder(w).Encode(map[string]int{"timeout_seconds": 60})
+		case r.Method == http.MethodGet && r.URL.Path == "/internal/v1/job-executions/"+job.ID+"/1":
+			_ = json.NewEncoder(w).Encode(testReceipt(envelope, "succeeded"))
+		case r.Method == http.MethodPost && r.URL.Path == "/internal/v1/job-executions/"+job.ID+"/1/events":
+			w.WriteHeader(http.StatusNoContent)
+		default:
+			http.NotFound(w, r)
+		}
+	}))
+	defer server.Close()
+	client, err := executor.New(server.URL, "fixture-executor-token-123", 100*time.Millisecond)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if got, want := db.now.Truncate(time.Microsecond), time.Date(2026, time.October, 24, 12, 0, 0, 123456000, time.UTC); !got.Equal(want) {
+		t.Fatalf("fixture database time = %s, want PostgreSQL microsecond time %s", got, want)
+	}
+	worker := fakeWorker(client, db, 100*time.Millisecond)
+	if err := worker.runJob(context.Background(), job); err != nil {
+		t.Fatal(err)
+	}
+	if db.finishCount != 1 || db.finishState != "succeeded" {
+		t.Fatalf("finished state/count = %q/%d, want succeeded/1", db.finishState, db.finishCount)
 	}
 }
 

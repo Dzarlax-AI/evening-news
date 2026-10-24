@@ -167,8 +167,14 @@ class GoJobWorkerGate(DockerGate):
         self.wait_http_probe("health")
         self.check("runtime_source_matches_checkout", self.source_hashes() == self.source_hashes(
             f"{self.prefix}-web"))
-        self.check("public_home_and_admin_login", self.exec_json(
-            f"{self.prefix}-web", "auth-login-check").get("response", {}).get("http_status") == 200)
+        login = self.exec_json(f"{self.prefix}-web", "admin-cookie-check")
+        self.check("public_home_and_admin_login", self.private_probe("public-home")["http_status"] == 200
+                   and login.get("http_status") == 200
+                   and login.get("response", {}).get("admin_cookie_received") is True)
+        # Preserve the previous gate's diagnostic-only coverage of the separate
+        # token-login endpoint; the actual admin path uses its session cookie.
+        self.report["admin_login_diagnostic"] = self.exec_json(
+            f"{self.prefix}-web", "auth-login-check").get("response", {})
         openapi = self.exec_json(f"{self.prefix}-web", "openapi-check")
         self.check("public_reprocess_contract_in_openapi", openapi.get("http_status") == 200
                    and all(openapi.get("response", {}).get(key) is True

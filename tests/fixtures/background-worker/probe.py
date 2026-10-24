@@ -193,6 +193,9 @@ def main():
                 "/api/v1/articles/{article_id}/reprocess", {}
             ),
         }
+    elif action == "admin-cookie-check":
+        status, _ = request("GET", "/admin/")
+        value = {"admin_cookie_received": has_admin_cookie()}
     elif action == "auth-login-check":
         status, response = request("POST", "/auth/login", payload={})
         value = {
