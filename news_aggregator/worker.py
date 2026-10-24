@@ -1,17 +1,14 @@
-"""Entrypoint for the separately deployed durable background worker."""
+"""Retired Python queue-worker command kept for import compatibility."""
 
-import argparse
-import asyncio
+import sys
 
-from .services.background_execution import main as run_worker
 from .services.background_execution import worker_healthcheck
 
 
 if __name__ == "__main__":
-    parser = argparse.ArgumentParser(description="Evening News durable background worker")
-    parser.add_argument("--healthcheck", action="store_true",
-                        help="Check the persisted worker heartbeat and exit")
-    args = parser.parse_args()
-    if args.healthcheck:
-        raise SystemExit(asyncio.run(worker_healthcheck()))
-    run_worker()
+    print(
+        "The Python queue worker has been retired. Run the Go job worker and "
+        "the private Python executor instead.",
+        file=sys.stderr,
+    )
+    raise SystemExit(2)

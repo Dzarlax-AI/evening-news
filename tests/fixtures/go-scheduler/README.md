@@ -1,8 +1,8 @@
 # Go scheduler Docker fixture
 
-The fixture gate runs a supplied local News app image and the actual standalone Go scheduler on a newly created internal-only Docker network. It uses a disposable PostgreSQL 16 database with separate `news` and `scheduler` schema owners, synthetic source/AI/Telegram receivers, and a second generic consumer. It never publishes a port or mounts the repository, `.env`, credentials, or application data. The app containers mount only this fixture directory read-only.
+The fixture gate runs supplied local News app, Go job worker, and standalone Go scheduler images on a newly created internal-only Docker network. A private Python executor runs from the same app image. It uses a disposable PostgreSQL 16 database with separate `news` and `scheduler` schema owners, synthetic source/AI/Telegram receivers, and a second generic consumer. It never publishes a port or mounts the repository, `.env`, credentials, or application data. The app and executor containers mount only this fixture directory read-only; the Go worker has no host filesystem mount.
 
-Build the app and scheduler images from the current checkout first. For the scheduler image, set `SCHEDULER_BUILD_ID` to the gate's deterministic SHA-256 over sorted relative file paths and contents from `go.mod`, optional `go.sum`, recursive `*.go`, and `migrations/**`. File framing is `relative/path`, NUL, bytes, NUL. The gate compares that value to the running scheduler's `/version` response and compares the running app's Python/web source files against the checkout.
+Build the app, Go worker, and scheduler images from the current checkout first. Build the worker image with the repository root as context (`docker build -f go-worker/Dockerfile ... .`). For the scheduler image, set `SCHEDULER_BUILD_ID` to the gate's deterministic SHA-256 over sorted relative file paths and contents from `go.mod`, optional `go.sum`, recursive `*.go`, and `migrations/**`. File framing is `relative/path`, NUL, bytes, NUL. The gate compares that value to the running scheduler's `/version` response and compares the running app's Python/web source files against the checkout.
 
 Run the gate with explicit local image references and a report directory:
 
@@ -10,6 +10,7 @@ Run the gate with explicit local image references and a report directory:
 python3 scripts/run_go_scheduler_fixture_gate.py \
   --app-image evening-news:go-scheduler-fixture \
   --scheduler-image rss-go-scheduler:fixture \
+  --worker-image evening-news-job-worker:fixture \
   --output-dir /tmp/go-scheduler-fixture-gate
 ```
 

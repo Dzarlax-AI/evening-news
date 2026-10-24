@@ -1,18 +1,21 @@
 # Standalone scheduler operations
 
-The standalone Go scheduler is deployed with the News app and Python worker.
-It owns calendar timing and command-delivery state in a dedicated PostgreSQL
-database/schema. The News adapter accepts commands into the existing durable
-job queue; Python continues to own job execution, persistence, article
-processing, and delivery. See the [October 23, 2026 release record](RELEASE_2026-10-23.md)
-for the verified rollout evidence.
+The target topology combines the standalone Go scheduler with the News app,
+Go job worker, and private Python executor. The job-worker cutover requires a
+separately approved deployment. It owns calendar timing and command-delivery state in
+a dedicated PostgreSQL database/schema. The News adapter accepts commands into
+the existing durable job queue; Go owns queue claims and recovery while Python
+continues to own News persistence, article processing, and delivery. See the
+[October 23, 2026 release record](RELEASE_2026-10-23.md) for the verified
+scheduler rollout evidence.
 
 ## Topology and guardrails
 
 - The scheduler has no published port, Traefik labels, or public route.
 - `news-scheduler-control` is an internal Docker network shared only by `app`
   and `scheduler`. The app keeps its existing `infra` and `private-control`
-  attachments; the Python `worker` does not join `news-scheduler-control`.
+  attachments; the Go job worker and private Python executor do not join
+  `news-scheduler-control`.
 - The scheduler also joins `infra` to reach `infra-postgres-1:5432`.
   `LISTEN_ADDR=:8080` binds on both interfaces, so services on `infra` can
   reach its API; every API request still requires the scheduler bearer token.
@@ -24,8 +27,8 @@ for the verified rollout evidence.
   dropped capabilities, no-new-privileges, PID limit 64, memory limit 64 MiB,
   and CPU limit 0.25. These are configured limits, not observed memory use.
 - No Gemini, Telegram, browser, or other provider credentials belong in these
-  files. Existing app/worker environment remains managed by the canonical News
-  stack.
+  files. Existing app, Go worker, and Python executor environment remains
+  managed by the canonical News stack.
 
 ## Private configuration
 

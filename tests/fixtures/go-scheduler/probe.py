@@ -14,10 +14,12 @@ ROOTS = {
     "web": "http://web:8000",
     "scheduler": "http://scheduler:8080",
     "fake": "http://fixture-services:8090",
+    "executor": "http://executor:8100",
 }
 ADMIN = "Basic " + base64.b64encode(b"fixture-admin:fixture-admin-password").decode()
 SCHEDULER = "Bearer fixture-scheduler-only"
 TARGET = "Bearer fixture-news-target"
+EXECUTOR = "Bearer fixture-job-executor-only-token"
 
 
 def request(service, method, path, payload=None, auth="none", headers=None, timeout=10):
@@ -32,6 +34,8 @@ def request(service, method, path, payload=None, auth="none", headers=None, time
         request_headers["Authorization"] = SCHEDULER
     elif auth == "target":
         request_headers["Authorization"] = TARGET
+    elif auth == "executor":
+        request_headers["Authorization"] = EXECUTOR
     elif auth != "none":
         raise ValueError("unknown_fixture_probe_auth")
     request_headers.update(headers or {})

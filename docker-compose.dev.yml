@@ -13,7 +13,7 @@ services:
       - ./news_aggregator:/app/news_aggregator:ro
       - ./web:/app/web:ro
 
-  worker:
+  executor:
     environment:
       LOG_LEVEL: DEBUG
       DEVELOPMENT: "true"

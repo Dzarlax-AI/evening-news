@@ -210,8 +210,14 @@ class DurableBackgroundWorker:
             try:
                 async with self.engine.connect() as connection:
                     await connection.execute(text(
-                        "SELECT id, generation, owner_id, heartbeat_at, status "
+                        "SELECT id, generation, owner_id, lock_backend_pid, heartbeat_at, status "
                         "FROM background_worker_status WHERE id = 1"
+                    ))
+                    await connection.execute(text(
+                        "SELECT job_id, attempt_generation, envelope_sha256, executor_instance_id, "
+                        "state, accepted_at, started_at, finished_at, result, error_code, "
+                        "legacy_completion_applied_at, legacy_alert_state "
+                        "FROM background_job_executions LIMIT 0"
                     ))
                     await connection.execute(text(
                         "SELECT id, queue_position, kind, payload, idempotency_key, "
@@ -382,6 +388,17 @@ class DurableBackgroundWorker:
                         if claimed.kind == "source_test" and not result.get("connection_ok"):
                             state, error_code = "failed", "worker_error"
                     finally:
+                        # The tracker previously persisted each update. Flush it
+                        # after both successful and failed attempts, while the
+                        # current attempt fence still protects the cache file.
+                        from .domain_stability_tracker import get_stability_tracker
+                        try:
+                            tracker = await get_stability_tracker()
+                            await tracker.flush_fenced_state(fence)
+                        except StaleWorker:
+                            raise
+                        except Exception:
+                            logger.warning("Could not publish fenced domain stability cache", exc_info=True)
                         release_processing_cycle(reservation)
         except asyncio.CancelledError:
             if job_may_deliver(claimed.kind, claimed.payload):

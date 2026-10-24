@@ -22,9 +22,9 @@ Everything runs on a schedule you control, or you can trigger any step manually 
 
 ## Architecture
 
-The deployed application uses the standalone Go scheduler for calendar timing and command dispatch. Python retains source configuration, News PostgreSQL persistence, selector memory, durable job execution, AI processing, and digest delivery. A separate private Go collection service handles SourceManager dispatch, RSS/Atom collection, Telegram channel capture/parsing, Page Monitor capture/parsing, and article extraction. Python calls its authenticated API and saves the results; the collection service does not own the database or send digests.
+The application architecture uses a standalone Go scheduler for calendar timing, a Go job worker for durable queue ownership, and a separate Go collection service for SourceManager dispatch, RSS/Atom collection, Telegram channel capture/parsing, Page Monitor capture/parsing, and article extraction. Python retains source configuration, News PostgreSQL persistence, selector memory, AI processing, and digest delivery. The Go job worker sends fixed, authenticated job attempts to a private Python executor, which runs the existing News domain functions; neither Go service owns article data or sends digests.
 
-The Python web app and [separate background worker](docs/background-worker.md) retain News PostgreSQL persistence, selector memory, durable job execution, AI processing, and digest delivery. Scheduled commands are accepted by the app into its durable job queue and executed by the worker. `BACKGROUND_EXECUTION_MODE=worker` is required for scheduled work; `embedded` remains available for manual execution paths.
+The Python web app accepts scheduled commands into the durable News job queue. The [Go job worker and private Python executor](docs/background-worker.md) own execution: Go claims and fences attempts, while Python performs the fixed News jobs and returns durable receipts. `BACKGROUND_EXECUTION_MODE=worker` is required for scheduled work; `embedded` remains available for manual execution paths.
 
 The [standalone Go scheduler](docs/go-scheduler.md) owns calendar timing and dispatch, with its own PostgreSQL schema and versioned HTTP command/receipt contract. It is deployed separately from the News application. The News API exposes schedule configuration through a thin authenticated Go-service facade, and the app accepts dispatched commands into its durable queue. The scheduler is independently packaged and does not depend on article, AI, or delivery models.
 
@@ -38,17 +38,29 @@ flowchart TD
         WEB[Custom pages]
     end
 
-    subgraph app["Python web + execution worker"]
+    subgraph app["Python News services"]
         Adapter[Scheduled command adapter]
         Jobs[Durable News jobs]
         SourceClient[Source configuration + Go API client]
         Memory[Page Monitor state + selector learning]
         DB[(News PostgreSQL schema)]
         Proc[Quality checks + article processing]
-        AI[Google Gemini]
         Digest[Daily summaries + digest delivery]
         UI[FastAPI admin + public site]
     end
+
+    subgraph jobs["Private background execution"]
+        GoWorker[Go queue owner<br/>lease + recovery]
+        PyExecutor[Python executor<br/>fixed News jobs]
+        GoWorker -->|authenticated attempt| PyExecutor
+    end
+    GoWorker -->|claim + fence| Jobs
+    PyExecutor --> Proc
+    PyExecutor --> Digest
+    PyExecutor -->|fenced updates + receipt| DB
+    AI[Google Gemini]
+    Proc --> AI
+    Digest --> AI
 
     subgraph scheduling["Standalone Go scheduler — production service"]
         GoScheduler[Calendar + command dispatch]
@@ -99,9 +111,7 @@ flowchart TD
     Admission -->|CDP control| Cloak
     Cloak -->|browser HTTP/S| Egress
     Egress --> Origins
-    Proc <--> AI
     Proc -->|save processed articles| DB
-    Jobs --> Digest
     DB --> Digest
     Digest <--> AI
     Digest -->|save summaries| DB
@@ -109,7 +119,7 @@ flowchart TD
     DB --> UI
 ```
 
-This diagram shows the runtime ownership boundary: Go owns collection, extraction, scheduling, and dispatch; Python owns News persistence, durable work execution, article processing, and delivery. See the [scheduler release record](deploy/news-scheduler/RELEASE_2026-10-23.md) for deployment verification.
+This diagram shows the runtime ownership boundary: Go owns collection, extraction, scheduling, dispatch, and durable job queue coordination; Python owns News persistence, article processing, and delivery. The Python executor accepts only fixed job envelopes over its private authenticated endpoint. See the [scheduler release record](deploy/news-scheduler/RELEASE_2026-10-23.md) for scheduler deployment verification.
 
 See the [source collection guide](docs/go-source-manager.md), [Telegram guide](docs/go-telegram-source.md), [Page Monitor guide](docs/go-page-monitor.md), [native worker guide](docs/go-cloak-native-worker.md), and [deployment handoff](deploy/news-extractor/HANDOFF.md) for contracts, limits, and deployment boundaries.
 
@@ -201,9 +211,9 @@ AI calls are the main operating cost. Several mechanisms keep them in check:
 
 ### With Docker (recommended)
 
-This standalone example is a minimal HTTP-only local stack. It starts the Go collector and scheduler, the News web app and worker, and separate PostgreSQL instances for News and scheduler data. It does not start a browser or render JavaScript pages.
+This standalone example is a minimal HTTP-only local stack. It starts the Go collector, scheduler, and job worker; the News web app and private Python executor; and separate PostgreSQL instances for News and scheduler data. It does not start a browser or render JavaScript pages.
 
-Set `DB_PASSWORD`, `SCHEDULER_DB_PASSWORD`, `GEMINI_API_KEY`, `TELEGRAM_TOKEN`, `TELEGRAM_CHAT_ID`, `ADMIN_PASSWORD`, `JWT_SECRET`, `SCHEDULER_API_TOKEN`, `SCHEDULED_JOBS_TOKEN`, and `EXTRACTION_SERVICE_TOKEN` in the shell or an ignored `.env` file before starting it. Use fixture credentials for local development. Set Page Monitor sources to HTTP mode (`use_browser=false`) in this profile. For JavaScript-rendered sources, follow the [native deployment guide](docs/go-cloak-native-worker.md).
+Set `DB_PASSWORD`, `SCHEDULER_DB_PASSWORD`, `GEMINI_API_KEY`, `TELEGRAM_TOKEN`, `TELEGRAM_CHAT_ID`, `ADMIN_PASSWORD`, `JWT_SECRET`, `SCHEDULER_API_TOKEN`, `SCHEDULED_JOBS_TOKEN`, `JOB_EXECUTOR_TOKEN`, and `EXTRACTION_SERVICE_TOKEN` in the shell or an ignored `.env` file before starting it. Use fixture credentials for local development. Set Page Monitor sources to HTTP mode (`use_browser=false`) in this profile. For JavaScript-rendered sources, follow the [native deployment guide](docs/go-cloak-native-worker.md).
 
 ```bash
 docker compose -f docker-compose.example.yml up --build -d
@@ -221,7 +231,7 @@ docker compose -f docker-compose.example.yml -f docker-compose.dev.yml up --buil
 
 ### Production topology
 
-Production runs the Python News app and durable worker with the private Go collector and standalone Go scheduler. Native browser rendering is an optional Go deployment profile that uses the approved browser and egress infrastructure. [`compose.native.yml`](deploy/news-extractor/compose.native.yml) and [`compose.shared-browser.yml`](deploy/news-extractor/compose.shared-browser.yml) are deployment templates, not standalone Compose projects.
+The deployment target for this change is the Python News app and private Python executor with the Go durable job worker, Go collector, and standalone Go scheduler. The Go job-worker cutover requires a separately approved deployment; this documentation does not assert that production has been upgraded. Deploy exactly one Python executor per News database/schema; do not place overlapping executor instances behind a load balancer. Native browser rendering is an optional Go deployment profile that uses the approved browser and egress infrastructure. [`compose.native.yml`](deploy/news-extractor/compose.native.yml) and [`compose.shared-browser.yml`](deploy/news-extractor/compose.shared-browser.yml) are deployment templates, not standalone Compose projects.
 
 ---
 
@@ -251,8 +261,10 @@ JWT_SECRET=your_jwt_secret
 The Go collector and scheduler are also mandatory runtime services. Configure
 `EXTRACTION_SERVICE_URL` and `EXTRACTION_SERVICE_TOKEN`,
 `SCHEDULER_API_URL` and `SCHEDULER_API_TOKEN`, plus `SCHEDULED_JOBS_TOKEN` for
-the private News job receiver. The Compose example wires these service URLs
-and credentials; see `docker-compose.example.yml` for the complete reference.
+the private News job receiver. The Go job worker and Python executor share the
+dedicated `JOB_EXECUTOR_TOKEN`; the executor endpoint remains private. The
+Compose example wires service URLs and credentials; see
+`docker-compose.example.yml` for the complete reference.
 
 Go is the only collection, scheduling, and extraction runtime. Startup requires authenticated Go service configuration. Deprecated Python/shadow/fallback mode settings are rejected when they request removed behavior; inert compatibility values do not restore legacy runtimes. See the [source collection guide](docs/go-source-manager.md), [scheduler guide](docs/go-scheduler.md), and [native worker guide](docs/go-cloak-native-worker.md).
 

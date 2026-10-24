@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""Fail closed unless the requested scheduler SHA tag is confirmed absent."""
+"""Fail closed unless the requested immutable image SHA tag is confirmed absent."""
 
 import base64
 import json
@@ -11,7 +11,8 @@ from urllib.parse import urlencode
 from urllib.request import HTTPRedirectHandler, Request, build_opener
 
 REGISTRY = "ghcr.io"
-REPOSITORY = "dzarlax-ai/rss-scheduler"
+DEFAULT_REPOSITORY = "dzarlax-ai/rss-scheduler"
+ALLOWED_REPOSITORIES = {DEFAULT_REPOSITORY, "dzarlax-ai/rss-job-worker"}
 MANIFEST_ACCEPT = ", ".join((
     "application/vnd.oci.image.index.v1+json",
     "application/vnd.oci.image.manifest.v1+json",
@@ -73,12 +74,12 @@ def _not_found_code(body):
     return None
 
 
-def _challenge_parameters(value):
+def _challenge_parameters(value, repository):
     if not isinstance(value, str) or not value.startswith("Bearer "):
         raise RegistryCheckError("registry_auth_challenge_invalid")
     pairs = re.findall(r'([A-Za-z]+)="([^"\\]*)"', value[len("Bearer "):])
     parameters = dict(pairs)
-    expected_scope = f"repository:{REPOSITORY}:pull"
+    expected_scope = f"repository:{repository}:pull"
     if (
         parameters.get("realm") != f"https://{REGISTRY}/token"
         or parameters.get("service") != REGISTRY
@@ -115,8 +116,13 @@ def _access_token(opener, username, password, scope):
     return token
 
 
-def tag_exists(image_tag, username, password, opener=_urlopen_no_redirect):
-    match = re.fullmatch(r"ghcr\.io/dzarlax-ai/rss-scheduler:sha-([0-9a-f]{40})", image_tag or "")
+def tag_exists(image_tag, username, password, opener=_urlopen_no_redirect,
+               repository=DEFAULT_REPOSITORY):
+    if repository not in ALLOWED_REPOSITORIES:
+        raise RegistryCheckError("registry_check_configuration_invalid")
+    match = re.fullmatch(
+        rf"ghcr\.io/{re.escape(repository)}:sha-([0-9a-f]{{40}})", image_tag or ""
+    )
     if (
         not match
         or not isinstance(username, str)
@@ -127,7 +133,7 @@ def tag_exists(image_tag, username, password, opener=_urlopen_no_redirect):
         raise RegistryCheckError("registry_check_configuration_invalid")
 
     tag = "sha-" + match.group(1)
-    manifest_url = f"https://{REGISTRY}/v2/{REPOSITORY}/manifests/{tag}"
+    manifest_url = f"https://{REGISTRY}/v2/{repository}/manifests/{tag}"
     manifest_headers = {"Accept": MANIFEST_ACCEPT}
     status, headers, body = _response(opener, Request(manifest_url, headers=manifest_headers))
     if status == 200:
@@ -137,9 +143,9 @@ def tag_exists(image_tag, username, password, opener=_urlopen_no_redirect):
         if not_found_code not in {"MANIFEST_UNKNOWN", "NAME_UNKNOWN"}:
             raise RegistryCheckError("registry_manifest_check_failed")
         # Authenticate before treating any 404 as proof that the tag is absent.
-        scope = f"repository:{REPOSITORY}:pull"
+        scope = f"repository:{repository}:pull"
     elif status == 401:
-        scope = _challenge_parameters(headers.get("WWW-Authenticate"))
+        scope = _challenge_parameters(headers.get("WWW-Authenticate"), repository)
     else:
         raise RegistryCheckError("registry_manifest_check_failed")
 
@@ -162,14 +168,15 @@ def main():
             os.environ.get("IMAGE_TAG", ""),
             os.environ.get("GHCR_USERNAME", ""),
             os.environ.get("GHCR_TOKEN", ""),
+            repository=os.environ.get("GHCR_REPOSITORY", DEFAULT_REPOSITORY),
         )
         if exists:
-            print("::error::The immutable scheduler SHA tag already exists", file=sys.stderr)
+            print("::error::The immutable image SHA tag already exists", file=sys.stderr)
             return 1
-        print("Scheduler SHA tag is confirmed absent")
+        print("Image SHA tag is confirmed absent")
         return 0
     except RegistryCheckError as error:
-        print(f"::error::Could not verify scheduler SHA tag ({error})", file=sys.stderr)
+        print(f"::error::Could not verify image SHA tag ({error})", file=sys.stderr)
         return 1
 
 
