@@ -4,7 +4,7 @@ import asyncio
 import json
 from sqlalchemy import select, update
 from news_aggregator.database import AsyncSessionLocal
-from news_aggregator.models import Category, Source
+from news_aggregator.models import Article, Category, Source
 
 
 async def main():
@@ -35,6 +35,15 @@ async def main():
         await session.flush()
         await session.execute(update(Source).where(Source.name.in_([source.name for source in sources]))
                               .values(enabled=True))
+        rss_source = await session.scalar(select(Source).where(Source.name == "Go Ingestion Gate RSS"))
+        if rss_source is None:
+            raise RuntimeError("synthetic RSS source was not seeded")
+        duplicate_url = "http://rss.fixture.test/story/one/1"
+        duplicate = await session.scalar(select(Article).where(Article.url == duplicate_url))
+        if duplicate is None:
+            session.add(Article(source_id=rss_source.id, title="Existing Gate RSS Metadata",
+                                url=duplicate_url, content="Pre-existing fixture content",
+                                summary=None, processed=False, hash_content=None))
         await session.commit()
         rows = (await session.execute(select(Source.id, Source.name)
                                       .where(Source.name.like("Go Ingestion Gate %")))).all()

@@ -60,7 +60,7 @@ GRANT SELECT, INSERT, UPDATE ON :"news_schema".article_ingestion_source_runs TO 
 GRANT SELECT, INSERT, UPDATE ON :"news_schema".source_collection_state TO news_ingestion_runtime;
 
 GRANT SELECT (id, source_id, title, url, content, summary, image_url,
-              published_at, fetched_at, processed)
+              published_at, fetched_at, processed, hash_content)
 ON :"news_schema".articles TO news_ingestion_runtime;
 GRANT INSERT (source_id, title, url, content, summary, image_url, media_files,
               published_at, fetched_at, processed, summary_processed,

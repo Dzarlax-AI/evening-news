@@ -425,6 +425,22 @@ class IngestionGate(GoJobWorkerGate):
         by_type = {name: source_id for name, source_id in before["source_ids"].items()}
         self.check("go_receipts_for_all_source_types", len(source_runs) == 3
                    and all(row.get("state") == "succeeded" and row.get("saved", 0) >= 1 for row in source_runs))
+        rss_source_id = by_type["Go Ingestion Gate RSS"]
+        rss_receipt = next((row for row in source_runs if row.get("source_id") == rss_source_id), {})
+        before_duplicate = before.get("duplicate_article") or {}
+        updated_duplicate = state.get("duplicate_article") or {}
+        self.report["existing_article_update"] = {
+            "same_row": bool(before_duplicate.get("id"))
+            and updated_duplicate.get("id") == before_duplicate.get("id"),
+            "source_receipt_updated": rss_receipt.get("updated", 0),
+            "content_replaced": updated_duplicate.get("content_replaced") is True,
+            "hash_content_present": updated_duplicate.get("hash_content_present") is True,
+        }
+        self.check("runtime_duplicate_article_metadata_update",
+                   rss_receipt.get("updated", 0) == 1
+                   and self.report["existing_article_update"]["same_row"]
+                   and self.report["existing_article_update"]["content_replaced"]
+                   and self.report["existing_article_update"]["hash_content_present"])
         self.check("articles_persisted_for_each_type", all(
             any(article.get("source_id") == source_id for article in state.get("articles", []))
             for source_id in by_type.values()))

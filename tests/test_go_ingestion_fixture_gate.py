@@ -21,6 +21,7 @@ def test_runtime_role_sql_is_manual_and_separates_function_owner():
     assert "\\password news_ingestion_runtime" in sql
     assert re.search(r"(?<!NO)SUPERUSER", sql, re.IGNORECASE) is None
     assert "GRANT ALL" not in sql.upper()
+    assert re.search(r"GRANT SELECT\s*\([^;]*hash_content\)[^;]*ON :\"news_schema\"\.articles TO news_ingestion_runtime", sql, re.IGNORECASE)
     assert "FROM PUBLIC" in sql
     migration = (ROOT / "news_aggregator/migrations/article_ingestion.py").read_text()
     assert "CREATE ROLE" not in migration.upper()
@@ -87,6 +88,18 @@ def test_selector_learning_fixture_requires_learned_selectors_and_same_snapshot_
     assert 're.fullmatch(r"[0-9a-f]{64}"' in gate
     assert 'origin_counters.get("page_fetches") == 1' in gate
     assert 'counters.get("selector_study", 0) == 1' in gate
+
+
+def test_gate_exercises_unprocessed_duplicate_metadata_update_as_runtime_role():
+    seed = (ROOT / "tests/fixtures/go-ingestion/gate_seed.py").read_text()
+    probe = (ROOT / "tests/fixtures/go-ingestion/gate_probe.py").read_text()
+    gate = (ROOT / "scripts/run_go_ingestion_fixture_gate.py").read_text()
+    assert 'duplicate_url = "http://rss.fixture.test/story/one/1"' in seed
+    assert 'content="Pre-existing fixture content"' in seed
+    assert "hash_content=None" in seed and "processed=False" in seed
+    assert '"hash_content_present"' in probe
+    assert 'rss_receipt.get("updated", 0) == 1' in gate
+    assert '"runtime_duplicate_article_metadata_update"' in gate
 
 
 def test_fixture_postgres_runs_unprivileged_and_reports_sanitized_startup_failure():
