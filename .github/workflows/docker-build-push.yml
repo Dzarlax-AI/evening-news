@@ -16,6 +16,8 @@ on:
       - 'tests/**'
       - 'scripts/run_background_worker_fixture_gate.py'
       - 'scripts/run_go_job_worker_fixture_gate.py'
+      - 'scripts/check_ghcr_tag_absent.py'
+      - 'tests/test_ghcr_tag_guard.py'
       - '.github/workflows/docker-build-push.yml'
   pull_request:
     paths:
@@ -31,6 +33,8 @@ on:
       - 'tests/**'
       - 'scripts/run_background_worker_fixture_gate.py'
       - 'scripts/run_go_job_worker_fixture_gate.py'
+      - 'scripts/check_ghcr_tag_absent.py'
+      - 'tests/test_ghcr_tag_guard.py'
       - '.github/workflows/docker-build-push.yml'
   release:
     types: [published]
@@ -172,6 +176,9 @@ jobs:
 
   build-and-push:
     needs: [test, go-worker-tests, background-worker-fixture]
+    concurrency:
+      group: news-app-worker-publish-${{ github.sha }}
+      cancel-in-progress: false
     runs-on: ubuntu-latest
     permissions:
       contents: read
@@ -191,6 +198,15 @@ jobs:
           registry: ghcr.io
           username: ${{ github.actor }}
           password: ${{ secrets.GITHUB_TOKEN }}
+
+      - name: Refuse to overwrite an existing Go worker SHA tag
+        if: github.event_name != 'pull_request' && github.ref == 'refs/heads/main'
+        env:
+          IMAGE_TAG: ghcr.io/dzarlax-ai/rss-job-worker:sha-${{ github.sha }}
+          GHCR_REPOSITORY: dzarlax-ai/rss-job-worker
+          GHCR_USERNAME: ${{ github.actor }}
+          GHCR_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: python3 scripts/check_ghcr_tag_absent.py
 
       - name: Extract metadata
         id: meta
@@ -222,6 +238,42 @@ jobs:
             BUILDTIME=${{ fromJSON(steps.meta.outputs.json).labels['org.opencontainers.image.created'] }}
             VERSION=${{ fromJSON(steps.meta.outputs.json).labels['org.opencontainers.image.version'] }}
             REVISION=${{ github.sha }}
+
+      - name: Build and publish Go job worker image
+        id: go_worker_image
+        if: github.event_name != 'pull_request' && github.ref == 'refs/heads/main'
+        uses: docker/build-push-action@v5
+        with:
+          context: .
+          file: ./go-worker/Dockerfile
+          platforms: linux/amd64
+          push: true
+          tags: ghcr.io/dzarlax-ai/rss-job-worker:sha-${{ github.sha }}
+          labels: |
+            org.opencontainers.image.source=${{ github.server_url }}/${{ github.repository }}
+            org.opencontainers.image.revision=${{ github.sha }}
+            org.opencontainers.image.title=Evening News Go job worker
+          cache-from: type=gha,scope=go-job-worker
+          cache-to: type=gha,mode=max,scope=go-job-worker
+
+      - name: Record exact published Go worker digest
+        id: go_worker_digest
+        if: steps.go_worker_image.outcome == 'success'
+        env:
+          IMAGE_DIGEST: ${{ steps.go_worker_image.outputs.digest }}
+        run: |
+          test -n "$IMAGE_DIGEST"
+          IMAGE_REF="ghcr.io/dzarlax-ai/rss-job-worker@${IMAGE_DIGEST}"
+          printf '%s\n' "$IMAGE_REF" > job-worker-image.txt
+          printf 'image_ref=%s\n' "$IMAGE_REF" >> "$GITHUB_OUTPUT"
+
+      - name: Save Go worker image digest evidence
+        if: steps.go_worker_image.outcome == 'success'
+        uses: actions/upload-artifact@v4
+        with:
+          name: go-job-worker-image
+          path: job-worker-image.txt
+          retention-days: 14
 
       - name: Test Docker image
         if: github.event_name == 'pull_request'

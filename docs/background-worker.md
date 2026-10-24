@@ -121,6 +121,16 @@ with fake provider services and synthetic PostgreSQL data. The gate checks
 cross-language queue ownership, public/admin job paths, supported job kinds,
 worker and executor restarts, backup sharing, and conservative delivery
 recovery. It does not contact real sites, AI providers, or messaging services.
+After those checks pass on `main`, CI publishes the worker as
+`ghcr.io/dzarlax-ai/rss-job-worker:sha-<commit>` and uploads the immutable
+`ghcr.io/dzarlax-ai/rss-job-worker@sha256:…` reference as the
+`go-job-worker-image` artifact. Pull a specific main revision with:
+
+```sh
+WORKER_IMAGE="ghcr.io/dzarlax-ai/rss-job-worker:sha-$(git rev-parse HEAD)"
+docker pull "$WORKER_IMAGE"
+```
+
 Build the Go image from the repository root because the Dockerfile copies
 `go-worker/` paths from that context:
 
