@@ -241,6 +241,11 @@ func testReceipt(envelope executor.Envelope, state string) map[string]any {
 type fakeQueueStore struct {
 	now          time.Time
 	info         store.LeaseInfo
+	claimErr     error
+	heartbeatErr error
+	claimCalled  chan struct{}
+	claimOnce    sync.Once
+	releaseCount atomic.Int32
 	finishState  string
 	finishResult map[string]any
 	finishCode   *string
@@ -248,15 +253,31 @@ type fakeQueueStore struct {
 	finishErr    error
 }
 
-func (s *fakeQueueStore) CheckSchema(context.Context) error                        { return nil }
-func (s *fakeQueueStore) Acquire(context.Context) (store.LeaseInfo, error)         { return s.info, nil }
-func (s *fakeQueueStore) Release(context.Context) error                            { return nil }
-func (s *fakeQueueStore) Heartbeat(context.Context) error                          { return nil }
+func (s *fakeQueueStore) CheckSchema(context.Context) error                { return nil }
+func (s *fakeQueueStore) Acquire(context.Context) (store.LeaseInfo, error) { return s.info, nil }
+func (s *fakeQueueStore) Release(context.Context) error                    { s.releaseCount.Add(1); return nil }
+func (s *fakeQueueStore) Heartbeat(context.Context) error {
+	if s.heartbeatErr != nil && s.claimCalled != nil {
+		select {
+		case <-s.claimCalled:
+			return s.heartbeatErr
+		default:
+			return nil
+		}
+	}
+	return s.heartbeatErr
+}
 func (s *fakeQueueStore) Prune(context.Context, time.Duration, int) (int64, error) { return 0, nil }
 func (s *fakeQueueStore) FailExhaustedInterrupted(context.Context, int64, int) (int64, error) {
 	return 0, nil
 }
 func (s *fakeQueueStore) Claim(context.Context, int64) (store.Job, error) {
+	if s.claimCalled != nil {
+		s.claimOnce.Do(func() { close(s.claimCalled) })
+	}
+	if s.claimErr != nil {
+		return store.Job{}, s.claimErr
+	}
 	return store.Job{}, store.ErrNoJob
 }
 func (s *fakeQueueStore) ActiveJobs(context.Context) ([]store.Job, error) { return nil, nil }
@@ -288,6 +309,75 @@ func fakeWorker(client *executor.Client, db *fakeQueueStore, requestTimeout time
 		config: config.Config{PollInterval: 5 * time.Millisecond, RequestTimeout: requestTimeout,
 			ShutdownDrain: 500 * time.Millisecond, MaxJobAttempts: 3},
 		store: db, executor: client, policy: allowAllPolicy{}, logger: slog.New(slog.NewTextHandler(io.Discard, nil)),
+	}
+}
+
+func TestRunSleepCancellationReturnsLeaseLossOnlyForHeartbeatLoss(t *testing.T) {
+	for _, test := range []struct {
+		name          string
+		claimErr      error
+		heartbeat     bool
+		shutdown      bool
+		wantLeaseLost bool
+	}{
+		{name: "idle heartbeat loss", heartbeat: true, wantLeaseLost: true},
+		{name: "claim error heartbeat loss", claimErr: errors.New("temporary claim failure"), heartbeat: true, wantLeaseLost: true},
+		{name: "idle shutdown", shutdown: true},
+		{name: "claim error shutdown", claimErr: errors.New("temporary claim failure"), shutdown: true},
+	} {
+		t.Run(test.name, func(t *testing.T) {
+			db := &fakeQueueStore{
+				info:     store.LeaseInfo{OwnerID: "a39321b0-7724-443c-aaed-fd5b57e301db", Generation: 5},
+				claimErr: test.claimErr, claimCalled: make(chan struct{}),
+			}
+			if test.heartbeat {
+				db.heartbeatErr = errors.New("fixture lease heartbeat failure")
+			}
+			server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+				if r.Method == http.MethodPost && r.URL.Path == "/internal/v1/worker-events" {
+					w.WriteHeader(http.StatusNoContent)
+					return
+				}
+				http.NotFound(w, r)
+			}))
+			defer server.Close()
+			client, err := executor.New(server.URL, "fixture-executor-token-123", 100*time.Millisecond)
+			if err != nil {
+				t.Fatal(err)
+			}
+			worker := fakeWorker(client, db, 100*time.Millisecond)
+			worker.config.PollInterval = time.Second
+			worker.config.HeartbeatInterval = 10 * time.Millisecond
+			ctx, cancel := context.WithCancel(context.Background())
+			defer cancel()
+			done := make(chan error, 1)
+			go func() { done <- worker.Run(ctx) }()
+
+			select {
+			case <-db.claimCalled:
+			case <-time.After(time.Second):
+				t.Fatal("worker did not attempt a claim")
+			}
+			if test.shutdown {
+				// Let Claim return and the worker enter its idle/claim-error poll sleep.
+				time.Sleep(20 * time.Millisecond)
+				cancel()
+			}
+			select {
+			case runErr := <-done:
+				if test.wantLeaseLost && !errors.Is(runErr, ErrLeaseLost) {
+					t.Fatalf("Run error = %v, want ErrLeaseLost", runErr)
+				}
+				if !test.wantLeaseLost && runErr != nil {
+					t.Fatalf("Run error = %v, want clean shutdown", runErr)
+				}
+				if got := db.releaseCount.Load(); got != 1 {
+					t.Fatalf("lease release count = %d, want 1", got)
+				}
+			case <-time.After(time.Second):
+				t.Fatal("worker did not stop after idle/claim-error cancellation")
+			}
+		})
 	}
 }
 

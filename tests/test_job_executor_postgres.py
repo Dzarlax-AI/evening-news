@@ -1,6 +1,8 @@
 """Receipt idempotency and real PostgreSQL lease-fence checks."""
 
 from datetime import datetime, timedelta, timezone
+import os
+from pathlib import Path
 import uuid
 from types import SimpleNamespace
 import asyncio
@@ -330,11 +332,14 @@ async def test_cache_publication_io_failure_does_not_fail_news_job(executor_pg, 
         await session.commit()
 
     from news_aggregator.services.domain_stability_tracker import DomainStabilityTracker
+    from news_aggregator.services.job_fence import current_job_fence
     tracker = DomainStabilityTracker(str(tmp_path / "cache.json"))
     target = tmp_path / "cache.json"
     target.mkdir()
     async def success_with_pending_cache(_job, _orchestrator, _reservation):
-        tracker.pending_state_publish = True
+        fence = current_job_fence.get()
+        assert fence is not None and fence.active
+        fence.pending_state_publish = True
         return {"success": True}
 
     async def start():
@@ -344,6 +349,8 @@ async def test_cache_publication_io_failure_does_not_fail_news_job(executor_pg, 
         return 30
 
     monkeypatch.setattr(executor_module, "AsyncSessionLocal", factory)
+    import news_aggregator.database as database_module
+    monkeypatch.setattr(database_module, "AsyncSessionLocal", factory)
     monkeypatch.setattr(executor_module, "execute_job", success_with_pending_cache)
     import news_aggregator.orchestrator as orchestrator_module
     monkeypatch.setattr(orchestrator_module, "reserve_processing_cycle", lambda: object())
@@ -351,7 +358,15 @@ async def test_cache_publication_io_failure_does_not_fail_news_job(executor_pg, 
     from news_aggregator.services.background_execution import DurableBackgroundWorker
     monkeypatch.setattr(DurableBackgroundWorker, "_job_timeout_seconds", timeout)
     import news_aggregator.services.domain_stability_tracker as tracker_module
-    monkeypatch.setattr(tracker_module, "get_stability_tracker", lambda: tracker)
+    async def get_tracker():
+        return tracker
+    monkeypatch.setattr(tracker_module, "get_stability_tracker", get_tracker)
+    replace_calls = []
+    real_replace = os.replace
+    def track_replace(source, destination):
+        replace_calls.append((source, destination))
+        return real_replace(source, destination)
+    monkeypatch.setattr(os, "replace", track_replace)
     worker = PythonJobExecutor()
     worker.orchestrator = SimpleNamespace(start=start)
     try:
@@ -363,6 +378,10 @@ async def test_cache_publication_io_failure_does_not_fail_news_job(executor_pg, 
         async with factory() as session:
             receipt = await session.get(BackgroundJobExecution, (job_id, 2))
             assert receipt.state == "succeeded"
+        assert len(replace_calls) == 1
+        assert Path(replace_calls[0][0]).name.endswith(".working")
+        assert Path(replace_calls[0][1]) == target
+        assert target.is_dir()
         assert not list(tmp_path.glob(".*.working"))
     finally:
         await lease_conn.close()

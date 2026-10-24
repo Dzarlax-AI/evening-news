@@ -115,6 +115,9 @@ func (w *Worker) Run(ctx context.Context) error {
 			job, err := w.store.Claim(claimCtx, int64(w.config.MaxJobAttempts))
 			if errors.Is(err, store.ErrNoJob) {
 				if err := sleep(claimCtx, w.config.PollInterval); err != nil {
+					if runCtx.Err() != nil {
+						return ErrLeaseLost
+					}
 					return nil
 				}
 				continue
@@ -125,6 +128,9 @@ func (w *Worker) Run(ctx context.Context) error {
 				}
 				w.logger.Warn("job claim failed", "error", err)
 				if err := sleep(claimCtx, w.config.PollInterval); err != nil {
+					if runCtx.Err() != nil {
+						return ErrLeaseLost
+					}
 					return nil
 				}
 				continue
