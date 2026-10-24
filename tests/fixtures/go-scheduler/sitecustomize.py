@@ -1,4 +1,4 @@
-"""Fixture-only provider routing and web/worker process separation guards."""
+"""Fixture-only provider routing and web/executor process separation guards."""
 
 import os
 
@@ -17,7 +17,7 @@ if role == "web":
     NewsOrchestrator.__init__ = _forbid_web_orchestrator
     AIClient.__init__ = _forbid_web_ai_client
 
-if role in {"web", "worker"}:
+if role in {"web", "executor"}:
     from news_aggregator.services.telegram_service import TelegramService
 
     _original_init = TelegramService.__init__

@@ -5,6 +5,7 @@ on:
     branches: [main]
     paths:
       - 'go-scheduler/**'
+      - 'go-worker/**'
       - 'news_aggregator/**'
       - 'web/**'
       - 'tests/**'
@@ -17,6 +18,7 @@ on:
   pull_request:
     paths:
       - 'go-scheduler/**'
+      - 'go-worker/**'
       - 'news_aggregator/**'
       - 'web/**'
       - 'tests/**'
@@ -89,6 +91,8 @@ jobs:
         run: |
           SCHEDULER_FIXTURE_BUILD_ID=$(python -c "import runpy; ns=runpy.run_path('scripts/run_go_scheduler_fixture_gate.py'); print(ns['DockerGate'].scheduler_source_hash(None))")
           docker build --build-arg SCHEDULER_BUILD_ID="$SCHEDULER_FIXTURE_BUILD_ID" -t evening-news-scheduler:fixture go-scheduler
+      - name: Build local Go job worker fixture image
+        run: docker build -f go-worker/Dockerfile -t evening-news-job-worker:fixture .
       - name: Fetch isolated PostgreSQL fixture image
         run: docker pull postgres:16-alpine
       - name: Verify isolated service integration
@@ -96,6 +100,7 @@ jobs:
           python scripts/run_go_scheduler_fixture_gate.py
           --app-image evening-news-scheduler-app:fixture
           --scheduler-image evening-news-scheduler:fixture
+          --worker-image evening-news-job-worker:fixture
           --output-dir artifacts/go-scheduler-fixture
       - name: Save acceptance evidence
         if: always()
