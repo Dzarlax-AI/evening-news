@@ -171,44 +171,46 @@ class NewsOrchestrator:
             sync_start = time.time()
 
             # Step 1a: Get sources list (quick DB read)
-            logger.info("  📋 Getting enabled sources...")
-            sources = await self.source_manager.get_sources_from_db()
-            logger.info(f"  ✅ Found {len(sources)} enabled sources")
-            # Step 1b: HTTP fetching (NO DB transaction - semaphore free!)
-            logger.info("  🌐 Fetching articles via HTTP (no DB lock)...")
-            fetch_start = time.time()
+            if settings.article_ingestion_mode == "go":
+                logger.info("  🌐 Collecting and saving articles through private Go ingestion")
+                from .services.article_ingestion_client import ArticleIngestionClient
+                ingestion_result = await ArticleIngestionClient().collect_and_save()
+                if ingestion_result.get("fatal_error"):
+                    raise RuntimeError("Go article ingestion failed")
+                stats.update({
+                    "sources_synced": ingestion_result.get("sources_synced", 0),
+                    "articles_fetched": ingestion_result.get("articles_fetched", 0),
+                    "errors": ingestion_result.get("errors", []),
+                    "errors_count": ingestion_result.get("errors_count", 0),
+                })
+                sync_duration = time.time() - sync_start
+            else:
+                logger.info("  📋 Getting enabled sources...")
+                sources = await self.source_manager.get_sources_from_db()
+                logger.info(f"  ✅ Found {len(sources)} enabled sources")
+                logger.info("  🌐 Fetching articles via HTTP (no DB lock)...")
+                fetch_start = time.time()
+                raw_articles = await self.source_manager.fetch_from_all_sources_no_db(sources)
+                fetch_duration = time.time() - fetch_start
+                logger.info(f"  ✅ HTTP fetching completed in {fetch_duration:.1f}s")
+                logger.info("  💾 Saving articles to database...")
+                save_start = time.time()
 
-            # HTTP fetching happens here WITHOUT database lock
-            raw_articles = await self.source_manager.fetch_from_all_sources_no_db(sources)
+                async def save_operation(db):
+                    from sqlalchemy import select
+                    source_query = select(Source).where(Source.enabled == True)
+                    result = await db.execute(source_query)
+                    sources_db = result.scalars().all()
+                    source_map = {source.id: source for source in sources_db}
+                    return await self.source_manager.save_fetched_articles_with_sources(raw_articles, source_map, db)
 
-            fetch_duration = time.time() - fetch_start
-            logger.info(f"  ✅ HTTP fetching completed in {fetch_duration:.1f}s")
-            # Step 1c: Save articles to database (quick DB write)
-            logger.info("  💾 Saving articles to database...")
-            save_start = time.time()
+                sync_result = await self.db_queue_manager.execute_write(save_operation, timeout=30.0)
+                total_articles = sum(len(articles) for articles in sync_result.values())
+                save_duration = time.time() - save_start
+                logger.info(f"  ✅ Saved {total_articles} articles in {save_duration:.1f}s")
+                stats.update({'sources_synced': len(sync_result), 'articles_fetched': total_articles})
+                sync_duration = time.time() - sync_start
 
-            async def save_operation(db):
-                # Refresh sources with DB session
-                from sqlalchemy import select
-                source_query = select(Source).where(Source.enabled == True)
-                result = await db.execute(source_query)
-                sources_db = result.scalars().all()
-
-                source_map = {source.id: source for source in sources_db}
-
-                return await self.source_manager.save_fetched_articles_with_sources(raw_articles, source_map, db)
-
-            sync_result = await self.db_queue_manager.execute_write(save_operation, timeout=30.0)
-            total_articles = sum(len(articles) for articles in sync_result.values())
-
-            save_duration = time.time() - save_start
-            logger.info(f"  ✅ Saved {total_articles} articles in {save_duration:.1f}s")
-            stats.update({
-                'sources_synced': len(sync_result),
-                'articles_fetched': total_articles
-            })
-
-            sync_duration = time.time() - sync_start
             stats['performance']['sync_duration'] = sync_duration
             logger.info(f"  ✅ Total sync: {stats['sources_synced']} sources, {stats['articles_fetched']} articles in {sync_duration:.1f}s")
             # Step 2: Process articles with AI

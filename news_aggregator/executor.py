@@ -5,14 +5,16 @@ import hashlib
 import hmac
 import json
 import logging
+import re
 import signal
 import uuid
 from contextlib import asynccontextmanager
 from datetime import datetime, timedelta, timezone
 from typing import Any
+from urllib.parse import urlsplit
 
 import uvicorn
-from fastapi import FastAPI, HTTPException, Request
+from fastapi import FastAPI, HTTPException, Request, Response
 from fastapi.responses import JSONResponse
 from sqlalchemy import select, text, update
 from sqlalchemy.ext.asyncio import AsyncConnection
@@ -33,6 +35,8 @@ from .services.job_fence import JobExecutionFence, current_job_fence
 logger = logging.getLogger(__name__)
 
 MAX_ENVELOPE_BYTES = 8192
+MAX_SELECTOR_CALLBACK_BYTES = 5 * 1024 * 1024 + MAX_ENVELOPE_BYTES
+MAX_SELECTOR_CALLBACK_HTML_BYTES = 5 * 1024 * 1024
 MAX_DEADLINE_SECONDS = 24 * 60 * 60
 EXECUTOR_INSTANCE_ID = uuid.uuid4()
 _ACTIVE: dict[tuple[uuid.UUID, int], asyncio.Task] = {}
@@ -300,6 +304,62 @@ class RemoteJobFence:
             yield
 
 
+class ArticleIngestionCallbackFence:
+    """Fence selector-memory writes to both the Python attempt and Go run."""
+
+    def __init__(self, parent: RemoteJobFence, *, run_id: uuid.UUID,
+                 executor_instance_id: uuid.UUID, context: JobExecutionFence,
+                 source_id: int, source_fingerprint: str):
+        self.parent = parent
+        self.run_id = run_id
+        self.executor_instance_id = executor_instance_id
+        self.context = context
+        self.source_id = source_id
+        self.source_fingerprint = source_fingerprint
+        self.job_id = parent.job_id
+        self.attempt_generation = parent.attempt_generation
+
+    @asynccontextmanager
+    async def transaction_fence(self, session, job_id, attempt_generation):
+        if (not self.context.active or job_id != self.job_id
+                or attempt_generation != self.attempt_generation):
+            raise StaleWorker("article ingestion callback is no longer active")
+        async with self.parent.transaction_fence(session, job_id, attempt_generation):
+            run = (await session.execute(text("""
+                SELECT state FROM article_ingestion_runs
+                WHERE id=:run_id AND job_id=:job_id AND attempt_generation=:attempt
+                FOR UPDATE
+            """), {"run_id": self.run_id, "job_id": self.job_id,
+                  "attempt": self.attempt_generation})).one_or_none()
+            receipt = (await session.execute(text("""
+                SELECT executor_instance_id,owner_id,worker_generation,deadline_at,state
+                FROM background_job_executions
+                WHERE job_id=:job_id AND attempt_generation=:attempt FOR UPDATE
+            """), {"job_id": self.job_id, "attempt": self.attempt_generation})).one_or_none()
+            if (run is None or run.state != "running" or receipt is None
+                    or receipt.executor_instance_id != self.executor_instance_id
+                    or receipt.owner_id != self.parent.owner_id
+                    or receipt.worker_generation != self.parent.generation
+                    or receipt.deadline_at != self.parent.deadline_at
+                    or receipt.state != "running" or not self.context.active):
+                raise StaleWorker("article ingestion callback receipt is no longer current")
+            source = (await session.execute(text("""
+                SELECT name,source_type,url,enabled,config::text AS config_text
+                FROM sources WHERE id=:source_id FOR SHARE
+            """), {"source_id": self.source_id})).mappings().one_or_none()
+            if (source is None or source["source_type"] != "custom" or source["enabled"] is not True
+                    or _source_fingerprint(self.source_id, source["name"], source["source_type"],
+                                           source["url"], source["enabled"], source["config_text"])
+                    != self.source_fingerprint):
+                raise StaleWorker("Page Monitor source changed during selector study")
+            yield
+
+    @asynccontextmanager
+    async def publication_fence(self, session):
+        async with self.transaction_fence(session, self.job_id, self.attempt_generation):
+            yield
+
+
 def _reject_duplicate_pairs(pairs):
     result = {}
     for key, value in pairs:
@@ -389,20 +449,20 @@ def _validate_executor_runtime() -> None:
     settings.validate_runtime_services()
 
 
-async def _read_body_bounded(request: Request) -> bytes:
+async def _read_body_bounded(request: Request, max_bytes: int = MAX_ENVELOPE_BYTES) -> bytes:
     content_length = request.headers.get("content-length")
     if content_length is not None:
         try:
-            if int(content_length) > MAX_ENVELOPE_BYTES:
-                raise HTTPException(status_code=413, detail="Request body exceeds 8192 bytes")
+            if int(content_length) > max_bytes:
+                raise HTTPException(status_code=413, detail="Request body exceeds its limit")
         except ValueError as exc:
             raise HTTPException(status_code=400, detail="Invalid content length") from exc
     chunks = []
     size = 0
     async for chunk in request.stream():
         size += len(chunk)
-        if size > MAX_ENVELOPE_BYTES:
-            raise HTTPException(status_code=413, detail="Request body exceeds 8192 bytes")
+        if size > max_bytes:
+            raise HTTPException(status_code=413, detail="Request body exceeds its limit")
         chunks.append(chunk)
     return b"".join(chunks)
 
@@ -509,7 +569,8 @@ class PythonJobExecutor:
             attempt_generation=attempt, backend_pid=accepted["backend_pid"],
             deadline_at=deadline.replace(tzinfo=None),
         )
-        fence_context = JobExecutionFence(fence, job_id, attempt)
+        fence_context = JobExecutionFence(fence, job_id, attempt,
+                                         executor_instance_id=self.instance_id)
         key = (job_id, attempt)
         _ACTIVE_FENCES[key] = fence_context
         state, error_code, result = "succeeded", None, None
@@ -816,6 +877,129 @@ async def get_status(request: Request):
     except Exception as exc:
         raise HTTPException(status_code=503, detail="Executor database is unavailable") from exc
     return executor.status()
+
+
+def _source_fingerprint(source_id, name, source_type, url, enabled, config_text):
+    parts = (str(source_id), name, source_type, url, "true" if enabled else "false", config_text)
+    raw = "".join(f"{len(part.encode('utf-8'))}:{part}" for part in parts).encode("utf-8")
+    return hashlib.sha256(raw).hexdigest()
+
+
+def _validated_selector_arrays(structure):
+    output = {}
+    for key in ("container_selectors", "title_selectors", "link_selectors", "date_selectors"):
+        values = structure.get(key, []) if isinstance(structure, dict) else []
+        if (not isinstance(values, list) or len(values) > 64
+                or any(not isinstance(value, str) or not value.strip()
+                       or len(value.encode("utf-8")) > 2048 for value in values)):
+            raise HTTPException(status_code=502, detail="Selector memory returned invalid data")
+        output[{"container_selectors": "learned_container_selectors",
+                "title_selectors": "learned_title_selectors",
+                "link_selectors": "learned_link_selectors",
+                "date_selectors": "learned_date_selectors"}[key]] = values
+    return output
+
+
+@app.post("/internal/v1/ingestion/selectors")
+async def ingestion_selector_callback(request: Request):
+    _auth(request)
+    await _require_executor_guard()
+    try:
+        raw = await _read_body_bounded(request, MAX_SELECTOR_CALLBACK_BYTES)
+        body = json.loads(raw.decode("utf-8"), object_pairs_hook=_reject_duplicate_pairs,
+                          parse_constant=lambda _: (_ for _ in ()).throw(InvalidEnvelope("invalid JSON number")))
+    except (json.JSONDecodeError, UnicodeDecodeError, InvalidEnvelope) as exc:
+        raise HTTPException(status_code=422, detail="Selector callback request is invalid") from exc
+    required = {"version", "job_id", "attempt_generation", "owner_id", "generation", "backend_pid",
+                "executor_instance_id", "deadline_at", "operation", "source_id", "source_fingerprint"}
+    operation = body.get("operation") if isinstance(body, dict) else None
+    expected = required | ({"study_html"} if operation == "study" else set())
+    if (not isinstance(body, dict) or set(body) != expected or type(body.get("version")) is not int
+            or body["version"] != 1 or operation not in {"load", "study"}
+            or type(body.get("attempt_generation")) is not int or body["attempt_generation"] <= 0
+            or type(body.get("generation")) is not int or body["generation"] <= 0
+            or type(body.get("backend_pid")) is not int or body["backend_pid"] <= 0
+            or type(body.get("source_id")) is not int or body["source_id"] <= 0
+            or not isinstance(body.get("source_fingerprint"), str)
+            or re.fullmatch(r"[0-9a-f]{64}", body["source_fingerprint"]) is None):
+        raise HTTPException(status_code=422, detail="Selector callback request is invalid")
+    try:
+        job_id, owner_id, executor_id = (uuid.UUID(body[name]) for name in
+                                         ("job_id", "owner_id", "executor_instance_id"))
+        deadline = datetime.fromisoformat(body["deadline_at"].replace("Z", "+00:00"))
+    except (ValueError, TypeError, AttributeError) as exc:
+        raise HTTPException(status_code=422, detail="Selector callback fence is invalid") from exc
+    if (str(job_id) != body["job_id"] or str(owner_id) != body["owner_id"]
+            or str(executor_id) != body["executor_instance_id"] or deadline.tzinfo is None):
+        raise HTTPException(status_code=422, detail="Selector callback fence is invalid")
+    if operation == "study":
+        html = body["study_html"]
+        try:
+            html_size = len(html.encode("utf-8", errors="strict")) if isinstance(html, str) else 0
+        except UnicodeEncodeError as exc:
+            raise HTTPException(status_code=422, detail="Captured HTML is invalid Unicode") from exc
+        if not isinstance(html, str) or not html or html_size > MAX_SELECTOR_CALLBACK_HTML_BYTES:
+            raise HTTPException(status_code=413, detail="Captured HTML exceeds its limit")
+    else:
+        html = ""
+
+    attempt = body["attempt_generation"]
+    active = _ACTIVE_FENCES.get((job_id, attempt))
+    if (active is None or not active.active or active.executor_instance_id != executor.instance_id
+            or executor_id != executor.instance_id):
+        raise HTTPException(status_code=409, detail="Python execution receipt is not active")
+    lease = active.lease
+    provided_deadline = deadline.astimezone(timezone.utc).replace(tzinfo=None)
+    if (active.job_id != job_id or active.attempt_generation != attempt
+            or lease.owner_id != owner_id or lease.generation != body["generation"]
+            or lease.backend_pid != body["backend_pid"] or lease.deadline_at != provided_deadline):
+        raise HTTPException(status_code=409, detail="Python execution fence does not match")
+
+    from .services.article_ingestion_client import _run_id
+    callback_fence = ArticleIngestionCallbackFence(
+        lease, run_id=uuid.UUID(_run_id(job_id, attempt)),
+        executor_instance_id=executor.instance_id, context=active,
+        source_id=body["source_id"], source_fingerprint=body["source_fingerprint"],
+    )
+    async with _execution_context(JobExecutionFence(
+            callback_fence, job_id, attempt, executor_instance_id=executor.instance_id)):
+        async with AsyncSessionLocal() as session:
+            try:
+                async with callback_fence.transaction_fence(session, job_id, attempt):
+                    row = (await session.execute(text("""
+                        SELECT name,source_type,url,enabled,config,config::text AS config_text
+                        FROM sources WHERE id=:source_id FOR SHARE
+                    """), {"source_id": body["source_id"]})).mappings().one_or_none()
+                    if (row is None or row["source_type"] != "custom" or row["enabled"] is not True
+                            or _source_fingerprint(body["source_id"], row["name"], row["source_type"],
+                                                  row["url"], row["enabled"], row["config_text"])
+                            != body["source_fingerprint"]):
+                        raise HTTPException(status_code=409, detail="Page Monitor source changed")
+                    source = {"name": row["name"], "url": row["url"],
+                              "config": row["config"] if isinstance(row["config"], dict) else {}}
+                await session.rollback()
+            except StaleWorker as exc:
+                raise HTTPException(status_code=409, detail="Ingestion callback fence is stale") from exc
+
+        config = source["config"]
+        domain = urlsplit(source["url"]).netloc.lower()
+        if not domain:
+            raise HTTPException(status_code=409, detail="Page Monitor source URL is invalid")
+        from .services.extraction_memory import get_extraction_memory
+        memory = await get_extraction_memory()
+        structure = await memory.get_page_structure(domain)
+        studied = False
+        if operation == "study":
+            if config.get("enable_ai_analysis", True) is False:
+                return Response(status_code=204)
+            from .sources.page_monitor_source import PageMonitorConfig, PageMonitorSource
+            monitor = PageMonitorSource(PageMonitorConfig(url=source["url"], name=source["name"],
+                                                          enable_ai_analysis=True))
+            studied = await monitor._study_source_structure(html)
+            if not studied:
+                return Response(status_code=204)
+            structure = await memory.get_page_structure(domain)
+        return _validated_selector_arrays(structure) | {"version": 1}
 
 
 @app.get("/internal/v1/job-executions/{job_id}/policy")

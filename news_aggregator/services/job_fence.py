@@ -12,6 +12,7 @@ class JobExecutionFence:
     attempt_generation: int
     active: bool = True
     pending_state_publish: bool = False
+    executor_instance_id: Any = None
 
 
 current_job_fence: ContextVar[JobExecutionFence | None] = ContextVar(

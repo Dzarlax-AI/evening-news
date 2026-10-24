@@ -1,0 +1,12 @@
+{
+  "source": {
+    "id": 42,
+    "name": "Fixture News",
+    "type": "custom",
+    "url": "https://fixture.invalid",
+    "enabled": true,
+    "config_text": "{\"a\": 1, \"b\": 2}"
+  },
+  "encoding": "UTF-8 byte-length prefix: length:field for each field in order id,name,type,url,enabled,config_text",
+  "sha256": "d04771bc732ba36e7e623d7138c0bb936cec8de620b4e587c352c67e51229a86"
+}

@@ -332,6 +332,91 @@ class BackgroundWorkerStatus(Base):
     )
 
 
+class ArticleIngestionRun(Base):
+    """Scalar progress and immutable execution fence for one ingestion attempt."""
+    __tablename__ = "article_ingestion_runs"
+
+    id = Column(Uuid(as_uuid=True), primary_key=True)
+    job_id = Column(Uuid(as_uuid=True), ForeignKey("background_jobs.id", ondelete="CASCADE"), nullable=False)
+    attempt_generation = Column(Integer, nullable=False)
+    envelope_sha256 = Column(String(64), nullable=False)
+    owner_id = Column(Uuid(as_uuid=True), nullable=False)
+    worker_generation = Column(Integer, nullable=False)
+    backend_pid = Column(Integer, nullable=False)
+    executor_instance_id = Column(Uuid(as_uuid=True), nullable=False)
+    deadline_at = Column(DateTime, nullable=False)
+    state = Column(String(20), nullable=False, default="running", server_default="running")
+    started_at = Column(DateTime, nullable=False, server_default=func.now())
+    updated_at = Column(DateTime, nullable=False, server_default=func.now())
+    finished_at = Column(DateTime)
+    result = Column(JSON().with_variant(JSONB, "postgresql"), nullable=False,
+                    default=dict, server_default=text("'{}'"))
+    error_code = Column(String(40))
+
+    __table_args__ = (
+        UniqueConstraint("job_id", "attempt_generation"),
+        CheckConstraint("attempt_generation > 0", name="ck_ingestion_run_attempt_positive"),
+        CheckConstraint("worker_generation > 0", name="ck_ingestion_run_worker_generation_positive"),
+        CheckConstraint("backend_pid > 0", name="ck_ingestion_run_backend_pid_positive"),
+        CheckConstraint("length(envelope_sha256) = 64", name="ck_ingestion_run_digest_length"),
+        CheckConstraint("state IN ('running','succeeded','failed','cancelled','interrupted')", name="ck_ingestion_run_state"),
+        CheckConstraint("jsonb_typeof(result) = 'object'", name="ck_ingestion_run_result_object").ddl_if(dialect="postgresql"),
+    )
+
+
+class ArticleIngestionSourceRun(Base):
+    """Bounded, content-free result for one source in an ingestion run."""
+    __tablename__ = "article_ingestion_source_runs"
+
+    run_id = Column(Uuid(as_uuid=True), ForeignKey("article_ingestion_runs.id", ondelete="CASCADE"), primary_key=True)
+    source_id = Column(Integer, primary_key=True)
+    source_type = Column(String(20), nullable=False)
+    config_sha256 = Column(String(64), nullable=False)
+    state = Column(String(20), nullable=False, default="pending", server_default="pending")
+    candidates = Column(Integer, nullable=False, default=0, server_default="0")
+    saved = Column(Integer, nullable=False, default=0, server_default="0")
+    updated = Column(Integer, nullable=False, default=0, server_default="0")
+    skipped = Column(Integer, nullable=False, default=0, server_default="0")
+    fetched_at = Column(DateTime)
+    error_code = Column(String(40))
+    selector_study_sha256 = Column(String(64))
+
+    __table_args__ = (
+        CheckConstraint("source_type IN ('rss','telegram','custom')", name="ck_ingestion_source_type"),
+        CheckConstraint("state IN ('pending','running','succeeded','partial','failed','skipped','busy','deferred','resource_limit','unavailable')", name="ck_ingestion_source_state"),
+        CheckConstraint("candidates >= 0 AND saved >= 0 AND updated >= 0 AND skipped >= 0", name="ck_ingestion_source_counts_nonnegative"),
+        CheckConstraint("length(config_sha256) = 64", name="ck_ingestion_source_digest_length"),
+    )
+
+
+class SourceCollectionState(Base):
+    """Persistent bounded Page Monitor hashes and commit acknowledgements."""
+    __tablename__ = "source_collection_state"
+
+    source_id = Column(Integer, ForeignKey("sources.id", ondelete="CASCADE"), primary_key=True)
+    config_sha256 = Column(String(64), nullable=False)
+    scan_limit = Column(Integer, nullable=False, default=20, server_default="20")
+    cursor_offset = Column(Integer, nullable=False, default=0, server_default="0")
+    scan_active = Column(Boolean, nullable=False, default=False, server_default="false")
+    previous_hashes = Column(JSON().with_variant(JSONB, "postgresql"), nullable=False,
+                             default=dict, server_default=text("'{}'"))
+    scan_hashes = Column(JSON().with_variant(JSONB, "postgresql"), nullable=False,
+                         default=dict, server_default=text("'{}'"))
+    acknowledged_hashes = Column(JSON().with_variant(JSONB, "postgresql"), nullable=False,
+                                 default=dict, server_default=text("'{}'"))
+    snapshot_at = Column(DateTime)
+    content_sha256 = Column(String(64))
+    updated_at = Column(DateTime, nullable=False, server_default=func.now())
+
+    __table_args__ = (
+        CheckConstraint("scan_limit BETWEEN 1 AND 100", name="ck_source_collection_scan_limit"),
+        CheckConstraint("cursor_offset BETWEEN 0 AND 100", name="ck_source_collection_cursor"),
+        CheckConstraint("cursor_offset <= scan_limit", name="ck_source_collection_cursor_within_limit"),
+        CheckConstraint("jsonb_typeof(previous_hashes) = 'object' AND jsonb_typeof(scan_hashes) = 'object' AND jsonb_typeof(acknowledged_hashes) = 'object'", name="ck_source_collection_hash_objects").ddl_if(dialect="postgresql"),
+        CheckConstraint("length(config_sha256) = 64", name="ck_source_collection_digest_length"),
+    )
+
+
 
 class ScheduleSettings(Base):
     """Schedule settings for automated tasks."""
