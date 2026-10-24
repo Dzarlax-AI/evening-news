@@ -54,6 +54,8 @@ from .migrations.scheduled_job_metadata import (
 )
 migration_manager.register_migration(BackgroundJobsMigration())
 migration_manager.register_migration(ScheduledJobMetadataMigration())
+from .migrations.job_executor import JobExecutorMigration, ensure_job_executor_migration
+migration_manager.register_migration(JobExecutorMigration())
 
 
 
@@ -78,6 +80,7 @@ async def lifespan(app: FastAPI):
         ensure_article_processing_migration(migration_results)
         ensure_background_jobs_migration(migration_results)
         ensure_scheduled_job_metadata_migration(migration_results)
+        ensure_job_executor_migration(migration_results)
         
         if migration_results['migrations_run']:
             logger.info(f"✅ Applied {len(migration_results['migrations_run'])} migrations")

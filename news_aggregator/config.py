@@ -74,6 +74,12 @@ class Settings(BaseSettings):
     worker_shutdown_drain_seconds: int = Field(default=20, ge=0, le=120, alias="WORKER_SHUTDOWN_DRAIN_SECONDS")
     worker_job_retention_days: int = Field(default=7, ge=1, le=90, alias="WORKER_JOB_RETENTION_DAYS")
     worker_max_job_attempts: int = Field(default=3, ge=1, le=10, alias="WORKER_MAX_JOB_ATTEMPTS")
+    job_executor_token: Optional[SecretStr] = Field(default=None, repr=False, alias="JOB_EXECUTOR_TOKEN")
+    job_executor_host: str = Field(default="127.0.0.1", alias="JOB_EXECUTOR_HOST")
+    job_executor_port: int = Field(default=8100, ge=1, le=65535, alias="JOB_EXECUTOR_PORT")
+    job_executor_request_timeout_seconds: float = Field(
+        default=5.0, gt=0, le=30, allow_inf_nan=False, alias="JOB_EXECUTOR_REQUEST_TIMEOUT_SECONDS"
+    )
 
     # Local/regional category isolation
     # When set, articles matching this category are isolated from other feeds

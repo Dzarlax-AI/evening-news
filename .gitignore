@@ -55,6 +55,7 @@ cache/
 
 # Docker
 .dockerignore
+!/.dockerignore
 !go/.dockerignore
 
 # Database

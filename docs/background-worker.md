@@ -1,219 +1,148 @@
-# Background worker
+# Background job worker
 
-`BACKGROUND_EXECUTION_MODE=worker` separates the Python web process from
-background execution. The `embedded` mode remains available for manual
-operations. Scheduled commands require worker mode because calendar timing and
-dispatch belong to the standalone Go scheduler; the Python schedule loop has
-been removed.
+The Go worker is the only process that owns and consumes the durable News job
+queue. The Python web app accepts jobs and reads their status. A separate,
+private Python executor performs the existing News operations after Go claims a
+job. `NewsOrchestrator.run_full_cycle` and its internal pipeline remain Python;
+this change moves queue ownership and job lifecycle management, not the News
+orchestration or AI implementation.
 
-## Responsibilities
+The standalone Go scheduler continues to own calendar timing and dispatch. The
+separate Go collection service continues to own source collection and article
+extraction. They are independent services with their existing APIs.
 
-- Web: authenticated administration, source CRUD, public reads, durable job
-  submission, and job status.
-- Python worker: accepted scheduled jobs, collection through Go, article processing,
-  Gemini calls, summary generation, and the existing digest delivery.
-- Go service: source dispatch, RSS/Atom, Telegram and Page Monitor capture/parsing,
-  and article extraction. Its native render limit is configured independently.
-
-Both Python processes share PostgreSQL and use the same application image with
-different entrypoints. This is an execution boundary with a shared schema;
-there is no new message broker or public worker execution port.
-
-## Configuration and startup
-
-Use matching application versions and the same database for web and worker.
-Select `BACKGROUND_EXECUTION_MODE=worker` explicitly in both processes. The
-required authenticated Go service URLs and tokens are validated at application
-startup.
-
-`SCHEDULER_ENABLED` is a deprecated inert compatibility setting; it does not
-enable or disable Go scheduling. `WORKER_POLL_INTERVAL_SECONDS` defaults to 1,
-`WORKER_SHUTDOWN_DRAIN_SECONDS` to 20, and `WORKER_JOB_RETENTION_DAYS` to 7.
-The worker refuses to start unless worker mode is explicitly selected.
-
-`WORKER_MAX_JOB_ATTEMPTS` defaults to 3 (allowed range 1–10). After repeated
-interrupted execution reaches this limit, recovery marks that job `failed` with
-`worker_recovery_exhausted` so later queued work can proceed. The job remains
-inspectable; articles and saved stages are retained. This job recovery limit is
-separate from article retry counters and does not change browser-busy refunds.
-
-The web process applies the application's additive migrations at startup. The
-worker requires a compatible schema; it does not apply migrations itself. The
-new migration creates the durable jobs, idempotency keys, and worker ownership
-metadata. Queue acceptance must fail closed if the required schema is missing.
-
-Entrypoints:
-
-```bash
-# Web, with background execution disabled in this process by worker mode
-uvicorn news_aggregator.main:app --host 0.0.0.0 --port 8000
-
-# Background execution, with the same code/image and explicit worker mode
-python -m news_aggregator.worker
+```mermaid
+flowchart LR
+    Scheduler[Go scheduler] -->|authenticated scheduled command| Web[Python web]
+    Web -->|durable job and status| DB[(News PostgreSQL)]
+    Worker[Go job worker] -->|lease, claim, finish| DB
+    Worker -->|private fixed job API| Executor[Python job executor]
+    Executor -->|fenced News writes| DB
+    Executor -->|existing collection API| Collector[Go collection service]
+    Executor --> AI[Gemini]
+    Executor --> Telegram[Telegram delivery]
 ```
 
-Override the application image's HTTP healthcheck for the worker container:
+## Runtime and configuration
 
-```yaml
-healthcheck:
-  test: ["CMD", "python", "-m", "news_aggregator.worker", "--healthcheck"]
-  interval: 10s
-  timeout: 6s
-  start_period: 30s
-  retries: 3
+The standalone example stack in `docker-compose.example.yml` runs the web app,
+Go worker, private Python executor, Go collection service, Go scheduler, and
+separate News and scheduler PostgreSQL databases. The executor and worker have
+no published host ports. Worker traffic reaches the executor directly over the
+Compose network.
+
+Set `JOB_EXECUTOR_TOKEN` to an independent printable ASCII service token at
+least 16 characters long. The same token is configured only on the worker and
+executor. The Go worker also needs `DATABASE_URL` and `JOB_EXECUTOR_URL`. Queue
+limits remain configurable through `WORKER_POLL_INTERVAL_SECONDS` (1–10,
+default 1), `WORKER_SHUTDOWN_DRAIN_SECONDS` (0–120, default 20),
+`WORKER_MAX_JOB_ATTEMPTS` (1–10, default 3), and
+`WORKER_JOB_RETENTION_DAYS` (1–90, default 7). The executor uses the app's
+existing AI, collection-service, and scheduler-client configuration.
+
+Both background containers use a 180-second Compose stop grace, covering the
+supported drain range (up to 120 seconds) plus bounded cancellation and database
+cleanup. They exit sooner when idle or drained. If overriding shutdown or RPC
+timeouts in a custom deployment, keep container stop grace greater than the
+drain plus all cancellation and database cleanup budgets; the default RPC
+configuration requires at least 60 seconds beyond the drain.
+
+Run exactly one Python executor per News database schema. It holds its own
+PostgreSQL session advisory lock and refuses startup while another executor
+owns that lock. Its lock is separate from Go's queue-owner lease. Point the
+worker directly at this singleton; do not load-balance requests across executor
+instances or overlap replacement instances. Stop and replace the executor in
+place so a changed instance identity proves the previous process has exited.
+This is the supported topology and does not claim exactly-once AI billing or
+external delivery across a database or network partition.
+
+The executor binds port 8100 inside the Compose network. Its fixed private API
+requires the bearer token and accepts only a versioned job envelope containing
+owner, generation, attempt, and immutable deadline. It reads the job kind and
+payload from PostgreSQL. It does not accept arbitrary code, commands, or URLs.
+The job receipt is committed before execution starts, so Go resolves a lost
+response by polling the same receipt rather than submitting another attempt.
+An HTTP timeout alone never proves that Python stopped. Shutdown, cancellation,
+lease loss, and recovery preserve that rule; uncertain external sends finish as
+`delivery_unknown` and are not replayed automatically.
+
+## Queue behavior
+
+The existing producer API, idempotency keys, queue-position ordering, maximum
+of 32 queued/interrupted jobs, scheduler occurrence receipts, and job-status
+API remain in Python/PostgreSQL. The Go worker claims one job at a time and
+preserves the eight existing operation kinds:
+`news_processing`, `news_digest`, `telegram_digest`, `backup`,
+`reprocess_failed`, `article_reprocess`, `summaries_generate`, and
+`source_test`.
+
+PostgreSQL advisory lock acquisition, owner generation, worker status, and
+heartbeat checks follow the existing SQL contract. Go records the lease backend
+PID; Python verifies that exact backend still holds the expected advisory lock
+with a fresh heartbeat. Every domain commit is fenced under the worker/job row
+locks. Attempt-specific backup files and the domain-statistics cache use a
+publication fence as they touch the filesystem.
+
+Job results are bounded to 4 KiB. A repeated identical envelope returns its
+durable receipt; a changed envelope conflicts. Go writes the terminal News job
+state before asking Python to apply fixed legacy schedule-completion and alert
+effects. Pending completion events remain durable until Python acknowledges
+them, even when normal job retention expires. Scheduler occurrence receipts
+remain governed by their existing independent retention contract.
+
+Selected-article `article_reprocess` initialization remains a one-time fenced
+Python operation. Retry counters and completed article stages survive worker
+recovery. The Python executor does not run a hidden queue consumer. The old
+`python -m news_aggregator.worker` entrypoint fails closed with a migration
+message; use the Go worker and Python executor processes instead.
+
+## Local checks and isolated acceptance
+
+Run the Go module checks with Go 1.25.6:
+
+```sh
+cd go-worker
+go test -race ./...
+go vet ./...
 ```
 
-This command reads the persisted heartbeat with a bounded database timeout. It
-does not start a worker, open a browser, or expose a new network port.
+The PostgreSQL store tests run only when `TEST_DATABASE_URL` points to a
+loopback test database. They create and remove an isolated schema. Run the
+Python contract and regression suite with the corresponding isolated
+`TEST_DATABASE_URL` and `DATABASE_URL` values:
 
-These commands require configured environment variables. They are not an
-instruction to switch production. Deploy and test the pair together in an
-isolated environment before proposing a production release.
-
-## Durable jobs
-
-Manual and scheduled operations use the same PostgreSQL queue. The initial
-worker executes one pipeline job at a time; this does not serialize individual
-Go HTTP source jobs or change the Go browser render limit. At most 32 jobs may
-wait in `queued` or `interrupted` state.
-
-Job payloads contain validated IDs and flags, not article bodies, credentials,
-or arbitrary source URLs. Responses expose bounded status and aggregate results.
-Supported operations cover processing, summaries, article reprocessing, source
-connection tests, backup creation, and digest delivery.
-
-Results fit within 4 KiB. Selected-article jobs retain up to 20 finite article
-outcomes with total and omitted counts; warning classification covers the full
-selection. A forced selected-article job initializes its retry state once in the
-claim transaction. Recovery preserves subsequent attempts and completed stages.
-
-An idempotency key identifies a particular request. Reusing it with different
-parameters is a conflict. Identical active manual work can share one job; aliases
-remain associated with that job after completion. A scheduled occurrence uses
-its schedule ID and due timestamp, so scheduler retries do not enqueue that
-occurrence twice.
-
-States are `queued`, `running`, `succeeded`, `failed`, `interrupted`, and
-`delivery_unknown`. Queue acceptance is not processing success. Interrupted
-processing work remains durable and resumes using the existing article stages
-and attempt counters; existing native-browser busy handling still applies.
-
-## API and administration
-
-In worker mode, long operations return HTTP 202 with a job ID and status URL.
-The administrator can read `GET /api/v1/jobs/{job_id}` using the existing admin
-API authentication. First-party pages follow the job to its terminal outcome;
-they must not display successful completion merely because it was queued.
-
-The affected operations include:
-
-- `POST /api/v1/process/run`
-- `POST /api/v1/articles/{article_id}/reprocess`
-- `POST /api/v1/summaries/generate`
-- `POST /api/v1/telegram/send-digest`
-- `POST /api/v1/sources/{source_id}/test`
-
-Short database actions such as selected article retry retain their existing
-response and coordinate with the active worker through PostgreSQL. Worker mode
-has no silent fallback to execution inside web when the worker is unavailable.
-Embedded mode retains the existing execution behavior.
-
-The explicit Telegram connection diagnostic remains available. The legacy AI
-category-mapping analysis endpoint returns HTTP 409 in worker mode; migrating
-its interactive suggestions is outside the initial job contract. Manual category
-mapping CRUD remains available.
-
-## Ownership and recovery
-
-A dedicated PostgreSQL connection holds the singleton worker advisory lock.
-An additional fencing generation identifies the worker, and each claimed job
-has its own attempt generation. Result writes must validate ownership while the
-transaction remains locked through commit. A stale attempt cannot publish a
-late result after another attempt takes over.
-
-The worker maintains a persisted heartbeat independently of individual jobs.
-Loss of ownership stops claims and cancels active work. A second worker cannot
-start another scheduler or execute the same pipeline in parallel. Web restarts
-do not cancel accepted work.
-
-Worker startup recovers interrupted durable jobs under its database lease,
-preserving accepted job identity and completed stages. Legacy numeric
-`schedule_id` payloads remain recoverable, and completing or recovering those
-legacy jobs may update `ScheduleSettings.next_run`. The worker does not calculate
-or mutate Go-owned calendar due times.
-
-Digest jobs can have an uncertain external outcome after a crash. Such jobs
-become `delivery_unknown` and are not resent automatically. An explicit user
-action is required to retry delivery. This boundary does not promise exactly-once
-Telegram sends or exactly-once external AI billing.
-
-## Data, resource limits, and rollback
-
-Only the worker writes processing caches and domain statistics. Web status reads
-use persisted metadata rather than constructing an orchestrator. Backup downloads
-need access to the worker's backup files. Mount `/app/data` writable only in the
-worker and share a persistent `/app/backups` volume between web and worker so
-both processes see the same archives. Worker-mode upload, cleanup, and restore
-API requests remain disabled; those maintenance actions require a stopped
-worker and an offline procedure. Keep process log directories separate. The
-worker's backup command uses its installed PostgreSQL client and does not require
-a Docker socket. Keep both application images at the same revision. Allow a
-container stop grace period longer than the configured shutdown drain.
-
-Backup creation is queued and backup downloads remain available. In worker mode,
-the web API rejects backup upload, cleanup, and restore with HTTP 409. A live
-restore must not race accepted jobs or replace their ownership metadata.
-
-Measure web and worker idle/active memory separately and together. Separating
-Python processes adds independent interpreter and connection-pool overhead; it
-does not establish a memory reduction or higher throughput. Go/browser limits
-remain unchanged.
-
-Before changing execution mode, stop/drain the worker and inventory queued or
-interrupted jobs. Disabling worker mode does not migrate or delete accepted
-jobs. Retain the additive tables and saved articles. Manual embedded operations
-must not substitute for the Go scheduler and worker.
-
-## Validation status
-
-At commit `27d05e5`, the local regression suite passed with 1,206 tests and 10 skips, including real
-PostgreSQL ownership, migration, stale-attempt fencing, recovery, subprocess
-cleanup, and JavaScript behavior checks. Independent code review found no
-remaining actionable findings after the fixes. The Docker acceptance gate passed
-all 23 checks on macOS ARM64 using PostgreSQL 16 and separate web/worker
-containers. It exercised source collection, extraction, and Gemini through HTTP
-fixtures, a web restart during processing, singleton ownership, worker recovery,
-and ambiguous Telegram delivery without automatic replay. Recovery explicitly
-advanced only the synthetic article's retry deadline while its worker was stopped;
-attempts and saved stages remained unchanged.
-
-The ARM64 image matched all 132 application/UI files at commit `27d05e5`. Web
-and Python worker together used about 177–184 MiB after startup in this short fixture run
-(startup snapshot: 231 MiB),
-excluding PostgreSQL and fake service containers. This is not production sizing,
-a real Go/browser benchmark, or a throughput claim. Fixture resources were removed.
-Review follow-ups also preserve resumable processing-only digests (`send_telegram=false`)
-and best-effort optional media refresh. Enabled delivery retains the conservative
-no-replay rule. A fresh focused PostgreSQL/runtime/UI run passed 53 tests after
-these final corrections. The final Linux fixture gate rebuilds the current PR head.
-Final head checks are tracked in [PR #18](https://github.com/Dzarlax-AI/evening-news/pull/18);
-production rollout is outside this change.
-
-To repeat the acceptance gate without publishing an image:
-
-```bash
-docker build -f docker/Dockerfile -t evening-news-background-worker:fixture .
-python scripts/run_background_worker_fixture_gate.py \
-  --image evening-news-background-worker:fixture \
-  --output-dir artifacts/background-worker-fixture
+```sh
+python -m pytest -q
 ```
 
-The harness creates uniquely labeled resources on an internal-only Docker network,
-mounts only read-only test fixtures, uses dummy credentials, and removes only its
-own containers and network. It never accepts a production endpoint.
+CI builds `docker/Dockerfile` and `go-worker/Dockerfile`, then runs
+`scripts/run_go_job_worker_fixture_gate.py` against an internal Docker network
+with fake provider services and synthetic PostgreSQL data. The gate checks
+cross-language queue ownership, public/admin job paths, supported job kinds,
+worker and executor restarts, backup sharing, and conservative delivery
+recovery. It does not contact real sites, AI providers, or messaging services.
+Build the Go image from the repository root because the Dockerfile copies
+`go-worker/` paths from that context:
 
-The gate uses the real `/admin/` Basic-auth page to obtain the JWT cookie and
-checks the public article-reprocess endpoint with it. A separate diagnostic
-found a pre-existing HTTP 500 in the auxiliary `/auth/login` endpoint (its
-dependency returns a string, while the handler reads `.username`). That endpoint
-is unchanged by this PR; the tested administrator cookie path succeeds.
+```sh
+docker build -f go-worker/Dockerfile -t evening-news-job-worker:local .
+```
+
+The standalone Python worker gate describes the superseded runtime and is not
+the current acceptance command. The full Python `DurableBackgroundWorker`
+class remains only as compatibility code for focused migration/fence tests and
+must not be started as a queue consumer.
+
+## Boundaries
+
+Production cutover, database migration on production, image publication, and
+deployment are separate decisions. Do not switch a live queue owner until the
+new images and isolated gate pass, accepted jobs and receipts are inventoried,
+and the old owner has drained or been stopped. Keep backups and receipt data;
+do not restore an old database snapshot over a live queue.
+
+The Go worker moves queue lease, claim, timeout, recovery, retention, and job
+state transitions. Python continues to perform News domain work, including
+`run_full_cycle`, article processing, AI, summaries, and delivery. Any later
+port of the News orchestration sequence requires a separate stage contract and
+validation.

@@ -5,7 +5,7 @@ import hashlib
 import math
 import os
 import uuid
-from datetime import datetime
+from datetime import datetime, timedelta
 
 import pytest
 from sqlalchemy import delete, select, text, update
@@ -15,6 +15,7 @@ from sqlalchemy.orm import sessionmaker
 
 from news_aggregator.migrations.background_jobs import BackgroundJobsMigration
 from news_aggregator.migrations.scheduled_job_metadata import ScheduledJobMetadataMigration
+from news_aggregator.migrations.job_executor import JobExecutorMigration
 from news_aggregator.models import (
     BackgroundJob, BackgroundJobIdempotencyKey, BackgroundWorkerStatus, ScheduleSettings,
 )
@@ -62,6 +63,10 @@ async def pg_jobs():
             assert await scheduler_metadata.check_needed(session)
             await scheduler_metadata.execute(session)
             assert not await scheduler_metadata.check_needed(session)
+            executor_migration = JobExecutorMigration()
+            assert await executor_migration.check_needed(session)
+            await executor_migration.execute(session)
+            assert not await executor_migration.check_needed(session)
         async with engine.begin() as conn:
             await conn.run_sync(lambda sync: ScheduleSettings.__table__.create(sync, checkfirst=True))
         yield engine, factory
@@ -264,12 +269,13 @@ async def test_job_and_alias_server_timestamps_are_utc_with_local_session_timezo
 @pytest.mark.asyncio
 async def test_recovering_scheduled_digest_clears_running_schedule_atomically(pg_jobs):
     engine, factory = pg_jobs
+    future_due = datetime.utcnow() + timedelta(days=1)
     first, second = BackgroundWorkerLease(engine), BackgroundWorkerLease(engine)
     assert await first.acquire()
     async with factory() as session:
         schedule = ScheduleSettings(
             task_name="telegram_digest", enabled=True, is_running=True,
-            next_run=datetime(2026, 10, 24, 7, 0), last_status="running",
+            next_run=future_due, last_status="running",
         )
         session.add(schedule)
         await session.flush()
@@ -298,7 +304,7 @@ async def test_recovering_scheduled_digest_clears_running_schedule_atomically(pg
         assert recovered_schedule.is_running is False
         assert recovered_schedule.last_status == "delivery_unknown"
         assert recovered_schedule.last_error == "External delivery outcome is unknown"
-        assert recovered_schedule.next_run == datetime(2026, 10, 24, 7, 0)
+        assert recovered_schedule.next_run == future_due
     await second.release()
 
 

@@ -398,13 +398,15 @@ class BackgroundWorkerLease:
                 return False
             owner_id = uuid.uuid4()
             async with conn.begin():
+                backend_pid = await conn.scalar(text("SELECT pg_backend_pid()"))
                 generation = await conn.scalar(text("""
                     UPDATE background_worker_status
                     SET generation = generation + 1, owner_id = :owner,
+                        lock_backend_pid = :backend_pid,
                         heartbeat_at = CURRENT_TIMESTAMP AT TIME ZONE 'UTC', status = 'running'
                     WHERE id = 1
                     RETURNING generation
-                """), {"owner": owner_id})
+                """), {"owner": owner_id, "backend_pid": backend_pid})
                 if generation is None:
                     raise WorkerLeaseUnavailable("worker status row is missing")
             self.connection, self.owner_id, self.generation = conn, owner_id, generation
@@ -443,7 +445,8 @@ class BackgroundWorkerLease:
             async with conn.begin():
                 await conn.execute(text("""
                     UPDATE background_worker_status
-                    SET owner_id = NULL, heartbeat_at = NULL, status = 'stopped'
+                    SET owner_id = NULL, lock_backend_pid = NULL,
+                        heartbeat_at = NULL, status = 'stopped'
                     WHERE id = 1 AND owner_id = :owner AND generation = :generation
                 """), {"owner": self.owner_id, "generation": self.generation})
         finally:
@@ -578,10 +581,13 @@ class BackgroundWorkerLease:
     async def assert_generation(self, session: AsyncSession, *, lock_row: bool = False) -> None:
         if not self.owned:
             raise StaleWorker("worker lease is not held")
-        query = select(BackgroundWorkerStatus).where(BackgroundWorkerStatus.id == 1)
+        query = select(
+            BackgroundWorkerStatus.generation, BackgroundWorkerStatus.owner_id,
+            BackgroundWorkerStatus.status,
+        ).where(BackgroundWorkerStatus.id == 1)
         if lock_row:
             query = query.with_for_update()
-        status = await session.scalar(query)
+        status = (await session.execute(query)).one_or_none()
         if (status is None or status.generation != self.generation
                 or status.owner_id != self.owner_id or status.status != "running"):
             raise StaleWorker("worker generation is no longer current")
@@ -596,13 +602,27 @@ class BackgroundWorkerLease:
         the protected result write has committed or rolled back.
         """
         await self.assert_generation(session, lock_row=True)
-        job = await session.scalar(select(BackgroundJob).where(
-            BackgroundJob.id == job_id).with_for_update())
+        job = (await session.execute(select(
+            BackgroundJob.state, BackgroundJob.owner_generation,
+            BackgroundJob.attempt_generation,
+        ).where(BackgroundJob.id == job_id).with_for_update())).one_or_none()
         if (job is None or job.state != "running"
                 or job.owner_generation != self.generation
                 or job.attempt_generation != attempt_generation):
             raise StaleWorker("job attempt is no longer current")
         yield
+
+    @asynccontextmanager
+    async def publication_fence(self, session: AsyncSession):
+        """Hold the local worker lease and current job attempt during file publication."""
+        from .job_fence import current_job_fence
+
+        fence = current_job_fence.get()
+        if (fence is None or not fence.active or fence.lease is not self or fence.job_id is None
+                or fence.attempt_generation <= 0):
+            raise StaleWorker("job attempt is no longer active")
+        async with self.transaction_fence(session, fence.job_id, fence.attempt_generation):
+            yield
 
 
 async def claim_next_job(session: AsyncSession, lease: BackgroundWorkerLease) -> Optional[BackgroundJob]:

@@ -142,13 +142,27 @@ class BackupService:
         Raises:
             RuntimeError: If backup creation fails.
         """
+        from .job_fence import current_job_fence
+
+        execution_fence = current_job_fence.get()
+        attempt_suffix = (f"_{execution_fence.job_id.hex}_a{execution_fence.attempt_generation}"
+                         if execution_fence is not None else "")
+        staged_dir = None
+        staged_archive = None
+        staged_config = None
         try:
             timestamp = datetime.now().strftime("%Y%m%d_%H%M%S")
-            backup_name = f"backup_{timestamp}"
-            backup_dir = self.backups_dir / backup_name
+            backup_name = f"backup_{timestamp}{attempt_suffix}"
+            if execution_fence is not None:
+                self.backups_dir.mkdir(parents=True, exist_ok=True)
+                backup_dir = self.backups_dir / f".{backup_name}.working"
+                backup_dir.mkdir(parents=False, exist_ok=False)
+                staged_dir = backup_dir
+            else:
+                backup_dir = self.backups_dir / backup_name
+                backup_dir.mkdir(parents=True, exist_ok=True)
 
             # Create backup directory
-            backup_dir.mkdir(parents=True, exist_ok=True)
             logger.info(f"Created backup directory: {backup_dir}")
 
             # 1. Database Backup
@@ -209,29 +223,77 @@ class BackupService:
 
             # 5. Create archive
             logger.info("Creating backup archive...")
-            archive_name = f"news_aggregator_backup_{timestamp}.tar.gz"
+            archive_name = f"news_aggregator_backup_{timestamp}{attempt_suffix}.tar.gz"
             archive_path = self.backups_dir / archive_name
 
-            with tarfile.open(archive_path, "w:gz") as tar:
+            tar_target = archive_path
+            if execution_fence is not None:
+                staged_archive = archive_path.with_name(f".{archive_path.name}.working")
+                tar_target = staged_archive
+            with tarfile.open(tar_target, "w:gz") as tar:
                 tar.add(backup_dir, arcname=backup_name)
 
-            logger.info(f"✅ Archive created: {archive_path} ({archive_path.stat().st_size / 1024 / 1024:.2f} MB)")
+            archive_size = tar_target.stat().st_size
+            if execution_fence is not None:
+                from ..database import AsyncSessionLocal
+
+                async with AsyncSessionLocal() as session:
+                    async with execution_fence.lease.publication_fence(session):
+                        # Hard-link publication is atomic and refuses to replace an
+                        # archive already published by another attempt.
+                        os.link(tar_target, archive_path)
+                        await session.commit()
+                tar_target.unlink(missing_ok=True)
+            logger.info(f"✅ Archive created: {archive_path} ({archive_size / 1024 / 1024:.2f} MB)")
 
             # 6. Cleanup temporary backup directory
             import shutil
             shutil.rmtree(backup_dir)
+            staged_dir = None
             logger.info("✅ Temporary backup directory cleaned up")
 
             # 7. Update last backup timestamp in config
-            config = await self.get_schedule_config()
-            config["last_backup"] = datetime.utcnow().isoformat()
-            with open(self.config_file, 'w') as f:
-                json.dump(config, f, indent=2)
+            if execution_fence is None:
+                config = await self.get_schedule_config()
+                config["last_backup"] = datetime.utcnow().isoformat()
+                with open(self.config_file, 'w') as f:
+                    json.dump(config, f, indent=2)
+            else:
+                from ..database import AsyncSessionLocal
+
+                temp_config = self.config_file.with_name(
+                    f".{self.config_file.name}.{execution_fence.job_id.hex}.a{execution_fence.attempt_generation}.working"
+                )
+                staged_config = temp_config
+                async with AsyncSessionLocal() as session:
+                    async with execution_fence.lease.publication_fence(session):
+                        config = await self.get_schedule_config()
+                        config["last_backup"] = datetime.utcnow().isoformat()
+                        temp_config.write_text(json.dumps(config, indent=2))
+                        os.replace(temp_config, self.config_file)
+                        staged_config = None
+                        await session.commit()
 
             logger.info(f"🎉 Backup completed successfully: {archive_path}")
             return archive_path
 
+        except asyncio.CancelledError:
+            import shutil
+
+            if staged_dir is not None:
+                shutil.rmtree(staged_dir, ignore_errors=True)
+            for staged in (staged_archive, staged_config):
+                if staged is not None:
+                    staged.unlink(missing_ok=True)
+            raise
         except Exception as e:
+            import shutil
+
+            if staged_dir is not None:
+                shutil.rmtree(staged_dir, ignore_errors=True)
+            for staged in (staged_archive, staged_config):
+                if staged is not None:
+                    staged.unlink(missing_ok=True)
             logger.error(f"Backup creation failed: {e}")
             import traceback
             traceback.print_exc()

@@ -535,6 +535,13 @@ class DomainStabilityTracker:
     def _save_stats(self):
         """Save statistics to persistent storage."""
         try:
+            from .job_fence import current_job_fence
+            fence = current_job_fence.get()
+            if fence is not None and not fence.active:
+                return
+            if fence is not None:
+                fence.pending_state_publish = True
+                return
             import os
             os.makedirs(os.path.dirname(self.persistence_file), exist_ok=True)
             
@@ -543,6 +550,29 @@ class DomainStabilityTracker:
                 f.write(json.dumps(data, indent=2))
         except Exception as e:
             logger.warning(f"⚠️ Failed to save domain stats: {e}")
+
+    async def flush_fenced_state(self, fence):
+        """Atomically publish accumulated cache state while the current job is fenced."""
+        if not fence.pending_state_publish:
+            return
+        import os
+        from pathlib import Path
+        from ..database import AsyncSessionLocal
+
+        target = Path(self.persistence_file)
+        target.parent.mkdir(parents=True, exist_ok=True)
+        temp = target.with_name(
+            f".{target.name}.{fence.job_id.hex}.a{fence.attempt_generation}.working"
+        )
+        try:
+            temp.write_text(json.dumps(self.export_stats(), indent=2))
+            async with AsyncSessionLocal() as session:
+                async with fence.lease.publication_fence(session):
+                    os.replace(temp, target)
+                    await session.commit()
+            fence.pending_state_publish = False
+        finally:
+            temp.unlink(missing_ok=True)
 # Global instance
 _stability_tracker = None
 

@@ -7,22 +7,30 @@ on:
       - 'news_aggregator/**'
       - 'web/**'
       - 'docker/**'
+      - 'go-worker/**'
       - 'db/**'
+      - 'docker-compose.example.yml'
+      - 'docker-compose.dev.yml'
       - 'requirements.txt'
       - 'pytest.ini'
       - 'tests/**'
       - 'scripts/run_background_worker_fixture_gate.py'
+      - 'scripts/run_go_job_worker_fixture_gate.py'
       - '.github/workflows/docker-build-push.yml'
   pull_request:
     paths:
       - 'news_aggregator/**'
       - 'web/**'
       - 'docker/**'
+      - 'go-worker/**'
       - 'db/**'
+      - 'docker-compose.example.yml'
+      - 'docker-compose.dev.yml'
       - 'requirements.txt'
       - 'pytest.ini'
       - 'tests/**'
       - 'scripts/run_background_worker_fixture_gate.py'
+      - 'scripts/run_go_job_worker_fixture_gate.py'
       - '.github/workflows/docker-build-push.yml'
   release:
     types: [published]
@@ -96,6 +104,42 @@ jobs:
           SCHEDULER_ENABLED: 'false'
         run: python -m pytest tests/ -q
 
+  go-worker-tests:
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    services:
+      postgres:
+        image: postgres:17-alpine
+        env:
+          POSTGRES_USER: fixture_admin
+          POSTGRES_PASSWORD: fixture-only
+          POSTGRES_DB: worker_tests
+        ports:
+          - 5432:5432
+        options: >-
+          --health-cmd "pg_isready -h 127.0.0.1 -U fixture_admin -d worker_tests"
+          --health-interval 5s
+          --health-timeout 5s
+          --health-retries 10
+    permissions:
+      contents: read
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v4
+      - name: Set up Go
+        uses: actions/setup-go@v5
+        with:
+          go-version-file: go-worker/go.mod
+          cache-dependency-path: go-worker/go.sum
+      - name: Run Go race tests
+        working-directory: go-worker
+        env:
+          TEST_DATABASE_URL: postgres://fixture_admin:fixture-only@127.0.0.1:5432/worker_tests
+        run: go test -race ./...
+      - name: Vet Go worker
+        working-directory: go-worker
+        run: go vet ./...
+
   background-worker-fixture:
     runs-on: ubuntu-latest
     timeout-minutes: 15
@@ -109,22 +153,25 @@ jobs:
         with:
           python-version: '3.12'
       - name: Build local fixture application image
-        run: docker build -f docker/Dockerfile -t evening-news-background-worker:fixture .
-      - name: Run isolated web and worker acceptance
+        run: docker build -f docker/Dockerfile -t evening-news-job-app:fixture .
+      - name: Build local Go job worker image
+        run: docker build -f go-worker/Dockerfile -t evening-news-job-worker:fixture .
+      - name: Run isolated Go worker and Python executor acceptance
         run: >-
-          python scripts/run_background_worker_fixture_gate.py
-          --image evening-news-background-worker:fixture
-          --output-dir artifacts/background-worker-fixture
+          python scripts/run_go_job_worker_fixture_gate.py
+          --image evening-news-job-app:fixture
+          --worker-image evening-news-job-worker:fixture
+          --output-dir artifacts/go-job-worker-fixture
       - name: Upload fixture evidence
         if: always()
         uses: actions/upload-artifact@v4
         with:
-          name: background-worker-fixture
-          path: artifacts/background-worker-fixture/
+          name: go-job-worker-fixture
+          path: artifacts/go-job-worker-fixture/
           if-no-files-found: ignore
 
   build-and-push:
-    needs: [test, background-worker-fixture]
+    needs: [test, go-worker-tests, background-worker-fixture]
     runs-on: ubuntu-latest
     permissions:
       contents: read

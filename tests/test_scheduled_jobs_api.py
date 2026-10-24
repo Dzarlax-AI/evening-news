@@ -23,6 +23,7 @@ os.environ.setdefault("ADMIN_PASSWORD", "fixture-only")
 
 from news_aggregator.migrations.background_jobs import BackgroundJobsMigration
 from news_aggregator.migrations.scheduled_job_metadata import ScheduledJobMetadataMigration
+from news_aggregator.migrations.job_executor import JobExecutorMigration
 from news_aggregator.models import (
     BackgroundJob, BackgroundWorkerStatus, ScheduleSettings, SchedulerOccurrenceReceipt,
 )
@@ -51,6 +52,7 @@ async def scheduled_db():
         async with factory() as session:
             await BackgroundJobsMigration().execute(session)
             await ScheduledJobMetadataMigration().execute(session)
+            await JobExecutorMigration().execute(session)
         async with engine.begin() as conn:
             await conn.run_sync(lambda sync: ScheduleSettings.__table__.create(sync, checkfirst=True))
         async with factory() as session:

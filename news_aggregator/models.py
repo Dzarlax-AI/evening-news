@@ -279,6 +279,42 @@ class SchedulerOccurrenceReceipt(Base):
     )
 
 
+class BackgroundJobExecution(Base):
+    """Idempotent Python executor receipt for one Go-owned job attempt."""
+    __tablename__ = "background_job_executions"
+
+    job_id = Column(Uuid(as_uuid=True), ForeignKey("background_jobs.id", ondelete="CASCADE"), primary_key=True)
+    attempt_generation = Column(Integer, primary_key=True)
+    envelope_sha256 = Column(String(64), nullable=False)
+    executor_instance_id = Column(Uuid(as_uuid=True), nullable=False)
+    owner_id = Column(Uuid(as_uuid=True))
+    worker_generation = Column(Integer)
+    deadline_at = Column(DateTime)
+    state = Column(String(24), nullable=False, server_default="accepted")
+    accepted_at = Column(DateTime, nullable=False, server_default=func.timezone("UTC", func.now()))
+    started_at = Column(DateTime)
+    finished_at = Column(DateTime)
+    result = Column(JSON(none_as_null=True).with_variant(JSONB(none_as_null=True), "postgresql"))
+    error_code = Column(String(40))
+    legacy_completion_applied_at = Column(DateTime)
+    legacy_alert_state = Column(String(16))
+
+    __table_args__ = (
+        CheckConstraint("attempt_generation >= 0", name="ck_background_execution_attempt_generation"),
+        CheckConstraint("length(envelope_sha256) = 64", name="ck_background_execution_hash"),
+        CheckConstraint("worker_generation IS NULL OR worker_generation > 0",
+                        name="ck_background_execution_generation"),
+        CheckConstraint("state IN ('accepted', 'running', 'succeeded', 'failed', 'interrupted', 'delivery_unknown')",
+                        name="ck_background_execution_state"),
+        CheckConstraint("error_code IS NULL OR error_code IN ('worker_error', 'worker_interrupted', 'worker_recovery_exhausted', 'external_outcome_unknown', 'invalid_job', 'resource_limit', 'database_unavailable')",
+                        name="ck_background_execution_error_code"),
+        CheckConstraint("result IS NULL OR jsonb_typeof(result) = 'object'",
+                        name="ck_background_execution_result_object").ddl_if(dialect="postgresql"),
+        CheckConstraint("legacy_alert_state IS NULL OR legacy_alert_state IN ('pending', 'attempting', 'delivered', 'unknown', 'not_needed')",
+                        name="ck_background_execution_alert_state"),
+    )
+
+
 class BackgroundWorkerStatus(Base):
     """Singleton persisted worker lease and heartbeat."""
     __tablename__ = "background_worker_status"
@@ -286,6 +322,7 @@ class BackgroundWorkerStatus(Base):
     id = Column(Integer, primary_key=True, default=1)
     generation = Column(Integer, nullable=False, server_default="0")
     owner_id = Column(Uuid(as_uuid=True))
+    lock_backend_pid = Column(Integer)
     heartbeat_at = Column(DateTime)
     status = Column(String(16), nullable=False, server_default="stopped")
 
