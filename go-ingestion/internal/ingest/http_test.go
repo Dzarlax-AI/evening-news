@@ -5,9 +5,11 @@ import (
 	"context"
 	"encoding/json"
 	"fmt"
+	"io"
 	"net/http"
 	"net/http/httptest"
 	"os"
+	"reflect"
 	"strconv"
 	"strings"
 	"sync/atomic"
@@ -125,7 +127,195 @@ func TestPageMonitorSameSnapshotReparseRequiresActualCollectorContract(t *testin
 	}
 }
 
+func TestHTMLRequestEncodingHonorsReceiverByteLimits(t *testing.T) {
+	markup := strings.Repeat("<p>news</p>", maxSelectorHTMLBytes/11)
+	markup += strings.Repeat("x", maxSelectorHTMLBytes-len(markup))
+	quotedMarkup := strings.Repeat(`"`, maxSelectorHTMLBytes)
+
+	t.Run("selector callback accepts near-limit ordinary markup", func(t *testing.T) {
+		var requests atomic.Int32
+		server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+			requests.Add(1)
+			body, err := io.ReadAll(r.Body)
+			if err != nil || len(body) > maxSelectorCallbackBytes {
+				t.Errorf("callback received invalid body length %d: %v", len(body), err)
+			}
+			var request selectorRequest
+			if err := json.Unmarshal(body, &request); err != nil || len(request.StudyHTML) != maxSelectorHTMLBytes {
+				t.Errorf("near-limit markup did not round trip: html bytes=%d err=%v", len(request.StudyHTML), err)
+			}
+			_ = json.NewEncoder(w).Encode(selectorResponse{Version: 1,
+				LearnedContainerSelectors: []string{}, LearnedTitleSelectors: []string{},
+				LearnedLinkSelectors: []string{}, LearnedDateSelectors: []string{}})
+		}))
+		defer server.Close()
+
+		handler := NewHandler(nil, Config{SelectorURL: server.URL, SelectorToken: "fixture"})
+		_, err := handler.selectorCall(context.Background(), store.Fence{DeadlineAt: time.Now().Add(time.Minute)},
+			store.Source{ID: 1, Fingerprint: "fixture"}, "study", markup)
+		if err != nil || requests.Load() != 1 {
+			t.Fatalf("near-limit callback request rejected: requests=%d err=%v", requests.Load(), err)
+		}
+	})
+
+	t.Run("selector callback rejects escaped over-budget markup before HTTP", func(t *testing.T) {
+		var requests atomic.Int32
+		server := httptest.NewServer(http.HandlerFunc(func(http.ResponseWriter, *http.Request) { requests.Add(1) }))
+		defer server.Close()
+		handler := NewHandler(nil, Config{SelectorURL: server.URL, SelectorToken: "fixture"})
+		_, err := handler.selectorCall(context.Background(), store.Fence{DeadlineAt: time.Now().Add(time.Minute)},
+			store.Source{ID: 1, Fingerprint: "fixture"}, "study", quotedMarkup)
+		if err == nil || requests.Load() != 0 {
+			t.Fatalf("over-budget callback body was sent: requests=%d err=%v", requests.Load(), err)
+		}
+	})
+
+	fixture, err := os.ReadFile("testdata/page_monitor_actual_response.json")
+	if err != nil {
+		t.Fatal(err)
+	}
+	snapshot := time.Date(2026, 10, 24, 12, 30, 0, 0, time.UTC)
+	page := &pageMonitorResult{Outcome: "needs_selector_study", SnapshotAt: &snapshot, StudyHTML: markup}
+	source := store.Source{ID: 7, Name: "Fixture monitor", Type: "custom", URL: "https://fixture.invalid/list"}
+	descriptor := descriptor{SourceID: 7, Type: "custom", URL: source.URL, Limit: 5, PageMonitor: &sourceConfig{}}
+	t.Run("collector accepts near-limit ordinary markup", func(t *testing.T) {
+		var requests atomic.Int32
+		server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+			requests.Add(1)
+			body, err := io.ReadAll(r.Body)
+			if err != nil || len(body) > maxExtractorBytes {
+				t.Errorf("collector received invalid body length %d: %v", len(body), err)
+			}
+			var request struct {
+				RequestID string `json:"request_id"`
+				HTML      string `json:"provided_html"`
+			}
+			if err := json.Unmarshal(body, &request); err != nil || len(request.HTML) != maxSelectorHTMLBytes {
+				t.Errorf("near-limit markup did not round trip: html bytes=%d err=%v", len(request.HTML), err)
+			}
+			response := bytes.Replace(fixture, []byte(`"fixture-request-id"`), []byte(strconv.Quote(request.RequestID)), 1)
+			_, _ = w.Write(response)
+		}))
+		defer server.Close()
+		handler := NewHandler(nil, Config{ExtractorURL: server.URL, ExtractorToken: "fixture"})
+		if _, err := handler.parsePageMonitor(context.Background(), source, descriptor, page); err != nil || requests.Load() != 1 {
+			t.Fatalf("near-limit collector request rejected: requests=%d err=%v", requests.Load(), err)
+		}
+	})
+
+	t.Run("collector rejects escaped over-budget markup before HTTP", func(t *testing.T) {
+		var requests atomic.Int32
+		server := httptest.NewServer(http.HandlerFunc(func(http.ResponseWriter, *http.Request) { requests.Add(1) }))
+		defer server.Close()
+		handler := NewHandler(nil, Config{ExtractorURL: server.URL, ExtractorToken: "fixture"})
+		escapedPage := *page
+		escapedPage.StudyHTML = quotedMarkup
+		if _, err := handler.parsePageMonitor(context.Background(), source, descriptor, &escapedPage); err == nil || requests.Load() != 0 {
+			t.Fatalf("over-budget collector body was sent: requests=%d err=%v", requests.Load(), err)
+		}
+	})
+}
+
 func ptrTime(value time.Time) *time.Time { return &value }
+
+func TestFetchBatchAllowsPayloadFreeDeferredAlongsideSuccess(t *testing.T) {
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		var request struct {
+			RequestID string `json:"request_id"`
+		}
+		if err := json.NewDecoder(r.Body).Decode(&request); err != nil {
+			t.Error(err)
+			return
+		}
+		_ = json.NewEncoder(w).Encode(map[string]any{
+			"contract_version": "1", "request_id": request.RequestID,
+			"results": []any{
+				map[string]any{"request_id": request.RequestID, "source_id": 1, "type": "rss", "outcome": "deferred",
+					"error": map[string]any{"code": "response_budget_exhausted", "retry_after_seconds": 1}},
+				map[string]any{"request_id": request.RequestID, "source_id": 2, "type": "rss", "outcome": "success", "rss_articles": []any{}},
+			},
+		})
+	}))
+	defer server.Close()
+
+	handler := NewHandler(nil, Config{ExtractorURL: server.URL, ExtractorToken: "fixture"})
+	got, code, _ := handler.fetchBatch(context.Background(), []descriptor{
+		{SourceID: 1, Type: "rss"}, {SourceID: 2, Type: "rss"},
+	})
+	if code != "" {
+		t.Fatalf("valid mixed batch rejected: %q", code)
+	}
+	if deferred := got[1]; deferred.Outcome != "deferred" || hasAnyCollectedPayload(deferred) || deferred.Error == nil || deferred.Error.Code != "response_budget_exhausted" {
+		t.Fatalf("payload-free deferred outcome was not preserved: %+v", deferred)
+	}
+	if success := got[2]; success.Outcome != "success" || success.RSSArticles == nil {
+		t.Fatalf("neighboring success result was lost: %+v", success)
+	}
+}
+
+func TestFetchBatchRejectsWrongTypedDeferredPayload(t *testing.T) {
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		var request struct {
+			RequestID string `json:"request_id"`
+		}
+		if err := json.NewDecoder(r.Body).Decode(&request); err != nil {
+			t.Error(err)
+			return
+		}
+		_ = json.NewEncoder(w).Encode(map[string]any{
+			"contract_version": "1", "request_id": request.RequestID,
+			"results": []any{map[string]any{
+				"request_id": request.RequestID, "source_id": 1, "type": "custom", "outcome": "deferred",
+				"rss_articles": []any{},
+			}},
+		})
+	}))
+	defer server.Close()
+
+	handler := NewHandler(nil, Config{ExtractorURL: server.URL, ExtractorToken: "fixture"})
+	if _, code, _ := handler.fetchBatch(context.Background(), []descriptor{{SourceID: 1, Type: "custom"}}); code != "extractor_response_invalid" {
+		t.Fatalf("wrong typed deferred payload accepted: code=%q", code)
+	}
+}
+
+func TestMakeDescriptorMatchesPythonPageMonitorSelectorDefaults(t *testing.T) {
+	expected := sourceConfig{
+		ArticleSelectors: []string{"article", ".article", ".news-item", ".post", ".entry", ".changelog-item", ".update-item", ".release-note", ".content li", ".main li", "ul.updates li", "ul.news li", ".content > div", ".main > div", ".updates > div", `[class*="item"]`, `[class*="post"]`, `[class*="article"]`, "h2, h3, h4", ".title", ".headline", ".heading"},
+		TitleSelectors:   []string{"h1", "h2", "h3", "h4", ".title", ".headline", ".heading", "a[href]", ".link", ".post-title", ".article-title"},
+		DateSelectors:    []string{"time", "time[datetime]", "[datetime]", ".date", ".timestamp", ".published", ".created", ".updated", ".publish-date", ".published-date", ".creation-date", ".post-date", ".article-date", ".news-date", ".entry-date", ".blog-date", ".meta .date", ".meta time", ".metadata .date", ".info .date", ".post-meta .date", ".article-meta .date", ".entry-meta .date", ".commit-date", ".release-date", ".version-date", ".update-date", ".changelog-date", ".timeline .date", ".byline .date", ".author-date", ".publish-info .date", `[class*="date"]`, `[class*="time"]`, `[class*="publish"]`, `[id*="date"]`, `[id*="time"]`},
+		LinkSelectors:    []string{"a[href]", ".link", ".read-more", ".permalink"},
+	}
+
+	falseValue := false
+	missing := store.Source{ID: 1, Type: "custom", URL: "https://fixture.invalid/news", Config: map[string]any{
+		"use_browser": false, "enable_ai_analysis": false,
+	}}
+	descriptor, code := makeDescriptor(missing, store.PageState{})
+	if code != "" || descriptor.PageMonitor == nil {
+		t.Fatalf("descriptor creation failed: descriptor=%+v code=%q", descriptor, code)
+	}
+	got := descriptor.PageMonitor
+	if !reflect.DeepEqual(got.ArticleSelectors, expected.ArticleSelectors) || !reflect.DeepEqual(got.TitleSelectors, expected.TitleSelectors) ||
+		!reflect.DeepEqual(got.DateSelectors, expected.DateSelectors) || !reflect.DeepEqual(got.LinkSelectors, expected.LinkSelectors) {
+		t.Fatalf("omitted selectors do not match Python defaults: got=%+v", got)
+	}
+	if got.UseBrowser == nil || *got.UseBrowser != falseValue || missing.Config["enable_ai_analysis"] != false {
+		t.Fatalf("false options were not preserved: page_monitor=%+v config=%v", got, missing.Config)
+	}
+
+	empty := store.Source{ID: 2, Type: "custom", URL: "https://fixture.invalid/empty", Config: map[string]any{
+		"article_selectors": []any{}, "title_selectors": []any{}, "date_selectors": []any{}, "link_selectors": []any{},
+	}}
+	descriptor, code = makeDescriptor(empty, store.PageState{})
+	if code != "" || descriptor.PageMonitor == nil {
+		t.Fatalf("explicit empty descriptor creation failed: descriptor=%+v code=%q", descriptor, code)
+	}
+	got = descriptor.PageMonitor
+	if got.ArticleSelectors == nil || got.TitleSelectors == nil || got.DateSelectors == nil || got.LinkSelectors == nil ||
+		len(got.ArticleSelectors) != 0 || len(got.TitleSelectors) != 0 || len(got.DateSelectors) != 0 || len(got.LinkSelectors) != 0 {
+		t.Fatalf("explicit empty selector groups were replaced by defaults: %+v", got)
+	}
+}
 
 func TestPageMonitorAcknowledgementFinalizesOnlyAfterReturnedPrefix(t *testing.T) {
 	var response collectResult

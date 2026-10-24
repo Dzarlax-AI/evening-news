@@ -192,6 +192,10 @@ class Settings(BaseSettings):
             if not 16 <= len(token) <= 4096 or any(ord(ch) < 0x21 or ord(ch) > 0x7E for ch in token):
                 raise RuntimeError(f"{label} token must be a valid non-empty service token")
         if self.article_ingestion_mode == "go":
+            if self.background_execution_mode != "worker":
+                raise RuntimeError(
+                    "ARTICLE_INGESTION_MODE=go requires BACKGROUND_EXECUTION_MODE=worker"
+                )
             url = self.article_ingestion_url
             token = (self.article_ingestion_token.get_secret_value()
                      if self.article_ingestion_token else None)

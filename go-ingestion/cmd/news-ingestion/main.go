@@ -29,7 +29,7 @@ func main() {
 	if dsn == "" || len(token) < 16 || extractorURL == "" || len(extractorToken) < 16 {
 		log.Fatal("required article ingestion configuration is missing")
 	}
-	maxConns := int32(envInt("ARTICLE_INGESTION_DB_MAX_CONNS", 5, 1, 20))
+	maxConns := int32(envInt("ARTICLE_INGESTION_DB_MAX_CONNS", 5, 1, 5))
 	ctx, cancel := signal.NotifyContext(context.Background(), syscall.SIGINT, syscall.SIGTERM)
 	defer cancel()
 	db, err := store.Open(ctx, dsn, maxConns)

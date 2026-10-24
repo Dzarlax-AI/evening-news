@@ -24,7 +24,7 @@ The service uses the existing collector API at `/v1/sources/collect`; it does no
 | `ARTICLE_INGESTION_URL` | Python app/executor | Private base URL for the service |
 | `ARTICLE_INGESTION_TOKEN` | Python app/executor and Go service | Run API bearer token |
 | `ARTICLE_INGESTION_LISTEN` | Go service | Defaults to `:8093` |
-| `ARTICLE_INGESTION_DB_MAX_CONNS` | Go service | Defaults to 5; accepted range 1–20 |
+| `ARTICLE_INGESTION_DB_MAX_CONNS` | Go service | Defaults to 5; accepted range 1–5 |
 | `DATABASE_URL` | Go service | Must use the separately provisioned least-privilege News role |
 | `EXTRACTION_SERVICE_URL` | Go service | Existing private Go collector base URL |
 | `EXTRACTION_SERVICE_TOKEN` | Go service and collector | Collector API bearer token |
@@ -41,6 +41,8 @@ First deploy the Python application migration `012_article_ingestion` through th
 After migration success, an authorized database operator can use `deploy/news-ingestion/provision-runtime-role.sql` as a starting point. It creates a non-login function owner and a separate ingestion login for the `news` schema by default; pass the psql variable `news_schema` if the deployment uses another schema. The role password is entered interactively with `\password`; the file contains no password. Review database/schema names and run the script manually as a database administrator. Do not run it automatically from application startup or the migration.
 
 The runtime grants are limited to reading source configuration, updating source fetch time and ingestion-owned progress, and inserting/updating the article fields required by collection. The separate fence function owner can read and lock the active job and worker rows while validating a request. It needs column-level update privileges to perform `SELECT ... FOR UPDATE`, but receives no permission to change worker ownership, job state, job payload, or executor state. The function revokes `PUBLIC` execution in the migration. Verify the negative privilege cases in PostgreSQL tests before using a deployment-specific grant script.
+
+The ingestion service can open up to five pooled PostgreSQL connections and one dedicated connection for the fenced run lock. The runtime role's connection limit is six to cover that combined maximum; lower pool settings use fewer connections.
 
 The migration currently owns the fence function as the role that applies migrations. Where database policy requires a dedicated non-login function owner, the operator provisioning script transfers ownership to its isolated non-login role after the migration has created the function. That role must not be granted to the application or ingestion login.
 

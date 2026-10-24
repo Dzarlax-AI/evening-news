@@ -18,7 +18,9 @@ The service requires:
 | `JOB_EXECUTOR_URL` | Private Python executor selector callback endpoint |
 | `JOB_EXECUTOR_TOKEN` | Bearer token for selector callbacks |
 | `ARTICLE_INGESTION_LISTEN` | Listen address; defaults to `:8093` |
-| `ARTICLE_INGESTION_DB_MAX_CONNS` | PostgreSQL pool limit; defaults to 5 and is bounded to 1–20 |
+| `ARTICLE_INGESTION_DB_MAX_CONNS` | PostgreSQL pool limit; defaults to 5 and is bounded to 1–5 |
+
+The service uses up to five pooled PostgreSQL connections plus one dedicated connection for the fenced run lock. The runtime role limit is six connections to cover that maximum combined budget.
 
 Run submission, status, cancellation, and selector callback endpoints are private service APIs. `/healthz` is an unauthenticated liveness probe intended for the container health check and private orchestration only. Do not publish the service port or add a public route.
 

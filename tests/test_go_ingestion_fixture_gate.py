@@ -16,6 +16,7 @@ def test_runtime_role_sql_is_manual_and_separates_function_owner():
     assert 'ON :"news_schema".sources' in sql
     assert "CREATE ROLE news_ingestion_fence_owner NOLOGIN NOINHERIT NOBYPASSRLS" in sql
     assert "CREATE ROLE news_ingestion_runtime LOGIN NOINHERIT NOBYPASSRLS" in sql
+    assert "CONNECTION LIMIT 6" in sql
     assert "NOSUPERUSER NOCREATEDB NOCREATEROLE NOREPLICATION" in sql
     assert "\\password news_ingestion_runtime" in sql
     assert re.search(r"(?<!NO)SUPERUSER", sql, re.IGNORECASE) is None
@@ -23,6 +24,17 @@ def test_runtime_role_sql_is_manual_and_separates_function_owner():
     assert "FROM PUBLIC" in sql
     migration = (ROOT / "news_aggregator/migrations/article_ingestion.py").read_text()
     assert "CREATE ROLE" not in migration.upper()
+
+
+def test_ingestion_pool_bound_fits_one_dedicated_run_lock_connection():
+    main = (ROOT / "go-ingestion/cmd/news-ingestion/main.go").read_text()
+    readme = (ROOT / "go-ingestion/README.md").read_text()
+    guide = (ROOT / "docs/go-article-ingestion.md").read_text()
+    assert 'envInt("ARTICLE_INGESTION_DB_MAX_CONNS", 5, 1, 5)' in main
+    assert "bounded to 1–5" in readme
+    assert "five pooled PostgreSQL connections plus one dedicated connection" in readme
+    assert "Defaults to 5; accepted range 1–5" in guide
+    assert "one dedicated connection for the fenced run lock" in guide
 
 
 def test_private_compose_has_no_host_publication_or_host_mounts():

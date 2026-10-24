@@ -19,6 +19,7 @@ os.environ.setdefault("ADMIN_PASSWORD", "fixture-only")
 from news_aggregator.migrations.article_ingestion import ArticleIngestionMigration
 from news_aggregator.migrations.background_jobs import BackgroundJobsMigration
 from news_aggregator.migrations.job_executor import JobExecutorMigration
+from news_aggregator.models import ArticleIngestionRun, SourceCollectionState
 from news_aggregator.executor import ArticleIngestionCallbackFence, RemoteJobFence, _source_fingerprint
 from news_aggregator.services.job_fence import JobExecutionFence, current_job_fence
 from news_aggregator.services import extraction_memory as memory_module
@@ -441,3 +442,55 @@ async def test_cancel_between_pattern_commit_and_cache_publication_keeps_cache_o
     finally:
         continue_publication.set()
         await lease_conn.close()
+
+
+@pytest.mark.asyncio
+async def test_create_all_article_ingestion_timestamp_defaults_are_utc_for_non_utc_session():
+    schema = "test_article_ingestion_defaults_" + uuid.uuid4().hex
+    admin = create_async_engine(_url())
+    engine = create_async_engine(
+        _url(), connect_args={
+            "server_settings": {
+                "search_path": schema,
+                "timezone": "America/Los_Angeles",
+            }
+        }
+    )
+    try:
+        async with admin.begin() as conn:
+            await conn.execute(text(f'CREATE SCHEMA "{schema}"'))
+        async with engine.begin() as conn:
+            await conn.execute(text("""
+                CREATE TABLE background_jobs (id UUID PRIMARY KEY)
+            """))
+            await conn.execute(text("""
+                CREATE TABLE sources (id SERIAL PRIMARY KEY)
+            """))
+            await conn.run_sync(lambda sync: ArticleIngestionRun.__table__.create(sync))
+            await conn.run_sync(lambda sync: SourceCollectionState.__table__.create(sync))
+            job_id, run_id = uuid.uuid4(), uuid.uuid4()
+            await conn.execute(text("INSERT INTO background_jobs(id) VALUES(:id)"), {"id": job_id})
+            await conn.execute(text("INSERT INTO sources(id) VALUES(1)"))
+            run_times = (await conn.execute(text("""
+                INSERT INTO article_ingestion_runs
+                    (id,job_id,attempt_generation,envelope_sha256,owner_id,worker_generation,
+                     backend_pid,executor_instance_id,deadline_at)
+                VALUES (:id,:job,1,:digest,:owner,1,1,:executor,:deadline)
+                RETURNING started_at,updated_at
+            """), {
+                "id": run_id, "job": job_id, "digest": "a" * 64,
+                "owner": uuid.uuid4(), "executor": uuid.uuid4(),
+                "deadline": datetime.now(timezone.utc).replace(tzinfo=None) + timedelta(minutes=2),
+            })).one()
+            state_updated = await conn.scalar(text("""
+                INSERT INTO source_collection_state(source_id,config_sha256)
+                VALUES(1,:digest) RETURNING updated_at
+            """), {"digest": "b" * 64})
+            utc_now = await conn.scalar(text("SELECT timezone('UTC', now())"))
+        for value in (*run_times, state_updated):
+            assert abs((value - utc_now).total_seconds()) < 5
+    finally:
+        await engine.dispose()
+        async with admin.begin() as conn:
+            await conn.execute(text(f'DROP SCHEMA IF EXISTS "{schema}" CASCADE'))
+        await admin.dispose()

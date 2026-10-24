@@ -46,6 +46,28 @@ def test_scheduler_enabled_false_does_not_change_go_service_requirements():
         settings.validate_runtime_services()
 
 
+def test_go_article_ingestion_requires_worker_mode_and_python_keeps_embedded_mode():
+    with pytest.raises(RuntimeError, match="BACKGROUND_EXECUTION_MODE=worker"):
+        configured(
+            ARTICLE_INGESTION_MODE="go",
+            ARTICLE_INGESTION_URL="http://ingestion:8093",
+            ARTICLE_INGESTION_TOKEN=TOKEN,
+            BACKGROUND_EXECUTION_MODE="embedded",
+        ).validate_runtime_services()
+
+    assert configured(
+        ARTICLE_INGESTION_MODE="go",
+        ARTICLE_INGESTION_URL="http://ingestion:8093",
+        ARTICLE_INGESTION_TOKEN=TOKEN,
+        BACKGROUND_EXECUTION_MODE="worker",
+    ).validate_runtime_services() is True
+
+    assert configured(
+        ARTICLE_INGESTION_MODE="python",
+        BACKGROUND_EXECUTION_MODE="embedded",
+    ).validate_runtime_services() is True
+
+
 @pytest.mark.parametrize("name,value", [
     ("SOURCE_MANAGER_MODE", "python"),
     ("TELEGRAM_SOURCE_MODE", "shadow"),

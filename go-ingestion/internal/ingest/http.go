@@ -29,6 +29,8 @@ import (
 
 const maxEnvelopeBytes = 8192
 const maxExtractorBytes = 8 * 1024 * 1024
+const maxSelectorHTMLBytes = 5 * 1024 * 1024
+const maxSelectorCallbackBytes = maxSelectorHTMLBytes + maxEnvelopeBytes
 
 type Config struct {
 	Token                  string
@@ -894,6 +896,10 @@ func hasCollectedPayload(r collectResult) bool {
 	}
 }
 
+func hasAnyCollectedPayload(r collectResult) bool {
+	return r.RSSArticles != nil || r.Telegram != nil || r.PageMonitor != nil
+}
+
 func makeDescriptor(src store.Source, p store.PageState) (descriptor, string) {
 	d := descriptor{SourceID: src.ID, Type: src.Type, SourceName: src.Name, URL: src.URL, PerSourceBudgetMS: 120000}
 	if src.Type == "rss" {
@@ -919,12 +925,51 @@ func makeDescriptor(src store.Source, p store.PageState) (descriptor, string) {
 	if c.Limit, _ = positiveConfig(src.Config, "max_articles_per_check", 100); c.Limit == 0 {
 		c.Limit = 20
 	}
+	applyPageMonitorSelectorDefaults(&c)
 	d.Limit = c.Limit
 	c.Limit = 0
 	c.Offset = p.CursorOffset
 	d.PageMonitor = &c
 	return d, ""
 }
+
+func applyPageMonitorSelectorDefaults(c *sourceConfig) {
+	if c.ArticleSelectors == nil {
+		c.ArticleSelectors = []string{
+			"article", ".article", ".news-item", ".post", ".entry",
+			".changelog-item", ".update-item", ".release-note",
+			".content li", ".main li", "ul.updates li", "ul.news li",
+			".content > div", ".main > div", ".updates > div",
+			`[class*="item"]`, `[class*="post"]`, `[class*="article"]`,
+			"h2, h3, h4", ".title", ".headline", ".heading",
+		}
+	}
+	if c.TitleSelectors == nil {
+		c.TitleSelectors = []string{
+			"h1", "h2", "h3", "h4", ".title", ".headline", ".heading",
+			"a[href]", ".link", ".post-title", ".article-title",
+		}
+	}
+	if c.DateSelectors == nil {
+		c.DateSelectors = []string{
+			"time", "time[datetime]", "[datetime]",
+			".date", ".timestamp", ".published", ".created", ".updated",
+			".publish-date", ".published-date", ".creation-date", ".post-date",
+			".article-date", ".news-date", ".entry-date", ".blog-date",
+			".meta .date", ".meta time", ".metadata .date", ".info .date",
+			".post-meta .date", ".article-meta .date", ".entry-meta .date",
+			".commit-date", ".release-date", ".version-date", ".update-date",
+			".changelog-date", ".timeline .date",
+			".byline .date", ".author-date", ".publish-info .date",
+			`[class*="date"]`, `[class*="time"]`, `[class*="publish"]`,
+			`[id*="date"]`, `[id*="time"]`,
+		}
+	}
+	if c.LinkSelectors == nil {
+		c.LinkSelectors = []string{"a[href]", ".link", ".read-more", ".permalink"}
+	}
+}
+
 func (h *Handler) fetchBatch(ctx context.Context, descriptors []descriptor) (map[int32]collectResult, string, time.Duration) {
 	requestID := fmt.Sprintf("ing-%d", time.Now().UnixNano())
 	body, _ := json.Marshal(map[string]any{"contract_version": "1", "request_id": requestID, "batch_budget_ms": 120000, "sources": descriptors})
@@ -968,7 +1013,8 @@ func (h *Handler) fetchBatch(ctx context.Context, descriptors []descriptor) (map
 		if _, duplicate := results[r.SourceID]; duplicate {
 			return nil, "extractor_response_invalid", 0
 		}
-		if r.Outcome == "success" || r.Outcome == "partial" || r.Outcome == "deferred" {
+		payloadPresent := hasAnyCollectedPayload(r)
+		if payloadPresent || r.Outcome == "success" || r.Outcome == "partial" {
 			switch typ {
 			case "rss":
 				if r.RSSArticles == nil || r.Telegram != nil || r.PageMonitor != nil {
@@ -1062,16 +1108,33 @@ func retryDelayForAttempt(attempt int, backoff, retryAfter time.Duration) time.D
 	return boundedRetryDelay(backoff, retryAfter)
 }
 
+func marshalBoundedJSON(value any, maxBytes int) ([]byte, error) {
+	var body bytes.Buffer
+	encoder := json.NewEncoder(&body)
+	encoder.SetEscapeHTML(false)
+	if err := encoder.Encode(value); err != nil {
+		return nil, err
+	}
+	encoded := body.Bytes()
+	if len(encoded) > 0 && encoded[len(encoded)-1] == '\n' {
+		encoded = encoded[:len(encoded)-1]
+	}
+	if len(encoded) > maxBytes {
+		return nil, errors.New("encoded request exceeds limit")
+	}
+	return append([]byte(nil), encoded...), nil
+}
+
 func (h *Handler) selectorCall(ctx context.Context, f store.Fence, src store.Source, operation, html string) (selectorResponse, error) {
-	if len(html) > 5*1024*1024 {
+	if len(html) > maxSelectorHTMLBytes {
 		return selectorResponse{}, errors.New("selector payload exceeds limit")
 	}
-	reqBody, err := json.Marshal(selectorRequest{
+	reqBody, err := marshalBoundedJSON(selectorRequest{
 		Envelope: Envelope{Version: 1, JobID: f.JobID, AttemptGeneration: f.AttemptGeneration,
 			OwnerID: f.OwnerID, Generation: f.WorkerGeneration, BackendPID: f.BackendPID,
 			ExecutorInstance: f.ExecutorInstance, DeadlineAt: f.DeadlineAt.UTC()},
 		Operation: operation, SourceID: src.ID, SourceFingerprint: src.Fingerprint, StudyHTML: html,
-	})
+	}, maxSelectorCallbackBytes)
 	if err != nil {
 		return selectorResponse{}, errors.New("selector request encoding failed")
 	}
@@ -1111,7 +1174,7 @@ func applyLearnedSelectors(config map[string]any, result selectorResponse) {
 }
 
 func (h *Handler) parsePageMonitor(ctx context.Context, src store.Source, d descriptor, captured *pageMonitorResult) (*pageMonitorResult, error) {
-	if captured == nil || captured.SnapshotAt == nil || captured.StudyHTML == "" || d.PageMonitor == nil || len(captured.StudyHTML) > 5*1024*1024 {
+	if captured == nil || captured.SnapshotAt == nil || captured.StudyHTML == "" || d.PageMonitor == nil || len(captured.StudyHTML) > maxSelectorHTMLBytes {
 		return nil, errors.New("captured page is invalid")
 	}
 	type parseRequest struct {
@@ -1138,13 +1201,16 @@ func (h *Handler) parsePageMonitor(ctx context.Context, src store.Source, d desc
 	}
 	requestID := fmt.Sprintf("study-%d", time.Now().UnixNano())
 	cfg := d.PageMonitor
-	body, _ := json.Marshal(parseRequest{ContractVersion: "1", RequestID: requestID, Operation: "parse",
+	body, err := marshalBoundedJSON(parseRequest{ContractVersion: "1", RequestID: requestID, Operation: "parse",
 		URL: src.URL, SourceName: src.Name, BudgetMS: 30000, Limit: d.Limit, Offset: 0,
 		MinTitleLength: cfg.MinTitleLength, ProvidedHTML: captured.StudyHTML, SnapshotAt: captured.SnapshotAt.UTC(),
 		ArticleSelectors: cfg.ArticleSelectors, TitleSelectors: cfg.TitleSelectors, DateSelectors: cfg.DateSelectors,
 		LinkSelectors: cfg.LinkSelectors, LearnedContainerSelectors: cfg.LearnedContainerSelectors,
 		LearnedTitleSelectors: cfg.LearnedTitleSelectors, LearnedLinkSelectors: cfg.LearnedLinkSelectors,
-		LearnedDateSelectors: cfg.LearnedDateSelectors, LearnedGeneralSelectors: cfg.LearnedGeneralSelectors})
+		LearnedDateSelectors: cfg.LearnedDateSelectors, LearnedGeneralSelectors: cfg.LearnedGeneralSelectors}, maxExtractorBytes)
+	if err != nil {
+		return nil, errors.New("same-snapshot reparse request exceeds limit")
+	}
 	u := strings.TrimRight(h.cfg.ExtractorURL, "/") + "/v1/page-monitor/extract"
 	req, err := http.NewRequestWithContext(ctx, http.MethodPost, u, bytes.NewReader(body))
 	if err != nil {

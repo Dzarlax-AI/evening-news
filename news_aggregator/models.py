@@ -12,8 +12,32 @@ from sqlalchemy import (
 from sqlalchemy.dialects.postgresql import JSONB
 from sqlalchemy.orm import relationship
 from sqlalchemy.sql import func
+from sqlalchemy.ext.compiler import compiles
+from sqlalchemy.sql.functions import FunctionElement
 
 from .database import Base
+
+
+class _UTCNow(FunctionElement):
+    """UTC timestamp default across PostgreSQL and SQLite test schemas."""
+
+    type = DateTime()
+    inherit_cache = True
+
+
+@compiles(_UTCNow, "postgresql")
+def _compile_utc_now_postgresql(element, compiler, **kw):
+    return "timezone('UTC', now())"
+
+
+@compiles(_UTCNow, "sqlite")
+def _compile_utc_now_sqlite(element, compiler, **kw):
+    return "CURRENT_TIMESTAMP"
+
+
+@compiles(_UTCNow)
+def _compile_utc_now_default(element, compiler, **kw):
+    return "CURRENT_TIMESTAMP"
 
 
 class Source(Base):
@@ -346,8 +370,8 @@ class ArticleIngestionRun(Base):
     executor_instance_id = Column(Uuid(as_uuid=True), nullable=False)
     deadline_at = Column(DateTime, nullable=False)
     state = Column(String(20), nullable=False, default="running", server_default="running")
-    started_at = Column(DateTime, nullable=False, server_default=func.now())
-    updated_at = Column(DateTime, nullable=False, server_default=func.now())
+    started_at = Column(DateTime, nullable=False, server_default=_UTCNow())
+    updated_at = Column(DateTime, nullable=False, server_default=_UTCNow())
     finished_at = Column(DateTime)
     result = Column(JSON().with_variant(JSONB, "postgresql"), nullable=False,
                     default=dict, server_default=text("'{}'"))
@@ -406,7 +430,7 @@ class SourceCollectionState(Base):
                                  default=dict, server_default=text("'{}'"))
     snapshot_at = Column(DateTime)
     content_sha256 = Column(String(64))
-    updated_at = Column(DateTime, nullable=False, server_default=func.now())
+    updated_at = Column(DateTime, nullable=False, server_default=_UTCNow())
 
     __table_args__ = (
         CheckConstraint("scan_limit BETWEEN 1 AND 100", name="ck_source_collection_scan_limit"),
