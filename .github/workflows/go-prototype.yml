@@ -40,8 +40,8 @@ jobs:
       - uses: actions/setup-python@v5
         with:
           python-version: '3.12'
-      - name: Install replay checker test dependency
-        run: python -m pip install pytest
+      - name: Install Python project and replay test dependencies
+        run: python -m pip install -r requirements.txt
       - name: Go unit tests, race detector, and static checks
         working-directory: go
         run: |

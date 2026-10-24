@@ -3,13 +3,21 @@
 The Go worker is the only process that owns and consumes the durable News job
 queue. The Python web app accepts jobs and reads their status. A separate,
 private Python executor performs the existing News operations after Go claims a
-job. `NewsOrchestrator.run_full_cycle` and its internal pipeline remain Python;
-this change moves queue ownership and job lifecycle management, not the News
-orchestration or AI implementation.
+job. `NewsOrchestrator.run_full_cycle` and its internal pipeline remain Python.
+The Go worker owns queue lifecycle; Python owns News orchestration and AI.
 
 The standalone Go scheduler continues to own calendar timing and dispatch. The
 separate Go collection service continues to own source collection and article
 extraction. They are independent services with their existing APIs.
+
+Article persistence has a separate, explicit mode boundary. The current
+default remains Python collection and persistence through the database-free Go
+collector. A database-aware Go article ingestion service is implemented but
+not deployed. If enabled in a future deployment, the Python executor calls it
+within the current job fence; it reads source configuration, calls the
+existing collector, and commits articles and source progress. Python then
+continues quality checks, AI processing, summaries, and delivery. The service
+does not own the queue or replace the executor.
 
 ```mermaid
 flowchart LR
@@ -18,7 +26,10 @@ flowchart LR
     Worker[Go job worker] -->|lease, claim, finish| DB
     Worker -->|private fixed job API| Executor[Python job executor]
     Executor -->|fenced News writes| DB
-    Executor -->|existing collection API| Collector[Go collection service]
+    Executor -->|current Python-mode collection API| Collector[Go collection service]
+    Ingestion[Go article ingestion<br/>implemented, not deployed] -.->|future explicit mode| Executor
+    Ingestion -->|existing collection API| Collector
+    Ingestion -->|fenced articles + source progress| DB
     Executor --> AI[Gemini]
     Executor --> Telegram[Telegram delivery]
 ```
@@ -27,7 +38,9 @@ flowchart LR
 
 The standalone example stack in `docker-compose.example.yml` runs the web app,
 Go worker, private Python executor, Go collection service, Go scheduler, and
-separate News and scheduler PostgreSQL databases. The executor and worker have
+separate News and scheduler PostgreSQL databases. The standalone ingestion
+template is maintained separately and is not included in this example stack.
+The executor and worker have
 no published host ports. Worker traffic reaches the executor directly over the
 Compose network.
 

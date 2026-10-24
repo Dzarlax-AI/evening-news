@@ -4,6 +4,7 @@ import json
 import sqlite3
 import os
 import uuid
+from contextlib import asynccontextmanager
 from types import SimpleNamespace
 from unittest.mock import AsyncMock, patch
 from datetime import datetime, timedelta
@@ -273,6 +274,59 @@ async def test_startup_sql_and_python_choose_same_pattern_order(monkeypatch):
 
 def analysis(reasoning="ok"):
     return PageAnalysis(["article"], ["h1"], ["time"], {}, "news", reasoning, {})
+
+
+@pytest.mark.asyncio
+async def test_fenced_page_study_uses_legacy_cache_merge_semantics(monkeypatch):
+    def make_service():
+        service = ExtractionMemoryService()
+        service._initialized = True
+        service._patterns["site.test"] = [
+            ExtractionMemoryEntry(
+                domain="site.test", selector_pattern="article", extraction_strategy="source_container",
+                success_count=0, failure_count=0, success_rate=95.0, quality_score_avg=0.95,
+                discovered_by="ai",
+            ),
+            entry("site.test", "manual-selector", quality=0.8),
+        ]
+        service._ensure_initialized = AsyncMock()
+        service._save_ai_discovery_to_db = AsyncMock()
+        return service
+
+    legacy = make_service()
+    fenced = make_service()
+    await legacy.record_page_structure("site.test", analysis())
+    await memory_module.asyncio.sleep(0)
+
+    class Session:
+        execute = AsyncMock()
+        commit = AsyncMock()
+
+    class SessionContext:
+        async def __aenter__(self):
+            return Session()
+
+        async def __aexit__(self, *args):
+            return False
+
+    class Lease:
+        run_id = uuid.uuid4()
+
+        @asynccontextmanager
+        async def transaction_fence(self, session, job_id, attempt_generation):
+            yield
+
+    active = SimpleNamespace(active=True, lease=Lease(), job_id=uuid.uuid4(), attempt_generation=1)
+    monkeypatch.setattr(memory_module, "AsyncSessionLocal", SessionContext)
+    assert await fenced._record_fenced_page_structure("site.test", analysis(), active)
+
+    def values(service):
+        return sorted((p.selector_pattern, p.extraction_strategy, p.success_rate,
+                       p.quality_score_avg, p.discovered_by, p.success_count, p.failure_count)
+                      for p in service._patterns["site.test"])
+
+    assert values(fenced) == values(legacy)
+    assert next(p for p in fenced._patterns["site.test"] if p.selector_pattern == "article").success_rate == 95.0
 
 
 @pytest.mark.asyncio

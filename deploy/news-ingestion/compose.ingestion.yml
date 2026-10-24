@@ -1,0 +1,35 @@
+services:
+  article-ingestion:
+    image: ${ARTICLE_INGESTION_IMAGE:?Set ARTICLE_INGESTION_IMAGE to a reviewed image}
+    environment:
+      ARTICLE_INGESTION_LISTEN: ":8093"
+      ARTICLE_INGESTION_DB_MAX_CONNS: "5"
+      DATABASE_URL: ${ARTICLE_INGESTION_DATABASE_URL:?Set ARTICLE_INGESTION_DATABASE_URL}
+      ARTICLE_INGESTION_TOKEN: ${ARTICLE_INGESTION_TOKEN:?Set ARTICLE_INGESTION_TOKEN}
+      EXTRACTION_SERVICE_URL: ${EXTRACTION_SERVICE_URL:?Set EXTRACTION_SERVICE_URL}
+      EXTRACTION_SERVICE_TOKEN: ${EXTRACTION_SERVICE_TOKEN:?Set EXTRACTION_SERVICE_TOKEN}
+      EXTRACTION_SERVICE_NATIVE_BROWSER: ${EXTRACTION_SERVICE_NATIVE_BROWSER:-false}
+      JOB_EXECUTOR_URL: ${JOB_EXECUTOR_URL:?Set JOB_EXECUTOR_URL}
+      JOB_EXECUTOR_TOKEN: ${JOB_EXECUTOR_TOKEN:?Set JOB_EXECUTOR_TOKEN}
+    networks:
+      - news-private
+    read_only: true
+    cap_drop:
+      - ALL
+    security_opt:
+      - no-new-privileges:true
+    pids_limit: 64
+    mem_limit: 256m
+    cpus: 0.50
+    restart: unless-stopped
+    healthcheck:
+      test: ["CMD", "wget", "-q", "-O", "/dev/null", "http://127.0.0.1:8093/healthz"]
+      interval: 15s
+      timeout: 3s
+      start_period: 10s
+      retries: 3
+
+networks:
+  news-private:
+    external: true
+    name: ${NEWS_INGESTION_NETWORK:?Set NEWS_INGESTION_NETWORK to an existing private network}

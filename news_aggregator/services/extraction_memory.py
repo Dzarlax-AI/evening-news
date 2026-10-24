@@ -2,6 +2,7 @@ import logging
 """Extraction memory service with database persistence."""
 
 import asyncio
+import copy
 from collections import deque
 from typing import Dict, List, Optional
 from dataclasses import dataclass
@@ -10,6 +11,7 @@ from decimal import Decimal
 
 from sqlalchemy import text
 from ..database import AsyncSessionLocal
+from .job_fence import current_job_fence
 
 logger = logging.getLogger(__name__)
 
@@ -269,6 +271,40 @@ class ExtractionMemoryService:
             rebuilt.setdefault(pattern.domain, []).append(pattern)
         self._patterns = rebuilt
 
+    def _merge_ai_pattern(self, domain: str, selector: str, strategy: str, confidence: float):
+        """Apply the legacy AI-prior merge semantics and return the cache row."""
+        if domain not in self._patterns:
+            self._patterns[domain] = []
+        self._patterns[domain] = self._unique_patterns(self._patterns[domain])
+        existing = next((entry for entry in self._patterns[domain]
+                         if entry.selector_pattern == selector
+                         and entry.extraction_strategy == strategy), None)
+        if existing is not None:
+            if not ((existing.success_count or 0) + (existing.failure_count or 0)):
+                if existing.discovered_by == 'ai':
+                    confidence = max(confidence, (existing.success_rate or 0) / 100,
+                                     existing.quality_score_avg or 0)
+                existing.success_rate = confidence * 100
+                existing.quality_score_avg = confidence
+                existing.discovered_by = 'ai'
+            existing.updated_at = datetime.utcnow()
+            return existing
+
+        pattern = ExtractionMemoryEntry(
+            domain=domain,
+            selector_pattern=selector,
+            extraction_strategy=strategy,
+            success_count=0,
+            failure_count=0,
+            success_rate=confidence * 100,
+            quality_score_avg=confidence,
+            discovered_by='ai',
+            created_at=datetime.utcnow(),
+            updated_at=datetime.utcnow(),
+        )
+        self._patterns[domain].append(pattern)
+        return pattern
+
     def _unique_patterns(self, patterns):
         """Keep one cumulative snapshot per identity, without doubling evidence."""
         unique = {}
@@ -337,27 +373,32 @@ class ExtractionMemoryService:
         """Refresh an AI prior without erasing an observed row outside the cache."""
         try:
             async with AsyncSessionLocal() as session:
-                await session.execute(text("""
-                    INSERT INTO extraction_patterns
-                        (domain, selector_pattern, extraction_strategy, quality_score_avg, discovered_by)
-                    VALUES (:domain, :selector, :strategy, :confidence, 'ai')
-                    ON CONFLICT (domain, selector_pattern, extraction_strategy) DO UPDATE SET
-                        quality_score_avg = CASE
-                            WHEN COALESCE(extraction_patterns.success_count, 0) +
-                                 COALESCE(extraction_patterns.failure_count, 0) = 0
-                            THEN GREATEST(COALESCE(extraction_patterns.quality_score_avg, 0), EXCLUDED.quality_score_avg)
-                            ELSE extraction_patterns.quality_score_avg END,
-                        discovered_by = CASE
-                            WHEN COALESCE(extraction_patterns.success_count, 0) +
-                                 COALESCE(extraction_patterns.failure_count, 0) = 0
-                            THEN 'ai' ELSE extraction_patterns.discovered_by END,
-                        updated_at = NOW()
-                """), {'domain': entry.domain, 'selector': entry.selector_pattern,
-                        'strategy': entry.extraction_strategy,
-                        'confidence': Decimal(str(entry.quality_score_avg))})
+                await self._save_ai_discovery_in_session(session, entry)
                 await session.commit()
         except Exception as e:
             logger.warning(f"  ⚠️ Failed to save AI pattern discovery: {e}")
+
+    @staticmethod
+    async def _save_ai_discovery_in_session(session, entry: ExtractionMemoryEntry):
+        """Persist the same AI prior merge used by the unfenced legacy path."""
+        await session.execute(text("""
+            INSERT INTO extraction_patterns
+                (domain, selector_pattern, extraction_strategy, quality_score_avg, discovered_by)
+            VALUES (:domain, :selector, :strategy, :confidence, 'ai')
+            ON CONFLICT (domain, selector_pattern, extraction_strategy) DO UPDATE SET
+                quality_score_avg = CASE
+                    WHEN COALESCE(extraction_patterns.success_count, 0) +
+                         COALESCE(extraction_patterns.failure_count, 0) = 0
+                    THEN GREATEST(COALESCE(extraction_patterns.quality_score_avg, 0), EXCLUDED.quality_score_avg)
+                    ELSE extraction_patterns.quality_score_avg END,
+                discovered_by = CASE
+                    WHEN COALESCE(extraction_patterns.success_count, 0) +
+                         COALESCE(extraction_patterns.failure_count, 0) = 0
+                    THEN 'ai' ELSE extraction_patterns.discovered_by END,
+                updated_at = NOW()
+        """), {'domain': entry.domain, 'selector': entry.selector_pattern,
+                'strategy': entry.extraction_strategy,
+                'confidence': Decimal(str(entry.quality_score_avg))})
     async def _save_attempt_to_db(self, attempt: ExtractionAttempt):
         """Save extraction attempt to database for analytics."""
         try:
@@ -700,6 +741,9 @@ class ExtractionMemoryService:
     
     async def record_page_structure(self, domain: str, analysis: 'PageAnalysis') -> bool:
         """Record page structure discovered by AI analysis."""
+        active = current_job_fence.get()
+        if active is not None and hasattr(active.lease, "run_id"):
+            return await self._record_fenced_page_structure(domain, analysis, active)
         try:
             patterns = []
             
@@ -745,6 +789,79 @@ class ExtractionMemoryService:
             
         except Exception as e:
             logger.error(f"❌ Error recording page structure: {e}")
+            return False
+
+    async def _record_fenced_page_structure(self, domain: str, analysis: 'PageAnalysis', active) -> bool:
+        """Commit callback learning and its cache publication under both fences."""
+        patterns = []
+        for selector in analysis.content_selectors:
+            patterns.append((selector, 'source_container', analysis.confidence_scores.get(selector, 0.8)))
+        for selector in analysis.title_selectors:
+            patterns.append((selector, 'source_title', 0.9))
+        for selector in getattr(analysis, 'link_selectors', []) or []:
+            patterns.append((selector, 'source_link', 0.9))
+        for selector in analysis.date_selectors:
+            patterns.append((selector, 'source_date', 0.8))
+        if any(not isinstance(selector, str) or not selector.strip()
+               or len(selector.encode('utf-8')) > 2048 for selector, _, _ in patterns):
+            return False
+        if not active.active:
+            return False
+        await self._ensure_initialized()
+        published_cache = None
+        original_cache = None
+        try:
+            async with AsyncSessionLocal() as session:
+                async with active.lease.transaction_fence(session, active.job_id, active.attempt_generation):
+                    if not active.active:
+                        return False
+                    for selector, strategy, confidence in patterns:
+                        await self._save_ai_discovery_in_session(
+                            session, ExtractionMemoryEntry(
+                                domain=domain,
+                                selector_pattern=selector,
+                                extraction_strategy=strategy,
+                                quality_score_avg=confidence,
+                            )
+                        )
+                    if not active.active:
+                        return False
+                    await session.commit()
+
+            # The durable pattern transaction must finish before any reader can
+            # observe these values in the shared cache. Reacquire the full
+            # receipt/source fence so cancellation or a source edit between
+            # DB commit and cache publication leaves the cache untouched.
+            if not active.active:
+                return False
+            async with AsyncSessionLocal() as session:
+                async with active.lease.transaction_fence(session, active.job_id, active.attempt_generation):
+                    if not active.active:
+                        return False
+                    original_cache = self._patterns
+                    staged_cache = copy.deepcopy(original_cache)
+                    self._patterns = staged_cache
+                    try:
+                        for selector, strategy, confidence in patterns:
+                            self._merge_ai_pattern(domain, selector, strategy, confidence)
+                        self._enforce_pattern_limits()
+                        staged_cache = self._patterns
+                    finally:
+                        self._patterns = original_cache
+                    if not active.active:
+                        return False
+                    self._patterns = staged_cache
+                    published_cache = staged_cache
+            logger.info("  🤖 Recorded %d fenced AI-discovered patterns", len(patterns))
+            return True
+        except asyncio.CancelledError:
+            if published_cache is not None and self._patterns is published_cache:
+                self._patterns = original_cache
+            raise
+        except Exception as exc:
+            if published_cache is not None and self._patterns is published_cache:
+                self._patterns = original_cache
+            logger.warning("  ⚠️ Fenced selector memory publication failed: %s", type(exc).__name__)
             return False
 
     async def get_page_structure(self, domain: str) -> Dict[str, List[str]]:
@@ -798,41 +915,7 @@ class ExtractionMemoryService:
                 confidence = pattern_data.get('confidence', 0.5)
                 
                 if selector:
-                    if domain not in self._patterns:
-                        self._patterns[domain] = []
-                    self._patterns[domain] = self._unique_patterns(self._patterns[domain])
-                    existing = next((entry for entry in self._patterns[domain]
-                                     if entry.selector_pattern == selector
-                                     and entry.extraction_strategy == strategy), None)
-                    if existing is not None:
-                        if not ((existing.success_count or 0) + (existing.failure_count or 0)):
-                            if existing.discovered_by == 'ai':
-                                confidence = max(confidence, (existing.success_rate or 0) / 100,
-                                                 existing.quality_score_avg or 0)
-                            existing.success_rate = confidence * 100
-                            existing.quality_score_avg = confidence
-                            existing.discovered_by = 'ai'
-                        existing.updated_at = datetime.utcnow()
-                        asyncio.create_task(self._save_ai_discovery_to_db(existing))
-                        self._enforce_pattern_limits()
-                        continue
-                    
-                    # Add AI-discovered pattern
-                    pattern = ExtractionMemoryEntry(
-                        domain=domain,
-                        selector_pattern=selector,
-                        extraction_strategy=strategy,
-                        success_count=0,
-                        failure_count=0,
-                        success_rate=confidence * 100,
-                        # success_rate is a generated database column; retain
-                        # zero-attempt AI confidence in this persisted score.
-                        quality_score_avg=confidence,
-                        discovered_by='ai',
-                        created_at=datetime.utcnow(),
-                        updated_at=datetime.utcnow()
-                    )
-                    self._patterns[domain].append(pattern)
+                    pattern = self._merge_ai_pattern(domain, selector, strategy, confidence)
                     asyncio.create_task(self._save_ai_discovery_to_db(pattern))
                     self._enforce_pattern_limits()
 

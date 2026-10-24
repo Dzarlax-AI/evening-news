@@ -70,6 +70,13 @@ class Settings(BaseSettings):
     background_execution_mode: Literal["embedded", "worker"] = Field(
         default="embedded", alias="BACKGROUND_EXECUTION_MODE"
     )
+    article_ingestion_mode: Literal["python", "go"] = Field(
+        default="python", alias="ARTICLE_INGESTION_MODE"
+    )
+    article_ingestion_url: Optional[str] = Field(default=None, alias="ARTICLE_INGESTION_URL")
+    article_ingestion_token: Optional[SecretStr] = Field(
+        default=None, repr=False, alias="ARTICLE_INGESTION_TOKEN"
+    )
     worker_poll_interval_seconds: int = Field(default=1, ge=1, le=10, alias="WORKER_POLL_INTERVAL_SECONDS")
     worker_shutdown_drain_seconds: int = Field(default=20, ge=0, le=120, alias="WORKER_SHUTDOWN_DRAIN_SECONDS")
     worker_job_retention_days: int = Field(default=7, ge=1, le=90, alias="WORKER_JOB_RETENTION_DAYS")
@@ -184,6 +191,26 @@ class Settings(BaseSettings):
                 raise RuntimeError(f"{label} must be a valid service URL")
             if not 16 <= len(token) <= 4096 or any(ord(ch) < 0x21 or ord(ch) > 0x7E for ch in token):
                 raise RuntimeError(f"{label} token must be a valid non-empty service token")
+        if self.article_ingestion_mode == "go":
+            if self.background_execution_mode != "worker":
+                raise RuntimeError(
+                    "ARTICLE_INGESTION_MODE=go requires BACKGROUND_EXECUTION_MODE=worker"
+                )
+            url = self.article_ingestion_url
+            token = (self.article_ingestion_token.get_secret_value()
+                     if self.article_ingestion_token else None)
+            try:
+                parsed = urlsplit(url or "")
+                _ = parsed.port
+            except ValueError:
+                raise RuntimeError("ARTICLE_INGESTION_URL must be a valid service URL") from None
+            if (parsed.scheme not in {"http", "https"} or not parsed.hostname
+                    or parsed.username or parsed.password or parsed.query or parsed.fragment
+                    or any(ch.isspace() for ch in (url or ""))):
+                raise RuntimeError("ARTICLE_INGESTION_URL must be a valid service URL")
+            if not token or not 16 <= len(token) <= 4096 or any(
+                    ord(ch) < 0x21 or ord(ch) > 0x7E for ch in token):
+                raise RuntimeError("ARTICLE_INGESTION_TOKEN must be configured with a valid service token")
         receiver_token = (self.scheduled_jobs_token.get_secret_value()
                           if self.scheduled_jobs_token else None)
         if not receiver_token or not 16 <= len(receiver_token) <= 4096 or any(

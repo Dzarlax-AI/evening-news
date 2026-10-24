@@ -15,11 +15,14 @@ import (
 	"time"
 
 	"github.com/Dzarlax-AI/evening-news/go/extractor"
+	"github.com/Dzarlax-AI/evening-news/go/pipeline"
+	"github.com/Dzarlax-AI/evening-news/go/transport"
 )
 
 type sourceManagerTestRunner struct {
-	RSS      func(context.Context, RSSRequest) RSSResponse
-	Telegram func(context.Context, TelegramRequest) TelegramResponse
+	RSS         func(context.Context, RSSRequest) RSSResponse
+	Telegram    func(context.Context, TelegramRequest) TelegramResponse
+	PageMonitor func(context.Context, PageMonitorRequest) PageMonitorResponse
 }
 
 func (r sourceManagerTestRunner) Run(context.Context, Request) Response {
@@ -37,7 +40,10 @@ func (r sourceManagerTestRunner) RunTelegram(ctx context.Context, req TelegramRe
 	}
 	return TelegramResponse{Outcome: "success", OriginalURL: req.ChannelURL, FinalURL: req.ChannelURL, Articles: []extractor.TelegramArticle{}}
 }
-func (r sourceManagerTestRunner) RunPageMonitor(_ context.Context, req PageMonitorRequest) PageMonitorResponse {
+func (r sourceManagerTestRunner) RunPageMonitor(ctx context.Context, req PageMonitorRequest) PageMonitorResponse {
+	if r.PageMonitor != nil {
+		return r.PageMonitor(ctx, req)
+	}
 	return PageMonitorResponse{Outcome: "success", OriginalURL: req.URL, FinalURL: req.URL, Items: []extractor.PageMonitorItem{}, SelectorsUsed: []string{}}
 }
 
@@ -98,6 +104,72 @@ func TestSourceBatchCollectPreservesOrderAndIndependentOutcomes(t *testing.T) {
 	s.ServeHTTP(article, articleRequest)
 	if article.Code != http.StatusOK {
 		t.Fatalf("article request after batch = %d %s", article.Code, article.Body.String())
+	}
+}
+
+func TestSourceBatchPageMonitorDefaultsCollectSyntheticArticleWithoutAI(t *testing.T) {
+	const fixtureURL = "https://pm.fixture.test/news"
+	const html = `<html><main><article class="news-item"><h2><a href="/story">Ordinary synthetic article title</a></h2><p>Fixture body.</p></article></main></html>`
+	var articleCount atomic.Int32
+	runner := sourceManagerTestRunner{PageMonitor: func(ctx context.Context, req PageMonitorRequest) PageMonitorResponse {
+		if req.UseBrowser == nil || *req.UseBrowser || req.WaitForJS == nil || *req.WaitForJS {
+			t.Errorf("HTTP-only synthetic collector request changed: use_browser=%v wait_for_js=%v", req.UseBrowser, req.WaitForJS)
+		}
+		if len(req.ArticleSelectors) == 0 || req.ArticleSelectors[0] != "article" || len(req.TitleSelectors) == 0 || req.TitleSelectors[0] != "h1" {
+			t.Errorf("Python default selector groups did not reach collector: article=%v title=%v", req.ArticleSelectors, req.TitleSelectors)
+		}
+		parser := pipeline.PageMonitorSource{
+			Fetch: func(context.Context, string, transport.Options) (transport.Document, error) {
+				return transport.Document{HTML: []byte(html), StatusCode: http.StatusOK, URL: fixtureURL}, nil
+			},
+			Now: func() time.Time { return time.Date(2026, 10, 24, 12, 0, 0, 0, time.UTC) },
+		}
+		out := parser.Extract(ctx, pipeline.PageMonitorRequest{
+			Operation: "fetch", URL: req.URL, SourceName: req.SourceName, Budget: time.Duration(req.BudgetMS) * time.Millisecond,
+			Limit: req.Limit, Offset: req.Offset, MinTitleLength: req.MinTitleLength,
+			UseBrowser: false, WaitForJS: false,
+			Selectors:         extractor.PageMonitorSelectors{Article: req.ArticleSelectors, Title: req.TitleSelectors, Date: req.DateSelectors, Link: req.LinkSelectors},
+			LearnedContainers: req.LearnedContainerSelectors, LearnedTitles: req.LearnedTitleSelectors,
+			LearnedLinks: req.LearnedLinkSelectors, LearnedDates: req.LearnedDateSelectors, LearnedGeneral: req.LearnedGeneralSelectors,
+		})
+		articleCount.Store(int32(len(out.Items)))
+		return PageMonitorResponse{Outcome: out.Outcome, OriginalURL: out.OriginalURL, FinalURL: out.FinalURL,
+			FetchMethod: out.FetchMethod, SnapshotAt: &out.SnapshotAt, ContentHash: out.ContentHash,
+			SelectorsUsed: out.SelectorsUsed, Items: out.Items, NextOffset: out.NextOffset,
+			NeedsSelectorStudy: out.NeedsSelectorStudy, StudyHTML: out.StudyHTML}
+	}}
+	server, err := New(Config{Token: "0123456789abcdef", BuildVersion: "fixture", MaxConcurrent: 1}, runner)
+	if err != nil {
+		t.Fatal(err)
+	}
+	useBrowser, waitForJS := false, false
+	request := SourceCollectRequest{ContractVersion: "1", RequestID: "defaults-no-ai", Sources: []SourceDescriptor{{
+		SourceID: 51, Type: "custom", SourceName: "Fixture PM", URL: fixtureURL,
+		PageMonitor: &PageMonitorSourceConfig{
+			UseBrowser: &useBrowser, WaitForJS: &waitForJS, Limit: 20, MinTitleLength: 10,
+			ArticleSelectors: []string{"article", ".article", ".news-item", ".post", ".entry", ".changelog-item", ".update-item", ".release-note", ".content li", ".main li", "ul.updates li", "ul.news li", ".content > div", ".main > div", ".updates > div", `[class*="item"]`, `[class*="post"]`, `[class*="article"]`, "h2, h3, h4", ".title", ".headline", ".heading"},
+			TitleSelectors:   []string{"h1", "h2", "h3", "h4", ".title", ".headline", ".heading", "a[href]", ".link", ".post-title", ".article-title"},
+			DateSelectors:    []string{"time", "time[datetime]", "[datetime]", ".date", ".timestamp", ".published", ".created", ".updated", ".publish-date", ".published-date", ".creation-date", ".post-date", ".article-date", ".news-date", ".entry-date", ".blog-date", ".meta .date", ".meta time", ".metadata .date", ".info .date", ".post-meta .date", ".article-meta .date", ".entry-meta .date", ".commit-date", ".release-date", ".version-date", ".update-date", ".changelog-date", ".timeline .date", ".byline .date", ".author-date", ".publish-info .date", `[class*="date"]`, `[class*="time"]`, `[class*="publish"]`, `[id*="date"]`, `[id*="time"]`},
+			LinkSelectors:    []string{"a[href]", ".link", ".read-more", ".permalink"},
+		},
+	}}}
+	bodyBytes, err := json.Marshal(request)
+	if err != nil {
+		t.Fatal(err)
+	}
+	writer := &deadlineRecorder{ResponseRecorder: httptest.NewRecorder()}
+	sourceBatchPost(server, string(bodyBytes), writer)
+	if writer.Code != http.StatusOK {
+		t.Fatalf("collector API status=%d body=%s", writer.Code, writer.Body.String())
+	}
+	var response SourceCollectResponse
+	if err := json.Unmarshal(writer.Body.Bytes(), &response); err != nil {
+		t.Fatal(err)
+	}
+	if len(response.Results) != 1 || response.Results[0].Outcome != "success" || response.Results[0].PageMonitor == nil ||
+		len(response.Results[0].PageMonitor.Items) != 1 || response.Results[0].PageMonitor.Items[0].Title != "Ordinary synthetic article title" ||
+		response.Results[0].PageMonitor.Items[0].Link != "https://pm.fixture.test/story" || articleCount.Load() != 1 {
+		t.Fatalf("default-selector synthetic collection failed: results=%+v count=%d", response.Results, articleCount.Load())
 	}
 }
 

@@ -12,7 +12,11 @@ from urllib.request import HTTPRedirectHandler, Request, build_opener
 
 REGISTRY = "ghcr.io"
 DEFAULT_REPOSITORY = "dzarlax-ai/rss-scheduler"
-ALLOWED_REPOSITORIES = {DEFAULT_REPOSITORY, "dzarlax-ai/rss-job-worker"}
+ALLOWED_REPOSITORIES = {
+    DEFAULT_REPOSITORY,
+    "dzarlax-ai/rss-job-worker",
+    "dzarlax-ai/rss-article-ingestion",
+}
 MANIFEST_ACCEPT = ", ".join((
     "application/vnd.oci.image.index.v1+json",
     "application/vnd.oci.image.manifest.v1+json",

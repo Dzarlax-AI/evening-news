@@ -22,13 +22,15 @@ Everything runs on a schedule you control, or you can trigger any step manually 
 
 ## Architecture
 
-The application architecture uses a standalone Go scheduler for calendar timing, a Go job worker for durable queue ownership, and a separate Go collection service for SourceManager dispatch, RSS/Atom collection, Telegram channel capture/parsing, Page Monitor capture/parsing, and article extraction. Python retains source configuration, News PostgreSQL persistence, selector memory, AI processing, and digest delivery. The Go job worker sends fixed, authenticated job attempts to a private Python executor, which runs the existing News domain functions; neither Go service owns article data or sends digests.
+The current application uses a standalone Go scheduler for calendar timing, a Go job worker for durable queue ownership, and a separate database-free Go collection service for RSS/Atom collection, Telegram channel capture/parsing, Page Monitor capture/parsing, and article extraction. Python retains source configuration, News PostgreSQL persistence, selector memory, AI processing, and digest delivery. The Go job worker sends fixed, authenticated job attempts to the private Python executor, which runs the existing News domain functions.
+
+A separate database-aware Go article ingestion service is implemented behind an explicit `ARTICLE_INGESTION_MODE` switch. Python remains the default mode, and the new service is not yet deployed. In Go mode, it calls the same database-free collector and commits fetched articles and collection progress to News PostgreSQL; Python continues the job and performs AI processing and delivery. See the [Go article ingestion guide](docs/go-article-ingestion.md) for the private service contract, deployment template, and isolated acceptance.
 
 The Python web app accepts scheduled commands into the durable News job queue. The [Go job worker and private Python executor](docs/background-worker.md) own execution: Go claims and fences attempts, while Python performs the fixed News jobs and returns durable receipts. `BACKGROUND_EXECUTION_MODE=worker` is required for scheduled work; `embedded` remains available for manual execution paths.
 
 The [standalone Go scheduler](docs/go-scheduler.md) owns calendar timing and dispatch, with its own PostgreSQL schema and versioned HTTP command/receipt contract. It is deployed separately from the News application. The News API exposes schedule configuration through a thin authenticated Go-service facade, and the app accepts dispatched commands into its durable queue. The scheduler is independently packaged and does not depend on article, AI, or delivery models.
 
-The Go collection service owns RSS/Atom, Telegram, Page Monitor capture and parsing, and article extraction. The app retains source CRUD/configuration and source-specific durable state. Browser rendering is available only in the native Go deployment profile; the minimal local Compose example intentionally uses HTTP-only extraction and Page Monitor capture.
+The Go collection service owns RSS/Atom, Telegram, Page Monitor capture and parsing, and article extraction. The app retains source CRUD/configuration and, in the current Python mode, source persistence and source-specific durable state. The separate Go ingestion implementation can own article persistence when explicitly enabled in a future deployment; it does not move source administration, AI work, or delivery out of Python. Browser rendering is available only in the native Go deployment profile; the minimal local Compose example intentionally uses HTTP-only extraction and Page Monitor capture.
 
 ```mermaid
 flowchart TD
@@ -77,6 +79,10 @@ flowchart TD
         Admission[Native render admission<br/>production: 2 active, up to 8 waiting]
     end
 
+    subgraph ingestion["Private Go article ingestion — implemented, not deployed"]
+        GoIngestion[Fenced collection run + persistence]
+    end
+
     subgraph browser["Shared browser infrastructure"]
         Cloak[One Cloak browser<br/>owned context + target per render]
         Egress[Private HTTP/S egress gateway]
@@ -92,6 +98,10 @@ flowchart TD
     Jobs --> SourceClient
     SourceClient <--> Memory
     SourceClient <-->|private authenticated API| GoCollect
+    PyExecutor -.->|future explicit Go mode| GoIngestion
+    GoIngestion -->|private collection API| GoCollect
+    GoIngestion -->|fenced article + cursor commits| DB
+    GoIngestion -->|private selector callback| PyExecutor
     RSS --> GoRSS
     TGS --> GoTelegram
     WEB --> GoPage
@@ -101,7 +111,7 @@ flowchart TD
     GoRSS -->|guarded HTTP| Origins
     GoTelegram -->|guarded HTTP first| Origins
     GoPage -->|guarded HTTP when configured| Origins
-    SourceClient -->|save collected articles| DB
+    SourceClient -->|current Python-mode collection + save| DB
     DB --> Proc
     Proc <-->|private authenticated API| GoArticle
     GoArticle -->|guarded HTTP| Origins
@@ -119,9 +129,9 @@ flowchart TD
     DB --> UI
 ```
 
-This diagram shows the runtime ownership boundary: Go owns collection, extraction, scheduling, dispatch, and durable job queue coordination; Python owns News persistence, article processing, and delivery. The Python executor accepts only fixed job envelopes over its private authenticated endpoint. See the [scheduler release record](deploy/news-scheduler/RELEASE_2026-10-23.md) for scheduler deployment verification.
+The dashed ingestion path shows an implemented but not deployed option. The current default path remains Python collection and persistence through the private database-free Go collector. Go owns collection, extraction, scheduling, and durable queue coordination; Python owns source configuration, current-mode persistence, article processing, and delivery. The Python executor accepts only fixed job envelopes over its private authenticated endpoint. See the [scheduler release record](deploy/news-scheduler/RELEASE_2026-10-23.md) for scheduler deployment verification.
 
-See the [source collection guide](docs/go-source-manager.md), [Telegram guide](docs/go-telegram-source.md), [Page Monitor guide](docs/go-page-monitor.md), [native worker guide](docs/go-cloak-native-worker.md), and [deployment handoff](deploy/news-extractor/HANDOFF.md) for contracts, limits, and deployment boundaries.
+See the [source collection guide](docs/go-source-manager.md), [Telegram guide](docs/go-telegram-source.md), [Page Monitor guide](docs/go-page-monitor.md), [article ingestion guide](docs/go-article-ingestion.md), [native worker guide](docs/go-cloak-native-worker.md), and [deployment handoff](deploy/news-extractor/HANDOFF.md) for contracts, limits, and deployment boundaries.
 
 ---
 
