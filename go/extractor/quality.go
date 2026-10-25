@@ -5,14 +5,174 @@ import (
 	"strings"
 
 	"github.com/PuerkitoBio/goquery"
+	"golang.org/x/net/html"
 )
+
+var recommendationContainerName = regexp.MustCompile(`(?:^|[^a-z0-9])(?:recommend(?:ation|ed)?|related|morecategory|popular|mostread|readmore|seealso)(?:$|[^a-z0-9])`)
+var recommendationNameSeparators = regexp.MustCompile(`[^a-z0-9]+`)
+var explicitRecommendationLabel = regexp.MustCompile(`(?:^|[^a-z0-9])(?:recommend(?:ations|ed articles?)|related (?:articles|stories|content|news)|popular (?:articles|stories|news)|most read|read more|see also)(?:$|[^a-z0-9])`)
+
+// recommendationContainer identifies structural article-card groups without
+// relying on a publisher hostname, title, or content-length ranking.
+func recommendationContainer(s *goquery.Selection) bool {
+	if s == nil || s.Length() == 0 {
+		return false
+	}
+	for _, name := range []string{"aria-label", "data-testid", "data-module"} {
+		value := strings.ToLower(s.AttrOr(name, ""))
+		normalized := recommendationNameSeparators.ReplaceAllString(value, " ")
+		if explicitRecommendationLabel.MatchString(normalized) {
+			return true
+		}
+	}
+	nameSignal := false
+	for _, name := range []string{"class", "id"} {
+		value := strings.ToLower(s.AttrOr(name, ""))
+		normalized := recommendationNameSeparators.ReplaceAllString(value, " ")
+		if strings.Contains(normalized, "related work") {
+			continue
+		}
+		if recommendationContainerName.MatchString(normalized) {
+			nameSignal = true
+			break
+		}
+	}
+	return nameSignal && (hasRepeatedLinkedCards(s) || isSingleLinkedCard(s))
+}
+
+func isSingleLinkedCard(s *goquery.Selection) bool {
+	if s == nil || s.Length() == 0 || s.Find("h1,h2,h3,h4,h5,h6").Length() == 0 {
+		return false
+	}
+	totalText, linkedText := 0, 0
+	s.Each(func(_ int, n *goquery.Selection) { totalText += runeLen(strings.TrimSpace(n.Text())) })
+	s.Find("a[href]").Each(func(_ int, n *goquery.Selection) { linkedText += runeLen(strings.TrimSpace(n.Text())) })
+	return totalText >= 100 && linkedText*100 >= totalText*60
+}
+
+func hasRepeatedLinkedCards(s *goquery.Selection) bool {
+	if s == nil || s.Length() == 0 {
+		return false
+	}
+	found := false
+	var visit func(*html.Node)
+	visit = func(parent *html.Node) {
+		if found || parent == nil {
+			return
+		}
+		groups := map[string]int{}
+		for child := parent.FirstChild; child != nil; child = child.NextSibling {
+			if child.Type != html.ElementNode {
+				continue
+			}
+			card := goquery.NewDocumentFromNode(child).Selection
+			if card.Find("a[href]").Length() > 0 && card.Find("h1,h2,h3,h4,h5,h6,img,[itemprop=headline]").Length() > 0 {
+				class := strings.Join(strings.Fields(card.AttrOr("class", "")), ".")
+				key := goquery.NodeName(card) + "." + class
+				groups[key]++
+				if groups[key] >= 2 {
+					found = true
+					return
+				}
+			}
+		}
+		for child := parent.FirstChild; child != nil; child = child.NextSibling {
+			if child.Type == html.ElementNode {
+				visit(child)
+			}
+		}
+	}
+	for _, node := range s.Nodes {
+		visit(node)
+	}
+	return found
+}
+
+func hasRepeatedLinkedArticleCards(s *goquery.Selection) bool {
+	if s == nil || s.Length() == 0 {
+		return false
+	}
+	found := false
+	var visit func(*html.Node)
+	visit = func(parent *html.Node) {
+		if found || parent == nil {
+			return
+		}
+		count := 0
+		for child := parent.FirstChild; child != nil; child = child.NextSibling {
+			if child.Type != html.ElementNode || child.Data != "article" {
+				continue
+			}
+			card := goquery.NewDocumentFromNode(child).Selection
+			if card.Find("a[href]").Length() > 0 && card.Find("h1,h2,h3,h4,h5,h6,img,[itemprop=headline]").Length() > 0 {
+				count++
+				if count >= 2 {
+					found = true
+					return
+				}
+			}
+		}
+		for child := parent.FirstChild; child != nil; child = child.NextSibling {
+			if child.Type == html.ElementNode {
+				visit(child)
+			}
+		}
+	}
+	for _, node := range s.Nodes {
+		visit(node)
+	}
+	return found
+}
+
+func insideRecommendationContainer(s *goquery.Selection) bool {
+	if recommendationContainer(s) {
+		return true
+	}
+	return s != nil && s.Parents().FilterFunction(func(_ int, p *goquery.Selection) bool {
+		return recommendationContainer(p)
+	}).Length() > 0
+}
+
+// HasArticleBodyProvenance confirms that extracted fallback text belongs to a
+// substantial semantic article container in the supplied HTML.
+func HasArticleBodyProvenance(rawHTML, content string) bool {
+	if runeLen(content) < 500 {
+		return false
+	}
+	d := parse(rawHTML)
+	if d == nil {
+		return false
+	}
+	pruneRecommendationControls(d.Selection)
+	prefixWords := strings.Fields(content)
+	if len(prefixWords) < 8 {
+		return false
+	}
+	prefix := strings.Join(prefixWords[:8], " ")
+	found := false
+	d.Find("article,main,[role=article]").EachWithBreak(func(_ int, n *goquery.Selection) bool {
+		if insideRecommendationContainer(n) || hasRepeatedLinkedArticleCards(n) {
+			return true
+		}
+		body := text(n)
+		headline := clean(text(n.Find("h1").First()))
+		linkedText := 0
+		n.Find("a[href]").Each(func(_ int, a *goquery.Selection) { linkedText += runeLen(strings.TrimSpace(a.Text())) })
+		if runeLen(body) >= 500 && n.Find("p").Length() >= 2 && headline != "" && linkedText*2 < runeLen(body) && strings.Contains(body, prefix) {
+			found = true
+			return false
+		}
+		return true
+	})
+	return found
+}
 
 // Prefer explicitly marked prose over surrounding player, byline and sharing
 // controls. Repeated body components are joined in document order.
 func editorialBody(s *goquery.Selection) *goquery.Selection {
 	for _, q := range []string{`[itemprop="articleBody"]`, `.body.markup`, `.real-body`, `[class*="article-body"]`} {
 		n := s.Find(q).FilterFunction(func(_ int, e *goquery.Selection) bool {
-			return e.Is("article,main,[role=article]") || e.ParentsFiltered("article,main,[role=article]").Length() > 0
+			return !insideRecommendationContainer(e) && (e.Is("article,main,[role=article]") || e.ParentsFiltered("article,main,[role=article]").Length() > 0)
 		})
 		if n.Length() == 0 || n.Find("p").Length() < 2 {
 			continue
@@ -111,6 +271,13 @@ func restoreIntroduction(d *goquery.Document, content, title string) string {
 
 // Prune widgets on the clone while keeping surrounding article paragraphs.
 func pruneRecommendationControls(s *goquery.Selection) {
+	// Recommendation grids often sit inside the page's broad story wrapper.
+	// Remove those child containers before scoring text or invoking Readability.
+	s.Find("*").Each(func(_ int, n *goquery.Selection) {
+		if recommendationContainer(n) {
+			n.Remove()
+		}
+	})
 	// Ghost bookmark cards contain article excerpts and separate linked-site
 	// attribution. Keep the excerpt/title while excluding card metadata.
 	s.Find(".kg-bookmark-metadata").Remove()

@@ -91,6 +91,9 @@ func text(s *goquery.Selection) string {
 	if s == nil || s.Length() == 0 {
 		return ""
 	}
+	if recommendationContainer(s) {
+		return ""
+	}
 	if s.Is("dialog,[role=dialog],[aria-modal=true]") || s.ParentsFiltered("dialog,[role=dialog],[aria-modal=true]").Length() > 0 {
 		return ""
 	}
@@ -228,7 +231,11 @@ func enhanced(d *goquery.Document, max int) (string, string) {
 	for _, q := range selectors {
 		ss := selectSafe(d.Selection, q)
 		for i := range ss.Nodes {
-			v := text(ss.Eq(i))
+			candidate := ss.Eq(i)
+			if insideRecommendationContainer(candidate) {
+				continue
+			}
+			v := text(candidate)
 			if good(v, false, max) {
 				return v, q
 			}
@@ -243,6 +250,9 @@ func heuristic(d *goquery.Document, max int) string {
 	}
 	var top []candidate
 	d.Find("p,div,article,section").Each(func(_ int, e *goquery.Selection) {
+		if insideRecommendationContainer(e) {
+			return
+		}
 		s := text(e)
 		n := runeLen(s)
 		if n <= 50 || n > max {
@@ -403,7 +413,10 @@ func extractWeb(ctx context.Context, in Input, r Result) Result {
 		case "learned_pattern":
 			sel = in.LearnedSelector
 			if sel != "" {
-				s = text(selectSafe(d.Selection, sel).First())
+				candidate := selectSafe(d.Selection, sel).First()
+				if !insideRecommendationContainer(candidate) {
+					s = text(candidate)
+				}
 			}
 			if !good(s, true, in.MaxChars) {
 				r.Trace = append(r.Trace, "learned_pattern_degraded")
@@ -431,7 +444,11 @@ func extractWeb(ctx context.Context, in Input, r Result) Result {
 				sel = "heuristics"
 			}
 			if method == "learned_pattern_browser_rendering" && in.LearnedSelector != "" {
-				v := text(selectSafe(md.Selection, in.LearnedSelector).First())
+				candidate := selectSafe(md.Selection, in.LearnedSelector).First()
+				v := ""
+				if !insideRecommendationContainer(candidate) {
+					v = text(candidate)
+				}
 				if runeLen(v) > runeLen(s) {
 					s = v
 					sel = in.LearnedSelector

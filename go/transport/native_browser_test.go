@@ -31,9 +31,15 @@ type nativeFixture struct {
 	navigateDownload                                                                                                   bool
 	requestBurst                                                                                                       int
 	pausedBurst                                                                                                        int
+	runtimePausedBurst                                                                                                 int
+	policyEventAt, authEventAt                                                                                         int
+	authEventBurst                                                                                                     int
+	frameBurst                                                                                                         int
+	largeWireEvent, largeDOM                                                                                           bool
 	pauseEventFlood                                                                                                    int
 	pauseEventInterval                                                                                                 time.Duration
 	continueDelay                                                                                                      time.Duration
+	policyRPCDelay, authRPCDelay                                                                                       time.Duration
 	failContinueRequest                                                                                                bool
 	requestURL                                                                                                         string
 	detachAfterPaused                                                                                                  bool
@@ -89,7 +95,10 @@ func newNativeFixture(t *testing.T) *nativeFixture {
 			return
 		}
 		defer conn.Close()
+		var writeMu sync.Mutex
 		write := func(v any) bool {
+			writeMu.Lock()
+			defer writeMu.Unlock()
 			data, e := json.Marshal(v)
 			return e == nil && wsutil.WriteServerMessage(conn, ws.OpText, data) == nil
 		}
@@ -132,6 +141,7 @@ func newNativeFixture(t *testing.T) *nativeFixture {
 			reply := true
 			protocolErr := false
 			responseDelay := time.Duration(0)
+			authBurst := 0
 			switch msg.Method {
 			case "Target.createBrowserContext":
 				if msg.Params["proxyServer"] != "http://gateway.test:3128" || msg.Params["proxyBypassList"] != "<-loopback>" || msg.Params["disposeOnDetach"] != true {
@@ -280,6 +290,21 @@ func newNativeFixture(t *testing.T) *nativeFixture {
 					f.overflowAfterRequestBudget = false
 				}
 				for i := 0; i < f.pausedBurst; i++ {
+					if i+1 == f.policyEventAt {
+						if !write(map[string]any{"method": "Network.requestWillBeSent", "sessionId": sessionID, "params": map[string]string{"requestId": fmt.Sprintf("burst-%d", i), "type": "XHR", "frameId": "main-frame"}}) ||
+							!write(map[string]any{"method": "Fetch.requestPaused", "sessionId": sessionID, "params": map[string]any{"requestId": fmt.Sprintf("burst-%d", i), "request": map[string]string{"url": "http://127.0.0.1/blocked"}}}) {
+							f.mu.Unlock()
+							return
+						}
+						continue
+					}
+					if i+1 == f.authEventAt {
+						if !write(map[string]any{"method": "Fetch.authRequired", "sessionId": sessionID, "params": map[string]any{"requestId": fmt.Sprintf("auth-%d", i), "authChallenge": map[string]string{"source": "Origin", "origin": "https://origin.example"}}}) {
+							f.mu.Unlock()
+							return
+						}
+						continue
+					}
 					if !emitPaused(fmt.Sprintf("burst-%d", i)) {
 						f.mu.Unlock()
 						return
@@ -323,10 +348,13 @@ func newNativeFixture(t *testing.T) *nativeFixture {
 					}
 				}
 			case "Fetch.continueWithAuth":
+				responseDelay = f.authRPCDelay
 				f.proxyAuth = msg.Params["authChallengeResponse"].(map[string]any)
 				if f.proxyAuth["response"] == "ProvideCredentials" {
 					write(map[string]any{"method": "Network.responseReceived", "sessionId": sessionID, "params": map[string]any{"frameId": "main-frame", "requestId": "main-request", "type": "Document", "response": map[string]any{"status": 200, "headers": map[string]string{}}}})
 				}
+			case "Fetch.failRequest":
+				responseDelay = f.policyRPCDelay
 			case "Runtime.evaluate":
 				if f.disconnect {
 					f.mu.Unlock()
@@ -336,6 +364,20 @@ func newNativeFixture(t *testing.T) *nativeFixture {
 					f.mu.Unlock()
 					return
 				}
+				for i := 0; i < f.frameBurst; i++ {
+					if !write(map[string]any{"method": "Page.frameAttached", "sessionId": sessionID, "params": map[string]string{"frameId": fmt.Sprintf("child-%d", i), "parentFrameId": "main-frame"}}) {
+						f.mu.Unlock()
+						return
+					}
+				}
+				f.frameBurst = 0
+				if f.largeWireEvent {
+					if !write(map[string]any{"method": "Network.dataReceived", "sessionId": sessionID, "params": map[string]any{"requestId": "oversized", "encodedDataLength": 6 * 1024 * 1024}}) {
+						f.mu.Unlock()
+						return
+					}
+					f.largeWireEvent = false
+				}
 				for i := 0; i < f.eventFlood; i++ {
 					if !write(map[string]any{"method": "Network.dataReceived", "sessionId": sessionID, "params": map[string]any{"requestId": fmt.Sprint(i), "encodedDataLength": 0}}) {
 						f.mu.Unlock()
@@ -343,6 +385,30 @@ func newNativeFixture(t *testing.T) *nativeFixture {
 					}
 				}
 				f.eventFlood = 0
+				for i := 0; i < f.runtimePausedBurst; i++ {
+					if i+1 == f.policyEventAt {
+						if !write(map[string]any{"method": "Fetch.requestPaused", "sessionId": sessionID, "params": map[string]any{"requestId": fmt.Sprintf("runtime-%d", i), "request": map[string]string{"url": "http://127.0.0.1/blocked"}}}) {
+							f.mu.Unlock()
+							return
+						}
+						continue
+					}
+					if i+1 == f.authEventAt {
+						if !write(map[string]any{"method": "Fetch.authRequired", "sessionId": sessionID, "params": map[string]any{"requestId": fmt.Sprintf("runtime-auth-%d", i), "authChallenge": map[string]string{"source": "Origin", "origin": "https://origin.example"}}}) {
+							f.mu.Unlock()
+							return
+						}
+						continue
+					}
+					if !emitPaused(fmt.Sprintf("runtime-%d", i)) {
+						f.mu.Unlock()
+						return
+					}
+				}
+				f.runtimePausedBurst = 0
+				if i := f.policyEventAt + f.authEventAt; i > 0 {
+					responseDelay = 25 * time.Millisecond
+				}
 				value := map[string]any{"ready": false}
 				if !f.empty {
 					now := time.Now()
@@ -355,7 +421,12 @@ func newNativeFixture(t *testing.T) *nativeFixture {
 					}
 					value = map[string]any{"ready": true, "html": html, "bytes": len(html), "url": "https://origin.example/final"}
 				}
+				if f.largeDOM {
+					f.largeDOM = false
+					value = map[string]any{"ready": true, "tooLarge": true}
+				}
 				result["result"] = map[string]any{"value": value}
+				authBurst, f.authEventBurst = f.authEventBurst, 0
 			case "Fetch.fulfillRequest", "Network.setUserAgentOverride", "Emulation.setDeviceMetricsOverride", "Browser.close":
 				t.Errorf("native path changed browser identity/body or closed browser: %s", msg.Method)
 			}
@@ -372,6 +443,16 @@ func newNativeFixture(t *testing.T) *nativeFixture {
 				if !write(response) {
 					return
 				}
+			}
+			if authBurst > 0 {
+				go func(count int) {
+					for i := 0; i < count; i++ {
+						if !write(map[string]any{"method": "Fetch.authRequired", "sessionId": sessionID, "params": map[string]any{"requestId": fmt.Sprintf("auth-burst-%d", i), "authChallenge": map[string]string{"source": "Proxy", "origin": "http://gateway.test:3128"}}}) {
+							return
+						}
+						time.Sleep(time.Millisecond)
+					}
+				}(authBurst)
 			}
 		}
 	}))
@@ -561,7 +642,7 @@ func TestNativeEventRPCAdmissionIsBoundedAndResourceLimitIsRecoverable(t *testin
 	f.continueDelay = 100 * time.Millisecond
 	f.mu.Unlock()
 	_, err := w.Fetch(context.Background(), "https://origin.example/", NativeBrowserOptions{})
-	if !errors.Is(err, extractor.ErrWireLimit) || errors.Is(err, context.Canceled) || !w.Ready() {
+	if !errors.Is(err, extractor.ErrWireLimit) || NativeResourceLimitReason(err) != "event_rpc_admission" || errors.Is(err, context.Canceled) || !w.Ready() {
 		t.Fatalf("RPC cap did not fail as a recoverable resource limit: %v ready=%v", err, w.Ready())
 	}
 	f.mu.Lock()
@@ -569,6 +650,135 @@ func TestNativeEventRPCAdmissionIsBoundedAndResourceLimitIsRecoverable(t *testin
 	f.mu.Unlock()
 	if _, err := w.Fetch(context.Background(), "https://origin.example/", NativeBrowserOptions{}); err != nil || !w.Ready() {
 		t.Fatalf("ordinary request failed after RPC admission limit: %v ready=%v", err, w.Ready())
+	}
+}
+
+func TestNativeRPCAdmissionPreservesConcurrentPolicyAndAuthCauses(t *testing.T) {
+	for _, tc := range []struct {
+		name         string
+		policy, auth bool
+	}{
+		{name: "policy", policy: true},
+		{name: "auth", auth: true},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			f := newNativeFixture(t)
+			w := f.worker(t)
+			if err := w.Probe(context.Background()); err != nil {
+				t.Fatal(err)
+			}
+			f.mu.Lock()
+			f.pausedBurst = nativeEventRPCMaxInFlight + 1
+			f.continueDelay = 150 * time.Millisecond
+			if tc.policy {
+				f.policyEventAt = nativeEventRPCMaxInFlight + 1
+			}
+			if tc.auth {
+				f.authEventAt = nativeEventRPCMaxInFlight + 1
+			}
+			f.mu.Unlock()
+			_, err := w.Fetch(context.Background(), "https://origin.example/", NativeBrowserOptions{})
+			if !errors.Is(err, extractor.ErrWireLimit) || NativeResourceLimitReason(err) != "event_rpc_admission" {
+				t.Fatalf("concurrent resource limit lost: %v reason=%q", err, NativeResourceLimitReason(err))
+			}
+			if tc.policy && !errors.Is(err, ErrUnsafePublicURL) {
+				t.Fatalf("request policy cause was lost behind RPC cap: %v", err)
+			}
+			if tc.auth {
+				var status *PublicHTTPStatusError
+				if !errors.As(err, &status) || status.StatusCode != 401 {
+					t.Fatalf("origin auth cause was lost behind RPC cap: %v", err)
+				}
+			}
+		})
+	}
+}
+
+func TestNativeWireAndFrameLimitsHaveFiniteReasons(t *testing.T) {
+	t.Run("wire bytes", func(t *testing.T) {
+		f := newNativeFixture(t)
+		w := f.worker(t)
+		if err := w.Probe(context.Background()); err != nil {
+			t.Fatal(err)
+		}
+		f.mu.Lock()
+		f.largeWireEvent = true
+		f.mu.Unlock()
+		_, err := w.Fetch(context.Background(), "https://origin.example/", NativeBrowserOptions{})
+		if !errors.Is(err, extractor.ErrWireLimit) || NativeResourceLimitReason(err) != "wire_bytes" {
+			t.Fatalf("wire byte limit reason missing: %v reason=%q", err, NativeResourceLimitReason(err))
+		}
+	})
+	t.Run("frame count", func(t *testing.T) {
+		f := newNativeFixture(t)
+		w := f.worker(t)
+		if err := w.Probe(context.Background()); err != nil {
+			t.Fatal(err)
+		}
+		f.mu.Lock()
+		f.frameBurst = 129
+		f.mu.Unlock()
+		_, err := w.Fetch(context.Background(), "https://origin.example/", NativeBrowserOptions{})
+		if !errors.Is(err, extractor.ErrWireLimit) || NativeResourceLimitReason(err) != "frame_count" {
+			t.Fatalf("frame count limit reason missing: %v reason=%q", err, NativeResourceLimitReason(err))
+		}
+	})
+	t.Run("auth event count", func(t *testing.T) {
+		f := newNativeFixture(t)
+		w := f.worker(t)
+		if err := w.Probe(context.Background()); err != nil {
+			t.Fatal(err)
+		}
+		f.mu.Lock()
+		f.authEventBurst = 257
+		f.mu.Unlock()
+		_, err := w.Fetch(context.Background(), "https://origin.example/", NativeBrowserOptions{})
+		if !errors.Is(err, extractor.ErrWireLimit) || NativeResourceLimitReason(err) != "auth_event_count" {
+			t.Fatalf("auth event limit reason missing: %v reason=%q", err, NativeResourceLimitReason(err))
+		}
+	})
+}
+
+func TestNativeDOMLimitPreservesPendingPolicyAndAuthCauses(t *testing.T) {
+	for _, tc := range []struct {
+		name         string
+		policy, auth bool
+	}{
+		{name: "policy", policy: true},
+		{name: "auth", auth: true},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			f := newNativeFixture(t)
+			w := f.worker(t)
+			if err := w.Probe(context.Background()); err != nil {
+				t.Fatal(err)
+			}
+			f.mu.Lock()
+			f.runtimePausedBurst = 1
+			f.largeDOM = true
+			if tc.policy {
+				f.policyEventAt = 1
+				f.policyRPCDelay = 150 * time.Millisecond
+			}
+			if tc.auth {
+				f.authEventAt = 1
+				f.authRPCDelay = 150 * time.Millisecond
+			}
+			f.mu.Unlock()
+			_, err := w.Fetch(context.Background(), "https://origin.example/", NativeBrowserOptions{BrowserOptions: BrowserOptions{MaxDOMBytes: 32}})
+			if !errors.Is(err, extractor.ErrOutputLimit) || NativeResourceLimitReason(err) != "dom_output" {
+				t.Fatalf("DOM resource failure was lost: %v reason=%q", err, NativeResourceLimitReason(err))
+			}
+			if tc.policy && !errors.Is(err, ErrUnsafePublicURL) {
+				t.Fatalf("pending request policy denial was lost: %v", err)
+			}
+			if tc.auth {
+				var status *PublicHTTPStatusError
+				if !errors.As(err, &status) || status.StatusCode != 401 {
+					t.Fatalf("pending origin auth denial was lost: %v", err)
+				}
+			}
+		})
 	}
 }
 
@@ -907,7 +1117,7 @@ func TestNativeDOMByteLimitRechecksScalarReply(t *testing.T) {
 		t.Fatal(err)
 	}
 	_, err := w.Fetch(context.Background(), "https://origin.example/", NativeBrowserOptions{BrowserOptions: BrowserOptions{MaxDOMBytes: 32}})
-	if !errors.Is(err, extractor.ErrOutputLimit) || !w.Ready() {
+	if !errors.Is(err, extractor.ErrOutputLimit) || NativeResourceLimitReason(err) != "dom_output" || !w.Ready() {
 		t.Fatalf("DOM guard or cleanup failed: %v", err)
 	}
 }
@@ -1960,7 +2170,7 @@ func TestNativeCumulativeRequestBudgetIncludesFinishedZeroByteRequests(t *testin
 	f.requestBurst = 129
 	f.mu.Unlock()
 	_, err := w.Fetch(context.Background(), "https://origin.example/", NativeBrowserOptions{})
-	if !errors.Is(err, extractor.ErrWireLimit) {
+	if !errors.Is(err, extractor.ErrWireLimit) || NativeResourceLimitReason(err) != "request_count" {
 		t.Fatalf("sequential zero-byte requests bypassed job budget: %v", err)
 	}
 	f.mu.Lock()

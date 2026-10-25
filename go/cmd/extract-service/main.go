@@ -114,7 +114,7 @@ func run() error {
 		if native != nil && r.UseBrowser != nil && *r.UseBrowser {
 			return nativeArticleResponse(ctx, r, func(ctx context.Context, raw string, opts transport.BrowserOptions, selector string) (transport.RenderedDocument, error) {
 				return native.Fetch(ctx, raw, transport.NativeBrowserOptions{BrowserOptions: opts, ReadySelector: nativeSelector})
-			})
+			}, transport.FetchPublic)
 		}
 		in := extractor.Input{URL: r.URL, Content: r.Content, HTML: r.HTML, Title: r.Title, SourceType: r.SourceType, Strategy: r.Strategy, Selectors: r.Selectors, LearnedSelector: r.LearnedSelector, LearnedMethod: r.LearnedMethod, UseBrowser: r.UseBrowser, MaxBytes: r.MaxBytes, MaxChars: r.MaxChars}
 		requestEngine := engine

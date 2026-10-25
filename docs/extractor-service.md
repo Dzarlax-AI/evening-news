@@ -21,9 +21,25 @@ in the [production readiness plan](ai-plans/2026-10-16-extractor-production-read
 HTTP-only is the default service profile. The optional native Go browser profile
 is selected explicitly in deployments with the approved browser and egress
 infrastructure. Eligible HTTP results may request a bounded native-browser retry
-within the original caller deadline. Authentication, invalid payload, resource,
-cancellation, rate-limit, and transport failures do not start another strategy.
-Upstream 429 preserves its bounded `retry_after_seconds` for durable retry.
+within the original caller deadline. HTTP authentication, invalid payload,
+resource, cancellation, rate-limit, and transport failures do not trigger that
+HTTP-to-browser escalation. Upstream 429 preserves its bounded
+`retry_after_seconds` for durable retry.
+
+A native article render resource failure has a narrower recovery path: at most
+one bounded public HTTP fetch, followed by Readability on a verified main-body
+candidate, within the same request deadline and existing byte/text limits.
+Recommendation cards, navigation, metadata-only pages and weak teasers cannot
+supply that candidate. Authentication, challenges, policy denials, ownership
+loss, cancellation and upstream HTTP failures do not permit recovery. This
+path does not replay the browser or enter the general alternate-URL graph.
+The existing failure `error.reason` carries a finite native resource category;
+`resource_limit` remains the top-level failure code when recovery is unusable.
+Successful recovery uses bounded entries in the existing result trace. No
+response field or contract version is added.
+A generic resource sentinel without a known category must not be interpreted as
+proof that a byte cap was exceeded. No browser deployment, network policy or
+concurrency setting changes are required by this behavior.
 
 Go checks public DNS before browser-required work. Connection-time DNS pinning
 applies to Go HTTP requests. The native path uses its own explicit isolation

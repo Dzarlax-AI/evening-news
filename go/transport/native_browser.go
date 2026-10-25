@@ -31,6 +31,38 @@ var (
 	errNativeOwnedDetach              = errors.New("native_browser_owned_detach")
 )
 
+// NativeResourceLimitError keeps a finite diagnostic reason while retaining
+// compatibility with callers that classify the existing extractor limits.
+type NativeResourceLimitError struct {
+	Reason string
+	Cause  error
+}
+
+func (e *NativeResourceLimitError) Error() string {
+	if e == nil || e.Cause == nil {
+		return "native_resource_limit"
+	}
+	return e.Cause.Error()
+}
+func (e *NativeResourceLimitError) Unwrap() error { return e.Cause }
+
+func nativeResourceLimit(reason string, cause error) error {
+	return &NativeResourceLimitError{Reason: reason, Cause: cause}
+}
+
+// NativeResourceLimitReason returns a bounded internal reason for native
+// browser limits, or an empty string for errors that are not such a limit.
+func NativeResourceLimitReason(err error) string {
+	var limit *NativeResourceLimitError
+	if errors.As(err, &limit) {
+		switch limit.Reason {
+		case "wire_bytes", "dom_output", "frame_count", "auth_event_count", "request_count", "event_rpc_admission":
+			return limit.Reason
+		}
+	}
+	return ""
+}
+
 // nativeAdmissionDeadlineError reports that a request's budget expired while
 // waiting for render admission. It matches ErrNativeBusy but deliberately does
 // not match context.DeadlineExceeded: navigation never started in this case.
@@ -931,6 +963,15 @@ func (w *NativeBrowser) Fetch(ctx context.Context, raw string, opts NativeBrowse
 	go func() {
 		defer close(eventsDone)
 		terminalPending := false
+		var terminalErr error
+		stopForLimit := func(reason string) {
+			limitErr := nativeResourceLimit(reason, extractor.ErrWireLimit)
+			if terminalErr != nil {
+				stop(errors.Join(limitErr, terminalErr))
+				return
+			}
+			stop(limitErr)
+		}
 		handleRPCResult := func(result nativeEventRPCResult) bool {
 			if result.err != nil && !result.ignoreRPCError {
 				stop(result.err)
@@ -1013,7 +1054,7 @@ func (w *NativeBrowser) Fetch(ctx context.Context, raw string, opts NativeBrowse
 					if json.Unmarshal(message.Params, &event) == nil && (ownedFrames[event.Parent] || event.Parent == mainFrame.Load().(string)) {
 						ownedFrames[event.ID] = true
 						if len(ownedFrames) > 128 {
-							stop(extractor.ErrWireLimit)
+							stopForLimit("frame_count")
 							return
 						}
 					}
@@ -1038,7 +1079,7 @@ func (w *NativeBrowser) Fetch(ctx context.Context, raw string, opts NativeBrowse
 				case "Fetch.authRequired":
 					totalAuth++
 					if totalAuth > 256 {
-						stop(extractor.ErrWireLimit)
+						stopForLimit("auth_event_count")
 						return
 					}
 					var event struct {
@@ -1062,12 +1103,13 @@ func (w *NativeBrowser) Fetch(ctx context.Context, raw string, opts NativeBrowse
 							code = 407
 						}
 						terminal = &PublicHTTPStatusError{StatusCode: code}
+						terminalErr = terminal
 						terminalPending = true
 					}
 					if !eventRPCs.submit(func() error {
 						return client.call(work, session, "Fetch.continueWithAuth", map[string]any{"requestId": event.ID, "authChallengeResponse": response}, nil)
 					}, terminal, false) {
-						stop(extractor.ErrWireLimit)
+						stopForLimit("event_rpc_admission")
 						return
 					}
 				case "Fetch.requestPaused":
@@ -1082,11 +1124,12 @@ func (w *NativeBrowser) Fetch(ctx context.Context, raw string, opts NativeBrowse
 						return
 					}
 					if policyErr := nativeURL(event.Request.URL); policyErr != nil {
+						terminalErr = policyErr
 						terminalPending = true
 						if !eventRPCs.submit(func() error {
 							return client.call(work, session, "Fetch.failRequest", map[string]any{"requestId": event.ID, "errorReason": "BlockedByClient"}, nil)
 						}, policyErr, true) {
-							stop(extractor.ErrWireLimit)
+							stopForLimit("event_rpc_admission")
 							return
 						}
 						continue
@@ -1094,7 +1137,7 @@ func (w *NativeBrowser) Fetch(ctx context.Context, raw string, opts NativeBrowse
 					if !eventRPCs.submit(func() error {
 						return client.call(work, session, "Fetch.continueRequest", map[string]any{"requestId": event.ID}, nil)
 					}, nil, false) {
-						stop(extractor.ErrWireLimit)
+						stopForLimit("event_rpc_admission")
 						return
 					}
 				case "Network.requestWillBeSent":
@@ -1106,7 +1149,7 @@ func (w *NativeBrowser) Fetch(ctx context.Context, raw string, opts NativeBrowse
 					if json.Unmarshal(message.Params, &event) == nil {
 						totalRequests++
 						if totalRequests > 128 {
-							stop(extractor.ErrWireLimit)
+							stopForLimit("request_count")
 							return
 						}
 						if event.Type == "Document" {
@@ -1118,7 +1161,7 @@ func (w *NativeBrowser) Fetch(ctx context.Context, raw string, opts NativeBrowse
 						requests[event.ID] = true
 						activeRequests.Add(1)
 						if len(requests) > 128 {
-							stop(extractor.ErrWireLimit)
+							stopForLimit("request_count")
 							return
 						}
 					}
@@ -1131,7 +1174,7 @@ func (w *NativeBrowser) Fetch(ctx context.Context, raw string, opts NativeBrowse
 						wire += max(0, event.Encoded-encodedByRequest[event.ID])
 						delete(encodedByRequest, event.ID)
 						if wire > float64(wireLimit) {
-							stop(extractor.ErrWireLimit)
+							stopForLimit("wire_bytes")
 							return
 						}
 						delete(requests, event.ID)
@@ -1146,7 +1189,7 @@ func (w *NativeBrowser) Fetch(ctx context.Context, raw string, opts NativeBrowse
 						wire += event.Encoded
 						encodedByRequest[event.ID] += event.Encoded
 						if wire > float64(wireLimit) {
-							stop(extractor.ErrWireLimit)
+							stopForLimit("wire_bytes")
 							return
 						}
 					}
@@ -1207,10 +1250,8 @@ func (w *NativeBrowser) Fetch(ctx context.Context, raw string, opts NativeBrowse
 				}
 			}
 			if result.terminal != nil {
-				if targetCrashed.Load() {
+				if !errors.Is(err, result.terminal) {
 					err = errors.Join(err, result.terminal)
-				} else if err == nil {
-					err = result.terminal
 				}
 			}
 		}
@@ -1295,7 +1336,7 @@ func (w *NativeBrowser) Fetch(ctx context.Context, raw string, opts NativeBrowse
 				return doc, cause
 			}
 			if value.TooLarge || int64(len(value.HTML)) > domLimit || int64(value.Bytes) > domLimit {
-				return doc, extractor.ErrOutputLimit
+				return doc, nativeResourceLimit("dom_output", extractor.ErrOutputLimit)
 			}
 			if err = nativeURL(value.URL); err != nil {
 				return doc, err
