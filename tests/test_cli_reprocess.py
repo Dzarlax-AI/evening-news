@@ -10,6 +10,8 @@ from rich.console import Console
 
 @pytest.mark.asyncio
 async def test_reprocess_cli_displays_current_pipeline_result_without_legacy_keys(monkeypatch):
+    from news_aggregator.config import settings
+    monkeypatch.setattr(settings, "background_execution_mode", "embedded")
     cli_module = importlib.import_module("news_aggregator.cli")
     output = StringIO()
     monkeypatch.setattr(

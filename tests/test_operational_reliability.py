@@ -81,6 +81,7 @@ async def test_manual_digest_endpoint_returns_non_2xx_on_delivery_failure(monkey
     from news_aggregator.config import settings
 
     monkeypatch.setattr(settings, "admin_password", "test-only-password")
+    monkeypatch.setattr(settings, "background_execution_mode", "embedded")
     orchestrator = MagicMock()
     orchestrator.start = AsyncMock()
     orchestrator.stop = AsyncMock()
@@ -107,6 +108,7 @@ async def test_manual_digest_endpoint_returns_non_2xx_on_delivery_failure(monkey
 async def test_manual_digest_endpoint_refuses_active_processing_without_constructing_sender(monkeypatch):
     from news_aggregator.config import settings
     monkeypatch.setattr(settings, 'admin_password', 'test-only-password')
+    monkeypatch.setattr(settings, 'background_execution_mode', 'embedded')
     from news_aggregator.api.telegram_router import send_telegram_digest
     from news_aggregator.orchestrator import reserve_processing_cycle, release_processing_cycle
     reservation = reserve_processing_cycle()
@@ -125,6 +127,7 @@ async def test_manual_digest_endpoint_refuses_active_processing_without_construc
 async def test_manual_digest_reservation_lasts_through_cleanup_and_releases_on_failure(monkeypatch):
     from news_aggregator.config import settings
     monkeypatch.setattr(settings, 'admin_password', 'test-only-password')
+    monkeypatch.setattr(settings, 'background_execution_mode', 'embedded')
     from news_aggregator.api.telegram_router import send_telegram_digest
     from news_aggregator.orchestrator import processing_cycle_busy
     async def send():

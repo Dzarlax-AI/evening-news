@@ -22,15 +22,15 @@ Everything runs on a schedule you control, or you can trigger any step manually 
 
 ## Architecture
 
-The current application uses a standalone Go scheduler for calendar timing, a Go job worker for durable queue ownership, and a separate database-free Go collection service for RSS/Atom collection, Telegram channel capture/parsing, Page Monitor capture/parsing, and article extraction. Python retains source configuration, News PostgreSQL persistence, selector memory, AI processing, and digest delivery. The Go job worker sends fixed, authenticated job attempts to the private Python executor, which runs the existing News domain functions.
+The current application uses a standalone Go scheduler for calendar timing, a Go job worker for durable queue ownership, and a separate database-free Go collection service for RSS/Atom collection, Telegram channel capture/parsing, Page Monitor capture/parsing, and article extraction. Python retains source configuration and admin operations, News AI processing, and digest delivery. The Go job worker sends fixed, authenticated job attempts to the private Python executor, which runs the existing News domain functions.
 
-A separate database-aware Go article ingestion service is implemented behind an explicit `ARTICLE_INGESTION_MODE` switch. Python remains the default mode, and the new service is not yet deployed. In Go mode, it calls the same database-free collector and commits fetched articles and collection progress to News PostgreSQL; Python continues the job and performs AI processing and delivery. See the [Go article ingestion guide](docs/go-article-ingestion.md) for the private service contract, deployment template, and isolated acceptance.
+The Python executor uses the database-aware Go article ingestion service as the only configured-source collection and persistence path. It reads source configuration and collection progress from News PostgreSQL, calls the separate database-free Go collector, and commits articles and source receipts under the active executor fence. The executor then continues article quality checks, AI processing, summaries, and delivery. The `ARTICLE_INGESTION_MODE` setting defaults to `go`; the removed `python` value is rejected at startup. See the [Go article ingestion guide](docs/go-article-ingestion.md) for the private service contract, deployment template, and isolated acceptance.
 
-The Python web app accepts scheduled commands into the durable News job queue. The [Go job worker and private Python executor](docs/background-worker.md) own execution: Go claims and fences attempts, while Python performs the fixed News jobs and returns durable receipts. `BACKGROUND_EXECUTION_MODE=worker` is required for scheduled work; `embedded` remains available for manual execution paths.
+The Python web app accepts scheduled and manual full-cycle commands into the durable News job queue. `BACKGROUND_EXECUTION_MODE=worker` is required at startup so every full cycle is fenced by the Go job worker; the embedded executor mode is no longer a supported startup configuration. Python still runs the fixed News jobs and returns durable receipts.
 
 The [standalone Go scheduler](docs/go-scheduler.md) owns calendar timing and dispatch, with its own PostgreSQL schema and versioned HTTP command/receipt contract. It is deployed separately from the News application. The News API exposes schedule configuration through a thin authenticated Go-service facade, and the app accepts dispatched commands into its durable queue. The scheduler is independently packaged and does not depend on article, AI, or delivery models.
 
-The Go collection service owns RSS/Atom, Telegram, Page Monitor capture and parsing, and article extraction. The app retains source CRUD/configuration and, in the current Python mode, source persistence and source-specific durable state. The separate Go ingestion implementation can own article persistence when explicitly enabled in a future deployment; it does not move source administration, AI work, or delivery out of Python. Browser rendering is available only in the native Go deployment profile; the minimal local Compose example intentionally uses HTTP-only extraction and Page Monitor capture.
+The Go collection service owns RSS/Atom, Telegram, Page Monitor capture and parsing, and article extraction. Python retains source CRUD/configuration, source probes, the selector-learning callback, AI work, and delivery. Go ingestion owns configured-source persistence and Page Monitor collection progress. Browser rendering is available only in the native Go deployment profile; the minimal local Compose example uses HTTP-only collection and extraction.
 
 ```mermaid
 flowchart TD
@@ -43,7 +43,7 @@ flowchart TD
     subgraph app["Python News services"]
         Adapter[Scheduled command adapter]
         Jobs[Durable News jobs]
-        SourceClient[Source configuration + Go API client]
+        SourceClient[Source admin + observational Go probe client]
         Memory[Page Monitor state + selector learning]
         DB[(News PostgreSQL schema)]
         Proc[Quality checks + article processing]
@@ -79,7 +79,7 @@ flowchart TD
         Admission[Native render admission<br/>production: 2 active, up to 8 waiting]
     end
 
-    subgraph ingestion["Private Go article ingestion — implemented, not deployed"]
+    subgraph ingestion["Private Go article ingestion"]
         GoIngestion[Fenced collection run + persistence]
     end
 
@@ -95,10 +95,11 @@ flowchart TD
     UI -->|manual commands| Jobs
     GoScheduler -->|private authenticated command + receipt| Adapter
     Adapter --> Jobs
-    Jobs --> SourceClient
+    UI --> SourceClient
+    SourceClient -->|source CRUD + article stats| DB
     SourceClient <--> Memory
     SourceClient <-->|private authenticated API| GoCollect
-    PyExecutor -.->|future explicit Go mode| GoIngestion
+    PyExecutor -->|fenced collection run| GoIngestion
     GoIngestion -->|private collection API| GoCollect
     GoIngestion -->|fenced article + cursor commits| DB
     GoIngestion -->|private selector callback| PyExecutor
@@ -111,7 +112,7 @@ flowchart TD
     GoRSS -->|guarded HTTP| Origins
     GoTelegram -->|guarded HTTP first| Origins
     GoPage -->|guarded HTTP when configured| Origins
-    SourceClient -->|current Python-mode collection + save| DB
+    SourceClient -->|source probes only| GoCollect
     DB --> Proc
     Proc <-->|private authenticated API| GoArticle
     GoArticle -->|guarded HTTP| Origins
@@ -129,7 +130,7 @@ flowchart TD
     DB --> UI
 ```
 
-The dashed ingestion path shows an implemented but not deployed option. The current default path remains Python collection and persistence through the private database-free Go collector. Go owns collection, extraction, scheduling, and durable queue coordination; Python owns source configuration, current-mode persistence, article processing, and delivery. The Python executor accepts only fixed job envelopes over its private authenticated endpoint. See the [scheduler release record](deploy/news-scheduler/RELEASE_2026-10-23.md) for scheduler deployment verification.
+Production has used Go article ingestion since PR #22. This cleanup removes the dormant Python collection and persistence fallback; it does not deploy or switch production services. Go owns collection, ingestion persistence, extraction, scheduling, and durable queue coordination; Python owns source configuration, the executor, article quality and AI processing, and delivery. The Python executor accepts only fixed job envelopes over its private authenticated endpoint. See the [scheduler release record](deploy/news-scheduler/RELEASE_2026-10-23.md) for scheduler deployment verification.
 
 See the [source collection guide](docs/go-source-manager.md), [Telegram guide](docs/go-telegram-source.md), [Page Monitor guide](docs/go-page-monitor.md), [article ingestion guide](docs/go-article-ingestion.md), [native worker guide](docs/go-cloak-native-worker.md), and [deployment handoff](deploy/news-extractor/HANDOFF.md) for contracts, limits, and deployment boundaries.
 
@@ -169,7 +170,7 @@ Design follows the [dzarlax.dev](https://dzarlax.dev) brand system: warm ivory b
 
 **Telegram** — public channels via the Go collector. It extracts messages and follows external links to fetch full article text. Explicit media refresh for a historical post retains a bounded Python compatibility helper.
 
-**Custom (Page Monitor)** — for sites without RSS. Point it at a URL and it finds new articles using CSS selectors. The Go service captures and parses the page while Python retains selector memory, cursor/snapshot state, and optional AI learning. You can provide your own selectors as a fixed override. The minimal local Compose example supports HTTP pages; use the [native deployment guide](docs/go-cloak-native-worker.md) for JavaScript-rendered pages.
+**Custom (Page Monitor)** — for sites without RSS. Point it at a URL and it finds new articles using CSS selectors. Go ingestion owns collection progress and persistence; Python retains source configuration and the selector-learning callback. You can provide your own selectors as a fixed override. The minimal local Compose example supports HTTP pages; use the [native deployment guide](docs/go-cloak-native-worker.md) for JavaScript-rendered pages.
 
 ---
 

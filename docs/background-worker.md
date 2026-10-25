@@ -10,14 +10,14 @@ The standalone Go scheduler continues to own calendar timing and dispatch. The
 separate Go collection service continues to own source collection and article
 extraction. They are independent services with their existing APIs.
 
-Article persistence has a separate, explicit mode boundary. The current
-default remains Python collection and persistence through the database-free Go
-collector. A database-aware Go article ingestion service is implemented but
-not deployed. If enabled in a future deployment, the Python executor calls it
-within the current job fence; it reads source configuration, calls the
-existing collector, and commits articles and source progress. Python then
-continues quality checks, AI processing, summaries, and delivery. The service
-does not own the queue or replace the executor.
+Configured-source collection and persistence always use the database-aware Go
+article ingestion service. It runs within the current job fence, reads source
+configuration, calls the separate database-free collector, and commits
+articles and source progress. Python then continues quality checks, AI
+processing, summaries, and delivery. The service does not own the queue or
+replace the executor. `ARTICLE_INGESTION_MODE` defaults to `go`; `python` is
+rejected. The existing production setup has used Go ingestion since PR #22;
+this cleanup does not deploy or switch production services.
 
 ```mermaid
 flowchart LR
@@ -26,8 +26,8 @@ flowchart LR
     Worker[Go job worker] -->|lease, claim, finish| DB
     Worker -->|private fixed job API| Executor[Python job executor]
     Executor -->|fenced News writes| DB
-    Executor -->|current Python-mode collection API| Collector[Go collection service]
-    Ingestion[Go article ingestion<br/>implemented, not deployed] -.->|future explicit mode| Executor
+    Executor -->|fenced ingestion request| Ingestion[Go article ingestion]
+    Ingestion -->|source collection API| Collector[Go collection service]
     Ingestion -->|existing collection API| Collector
     Ingestion -->|fenced articles + source progress| DB
     Executor --> AI[Gemini]

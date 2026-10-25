@@ -72,7 +72,10 @@ jobs:
       TELEGRAM_TOKEN: fixture-only-telegram-token
       TELEGRAM_CHAT_ID: fixture-only-chat-id
       SCHEDULER_ENABLED: 'false'
-      ARTICLE_INGESTION_MODE: python
+      ARTICLE_INGESTION_MODE: go
+      ARTICLE_INGESTION_URL: http://ingestion.invalid:8093
+      ARTICLE_INGESTION_TOKEN: isolated-article-ingestion-token
+      BACKGROUND_EXECUTION_MODE: worker
     steps:
       - uses: actions/checkout@v4
         with:
