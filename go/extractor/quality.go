@@ -44,6 +44,47 @@ func isSingleLinkedCard(s *goquery.Selection) bool {
 	if s == nil || s.Length() == 0 || s.Find("h1,h2,h3,h4,h5,h6").Length() == 0 {
 		return false
 	}
+	return isLinkedCard(s)
+}
+
+func hasLinkedHeadline(s *goquery.Selection) bool {
+	found := false
+	s.Find("h1,h2,h3,h4,h5,h6").EachWithBreak(func(_ int, h *goquery.Selection) bool {
+		total := runeLen(strings.TrimSpace(h.Text()))
+		if total < 4 {
+			return true
+		}
+		linked := 0
+		countLink := func(a *goquery.Selection) {
+			href := strings.TrimSpace(a.AttrOr("href", ""))
+			if href == "" || strings.HasPrefix(href, "#") {
+				return
+			}
+			linked += runeLen(strings.TrimSpace(a.Text()))
+		}
+		if h.Parent().Is("a[href]") {
+			countLink(h.Parent())
+		}
+		h.Find("a[href]").Each(func(_ int, a *goquery.Selection) { countLink(a) })
+		if linked*100 >= total*60 {
+			found = true
+			return false
+		}
+		return true
+	})
+	return found
+}
+
+func isLinkedCard(s *goquery.Selection) bool {
+	if s == nil || s.Length() == 0 || s.Find("a[href]").Length() == 0 {
+		return false
+	}
+	if hasLinkedHeadline(s) {
+		return true
+	}
+	if s.Find("h1,h2,h3,h4,h5,h6,img,[itemprop=headline]").Length() == 0 {
+		return false
+	}
 	totalText, linkedText := 0, 0
 	s.Each(func(_ int, n *goquery.Selection) { totalText += runeLen(strings.TrimSpace(n.Text())) })
 	s.Find("a[href]").Each(func(_ int, n *goquery.Selection) { linkedText += runeLen(strings.TrimSpace(n.Text())) })
@@ -66,7 +107,7 @@ func hasRepeatedLinkedCards(s *goquery.Selection) bool {
 				continue
 			}
 			card := goquery.NewDocumentFromNode(child).Selection
-			if card.Find("a[href]").Length() > 0 && card.Find("h1,h2,h3,h4,h5,h6,img,[itemprop=headline]").Length() > 0 {
+			if isLinkedCard(card) {
 				class := strings.Join(strings.Fields(card.AttrOr("class", "")), ".")
 				key := goquery.NodeName(card) + "." + class
 				groups[key]++
@@ -104,7 +145,7 @@ func hasRepeatedLinkedArticleCards(s *goquery.Selection) bool {
 				continue
 			}
 			card := goquery.NewDocumentFromNode(child).Selection
-			if card.Find("a[href]").Length() > 0 && card.Find("h1,h2,h3,h4,h5,h6,img,[itemprop=headline]").Length() > 0 {
+			if isLinkedCard(card) {
 				count++
 				if count >= 2 {
 					found = true

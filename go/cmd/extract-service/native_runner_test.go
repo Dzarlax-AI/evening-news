@@ -1,6 +1,7 @@
 package main
 
 import (
+	"bytes"
 	"context"
 	"errors"
 	"strings"
@@ -72,8 +73,6 @@ func TestUnknownNativeResourceFailureDoesNotTriggerFallback(t *testing.T) {
 }
 
 func TestNativeResourceFailureUsesOneBoundedReadabilityFallback(t *testing.T) {
-	prose := "Election officials reported that ballot counting continued across several districts after polling stations closed. Observers said the process remained calm, while local teams published turnout figures and described the verification steps used before releasing each update. The commission plans to publish another report later in the evening."
-	prose += " Election teams also compared totals from each district and checked that posted figures matched the signed records. Officials said the next bulletin would include additional precinct results, a summary of unresolved questions, and the schedule for the final review."
 	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
 	defer cancel()
 	fallbackCalls := 0
@@ -85,9 +84,9 @@ func TestNativeResourceFailureUsesOneBoundedReadabilityFallback(t *testing.T) {
 		if raw != r.URL || opts.MaxWireBytes != int64(r.MaxBytes) || opts.MaxDecodedBytes != int64(r.MaxBytes) || opts.Timeout <= 0 || opts.Timeout > 5*time.Second {
 			t.Fatalf("fallback bounds or target changed: url=%s opts=%+v", raw, opts)
 		}
-		return transport.Document{HTML: []byte(`<html><body><article><h1>Election updates</h1><p>` + prose + `</p><p>` + prose + `</p></article></body></html>`), URL: r.URL, StatusCode: 200}, nil
+		return knownGoodFallbackDocument(), nil
 	})
-	if fallbackCalls != 1 || resp.Outcome != "success" || !strings.Contains(strings.Join(resp.Result.Trace, ","), "native_resource_recovered:wire_bytes") || !strings.Contains(resp.Result.Content, "ballot counting") {
+	if fallbackCalls != 1 || resp.Outcome != "success" || !strings.Contains(strings.Join(resp.Result.Trace, ","), "native_resource_recovered:wire_bytes") || !strings.Contains(resp.Result.Content, "regional water measurements") {
 		t.Fatalf("fallback recovery failed: calls=%d response=%+v", fallbackCalls, resp)
 	}
 }
@@ -105,19 +104,33 @@ func TestNativeFallbackProvenanceAllowsMultipleInlineBookmarks(t *testing.T) {
 	}
 }
 
+func TestNativeFallbackProvenanceAllowsPopularArticleCitationSections(t *testing.T) {
+	first := "Researchers compared measurements from independent stations and explained the calibration method used during the regional survey. The report documents seasonal variation, equipment limitations, and the checks used to confirm the final results. A linked citation provides the original dataset for readers who want to inspect the measurements."
+	second := "The authors also describe how neighboring laboratories can repeat the analysis and compare new samples with earlier observations. Their conclusions distinguish measured changes from seasonal effects, and the appendices explain how the team handled missing records and uncertainty. The review includes a second citation to its source material."
+	html := `<html><body><article class="popular-article"><h1>Regional survey findings</h1><div class="popular-section"><h2>Measurement method</h2><p>` + first + ` <a href="https://example.org/citation-one">[1]</a></p></div><div class="popular-section"><h2>Comparison and limits</h2><p>` + second + ` <a href="https://example.org/citation-two">[2]</a></p></div></article></body></html>`
+	resp := nativeArticleResponse(context.Background(), service.Request{URL: "https://example.org/story", MaxBytes: 4096, MaxChars: 3000}, func(context.Context, string, transport.BrowserOptions, string) (transport.RenderedDocument, error) {
+		return transport.RenderedDocument{}, &transport.NativeResourceLimitError{Reason: "wire_bytes", Cause: extractor.ErrWireLimit}
+	}, func(context.Context, string, transport.Options) (transport.Document, error) {
+		return transport.Document{HTML: []byte(html), URL: "https://example.org/story", StatusCode: 200}, nil
+	})
+	if resp.Outcome != "success" || !strings.Contains(resp.Result.Content, "regional survey") || !strings.Contains(resp.Result.Content, "neighboring laboratories") {
+		t.Fatalf("citation links invalidated fallback article provenance: %+v", resp)
+	}
+}
+
 func TestNativeFallbackDoesNotMaskUnsafeOrNonResourceFailures(t *testing.T) {
 	for _, tc := range []struct {
 		name string
 		err  error
 	}{
-		{"ownership", errors.Join(extractor.ErrWireLimit, transport.ErrNativeOwnershipLost)},
-		{"policy", errors.Join(extractor.ErrWireLimit, transport.ErrNativePolicy)},
-		{"auth", errors.Join(extractor.ErrWireLimit, &transport.PublicHTTPStatusError{StatusCode: 401})},
-		{"challenge", errors.Join(extractor.ErrWireLimit, &transport.PublicChallengeError{})},
+		{"ownership", errors.Join(&transport.NativeResourceLimitError{Reason: "wire_bytes", Cause: extractor.ErrWireLimit}, transport.ErrNativeOwnershipLost)},
+		{"policy", errors.Join(&transport.NativeResourceLimitError{Reason: "wire_bytes", Cause: extractor.ErrWireLimit}, transport.ErrNativePolicy)},
+		{"auth", errors.Join(&transport.NativeResourceLimitError{Reason: "wire_bytes", Cause: extractor.ErrWireLimit}, &transport.PublicHTTPStatusError{StatusCode: 401})},
+		{"challenge", errors.Join(&transport.NativeResourceLimitError{Reason: "dom_output", Cause: extractor.ErrOutputLimit}, &transport.PublicChallengeError{})},
 		{"crash", errors.Join(&transport.NativeResourceLimitError{Reason: "dom_output", Cause: extractor.ErrOutputLimit}, transport.ErrNativeTargetCrashed)},
 		{"not_ready", errors.Join(&transport.NativeResourceLimitError{Reason: "wire_bytes", Cause: extractor.ErrWireLimit}, transport.ErrNativeNotReady)},
-		{"cancelled", context.Canceled},
-		{"timeout", context.DeadlineExceeded},
+		{"cancelled", errors.Join(&transport.NativeResourceLimitError{Reason: "dom_output", Cause: extractor.ErrOutputLimit}, context.Canceled)},
+		{"timeout", errors.Join(&transport.NativeResourceLimitError{Reason: "wire_bytes", Cause: extractor.ErrWireLimit}, context.DeadlineExceeded)},
 	} {
 		t.Run(tc.name, func(t *testing.T) {
 			fallbackCalls := 0
@@ -150,29 +163,57 @@ func TestNativeResourceReasonsAreFiniteAndPreserveLimitSentinels(t *testing.T) {
 	}
 }
 
+func knownGoodFallbackDocument() transport.Document {
+	prose := "Researchers published a detailed report about regional water measurements gathered at independent stations. The team compared readings across several seasons, explained the equipment limits, and released its calibration method with reproducible sample data. The report documents how neighboring laboratories can repeat the analysis and compare results with earlier observations."
+	html := `<html><body><article><h1>Regional water report</h1><p>` + prose + `</p><p>` + prose + `</p></article></body></html>`
+	return transport.Document{HTML: []byte(html), URL: "https://example.org/story", StatusCode: 200}
+}
+
 func TestNativeFallbackRejectsHTTPErrorAndUnusableBodies(t *testing.T) {
+	good := knownGoodFallbackDocument()
+	challenge := good
+	challenge.HTML = append([]byte(`<div id="challenge-form"></div>`), challenge.HTML...)
+	privateRedirect := good
+	privateRedirect.URL = "http://127.0.0.1/private"
+	httpStatus := good
+	httpStatus.StatusCode = 403
+	tooLarge := good
+	tooLarge.HTML = append(tooLarge.HTML, bytes.Repeat([]byte("x"), 400)...)
+	short := transport.Document{HTML: []byte(`<html><body><article><h1>Regional water report</h1><p>A short teaser only.</p></article></body></html>`), URL: good.URL, StatusCode: 200}
+	markedCard := transport.Document{HTML: []byte(`<html><body><article class="related-article"><a href="/other"><h2>Related article</h2><p>Researchers published a separate analysis of regional transit changes. The report compares service schedules across several cities and explains how the updated routes affect local commuters. Reviewers collected additional comments from riders during the past month.</p><p>The team will publish a follow-up with further detail about the survey, its sampling limits, and the next stages of the project. The linked story describes those results and includes background on the organization that prepared the report.</p></a></article></body></html>`), URL: good.URL, StatusCode: 200}
+	unmarkedCard := transport.Document{HTML: []byte(`<html><body><article><h2><a href="/other">Other headline</a></h2><p>Researchers published a separate analysis of regional transit changes. The report compares service schedules across several cities and explains how the updated routes affect local commuters. Reviewers collected additional comments from riders during the past month.</p><p>The team will publish a follow-up with further detail about the survey, its sampling limits, and the next stages of the project. The linked story describes those results and includes background on the organization that prepared the report.</p></article></body></html>`), URL: good.URL, StatusCode: 200}
+	listing := transport.Document{HTML: []byte(`<html><body><main><h1>Latest stories</h1><article><h2><a href="/one">Transit report</a></h2><p>Researchers published a separate analysis of regional transit changes. The report compares service schedules across several cities and explains how the updated routes affect local commuters. Reviewers collected additional comments from riders during the past month.</p><p>The team will publish a follow-up with further detail about the survey, its sampling limits, and the next stages of the project. The linked story describes those results and includes background on the organization that prepared the report.</p></article><article><h2><a href="/two">Transit update</a></h2><p>Researchers published a separate analysis of regional transit changes. The report compares service schedules across several cities and explains how the updated routes affect local commuters. Reviewers collected additional comments from riders during the past month.</p><p>The team will publish a follow-up with further detail about the survey, its sampling limits, and the next stages of the project. The linked story describes those results and includes background on the organization that prepared the report.</p></article></main></body></html>`), URL: good.URL, StatusCode: 200}
+	mainWithCard := transport.Document{HTML: []byte(`<html><body><main><h1>Page title</h1><article class="related-article"><h2><a href="/other">Other headline</a></h2><p>Researchers published a separate analysis of regional transit changes. The report compares service schedules across several cities and explains how the updated routes affect local commuters. Reviewers collected additional comments from riders during the past month.</p><p>The team will publish a follow-up with further detail about the survey, its sampling limits, and the next stages of the project. The linked story describes those results and includes background on the organization that prepared the report.</p></article></main></body></html>`), URL: good.URL, StatusCode: 200}
 	for _, tc := range []struct {
-		name string
-		doc  transport.Document
-		err  error
+		name    string
+		doc     transport.Document
+		err     error
+		request service.Request
 	}{
-		{"http_error", transport.Document{}, &transport.PublicHTTPStatusError{StatusCode: 403}},
-		{"http_status", transport.Document{StatusCode: 403, HTML: []byte(`<html><body>Article</body></html>`), URL: "https://example.org/story"}, nil},
-		{"challenge", transport.Document{HTML: []byte(`<html><body>Checking your browser</body></html>`), URL: "https://example.org/story"}, nil},
-		{"private_redirect", transport.Document{HTML: []byte(`<html><body>Article</body></html>`), URL: "http://127.0.0.1/private"}, nil},
-		{"teaser_only", transport.Document{HTML: []byte(`<html><head><meta name="description" content="A short teaser only."></head><body><article><p>A short teaser only.</p></article></body></html>`), URL: "https://example.org/story"}, nil},
-		{"single_recommendation_card", transport.Document{HTML: []byte(`<html><body><article class="related-article"><a href="/other"><h2>Related article</h2><p>Researchers published a separate analysis of regional transit changes. The report compares service schedules across several cities and explains how the updated routes affect local commuters. Reviewers collected additional comments from riders during the past month.</p><p>The team will publish a follow-up with further detail about the survey, its sampling limits, and the next stages of the project. The linked story describes those results and includes background on the organization that prepared the report.</p></a></article></body></html>`), URL: "https://example.org/story"}, nil},
-		{"unmarked_linked_teaser", transport.Document{HTML: []byte(`<html><body><article><h2><a href="/other">Other headline</a></h2><p>Researchers published a separate analysis of regional transit changes. The report compares service schedules across several cities and explains how the updated routes affect local commuters. Reviewers collected additional comments from riders during the past month.</p><p>The team will publish a follow-up with further detail about the survey, its sampling limits, and the next stages of the project. The linked story describes those results and includes background on the organization that prepared the report.</p></article></body></html>`), URL: "https://example.org/story"}, nil},
-		{"repeated_linked_listing", transport.Document{HTML: []byte(`<html><body><main><h1>Latest stories</h1><article><h2><a href="/one">Transit report</a></h2><p>Researchers published a separate analysis of regional transit changes. The report compares service schedules across several cities and explains how the updated routes affect local commuters. Reviewers collected additional comments from riders during the past month.</p><p>The team will publish a follow-up with further detail about the survey, its sampling limits, and the next stages of the project. The linked story describes those results and includes background on the organization that prepared the report.</p></article><article><h2><a href="/two">Transit update</a></h2><p>Researchers published a separate analysis of regional transit changes. The report compares service schedules across several cities and explains how the updated routes affect local commuters. Reviewers collected additional comments from riders during the past month.</p><p>The team will publish a follow-up with further detail about the survey, its sampling limits, and the next stages of the project. The linked story describes those results and includes background on the organization that prepared the report.</p></article></main></body></html>`), URL: "https://example.org/story"}, nil},
+		{name: "http_error", doc: good, err: &transport.PublicHTTPStatusError{StatusCode: 403}},
+		{name: "http_status", doc: httpStatus},
+		{name: "challenge", doc: challenge},
+		{name: "private_redirect", doc: privateRedirect},
+		{name: "teaser_only", doc: short},
+		{name: "oversized_html", doc: tooLarge, request: service.Request{MaxBytes: 1024}},
+		{name: "max_chars", doc: good, request: service.Request{MaxChars: 100}},
+		{name: "single_recommendation_card", doc: markedCard},
+		{name: "unmarked_linked_teaser", doc: unmarkedCard},
+		{name: "main_with_single_marked_card", doc: mainWithCard},
+		{name: "repeated_linked_listing", doc: listing},
 	} {
 		t.Run(tc.name, func(t *testing.T) {
-			resp := nativeArticleResponse(context.Background(), service.Request{URL: "https://example.org/story"}, func(context.Context, string, transport.BrowserOptions, string) (transport.RenderedDocument, error) {
-				return transport.RenderedDocument{}, extractor.ErrOutputLimit
+			fallbackCalls := 0
+			r := tc.request
+			r.URL = good.URL
+			resp := nativeArticleResponse(context.Background(), r, func(context.Context, string, transport.BrowserOptions, string) (transport.RenderedDocument, error) {
+				return transport.RenderedDocument{}, &transport.NativeResourceLimitError{Reason: "dom_output", Cause: extractor.ErrOutputLimit}
 			}, func(context.Context, string, transport.Options) (transport.Document, error) {
+				fallbackCalls++
 				return tc.doc, tc.err
 			})
-			if resp.Outcome == "success" || resp.Error == nil || resp.Error.Code != "resource_limit" || resp.Result.State != "resource_limit" {
-				t.Fatalf("unusable fallback changed resource failure: %+v", resp)
+			if fallbackCalls != 1 || resp.Outcome == "success" || resp.Error == nil || resp.Error.Code != "resource_limit" || resp.Result.State != "resource_limit" {
+				t.Fatalf("unusable fallback changed resource failure: calls=%d response=%+v", fallbackCalls, resp)
 			}
 		})
 	}

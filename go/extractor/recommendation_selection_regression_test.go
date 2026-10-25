@@ -69,3 +69,34 @@ func TestNestedWrappersInPopularArticleAreNotMistakenForCardGrid(t *testing.T) {
 		})
 	}
 }
+
+func TestPopularArticleSectionsWithInlineCitationsRemainArticleBody(t *testing.T) {
+	first := "Researchers compared measurements from independent stations and explained the calibration method used during the regional survey. The report documents seasonal variation, equipment limitations, and the checks used to confirm the final results. A linked citation provides the original dataset for readers who want to inspect the measurements."
+	second := "The authors also describe how neighboring laboratories can repeat the analysis and compare new samples with earlier observations. Their conclusions distinguish measured changes from seasonal effects, and the appendices explain how the team handled missing records and uncertainty. The review includes a second citation to its source material."
+	html := `<html><body><article class="popular-article"><h1>Regional survey findings</h1><div class="popular-section"><h2>Measurement method</h2><p>` + first + ` <a href="/citation-one">[1]</a></p></div><div class="popular-section"><h2>Comparison and limits</h2><p>` + second + ` <a href="/citation-two">[2]</a></p></div></article></body></html>`
+	for _, method := range []string{"auto", "browser_rendering", "enhanced_selectors", "learned_pattern"} {
+		t.Run(method, func(t *testing.T) {
+			input := Input{URL: "https://example.test/survey", HTML: html, RenderedHTML: html, Strategy: method, MaxChars: 3000}
+			if method == "learned_pattern" {
+				input.LearnedSelector = ".popular-article"
+			}
+			result := Extract(context.Background(), input)
+			if result.State != "extracted" || !strings.Contains(result.Content, "regional survey") || !strings.Contains(result.Content, "neighboring laboratories") {
+				t.Fatalf("plain prose sections with citation links were pruned: state=%s content=%q", result.State, result.Content)
+			}
+		})
+	}
+}
+
+func TestSingleMarkedHeadlineCardInsideMainIsNotAcceptedAsArticleBody(t *testing.T) {
+	excerpt := "Researchers published a separate analysis of regional transit changes. The report compares service schedules across several cities and explains how the updated routes affect local commuters. Reviewers collected additional comments from riders during the past month. The team will publish a follow-up with further detail about the survey, its sampling limits, and the next stages of the project."
+	html := `<html><body><main><h1>Page title</h1><article class="related-article"><h2><a href="/other">Other headline</a></h2><p>` + excerpt + `</p><p>` + excerpt + `</p></article></main></body></html>`
+	for _, method := range []string{"auto", "browser_rendering", "readability"} {
+		t.Run(method, func(t *testing.T) {
+			result := Extract(context.Background(), Input{URL: "https://example.test/page", HTML: html, RenderedHTML: html, Strategy: method, MaxChars: 3000})
+			if strings.Contains(result.Content, "regional transit changes") {
+				t.Fatalf("single marked recommendation card became article body with %s: %q", method, result.Content)
+			}
+		})
+	}
+}
