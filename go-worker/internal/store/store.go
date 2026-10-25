@@ -25,19 +25,26 @@ var (
 // HeartbeatError reports only bounded diagnostic metadata. It deliberately
 // omits PostgreSQL's error text, which may contain query or configuration data.
 type HeartbeatError struct {
-	Stage    string
-	Reason   string
-	SQLState string
+	Stage          string
+	Reason         string
+	SQLState       string
+	MutexWait      time.Duration
+	BeginDuration  time.Duration
+	UpdateDuration time.Duration
+	CommitDuration time.Duration
 }
 
 func (e *HeartbeatError) Error() string {
 	if e == nil {
 		return ErrLeaseLost.Error()
 	}
+	diagnostic := fmt.Sprintf("%s (heartbeat stage=%s reason=%s mutex_wait_ms=%d begin_ms=%d update_ms=%d commit_ms=%d",
+		ErrLeaseLost, e.Stage, e.Reason, e.MutexWait.Milliseconds(), e.BeginDuration.Milliseconds(),
+		e.UpdateDuration.Milliseconds(), e.CommitDuration.Milliseconds())
 	if e.SQLState != "" {
-		return fmt.Sprintf("%s (heartbeat stage=%s reason=%s sqlstate=%s)", ErrLeaseLost, e.Stage, e.Reason, e.SQLState)
+		diagnostic += fmt.Sprintf(" sqlstate=%s", e.SQLState)
 	}
-	return fmt.Sprintf("%s (heartbeat stage=%s reason=%s)", ErrLeaseLost, e.Stage, e.Reason)
+	return diagnostic + ")"
 }
 
 func (e *HeartbeatError) Unwrap() error { return ErrLeaseLost }
@@ -250,38 +257,53 @@ func (s *Store) Info() LeaseInfo {
 }
 
 func (s *Store) Heartbeat(ctx context.Context) error {
+	lockStarted := time.Now()
 	s.leaseMu.Lock()
 	defer s.leaseMu.Unlock()
+	mutexWait := time.Since(lockStarted)
 	if s.leaseConn == nil || s.closed {
 		return ErrLeaseLost
 	}
+	beginStarted := time.Now()
 	tx, err := s.leaseConn.Begin(ctx)
+	beginDuration := time.Since(beginStarted)
 	if err != nil {
-		return s.failHeartbeatLocked("begin", err)
+		return s.failHeartbeatLocked("begin", err, mutexWait, beginDuration, 0, 0)
 	}
+	updateStarted := time.Now()
 	command, err := tx.Exec(ctx, `UPDATE background_worker_status
 		SET heartbeat_at=clock_timestamp() AT TIME ZONE 'UTC'
 		WHERE id=1 AND owner_id=$1 AND generation=$2 AND lock_backend_pid=$3 AND status='running'`,
 		s.ownerID, s.generation, s.backendPID)
+	updateDuration := time.Since(updateStarted)
 	if err != nil {
 		rollbackTx(tx)
-		return s.failHeartbeatLocked("update", err)
+		return s.failHeartbeatLocked("update", err, mutexWait, beginDuration, updateDuration, 0)
 	}
 	if command.RowsAffected() != 1 {
 		rollbackTx(tx)
 		s.invalidateLeaseLocked()
-		return &HeartbeatError{Stage: "update", Reason: "lease_mismatch"}
+		return &HeartbeatError{Stage: "update", Reason: "lease_mismatch", MutexWait: mutexWait,
+			BeginDuration: beginDuration, UpdateDuration: updateDuration}
 	}
-	if err := tx.Commit(ctx); err != nil {
+	commitStarted := time.Now()
+	err = tx.Commit(ctx)
+	commitDuration := time.Since(commitStarted)
+	if err != nil {
 		rollbackTx(tx)
-		return s.failHeartbeatLocked("commit", err)
+		return s.failHeartbeatLocked("commit", err, mutexWait, beginDuration, updateDuration, commitDuration)
 	}
 	return nil
 }
 
-func (s *Store) failHeartbeatLocked(stage string, err error) error {
+func (s *Store) failHeartbeatLocked(stage string, err error, mutexWait, beginDuration, updateDuration, commitDuration time.Duration) error {
 	s.invalidateLeaseLocked()
-	return heartbeatError(stage, err)
+	diagnostic := heartbeatError(stage, err)
+	diagnostic.MutexWait = mutexWait
+	diagnostic.BeginDuration = beginDuration
+	diagnostic.UpdateDuration = updateDuration
+	diagnostic.CommitDuration = commitDuration
+	return diagnostic
 }
 
 func heartbeatError(stage string, err error) *HeartbeatError {
