@@ -621,8 +621,15 @@ func (c *browserCDP) callCleanup(ctx context.Context, session, method string, pa
 		return errors.New("prototype_browser_cleanup_command_denied")
 	}
 	stopClose := context.AfterFunc(ctx, func() { _ = c.conn.Close() })
-	defer stopClose()
-	return c.callMode(ctx, session, method, params, result, true)
+	err := c.callMode(ctx, session, method, params, result, true)
+	// callMode can return at the same time the deadline callback is scheduled.
+	// Close synchronously before stopping the callback so its connection close
+	// cannot be lost while the shared reader or writer is still blocked.
+	if ctx.Err() != nil {
+		_ = c.conn.Close()
+	}
+	stopClose()
+	return err
 }
 
 // writeLoop is the connection's only CDP writer. A one-entry queue bounds
