@@ -96,12 +96,42 @@ with a fresh heartbeat. Every domain commit is fenced under the worker/job row
 locks. Attempt-specific backup files and the domain-statistics cache use a
 publication fence as they touch the filesystem.
 
+When another backend still holds the worker lease at startup, Go waits for at
+most 20 seconds, retrying once per second. It does not claim jobs or notify the
+executor of recovery before acquisition succeeds. Other startup errors fail
+immediately. Heartbeat failures still invalidate ownership and stop execution;
+bounded diagnostics report the failed stage and a finite reason or SQLSTATE,
+without logging driver messages or connection details. These diagnostics help
+distinguish connection loss from row-lock contention; they do not establish the
+cause of a historical production restart by themselves.
+
 Job results are bounded to 4 KiB. A repeated identical envelope returns its
 durable receipt; a changed envelope conflicts. Go writes the terminal News job
 state before asking Python to apply fixed legacy schedule-completion and alert
 effects. Pending completion events remain durable until Python acknowledges
 them, even when normal job retention expires. Scheduler occurrence receipts
 remain governed by their existing independent retention contract.
+
+Scheduled `news_processing` runs use source-specific alert confirmation when a
+successful Go ingestion receipt proves that the only warning is one retryable
+source transport failure. A source incident requires two consecutive scheduled
+observations for the same source and configuration; recovery requires two
+healthy observations. Manual jobs, other schedules, changed configurations, and
+missing observations do not establish such a streak. The source receipts and
+job warning remain visible even when the first notification is suppressed.
+
+The executor keeps bounded incident and delivery markers in reserved
+`scheduled_source_alerts:v1:` JSON settings. Completion replay does not send an
+alert again, and an uncertain delivery is not blindly retried. Unknown
+warnings, failed jobs, and AI/delivery failures retain the immediate generic
+alert path. No new database migration or job-result field is required.
+
+If the executor stops after recording completion but before confirming an
+alert send, a later scheduled observation reconciles the orphaned delivery
+marker as uncertain. It does not depend on replaying the already-applied job
+completion. Live callbacks remain protected throughout their send and
+bookkeeping; an uncertain incident can retire silently after healthy evidence
+so it cannot permanently suppress a future incident.
 
 Selected-article `article_reprocess` initialization remains a one-time fenced
 Python operation. Retry counters and completed article stages survive worker

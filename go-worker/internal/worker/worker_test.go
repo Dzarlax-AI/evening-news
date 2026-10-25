@@ -239,23 +239,40 @@ func testReceipt(envelope executor.Envelope, state string) map[string]any {
 }
 
 type fakeQueueStore struct {
-	now          time.Time
-	info         store.LeaseInfo
-	claimErr     error
-	heartbeatErr error
-	claimCalled  chan struct{}
-	claimOnce    sync.Once
-	releaseCount atomic.Int32
-	finishState  string
-	finishResult map[string]any
-	finishCode   *string
-	finishCount  int
-	finishErr    error
+	now           time.Time
+	info          store.LeaseInfo
+	acquireErrors []error
+	acquireGate   chan struct{}
+	acquireCalls  atomic.Int32
+	claimCalls    atomic.Int32
+	claimErr      error
+	heartbeatErr  error
+	claimCalled   chan struct{}
+	claimOnce     sync.Once
+	releaseCount  atomic.Int32
+	finishState   string
+	finishResult  map[string]any
+	finishCode    *string
+	finishCount   int
+	finishErr     error
 }
 
-func (s *fakeQueueStore) CheckSchema(context.Context) error                { return nil }
-func (s *fakeQueueStore) Acquire(context.Context) (store.LeaseInfo, error) { return s.info, nil }
-func (s *fakeQueueStore) Release(context.Context) error                    { s.releaseCount.Add(1); return nil }
+func (s *fakeQueueStore) CheckSchema(context.Context) error { return nil }
+func (s *fakeQueueStore) Acquire(context.Context) (store.LeaseInfo, error) {
+	call := int(s.acquireCalls.Add(1))
+	if s.acquireGate != nil {
+		select {
+		case <-s.acquireGate:
+		default:
+			return store.LeaseInfo{}, store.ErrLeaseHeld
+		}
+	}
+	if call <= len(s.acquireErrors) {
+		return store.LeaseInfo{}, s.acquireErrors[call-1]
+	}
+	return s.info, nil
+}
+func (s *fakeQueueStore) Release(context.Context) error { s.releaseCount.Add(1); return nil }
 func (s *fakeQueueStore) Heartbeat(context.Context) error {
 	if s.heartbeatErr != nil && s.claimCalled != nil {
 		select {
@@ -272,6 +289,7 @@ func (s *fakeQueueStore) FailExhaustedInterrupted(context.Context, int64, int) (
 	return 0, nil
 }
 func (s *fakeQueueStore) Claim(context.Context, int64) (store.Job, error) {
+	s.claimCalls.Add(1)
 	if s.claimCalled != nil {
 		s.claimOnce.Do(func() { close(s.claimCalled) })
 	}
@@ -309,6 +327,115 @@ func fakeWorker(client *executor.Client, db *fakeQueueStore, requestTimeout time
 		config: config.Config{PollInterval: 5 * time.Millisecond, RequestTimeout: requestTimeout,
 			ShutdownDrain: 500 * time.Millisecond, MaxJobAttempts: 3},
 		store: db, executor: client, policy: allowAllPolicy{}, logger: slog.New(slog.NewTextHandler(io.Discard, nil)),
+	}
+}
+
+func TestRunWaitsForHeldLeaseBeforeRecoveryOrClaims(t *testing.T) {
+	db := &fakeQueueStore{
+		info:        store.LeaseInfo{OwnerID: "a39321b0-7724-443c-aaed-fd5b57e301db", Generation: 6},
+		acquireGate: make(chan struct{}),
+	}
+	recovered := make(chan struct{}, 1)
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if r.Method == http.MethodPost && r.URL.Path == "/internal/v1/worker-events" {
+			w.WriteHeader(http.StatusNoContent)
+			if flusher, ok := w.(http.Flusher); ok {
+				flusher.Flush()
+			}
+			recovered <- struct{}{}
+			return
+		}
+		http.NotFound(w, r)
+	}))
+	defer server.Close()
+	client, err := executor.New(server.URL, "fixture-executor-token-123", 100*time.Millisecond)
+	if err != nil {
+		t.Fatal(err)
+	}
+	worker := fakeWorker(client, db, 100*time.Millisecond)
+	worker.config.HeartbeatInterval = time.Second
+	ctx, cancel := context.WithCancel(context.Background())
+	done := make(chan error, 1)
+	go func() { done <- worker.Run(ctx) }()
+	defer cancel()
+
+	deadline := time.After(time.Second)
+	for db.acquireCalls.Load() == 0 {
+		select {
+		case <-deadline:
+			t.Fatal("worker did not attempt lease acquisition")
+		default:
+			time.Sleep(time.Millisecond)
+		}
+	}
+	select {
+	case <-recovered:
+		t.Fatal("worker notified executor before acquiring the lease")
+	case <-time.After(40 * time.Millisecond):
+	}
+	if got := db.claimCalls.Load(); got != 0 {
+		t.Fatalf("claim count before lease release = %d, want 0", got)
+	}
+
+	close(db.acquireGate)
+	select {
+	case <-recovered:
+	case <-time.After(3 * time.Second):
+		t.Fatal("worker did not continue after the existing owner released the lease")
+	}
+	time.Sleep(20 * time.Millisecond)
+	if got := db.acquireCalls.Load(); got < 2 {
+		t.Fatalf("acquire attempts = %d, want a held attempt followed by success", got)
+	}
+	cancel()
+	select {
+	case runErr := <-done:
+		if runErr != nil {
+			t.Fatalf("Run after cancellation = %v", runErr)
+		}
+	case <-time.After(time.Second):
+		t.Fatal("worker did not stop after cancellation")
+	}
+}
+
+func TestAcquireLeaseRetriesOnlyHeldAndStopsAtBound(t *testing.T) {
+	db := &fakeQueueStore{acquireGate: make(chan struct{})}
+	started := time.Now()
+	_, err := acquireLeaseWithRetry(context.Background(), db, nil, 50*time.Millisecond, 5*time.Millisecond)
+	if !errors.Is(err, store.ErrLeaseHeld) {
+		t.Fatalf("acquireLeaseWithRetry = %v, want ErrLeaseHeld", err)
+	}
+	if elapsed := time.Since(started); elapsed > 300*time.Millisecond {
+		t.Fatalf("bounded lease wait took %s, want under 300ms", elapsed)
+	}
+	if got := db.acquireCalls.Load(); got < 2 {
+		t.Fatalf("held lease acquisition attempts = %d, want retries", got)
+	}
+
+	databaseErr := errors.New("database unavailable")
+	db = &fakeQueueStore{acquireErrors: []error{databaseErr}}
+	if _, err := acquireLeaseWithRetry(context.Background(), db, nil, time.Second, 5*time.Millisecond); !errors.Is(err, databaseErr) {
+		t.Fatalf("non-held acquisition error = %v, want original error", err)
+	}
+	if got := db.acquireCalls.Load(); got != 1 {
+		t.Fatalf("non-held acquisition attempts = %d, want 1", got)
+	}
+}
+
+func TestAcquireLeaseCancellationStopsPromptly(t *testing.T) {
+	db := &fakeQueueStore{acquireGate: make(chan struct{})}
+	ctx, cancel := context.WithCancel(context.Background())
+	go func() {
+		time.Sleep(20 * time.Millisecond)
+		cancel()
+	}()
+	started := time.Now()
+	_, err := acquireLeaseWithRetry(ctx, db, nil, time.Second, 5*time.Millisecond)
+	if !errors.Is(err, context.Canceled) {
+		t.Fatalf("acquireLeaseWithRetry cancellation = %v, want context.Canceled", err)
+	}
+	if elapsed := time.Since(started); elapsed > 250*time.Millisecond {
+		t.Fatalf("canceled lease wait took %s, want prompt stop", elapsed)
 	}
 }
 

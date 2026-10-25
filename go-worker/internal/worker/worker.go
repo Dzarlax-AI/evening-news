@@ -18,6 +18,11 @@ var ErrLeaseLost = errors.New("worker lease lost")
 var ErrExecutorGone = errors.New("accepted executor instance exited before completing")
 var ErrExecutorAuth = errors.New("executor authentication failed; worker stopped fail-closed")
 
+const (
+	leaseAcquireWait     = 20 * time.Second
+	leaseAcquireInterval = time.Second
+)
+
 type Worker struct {
 	config   config.Config
 	store    QueueStore
@@ -62,7 +67,7 @@ func (w *Worker) Run(ctx context.Context) error {
 	if err := w.store.CheckSchema(ctx); err != nil {
 		return err
 	}
-	info, err := w.store.Acquire(ctx)
+	info, err := w.acquireLease(ctx)
 	if err != nil {
 		return err
 	}
@@ -160,6 +165,51 @@ func (w *Worker) Run(ctx context.Context) error {
 			}
 			if runCtx.Err() != nil {
 				return ErrLeaseLost
+			}
+		}
+	}
+}
+
+func (w *Worker) acquireLease(ctx context.Context) (store.LeaseInfo, error) {
+	return acquireLeaseWithRetry(ctx, w.store, w.logger, leaseAcquireWait, leaseAcquireInterval)
+}
+
+func acquireLeaseWithRetry(ctx context.Context, db interface {
+	Acquire(context.Context) (store.LeaseInfo, error)
+}, logger *slog.Logger, maxWait, retryInterval time.Duration) (store.LeaseInfo, error) {
+	if maxWait <= 0 || retryInterval <= 0 {
+		return store.LeaseInfo{}, errors.New("worker lease wait configuration is invalid")
+	}
+	deadlineCtx, cancel := context.WithTimeout(ctx, maxWait)
+	defer cancel()
+	deadline := time.NewTimer(maxWait)
+	defer deadline.Stop()
+	ticker := time.NewTicker(retryInterval)
+	defer ticker.Stop()
+	announced := false
+	for {
+		info, err := db.Acquire(deadlineCtx)
+		if err == nil {
+			return info, nil
+		}
+		if !errors.Is(err, store.ErrLeaseHeld) {
+			if ctx.Err() != nil {
+				return store.LeaseInfo{}, ctx.Err()
+			}
+			return store.LeaseInfo{}, err
+		}
+		if !announced && logger != nil {
+			logger.Info("worker lease held; waiting for current owner", "max_wait_seconds", int(maxWait.Seconds()))
+			announced = true
+		}
+		select {
+		case <-ctx.Done():
+			return store.LeaseInfo{}, ctx.Err()
+		case <-deadline.C:
+			return store.LeaseInfo{}, store.ErrLeaseHeld
+		case <-ticker.C:
+			if errors.Is(deadlineCtx.Err(), context.DeadlineExceeded) {
+				return store.LeaseInfo{}, store.ErrLeaseHeld
 			}
 		}
 	}

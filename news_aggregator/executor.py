@@ -31,6 +31,7 @@ from .services.background_jobs import (
     job_may_deliver, validate_payload,
 )
 from .services.job_fence import JobExecutionFence, current_job_fence
+from .services import scheduled_source_alerts
 
 logger = logging.getLogger(__name__)
 
@@ -50,10 +51,23 @@ _EXECUTOR_GUARD_HEALTHY = False
 _EXECUTOR_GUARD_LOCK = asyncio.Lock()
 _EXECUTOR_SERVER = None
 _EXECUTOR_GUARD_QUERY_TIMEOUT = 2.0
+MAX_TRACKED_SOURCE_ALERT_JOBS = 128
 
 # This two-key advisory lock is distinct from the Go worker lease key and its
 # retry coordination key. Only one private executor process may own a schema.
 _EXECUTOR_GUARD_KEY_XOR = 1145132609
+
+
+def _active_source_alert_job_ids():
+    """Snapshot bounded completion callbacks to protect pre-send markers."""
+    active = set()
+    for (job_id, _attempt), lock in _LEGACY_EVENT_LOCKS.items():
+        if not lock.locked():
+            continue
+        if len(active) >= MAX_TRACKED_SOURCE_ALERT_JOBS:
+            return None
+        active.add(str(job_id))
+    return frozenset(active)
 
 
 class InvalidEnvelope(ValueError):
@@ -708,6 +722,10 @@ class PythonJobExecutor:
         event_lock = _LEGACY_EVENT_LOCKS.setdefault(key, asyncio.Lock())
         async with event_lock:
             should_alert = False
+            should_send_source_alert = False
+            source_alert = None
+            source_identity = None
+            source_events = []
             async with AsyncSessionLocal() as session:
                 worker_status = await session.scalar(select(BackgroundWorkerStatus).where(
                     BackgroundWorkerStatus.id == 1).with_for_update().execution_options(
@@ -748,7 +766,8 @@ class PythonJobExecutor:
                     receipt.error_code = job.error_code
                     receipt.finished_at = job.finished_at
 
-                if receipt.legacy_completion_applied_at is None:
+                first_completion = receipt.legacy_completion_applied_at is None
+                if first_completion:
                     payload = job.payload if isinstance(job.payload, dict) else {}
                     schedule_id = payload.get("schedule_id")
                     if schedule_id:
@@ -783,21 +802,80 @@ class PythonJobExecutor:
                 alert_key = f"scheduler-warning-{schedule_key or schedule_id}"
                 if not (schedule_id or schedule_key):
                     receipt.legacy_alert_state = receipt.legacy_alert_state or "not_needed"
-                elif receipt.legacy_alert_state is None:
+                elif receipt.legacy_alert_state is None and first_completion:
                     result = job.result if isinstance(job.result, dict) else {}
-                    failure = job.state != "succeeded" or result.get("status") in {"warning", "deferred"}
-                    if failure:
-                        receipt.legacy_alert_state = "attempting"
-                        alert_kind, should_alert = "failure", True
-                    elif self.alerts is not None and self.alerts.is_active(alert_key):
-                        receipt.legacy_alert_state = "attempting"
-                        alert_kind, should_alert = "recovery", True
-                    else:
-                        receipt.legacy_alert_state = "not_needed"
+                    source_identity = scheduled_source_alerts.schedule_identity(job)
+                    observation_valid = False
+                    if source_identity is not None and job.kind == "news_processing":
+                        try:
+                            async with session.begin_nested():
+                                observation = None
+                                if job.state == "succeeded":
+                                    go_run, source_runs = await scheduled_source_alerts.read_current_go_observation(
+                                        session, job, attempt,
+                                    )
+                                    observation = scheduled_source_alerts.classify_observation(
+                                        job, go_run, source_runs,
+                                    )
+                                if observation is None:
+                                    await scheduled_source_alerts.break_streaks(
+                                        session, source_identity, job.queue_position,
+                                        _active_source_alert_job_ids(),
+                                    )
+                                else:
+                                    previous_position = await scheduled_source_alerts.previous_scheduled_position(
+                                        session, job, source_identity,
+                                    )
+                                    decision = await scheduled_source_alerts.prepare_alert(
+                                        session, source_identity, job.queue_position, job.id, observation,
+                                        previous_position, _active_source_alert_job_ids(),
+                                    )
+                                    observation_valid = decision is not None
+                                    if decision and decision.get("event"):
+                                        source_alert = decision["event"]
+                                        source_events = decision["events"]
+                                        should_send_source_alert = True
+                                        receipt.legacy_alert_state = "attempting"
+                                    elif observation_valid:
+                                        receipt.legacy_alert_state = "not_needed"
+                                        if (observation["warning"] is None
+                                                and result.get("status") == "success"
+                                                and self.alerts is not None
+                                                and self.alerts.is_active(alert_key)):
+                                            receipt.legacy_alert_state = "attempting"
+                                            alert_kind, should_alert = "recovery", True
+                        except Exception as exc:
+                            # Policy failures must not turn a warning into a quiet completion.
+                            logger.warning(
+                                "Scheduled source alert policy failed safely (job_id=%s error_type=%s)",
+                                job_id, type(exc).__name__,
+                            )
+                            observation_valid = False
+                            should_send_source_alert = False
+                            source_alert = None
+                            source_events = []
+                            should_alert = False
+                    if not observation_valid:
+                        failure = (job.state != "succeeded"
+                                   or result.get("status") in {"warning", "deferred"})
+                        if failure:
+                            receipt.legacy_alert_state = "attempting"
+                            alert_kind, should_alert = "failure", True
+                        elif self.alerts is not None and self.alerts.is_active(alert_key):
+                            receipt.legacy_alert_state = "attempting"
+                            alert_kind, should_alert = "recovery", True
+                        else:
+                            receipt.legacy_alert_state = "not_needed"
                 elif receipt.legacy_alert_state == "attempting" and key not in _ALERT_ACTIVE:
                     # A previous process may have sent the alert before it
                     # stopped. Preserve uncertainty and never replay it blindly.
                     receipt.legacy_alert_state = "unknown"
+                    source_identity = scheduled_source_alerts.schedule_identity(job)
+                    if source_identity:
+                        await scheduled_source_alerts.abandon_inflight(session, source_identity, job.id)
+                elif receipt.legacy_alert_state is None:
+                    # A successful completion replay has no new observation to count.
+                    receipt.legacy_alert_state = "not_needed"
                 await session.commit()
                 response = {
                     "job_id": str(job_id), "attempt_generation": attempt,
@@ -805,16 +883,31 @@ class PythonJobExecutor:
                     "alert_state": receipt.legacy_alert_state,
                 }
 
-            if should_alert:
+            if should_alert or should_send_source_alert:
                 _ALERT_ACTIVE.add(key)
                 try:
+                    sent = False
                     if self.alerts is None:
                         if self.orchestrator is None:
                             from .orchestrator import NewsOrchestrator
                             self.orchestrator = NewsOrchestrator()
                         from .services.operational_alerts import OperationalAlertManager
                         self.alerts = OperationalAlertManager(self.orchestrator.send_operational_alert)
-                    if alert_kind == "failure":
+                    if should_send_source_alert:
+                        if self.orchestrator is None:
+                            from .orchestrator import NewsOrchestrator
+                            self.orchestrator = NewsOrchestrator()
+                        try:
+                            sent = bool(await self.orchestrator.send_operational_alert(
+                                source_alert["title"], source_alert["message"],
+                            ))
+                        except Exception as exc:
+                            logger.warning(
+                                "Scheduled source alert delivery outcome is unknown (job_id=%s error_type=%s)",
+                                job_id, type(exc).__name__,
+                            )
+                            sent = False
+                    elif alert_kind == "failure":
                         sent = await self.alerts.failure(
                             alert_key,
                             f"Scheduled task {job.kind} needs attention",
@@ -829,9 +922,31 @@ class PythonJobExecutor:
                 finally:
                     _ALERT_ACTIVE.discard(key)
                 async with AsyncSessionLocal() as session:
+                    worker_status = await session.scalar(select(BackgroundWorkerStatus).where(
+                        BackgroundWorkerStatus.id == 1).with_for_update().execution_options(
+                            populate_existing=True))
+                    if worker_status is None or worker_status.lock_backend_pid is None:
+                        return response
+                    try:
+                        await _assert_remote_worker_lease(
+                            session, worker_status.owner_id, worker_status.generation,
+                            worker_status.lock_backend_pid,
+                        )
+                    except StaleWorker:
+                        return response
+                    job = await session.scalar(select(BackgroundJob).where(
+                        BackgroundJob.id == job_id).with_for_update().execution_options(
+                            populate_existing=True))
+                    if (job is None or job.attempt_generation != attempt
+                            or job.state not in {"succeeded", "failed", "delivery_unknown"}):
+                        return response
                     receipt = await session.get(BackgroundJobExecution, key, with_for_update=True)
                     if receipt and receipt.legacy_alert_state == "attempting":
                         receipt.legacy_alert_state = "delivered" if sent else "unknown"
+                        if should_send_source_alert and source_identity:
+                            await scheduled_source_alerts.finish_alert(
+                                session, source_identity, source_events, job_id, bool(sent),
+                            )
                         await session.commit()
                         response["alert_state"] = receipt.legacy_alert_state
             return response

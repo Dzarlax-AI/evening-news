@@ -22,6 +22,26 @@ var (
 	ErrNoJob     = errors.New("no job available")
 )
 
+// HeartbeatError reports only bounded diagnostic metadata. It deliberately
+// omits PostgreSQL's error text, which may contain query or configuration data.
+type HeartbeatError struct {
+	Stage    string
+	Reason   string
+	SQLState string
+}
+
+func (e *HeartbeatError) Error() string {
+	if e == nil {
+		return ErrLeaseLost.Error()
+	}
+	if e.SQLState != "" {
+		return fmt.Sprintf("%s (heartbeat stage=%s reason=%s sqlstate=%s)", ErrLeaseLost, e.Stage, e.Reason, e.SQLState)
+	}
+	return fmt.Sprintf("%s (heartbeat stage=%s reason=%s)", ErrLeaseLost, e.Stage, e.Reason)
+}
+
+func (e *HeartbeatError) Unwrap() error { return ErrLeaseLost }
+
 type Job struct {
 	ID                string
 	Kind              string
@@ -237,19 +257,61 @@ func (s *Store) Heartbeat(ctx context.Context) error {
 	}
 	tx, err := s.leaseConn.Begin(ctx)
 	if err != nil {
-		s.invalidateLeaseLocked()
-		return ErrLeaseLost
+		return s.failHeartbeatLocked("begin", err)
 	}
 	command, err := tx.Exec(ctx, `UPDATE background_worker_status
 		SET heartbeat_at=clock_timestamp() AT TIME ZONE 'UTC'
 		WHERE id=1 AND owner_id=$1 AND generation=$2 AND lock_backend_pid=$3 AND status='running'`,
 		s.ownerID, s.generation, s.backendPID)
-	if err != nil || command.RowsAffected() != 1 || tx.Commit(ctx) != nil {
+	if err != nil {
+		rollbackTx(tx)
+		return s.failHeartbeatLocked("update", err)
+	}
+	if command.RowsAffected() != 1 {
 		rollbackTx(tx)
 		s.invalidateLeaseLocked()
-		return ErrLeaseLost
+		return &HeartbeatError{Stage: "update", Reason: "lease_mismatch"}
+	}
+	if err := tx.Commit(ctx); err != nil {
+		rollbackTx(tx)
+		return s.failHeartbeatLocked("commit", err)
 	}
 	return nil
+}
+
+func (s *Store) failHeartbeatLocked(stage string, err error) error {
+	s.invalidateLeaseLocked()
+	return heartbeatError(stage, err)
+}
+
+func heartbeatError(stage string, err error) *HeartbeatError {
+	diagnostic := &HeartbeatError{Stage: stage, Reason: "other"}
+	if errors.Is(err, context.DeadlineExceeded) {
+		diagnostic.Reason = "timeout"
+	} else if errors.Is(err, context.Canceled) {
+		diagnostic.Reason = "canceled"
+	} else if errors.Is(err, pgx.ErrTxClosed) {
+		diagnostic.Reason = "transaction_closed"
+	} else if errors.Is(err, pgconn.ErrConnClosed) {
+		diagnostic.Reason = "connection_closed"
+	}
+	diagnostic.SQLState = safePgError(err)
+	if len(diagnostic.SQLState) != 5 || !isSQLState(diagnostic.SQLState) {
+		diagnostic.SQLState = ""
+	}
+	if diagnostic.SQLState != "" {
+		diagnostic.Reason = "sqlstate"
+	}
+	return diagnostic
+}
+
+func isSQLState(code string) bool {
+	for _, char := range code {
+		if (char < '0' || char > '9') && (char < 'A' || char > 'Z') {
+			return false
+		}
+	}
+	return true
 }
 
 func (s *Store) Release(_ context.Context) error {
