@@ -4,7 +4,7 @@ import os
 from typing import Optional, List, Dict, Any, Literal
 from datetime import datetime, timedelta
 
-from pydantic import ConfigDict, Field, SecretStr, model_validator
+from pydantic import ConfigDict, Field, SecretStr, field_validator, model_validator
 from pydantic_settings import BaseSettings
 
 
@@ -68,10 +68,10 @@ class Settings(BaseSettings):
         default=5.0, gt=0, le=30, allow_inf_nan=False, alias="SCHEDULER_HTTP_TIMEOUT_SECONDS"
     )
     background_execution_mode: Literal["embedded", "worker"] = Field(
-        default="embedded", alias="BACKGROUND_EXECUTION_MODE"
+        default="worker", alias="BACKGROUND_EXECUTION_MODE"
     )
-    article_ingestion_mode: Literal["python", "go"] = Field(
-        default="python", alias="ARTICLE_INGESTION_MODE"
+    article_ingestion_mode: Literal["go"] = Field(
+        default="go", alias="ARTICLE_INGESTION_MODE"
     )
     article_ingestion_url: Optional[str] = Field(default=None, alias="ARTICLE_INGESTION_URL")
     article_ingestion_token: Optional[SecretStr] = Field(
@@ -87,6 +87,13 @@ class Settings(BaseSettings):
     job_executor_request_timeout_seconds: float = Field(
         default=5.0, gt=0, le=30, allow_inf_nan=False, alias="JOB_EXECUTOR_REQUEST_TIMEOUT_SECONDS"
     )
+
+    @field_validator("article_ingestion_mode", mode="before")
+    @classmethod
+    def reject_removed_python_ingestion(cls, value):
+        if value == "python":
+            raise ValueError("ARTICLE_INGESTION_MODE=python is no longer supported; use go")
+        return value
 
     # Local/regional category isolation
     # When set, articles matching this category are isolated from other feeds
@@ -191,26 +198,25 @@ class Settings(BaseSettings):
                 raise RuntimeError(f"{label} must be a valid service URL")
             if not 16 <= len(token) <= 4096 or any(ord(ch) < 0x21 or ord(ch) > 0x7E for ch in token):
                 raise RuntimeError(f"{label} token must be a valid non-empty service token")
-        if self.article_ingestion_mode == "go":
-            if self.background_execution_mode != "worker":
-                raise RuntimeError(
-                    "ARTICLE_INGESTION_MODE=go requires BACKGROUND_EXECUTION_MODE=worker"
-                )
-            url = self.article_ingestion_url
-            token = (self.article_ingestion_token.get_secret_value()
-                     if self.article_ingestion_token else None)
-            try:
-                parsed = urlsplit(url or "")
-                _ = parsed.port
-            except ValueError:
-                raise RuntimeError("ARTICLE_INGESTION_URL must be a valid service URL") from None
-            if (parsed.scheme not in {"http", "https"} or not parsed.hostname
-                    or parsed.username or parsed.password or parsed.query or parsed.fragment
-                    or any(ch.isspace() for ch in (url or ""))):
-                raise RuntimeError("ARTICLE_INGESTION_URL must be a valid service URL")
-            if not token or not 16 <= len(token) <= 4096 or any(
-                    ord(ch) < 0x21 or ord(ch) > 0x7E for ch in token):
-                raise RuntimeError("ARTICLE_INGESTION_TOKEN must be configured with a valid service token")
+        if self.background_execution_mode != "worker":
+            raise RuntimeError(
+                "ARTICLE_INGESTION_MODE=go requires BACKGROUND_EXECUTION_MODE=worker"
+            )
+        url = self.article_ingestion_url
+        token = (self.article_ingestion_token.get_secret_value()
+                 if self.article_ingestion_token else None)
+        try:
+            parsed = urlsplit(url or "")
+            _ = parsed.port
+        except ValueError:
+            raise RuntimeError("ARTICLE_INGESTION_URL must be a valid service URL") from None
+        if (parsed.scheme not in {"http", "https"} or not parsed.hostname
+                or parsed.username or parsed.password or parsed.query or parsed.fragment
+                or any(ch.isspace() for ch in (url or ""))):
+            raise RuntimeError("ARTICLE_INGESTION_URL must be a valid service URL")
+        if not token or not 16 <= len(token) <= 4096 or any(
+                ord(ch) < 0x21 or ord(ch) > 0x7E for ch in token):
+            raise RuntimeError("ARTICLE_INGESTION_TOKEN must be configured with a valid service token")
         receiver_token = (self.scheduled_jobs_token.get_secret_value()
                           if self.scheduled_jobs_token else None)
         if not receiver_token or not 16 <= len(receiver_token) <= 4096 or any(

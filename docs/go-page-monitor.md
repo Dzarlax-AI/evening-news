@@ -27,12 +27,11 @@ Continuation refetches the page; it does not pin a historical DOM, so a changing
 list can shift positions between calls. State stores only bounded position/hash
 maps and the current snapshot, with no server cache or stored HTML.
 
-Python retains selector memory, AI calls, article hashes, acknowledged snapshots
-and normal SourceManager persistence. Only delivered items are acknowledged;
-caller limits do not discard the remainder of a captured list. Optional learning
-and parsing share a source deadline with time reserved for returning captured
-items. Resource limits do not trigger learning. Publication dates become naive
-UTC before reaching the existing ORM.
+Go ingestion owns collection progress, bounded cursor/hash metadata, and article
+persistence. The Python executor retains the selector-learning callback for a
+captured snapshot and stores learned selectors in the existing memory service.
+Only articles accepted by the fenced Go ingestion run are persisted. The source
+probe remains observational and does not update cursor or selector state.
 
 The Go SourceManager runs source jobs concurrently; only actual browser
 renders wait for the native gate shared with article extraction. Admission

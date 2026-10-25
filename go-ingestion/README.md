@@ -2,7 +2,7 @@
 
 This module provides the private, database-aware article ingestion service. It reads enabled source configuration from the News PostgreSQL schema, asks the existing Go collector to collect articles, and persists bounded article and source progress under the active Python executor fence. The collector remains a separate database-free service. Python continues to own source CRUD, job orchestration, AI processing, summaries, and delivery.
 
-The Python executor selects ingestion mode through `ARTICLE_INGESTION_MODE`. The repository default is `python`; setting it to `go` requires a reachable private service and its bearer token. A service failure is returned to the active job. There is no silent fallback from Go mode.
+The Python executor calls this service for every configured-source collection run. `ARTICLE_INGESTION_MODE` defaults to `go`; the removed `python` value is rejected. The private service URL and bearer token are required at application startup. A service failure fails the active job; there is no Python fallback.
 
 ## Configuration
 
@@ -48,4 +48,4 @@ Store tests that require PostgreSQL accept `TEST_DATABASE_URL` only when it poin
 
 ## Deployment status
 
-This service is implemented in the repository branch but is not part of the current production deployment. The default mode remains Python until a separately reviewed deployment and mode-switch decision. The Compose files under `deploy/news-ingestion/` are private deployment templates, not an instruction to deploy them.
+This service has been used by production since PR #22. This repository cleanup removes the dormant Python collection and persistence fallback; it does not deploy a new image or change production configuration. The Compose files under `deploy/news-ingestion/` are private deployment templates, not an instruction to deploy them.

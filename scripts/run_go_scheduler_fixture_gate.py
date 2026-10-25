@@ -177,6 +177,9 @@ class DockerGate:
             "PAGE_MONITOR_SOURCE_MODE": "go",
             "EXTRACTION_SERVICE_URL": "http://fixture-services:8090",
             "EXTRACTION_SERVICE_TOKEN": "fixture-only-token",
+            "ARTICLE_INGESTION_MODE": "go",
+            "ARTICLE_INGESTION_URL": "http://fixture-services:8090",
+            "ARTICLE_INGESTION_TOKEN": "fixture-only-article-ingestion-token",
             "EXTRACTION_SERVICE_MODE": "go",
             "EXTRACTION_SERVICE_PYTHON_FALLBACK": "false",
             "BROWSER_WS_ENDPOINT": "",
@@ -768,12 +771,12 @@ class DockerGate:
         counters = self.fake_counters()
         providers = counters.get("providers", {})
         self.report["fake_provider_calls"] = providers
-        self.report["checks"]["fake_go_and_gemini_exercised"] = (
-            providers.get("source_collection", 0) > 0 and providers.get("gemini", 0) > 0
+        self.report["checks"]["fake_ingestion_stub_and_gemini_exercised"] = (
+            providers.get("ingestion_stub_runs", 0) > 0 and providers.get("gemini", 0) > 0
         )
         self.report["checks"]["fake_telegram_exercised"] = providers.get("telegram", 0) > 0
-        if not self.report["checks"]["fake_go_and_gemini_exercised"]:
-            raise GateFailure("scheduled News processing did not use both fake Go and Gemini endpoints")
+        if not self.report["checks"]["fake_ingestion_stub_and_gemini_exercised"]:
+            raise GateFailure("scheduled News processing did not use the ingestion receipt stub and Gemini")
         if not self.report["checks"]["fake_telegram_exercised"]:
             raise GateFailure("scheduled Telegram digest did not use the fake Telegram endpoint")
         self.report["checks"]["service_mode_does_not_write_legacy_schedule_rows"] = (

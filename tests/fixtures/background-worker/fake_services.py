@@ -1,7 +1,9 @@
 """Internal-network fake endpoints for source collection, extraction, AI, and Telegram."""
 
+import hashlib
 import json
 import threading
+import uuid
 from datetime import datetime, timezone
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 from urllib.parse import urlsplit
@@ -11,7 +13,9 @@ LOCK = threading.Lock()
 GATES = {"ai": threading.Event(), "telegram": threading.Event()}
 GATES["ai"].set()
 GATES["telegram"].set()
-COUNTERS = {"source_collection": 0, "extraction": 0, "gemini": 0, "telegram": 0}
+COUNTERS = {"source_probe": 0, "ingestion_stub_runs": 0, "extraction": 0, "gemini": 0, "telegram": 0}
+INGESTION_RUNS = {}
+INGESTION_REQUESTS = {}
 TEXT = " ".join([
     "Synthetic fixture article reports a significant technology development in a regional research center.",
     "Engineers introduced a low power sensor that measures air quality in busy public spaces.",
@@ -57,6 +61,19 @@ class Handler(BaseHTTPRequestHandler):
                 counters = dict(COUNTERS)
             self._json(200, counters)
             return
+        prefix = "/internal/v1/ingestion/runs/"
+        if self.path.startswith(prefix):
+            if self.headers.get("Authorization") != "Bearer fixture-only-article-ingestion-token":
+                self._json(401, {"error": "unauthorized"})
+                return
+            run_id = self.path[len(prefix):]
+            with LOCK:
+                run = INGESTION_RUNS.get(run_id)
+            if run is None:
+                self._json(404, {"error": "not_found"})
+            else:
+                self._json(200, run)
+            return
         self._json(404, {"error": "not_found"})
 
     def do_POST(self):
@@ -74,12 +91,67 @@ class Handler(BaseHTTPRequestHandler):
             self._json(200, {"status": "updated"})
             return
 
+        if path == "/internal/v1/ingestion/runs":
+            if self.headers.get("Authorization") != "Bearer fixture-only-article-ingestion-token":
+                self._json(401, {"error": "unauthorized"})
+                return
+            if (payload.get("version") != 1 or not isinstance(payload.get("job_id"), str)
+                    or type(payload.get("attempt_generation")) is not int
+                    or not isinstance(payload.get("owner_id"), str)
+                    or type(payload.get("generation")) is not int
+                    or type(payload.get("backend_pid")) is not int
+                    or not isinstance(payload.get("executor_instance_id"), str)
+                    or not isinstance(payload.get("deadline_at"), str)):
+                self._json(422, {"error": "invalid_request"})
+                return
+            raw = bytearray(hashlib.sha256(
+                f"evening-news-ingestion-v1\0{payload['job_id']}\0{payload['attempt_generation']}".encode("ascii")
+            ).digest()[:16])
+            raw[6] = (raw[6] & 0x0F) | 0x50
+            raw[8] = (raw[8] & 0x3F) | 0x80
+            run_id = str(uuid.UUID(bytes=bytes(raw)))
+            request_hash = hashlib.sha256(json.dumps(payload, sort_keys=True).encode()).hexdigest()
+            run = {
+                "run_id": run_id,
+                "job_id": payload["job_id"],
+                "attempt_generation": payload["attempt_generation"],
+                "state": "succeeded",
+                "result": {"status": "success", "sources_completed": 0,
+                           "articles_fetched": 0, "errors_count": 0, "source_outcomes": {}},
+            }
+            with LOCK:
+                previous = INGESTION_RUNS.get(run_id)
+                if previous is not None and INGESTION_REQUESTS[run_id] != request_hash:
+                    self._json(409, {"error": "idempotency_conflict"})
+                    return
+                if previous is None:
+                    INGESTION_RUNS[run_id] = run
+                    INGESTION_REQUESTS[run_id] = request_hash
+                    COUNTERS["ingestion_stub_runs"] += 1
+                else:
+                    run = previous
+            self._json(200, run)
+            return
+
+        if path.startswith("/internal/v1/ingestion/runs/") and path.endswith("/cancel"):
+            if self.headers.get("Authorization") != "Bearer fixture-only-article-ingestion-token":
+                self._json(401, {"error": "unauthorized"})
+                return
+            run_id = path[len("/internal/v1/ingestion/runs/"):-len("/cancel")].rstrip("/")
+            with LOCK:
+                run = INGESTION_RUNS.get(run_id)
+            if run is None:
+                self._json(404, {"error": "not_found"})
+            else:
+                self._json(200, run)
+            return
+
         if self.path == "/v1/sources/collect":
             if self.headers.get("Authorization") != "Bearer fixture-only-token":
                 self._json(401, {"error": "unauthorized"})
                 return
             with LOCK:
-                COUNTERS["source_collection"] += 1
+                COUNTERS["source_probe"] += 1
             request_id = payload.get("request_id")
             results = []
             for source in payload.get("sources", []):

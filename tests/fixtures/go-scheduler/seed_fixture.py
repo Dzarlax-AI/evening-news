@@ -2,9 +2,10 @@
 
 import asyncio
 import json
+from datetime import datetime
 from sqlalchemy import select
 from news_aggregator.database import AsyncSessionLocal
-from news_aggregator.models import Category, Source
+from news_aggregator.models import Article, Category, Source
 
 
 async def main():
@@ -19,6 +20,24 @@ async def main():
                             url="https://fixture.invalid/feed.xml", enabled=True,
                             config={"limit": 1}, fetch_interval=3600)
             session.add(source)
+            await session.flush()
+        article = await session.scalar(select(Article).where(
+            Article.url == "https://fixture.invalid/articles/one"))
+        if article is None:
+            session.add(Article(
+                source_id=source.id,
+                title="Fixture technology article",
+                url="https://fixture.invalid/articles/one",
+                content="Short synthetic placeholder for the executor pipeline.",
+                published_at=datetime.utcnow(),
+                fetched_at=datetime.utcnow(),
+                processing_state="pending",
+                processing_attempts=0,
+                summary_processed=False,
+                category_processed=False,
+                ad_processed=False,
+                processed=False,
+            ))
         await session.commit()
         await session.refresh(source)
         print(json.dumps({"source_id": source.id, "category": "Tech"}))

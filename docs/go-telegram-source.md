@@ -6,8 +6,9 @@ render when HTTP fails in an eligible way or contains no posts. It uses the
 existing browser and disposable owned contexts. Auth, policy, resource-limit,
 rate-limit, cancellation and deadline failures do not trigger blind retries.
 
-Go owns Telegram collection and parsing. Python retains source configuration,
-enrichment and persistence. Explicit admin media refresh is a narrow compatibility
+Go owns Telegram collection, parsing, linked expansion, and article persistence
+through the Go ingestion service. Python retains source configuration and
+observational source probes. Explicit admin media refresh is a narrow compatibility
 exception: Python fetches the exact historical post over bounded HTTPS and uses
 the retained media helper. It does not run source collection, article extraction,
 a browser, or a fallback. The Go channel API currently has no post-specific
@@ -17,9 +18,11 @@ worker pool and reserve no native browser slot. Only eligible browser fallback
 enters the render gate shared with article extraction and Page Monitor. See the
 [source collection guide](go-source-manager.md).
 
-The application requires `EXTRACTION_SERVICE_URL` and
-`EXTRACTION_SERVICE_TOKEN` at startup and has no Python collection fallback.
-Delivery, AI, persistence and enrichment remain in Python; scheduling is owned
+The application requires `ARTICLE_INGESTION_URL` and
+`ARTICLE_INGESTION_TOKEN` at startup and has no Python collection fallback.
+Administrative Telegram source probes also require `EXTRACTION_SERVICE_URL`
+and `EXTRACTION_SERVICE_TOKEN`; missing service settings fail startup validation.
+AI, summaries, quality checks and delivery remain in Python; scheduling is owned
 by the Go scheduler service.
 
 ## Private wire contract
@@ -41,25 +44,14 @@ The response has `contract_version`, `build_version`, `request_id`,
 `original_url`, `final_url`, `outcome`, `fetch_method`, `articles` and an optional
 `error` with finite `code` and `retryable`. `outcome` is `success`, `partial`,
 `failed` or `rejected`; `fetch_method` is `http` or `native_browser` when a page
-was obtained. The response is bounded to 5 MiB. Wire timestamps include their timezone; the
-Python adapter converts them to naive UTC to match the existing PostgreSQL
-`DateTime(timezone=False)` persistence contract. An article retains the existing
-Python `Article` fields and `raw_data` without replacing its identity with the
-channel URL. Unsupported direct audio/video media can carry a null URL where
-the Python parser does; generated poll/contact/location fragments remain stable
-in Go.
+was obtained. The response is bounded to 5 MiB. Go ingestion validates the receipt
+and persists Telegram article fields, source IDs, and run metadata under the
+active executor fence.
 
-A later post or response limit preserves the already accepted prefix as
-`partial` with an explicit error. The Python source yields that prefix and logs
-a finite warning instead of raising after yield: the existing source manager
-would otherwise discard collected articles. Failed/empty results raise a source
-error; no articles are marked processed by this endpoint. Later scheduled fetches
-remain possible.
-
-For short posts with an external original link, optional enrichment uses the
-existing Go article API. It is sequential and bounded by the source deadline;
-an enrichment failure preserves the Telegram post. Content is replaced only
-when the extracted article is more than twice as long, matching the prior rule.
+A later post or response limit preserves the accepted prefix as `partial` with an
+explicit error. Go ingestion records per-source success or failure and keeps
+the accepted prefix durable. No articles are marked processed by collection;
+later scheduled fetches remain possible.
 
 ## Parser contract and checks
 
@@ -77,7 +69,6 @@ IDs, timestamps and metadata, with only documented runtime-dependent fragments
 normalized.
 
 ```sh
-PYTHONPATH=. .venv/bin/python -m pytest tests/test_telegram_go_source.py tests/test_source_manager_service_client.py -q
 cd go
 go test -race ./extractor ./service ./pipeline ./cmd/extract-service
 go vet ./...

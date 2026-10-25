@@ -112,7 +112,7 @@ Never publish the extraction or CDP ports on a public interface.
 | M01–M04 | Go article and Telegram routes | Metadata, attachments, provenance and caller semantics |
 | R01–R02 | Go RSS/Atom collector | Feed acquisition and article normalization |
 | T01–T05 | Go Telegram collector | HTTP acquisition, message identity/media and linked expansion |
-| C01–C05 | Go Page Monitor route; Python state adapter | Listing capture/parsing, selector learning, snapshots and deduplication |
+| C01–C05 | Go Page Monitor route and Go article ingestion | Listing capture/parsing, selector learning callback, bounded collection progress and fenced persistence |
 | X01 | Both, at their network boundary | Bounded wire/decoded content, DOM and text; no unbounded cross-service payload |
 
 This table assigns responsibility; it does not claim every live path is verified.

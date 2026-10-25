@@ -377,34 +377,32 @@ async def test_outcome_write_failure_cancels_and_awaits_other_batch_workers(isol
 
 
 @pytest.mark.asyncio
-async def test_manual_reservation_prevents_duplicate_background_requests(monkeypatch):
-    from news_aggregator.config import settings
-    monkeypatch.setattr(settings, 'admin_password', 'test-only-local-admin')
+async def test_manual_full_cycle_is_accepted_by_durable_worker_queue(monkeypatch):
     from fastapi import BackgroundTasks
     from news_aggregator.api.processing_router import trigger_processing
-    from news_aggregator.orchestrator import release_processing_cycle
+    from importlib import import_module
+    background_jobs_router = import_module('news_aggregator.api.background_jobs_router')
+    enqueue = AsyncMock(return_value={
+        'success': True, 'status': 'queued', 'job_id': 'job-1', 'status_url': '/api/v1/jobs/job-1',
+    })
+    monkeypatch.setattr(background_jobs_router, 'enqueue_from_request', enqueue)
     background = BackgroundTasks()
-    first = await trigger_processing(background)
-    try:
-        second = await trigger_processing(BackgroundTasks())
-        assert first['status'] == 'running'
-        assert second['status'] == 'busy'
-        assert len(background.tasks) == 1
-    finally:
-        release_processing_cycle(background.tasks[0].args[0])
+    response = await trigger_processing(background)
+    assert response.status_code == 202
+    assert background.tasks == []
+    enqueue.assert_awaited_once_with('news_processing', {}, None)
 
 
 @pytest.mark.asyncio
-async def test_real_batch_database_failure_aborts_combined_digest_before_delivery(isolated):
-    from types import SimpleNamespace
+async def test_real_batch_database_failure_aborts_combined_digest_before_delivery(isolated, monkeypatch):
     from news_aggregator.services.background_execution import execute_job
     orchestrator, engine = isolated
     add_articles(engine, 1)
     orchestrator.db_queue_manager.fail_save = True
-    orchestrator.source_manager = SimpleNamespace(
-        get_sources_from_db=AsyncMock(return_value=[]),
-        fetch_from_all_sources_no_db=AsyncMock(return_value={}),
-        save_fetched_articles_with_sources=AsyncMock(return_value={}))
+    from news_aggregator.services.article_ingestion_client import ArticleIngestionClient
+    monkeypatch.setattr(ArticleIngestionClient, 'collect_and_save', AsyncMock(return_value={
+        'sources_synced': 0, 'articles_fetched': 0, 'errors': [], 'errors_count': 0,
+    }))
     orchestrator.send_telegram_digest = AsyncMock(return_value={'success': True})
     with pytest.raises(RuntimeError, match='processing cycle failed'):
         await execute_job(SimpleNamespace(kind="news_digest", payload={}), orchestrator)
@@ -595,6 +593,27 @@ async def test_legacy_incremental_uses_typed_summary_metadata_and_never_reports_
 
 
 @pytest.mark.asyncio
+async def test_selected_article_reprocess_is_accepted_by_durable_worker_queue(monkeypatch):
+    from news_aggregator.config import settings
+    from news_aggregator.api.articles_router import reprocess_article, ReprocessRequest
+    from importlib import import_module
+    background_jobs_router = import_module('news_aggregator.api.background_jobs_router')
+    monkeypatch.setattr(settings, 'background_execution_mode', 'worker')
+    db = SimpleNamespace(scalar=AsyncMock(return_value=1))
+    enqueue = AsyncMock(return_value={
+        'success': True, 'status': 'queued', 'job_id': 'job-2', 'status_url': '/api/v1/jobs/job-2',
+    })
+    monkeypatch.setattr(background_jobs_router, 'enqueue_from_request', enqueue)
+
+    response = await reprocess_article(1, ReprocessRequest(force=True), db)
+
+    assert response.status_code == 202
+    enqueue.assert_awaited_once_with(
+        'article_reprocess', {'article_ids': [1], 'force': True, 'reextract_media': False}, None
+    )
+
+
+@pytest.mark.asyncio
 @pytest.mark.parametrize('state,reason,settled', [
     ('completed', None, True), ('rejected', 'advertisement', True),
     ('rejected', 'resource_limit', True), ('retry_wait', 'APIError', False),
@@ -605,6 +624,9 @@ async def test_selected_api_reports_durable_terminal_outcomes_without_inflating_
     from unittest.mock import MagicMock
     from news_aggregator.config import settings
     monkeypatch.setattr(settings, 'admin_password', 'test-only-admin')
+    # Exercise the direct executor behavior in isolation; normal startup requires
+    # worker mode and routes user requests through the durable queue.
+    monkeypatch.setattr(settings, 'background_execution_mode', 'embedded')
     from news_aggregator.api.articles_router import reprocess_article, ReprocessRequest
     orchestrator, engine = isolated
     add_articles(engine, 1)

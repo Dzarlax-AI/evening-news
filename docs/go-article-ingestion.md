@@ -6,7 +6,7 @@ The private Go article ingestion service is a new database-aware application lay
 
 The Python executor still owns the durable job execution boundary and the rest of the News operation. After ingestion succeeds, Python continues article quality checks, AI summarization and categorization, daily summaries, and digest delivery. Python also retains source CRUD and selector learning. The standalone Go scheduler and Go queue worker retain their current responsibilities.
 
-The repository default is `ARTICLE_INGESTION_MODE=python`. Go mode is available for an isolated deployment when the private service and its separately provisioned database role are ready. A Go-mode error fails the active job; it does not silently switch to Python. This implementation is not deployed by this change, and no production mode switch is implied.
+`ARTICLE_INGESTION_MODE` defaults to `go`; the removed `python` value is rejected during settings validation. Go ingestion has been used in production since PR #22. This repository cleanup removes the dormant Python fallback; it does not deploy services or change production configuration. An ingestion error fails the active job and never falls back to Python collection.
 
 ## Private topology
 
@@ -20,7 +20,7 @@ The service uses the existing collector API at `/v1/sources/collect`; it does no
 
 | Variable | Consumer | Notes |
 | --- | --- | --- |
-| `ARTICLE_INGESTION_MODE` | Python app/executor | `python` by default; `go` is an explicit deployment setting |
+| `ARTICLE_INGESTION_MODE` | Python app/executor | Defaults to `go`; `python` is rejected |
 | `ARTICLE_INGESTION_URL` | Python app/executor | Private base URL for the service |
 | `ARTICLE_INGESTION_TOKEN` | Python app/executor and Go service | Run API bearer token |
 | `ARTICLE_INGESTION_LISTEN` | Go service | Defaults to `:8093` |
@@ -48,7 +48,7 @@ The migration currently owns the fence function as the role that applies migrati
 
 ## Compose template
 
-`deploy/news-ingestion/compose.ingestion.yml` has no published ports, public labels, browser mounts, or provider credentials. It attaches the service to an operator-supplied private network shared with the News database, collector, and Python executor. The template applies a read-only root filesystem, drops Linux capabilities, disables privilege escalation, and sets bounded container resources. The template is not a complete production deployment and does not select an image digest or enable Go mode in the application.
+`deploy/news-ingestion/compose.ingestion.yml` has no published ports, public labels, browser mounts, or provider credentials. It attaches the service to an operator-supplied private network shared with the News database, collector, and Python executor. The template applies a read-only root filesystem, drops Linux capabilities, disables privilege escalation, and sets bounded container resources. The template is for a separately managed production service; `docker-compose.example.yml` includes the local Go ingestion service and its private app connection.
 
 Create separate random service tokens on the deployment host, store them in a mode-0600 ignored environment file, and pass the same token only to the two services on each authenticated boundary. Use a database URL for the dedicated runtime role; do not reuse the app administrator or migration credentials.
 
@@ -98,4 +98,4 @@ Pull the PostgreSQL and Python runtime images before running the gate. The gate 
 
 ## Rollback boundary
 
-The initial deployment and mode switch require a separate review. Keep the Python mode as the rollback path until the Go deployment and isolated acceptance have been reviewed. Do not drop ingestion receipts or Page Monitor cursor state as part of rollback; retention and cleanup require a separate decision.
+Production rollback requires restoring a previously approved app and service image pair that supports Go ingestion. The removed Python mode is not a rollback option. Do not drop ingestion receipts or Page Monitor cursor state as part of rollback; retention and cleanup require a separate decision.

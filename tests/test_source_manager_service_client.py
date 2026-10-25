@@ -249,6 +249,8 @@ def test_go_modes_are_defaults_and_runtime_config_is_validated_at_startup():
     assert defaults.source_manager_mode == 'go'
     assert defaults.telegram_source_mode == 'go'
     assert defaults.page_monitor_source_mode == 'go'
+    assert defaults.article_ingestion_mode == 'go'
+    assert defaults.background_execution_mode == 'worker'
     with pytest.raises(ValidationError):
         Settings(_env_file=None, source_manager_mode='python')
     configured = Settings(
@@ -256,7 +258,9 @@ def test_go_modes_are_defaults_and_runtime_config_is_validated_at_startup():
         EXTRACTION_SERVICE_TOKEN='private-token-value',
         SCHEDULER_API_URL='https://scheduler.example.test',
         SCHEDULER_API_TOKEN='scheduler-token-value',
-        SCHEDULED_JOBS_TOKEN='receiver-token-value')
+        SCHEDULED_JOBS_TOKEN='receiver-token-value',
+        ARTICLE_INGESTION_URL='http://ingestion:8093',
+        ARTICLE_INGESTION_TOKEN='ingestion-token-value')
     assert configured.validate_runtime_services() is True
 
 
@@ -285,9 +289,7 @@ async def test_source_test_failure_and_preparation_failure_are_not_empty_feed_su
     manager = SourceManager()
     rss = SimpleNamespace(id=10, name="Feed", source_type="rss", url="https://feed.example/rss",
                           enabled=True, config={})
-    assert await manager._fetch_from_go_source_manager([rss], 1, source_test=True) is False
-    assert await manager._fetch_from_go_source_manager(
-        [rss], 1, source_test=True, return_source_test_result=True) is None
+    assert await manager._probe_source(rss) is False
 
     telegram = SimpleNamespace(id=11, name="Channel", source_type="telegram", url="https://t.me/example",
                                enabled=True, config={})
@@ -296,7 +298,7 @@ async def test_source_test_failure_and_preparation_failure_are_not_empty_feed_su
         raise RuntimeError("fixture preparation failure")
 
     monkeypatch.setattr(manager, "get_source_instance", cannot_prepare)
-    assert await manager._fetch_from_go_source_manager([telegram], 1, source_test=True) is False
+    assert await manager._probe_source(telegram) is False
 
 
 @pytest.mark.asyncio
@@ -324,7 +326,7 @@ async def test_successful_empty_rss_collection_is_a_healthy_source_test(monkeypa
         EmptyFeedClient)
     source = SimpleNamespace(id=10, name="Empty feed", source_type="rss",
                              url="https://feed.example/rss", enabled=True, config={})
-    assert await SourceManager()._fetch_from_go_source_manager([source], 1, source_test=True) is True
+    assert await SourceManager()._probe_source(source) is True
 
 
 @pytest.mark.asyncio
@@ -367,8 +369,7 @@ async def test_inline_connection_test_probes_disabled_source_without_enabling_it
             pass
 
     assert await manager.test_source_connection(FakeSession(), source.id) is True
-    assert await manager._fetch_from_go_source_manager([source], 1) == {13: []}
-    assert observed["enabled"] == [True, False]
+    assert observed["enabled"] == [True]
     assert source.enabled is False
     assert source.error_count == 0
     assert source.last_error is None
@@ -402,17 +403,48 @@ async def test_page_monitor_source_test_uses_adapter_config_without_learning_or_
     source = Source(id=12, name="Fixture monitor", source_type="custom",
                     url="https://fixture.example/list", enabled=True, config={})
     adapter = await manager.get_source_instance(source)
-    monitor = adapter.monitor
-    before = (monitor.last_snapshot, monitor.failure_count, dict(monitor.learned_selectors),
-              monitor._go_offset, dict(monitor._go_previous_segments))
-
-    async def forbidden_learning_preparation():
-        raise AssertionError("source-test must not run selector-learning preparation")
-
-    monkeypatch.setattr(adapter, "prepare_go_collection", forbidden_learning_preparation)
-    assert await manager._fetch_from_go_source_manager([source], 1, source_test=True) is True
-    after = (monitor.last_snapshot, monitor.failure_count, dict(monitor.learned_selectors),
-             monitor._go_offset, dict(monitor._go_previous_segments))
-    assert after == before
+    assert await manager._probe_source(source) is True
     assert observed["sources"][0]["page_monitor"]["use_browser"] is True
     assert observed["sources"][0]["page_monitor"]["article_selectors"]
+
+
+@pytest.mark.asyncio
+async def test_source_stats_keeps_article_join_after_collection_removal():
+    from types import SimpleNamespace
+    from news_aggregator.services.source_manager import SourceManager
+
+    class Result:
+        def __init__(self, rows=(), sources=()):
+            self.rows = rows
+            self.sources = sources
+
+        def __iter__(self):
+            return iter(self.rows)
+
+        def scalars(self):
+            return self
+
+        def all(self):
+            return list(self.sources)
+
+    db = SimpleNamespace()
+    source_rows = [
+        SimpleNamespace(enabled=True, error_count=0),
+        SimpleNamespace(enabled=False, error_count=1),
+    ]
+    calls = 0
+
+    async def execute(_query):
+        nonlocal calls
+        calls += 1
+        if calls == 1:
+            return Result(sources=source_rows)
+        return Result(rows=[('Feed A', 4), ('Feed B', 2)])
+
+    db.execute = execute
+    stats = await SourceManager().get_source_stats(db)
+
+    assert stats['total_sources'] == 2
+    assert stats['enabled_sources'] == 1
+    assert stats['sources_with_errors'] == 1
+    assert stats['article_counts_by_source'] == {'Feed A': 4, 'Feed B': 2}

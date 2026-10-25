@@ -21,6 +21,9 @@ services:
       JWT_SECRET: ${JWT_SECRET:?Set JWT_SECRET}
       ALLOW_CREATE_ALL: "true"
       BACKGROUND_EXECUTION_MODE: worker
+      ARTICLE_INGESTION_MODE: go
+      ARTICLE_INGESTION_URL: http://article-ingestion:8093
+      ARTICLE_INGESTION_TOKEN: ${ARTICLE_INGESTION_TOKEN:?Set ARTICLE_INGESTION_TOKEN}
       SCHEDULE_DISPATCH_MODE: service
       SCHEDULER_ENABLED: "false"
       SCHEDULER_API_URL: http://scheduler:8080
@@ -42,6 +45,8 @@ services:
       TRUSTED_HOSTS: ${TRUSTED_HOSTS:-localhost,127.0.0.1,web}
     depends_on:
       postgres:
+        condition: service_healthy
+      article-ingestion:
         condition: service_healthy
       extractor:
         condition: service_healthy
@@ -102,6 +107,27 @@ services:
       postgres:
         condition: service_healthy
       executor:
+        condition: service_healthy
+    restart: unless-stopped
+
+  article-ingestion:
+    build:
+      context: .
+      dockerfile: go-ingestion/Dockerfile
+    environment:
+      ARTICLE_INGESTION_LISTEN: ":8093"
+      ARTICLE_INGESTION_TOKEN: ${ARTICLE_INGESTION_TOKEN:?Set ARTICLE_INGESTION_TOKEN}
+      ARTICLE_INGESTION_DB_MAX_CONNS: ${ARTICLE_INGESTION_DB_MAX_CONNS:-5}
+      DATABASE_URL: postgres://newsuser:${DB_PASSWORD:?Set DB_PASSWORD}@postgres:5432/newsdb
+      EXTRACTION_SERVICE_URL: http://extractor:8080
+      EXTRACTION_SERVICE_TOKEN: ${EXTRACTION_SERVICE_TOKEN:?Set EXTRACTION_SERVICE_TOKEN}
+      EXTRACTION_SERVICE_NATIVE_BROWSER: "false"
+      JOB_EXECUTOR_URL: http://executor:8100
+      JOB_EXECUTOR_TOKEN: ${JOB_EXECUTOR_TOKEN:?Set JOB_EXECUTOR_TOKEN}
+    depends_on:
+      postgres:
+        condition: service_healthy
+      extractor:
         condition: service_healthy
     restart: unless-stopped
 

@@ -17,6 +17,9 @@ def configured(**overrides):
         "SCHEDULER_API_URL": "https://scheduler.example.test",
         "SCHEDULER_API_TOKEN": TOKEN,
         "SCHEDULED_JOBS_TOKEN": TOKEN,
+        "ARTICLE_INGESTION_URL": "http://ingestion:8093",
+        "ARTICLE_INGESTION_TOKEN": TOKEN,
+        "BACKGROUND_EXECUTION_MODE": "worker",
     }
     values.update(overrides)
     return Settings(**values)
@@ -29,6 +32,8 @@ def test_go_modes_are_the_only_runtime_defaults_and_deprecated_go_values_are_ine
     assert settings.page_monitor_source_mode == "go"
     assert settings.extraction_service_mode == "go"
     assert settings.schedule_dispatch_mode == "service"
+    assert settings.article_ingestion_mode == "go"
+    assert settings.background_execution_mode == "worker"
 
     settings = configured(
         SOURCE_MANAGER_MODE="go", TELEGRAM_SOURCE_MODE="go", PAGE_MONITOR_SOURCE_MODE="go",
@@ -46,7 +51,7 @@ def test_scheduler_enabled_false_does_not_change_go_service_requirements():
         settings.validate_runtime_services()
 
 
-def test_go_article_ingestion_requires_worker_mode_and_python_keeps_embedded_mode():
+def test_article_ingestion_requires_worker_mode_and_python_mode_is_removed():
     with pytest.raises(RuntimeError, match="BACKGROUND_EXECUTION_MODE=worker"):
         configured(
             ARTICLE_INGESTION_MODE="go",
@@ -62,10 +67,8 @@ def test_go_article_ingestion_requires_worker_mode_and_python_keeps_embedded_mod
         BACKGROUND_EXECUTION_MODE="worker",
     ).validate_runtime_services() is True
 
-    assert configured(
-        ARTICLE_INGESTION_MODE="python",
-        BACKGROUND_EXECUTION_MODE="embedded",
-    ).validate_runtime_services() is True
+    with pytest.raises(ValidationError, match="ARTICLE_INGESTION_MODE=python is no longer supported"):
+        configured(ARTICLE_INGESTION_MODE="python")
 
 
 @pytest.mark.parametrize("name,value", [

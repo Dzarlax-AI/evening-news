@@ -1,7 +1,30 @@
-# Background worker Docker gate
+# Isolated Go worker and ingestion gates
 
-Run `python3 scripts/run_background_worker_fixture_gate.py --image evening-news-background-worker:test-20261023 --output-dir artifacts/background-worker-gate` after building the local app image from the current checkout.
+The Go job worker gate exercises the durable News queue and private Python executor:
 
-The gate creates uniquely named and labeled Docker resources on an internal-only network. It uses a new disposable PostgreSQL container, a fake Go/Gemini/Telegram endpoint, and separate web and worker containers. It does not publish ports or mount the repository, `.env`, or application data into the app containers. The only bind mount is this fixture directory, read-only. Cleanup removes only resources whose names and ownership labels were created by this run.
+```sh
+python3 scripts/run_go_job_worker_fixture_gate.py \
+  --image evening-news-app:test \
+  --worker-image evening-news-job-worker:test \
+  --output-dir artifacts/go-job-worker
+```
 
-The fake collection endpoint implements the Go SourceManager v1 wire contract; it does not run the Go service or prove browser/site throughput. The fake Gemini endpoint accepts the configured API request shape and returns deterministic structured output. A test-only bootstrap routes TelegramService to the fake receiver in both roles and makes web-side NewsOrchestrator and AIClient construction fail. No real sites, browsers, provider credentials, Telegram sends, or production services are used. Containers have bounded memory, CPU, and process limits, and the report explicitly marks that no Go runtime, browser, or throughput claim was tested.
+The ingestion gate runs Go article ingestion with the Go collector and synthetic
+RSS, Telegram, and Page Monitor responses:
+
+```sh
+python3 scripts/run_go_ingestion_fixture_gate.py \
+  --app-image evening-news-app:test \
+  --worker-image evening-news-job-worker:test \
+  --collector-image evening-news-collector:test \
+  --ingestion-image evening-news-ingestion:test \
+  --output-dir artifacts/go-ingestion-fixture
+```
+
+Both gates use disposable PostgreSQL and fake provider/receiver endpoints. The
+Go job-worker gate uses a deterministic ingestion receipt stub and a pre-seeded
+synthetic article to exercise executor/AI behavior; the Go ingestion gate tests
+real Go collection and persistence. They do not publish ports or use real sites,
+credentials, AI providers, Telegram sends, or production services. The shared `run_background_worker_fixture_gate.py`
+module still provides Docker setup and cleanup helpers for these gates; its
+retired Python worker CLI is not a supported test command.
