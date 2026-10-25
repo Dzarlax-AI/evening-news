@@ -6,7 +6,7 @@ from datetime import datetime, timedelta
 
 from sqlalchemy import select
 from news_aggregator.database import AsyncSessionLocal
-from news_aggregator.models import Category, ScheduleSettings, Source
+from news_aggregator.models import Article, Category, ScheduleSettings, Source
 
 
 async def main():
@@ -21,6 +21,24 @@ async def main():
                             url="https://fixture.example.test/feed.xml", enabled=True,
                             config={"limit": 1}, fetch_interval=3600)
             session.add(source)
+            await session.flush()
+        article = await session.scalar(select(Article).where(
+            Article.url == "https://fixture.example.test/articles/one"))
+        if article is None:
+            session.add(Article(
+                source_id=source.id,
+                title="Fixture technology article",
+                url="https://fixture.example.test/articles/one",
+                content="Short synthetic placeholder for the executor pipeline.",
+                published_at=datetime.utcnow(),
+                fetched_at=datetime.utcnow(),
+                processing_state="pending",
+                processing_attempts=0,
+                summary_processed=False,
+                category_processed=False,
+                ad_processed=False,
+                processed=False,
+            ))
         schedule = await session.scalar(select(ScheduleSettings).where(
             ScheduleSettings.task_name == "news_processing"))
         if schedule is None:

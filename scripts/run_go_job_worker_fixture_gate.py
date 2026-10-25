@@ -253,8 +253,9 @@ class GoJobWorkerGate(DockerGate):
         self.check("whole_python_pipeline_completed", bool(articles))
         article_id = articles[0]["id"]
         counters = self.fake_counters()
+        self.check("executor_used_ingestion_receipt_stub", counters.get("ingestion_stub_runs", 0) > 0)
         self.check("whole_pipeline_used_fake_providers", all(counters.get(key, 0) > 0
-                   for key in ("source_collection", "extraction", "gemini")))
+                   for key in ("extraction", "gemini")))
         self.check("disabled_scheduler_did_not_dispatch", snapshot["due_schedules"] > 0
                    and not any(job["scheduled"] for job in snapshot["jobs"]))
         self.check("public_home_available", self.private_probe("public-home")["http_status"] == 200)

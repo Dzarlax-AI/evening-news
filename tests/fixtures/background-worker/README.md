@@ -21,8 +21,10 @@ python3 scripts/run_go_ingestion_fixture_gate.py \
   --output-dir artifacts/go-ingestion-fixture
 ```
 
-Both gates use disposable PostgreSQL and fake provider/receiver endpoints. They
-do not publish ports or use real sites, credentials, AI providers, Telegram sends,
-or production services. The shared `run_background_worker_fixture_gate.py`
+Both gates use disposable PostgreSQL and fake provider/receiver endpoints. The
+Go job-worker gate uses a deterministic ingestion receipt stub and a pre-seeded
+synthetic article to exercise executor/AI behavior; the Go ingestion gate tests
+real Go collection and persistence. They do not publish ports or use real sites,
+credentials, AI providers, Telegram sends, or production services. The shared `run_background_worker_fixture_gate.py`
 module still provides Docker setup and cleanup helpers for these gates; its
 retired Python worker CLI is not a supported test command.

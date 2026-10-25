@@ -4,6 +4,7 @@ import hashlib
 import json
 import threading
 import time
+import uuid
 from datetime import datetime, timezone
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 from urllib.parse import urlsplit
@@ -11,7 +12,8 @@ from uuid import uuid5, NAMESPACE_URL
 
 
 LOCK = threading.RLock()
-COUNTERS = {"source_collection": 0, "extraction": 0, "gemini": 0, "telegram": 0}
+COUNTERS = {"source_probe": 0, "ingestion_stub_runs": 0, "extraction": 0, "gemini": 0, "telegram": 0}
+INGESTION_RUNS = {}
 CONSUMER = {"mode": "normal", "requests": 0, "by_occurrence": {}, "operations": {}}
 GEMINI_RELEASE = threading.Event()
 GEMINI_RELEASE.set()
@@ -59,6 +61,17 @@ class Handler(BaseHTTPRequestHandler):
                     "operations": dict(CONSUMER["operations"]),
                 }}
             self._json(200, result)
+        elif self.path.startswith("/internal/v1/ingestion/runs/"):
+            if self.headers.get("Authorization") != "Bearer fixture-only-article-ingestion-token":
+                self._json(401, {"error": "unauthorized"})
+                return
+            run_id = self.path.removeprefix("/internal/v1/ingestion/runs/")
+            with LOCK:
+                stored = INGESTION_RUNS.get(run_id)
+            if stored is None:
+                self._json(404, {"error": "not_found"})
+            else:
+                self._json(200, stored["receipt"])
         else:
             self._json(404, {"error": "not_found"})
 
@@ -82,12 +95,66 @@ class Handler(BaseHTTPRequestHandler):
             self._json(200, {"status": "updated"})
             return
 
+        if path == "/internal/v1/ingestion/runs":
+            if self.headers.get("Authorization") != "Bearer fixture-only-article-ingestion-token":
+                self._json(401, {"error": "unauthorized"})
+                return
+            if (payload.get("version") != 1 or not isinstance(payload.get("job_id"), str)
+                    or type(payload.get("attempt_generation")) is not int
+                    or not isinstance(payload.get("owner_id"), str)
+                    or type(payload.get("generation")) is not int
+                    or type(payload.get("backend_pid")) is not int
+                    or not isinstance(payload.get("executor_instance_id"), str)
+                    or not isinstance(payload.get("deadline_at"), str)):
+                self._json(422, {"error": "invalid_request"})
+                return
+            raw_id = bytearray(hashlib.sha256(
+                f"evening-news-ingestion-v1\0{payload['job_id']}\0{payload['attempt_generation']}".encode("ascii")
+            ).digest()[:16])
+            raw_id[6] = (raw_id[6] & 0x0F) | 0x50
+            raw_id[8] = (raw_id[8] & 0x3F) | 0x80
+            run_id = str(uuid.UUID(bytes=bytes(raw_id)))
+            request_hash = hashlib.sha256(json.dumps(payload, sort_keys=True).encode()).hexdigest()
+            run = {
+                "run_id": run_id,
+                "job_id": payload["job_id"],
+                "attempt_generation": payload["attempt_generation"],
+                "state": "succeeded",
+                "result": {"status": "success", "sources_completed": 0,
+                           "articles_fetched": 0, "errors_count": 0, "source_outcomes": {}},
+            }
+            with LOCK:
+                prior = INGESTION_RUNS.get(run_id)
+                if prior is not None and prior["request_hash"] != request_hash:
+                    self._json(409, {"error": "idempotency_conflict"})
+                    return
+                if prior is None:
+                    INGESTION_RUNS[run_id] = {"request_hash": request_hash, "receipt": run}
+                    COUNTERS["ingestion_stub_runs"] += 1
+                else:
+                    run = prior["receipt"]
+            self._json(200, run)
+            return
+
+        if path.startswith("/internal/v1/ingestion/runs/") and path.endswith("/cancel"):
+            if self.headers.get("Authorization") != "Bearer fixture-only-article-ingestion-token":
+                self._json(401, {"error": "unauthorized"})
+                return
+            run_id = path.removeprefix("/internal/v1/ingestion/runs/").removesuffix("/cancel").rstrip("/")
+            with LOCK:
+                prior = INGESTION_RUNS.get(run_id)
+            if prior is None:
+                self._json(404, {"error": "not_found"})
+            else:
+                self._json(200, prior["receipt"])
+            return
+
         if path == "/v1/sources/collect":
             if self.headers.get("Authorization") != "Bearer fixture-only-token":
                 self._json(401, {"error": "unauthorized"})
                 return
             with LOCK:
-                COUNTERS["source_collection"] += 1
+                COUNTERS["source_probe"] += 1
             results = []
             for source in payload.get("sources", []):
                 results.append({
