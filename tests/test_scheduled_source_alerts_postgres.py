@@ -413,6 +413,39 @@ async def test_missing_source_does_not_count_as_recovery_and_manual_job_does_not
 
 
 @pytest.mark.asyncio
+async def test_removed_healthy_sources_are_pruned_without_dropping_open_incident(executor_pg, monkeypatch):
+    lease_conn, factory, owner_id, backend_pid = await _lease(executor_pg, monkeypatch)
+    sender = AsyncMock(return_value=True)
+    try:
+        for _ in range(2):
+            bad, attempt = await _job(factory, owner_id, backend_pid, warning="transport_failed", source_id=1)
+            await _executor(sender).apply_legacy_completion(bad, attempt)
+        assert sender.await_count == 1
+
+        for source_id in range(2, 72):
+            row = {"id": source_id, "type": "rss", "config": f"{source_id:064x}", "warning": None}
+            healthy, attempt = await _job(
+                factory, owner_id, backend_pid, source_rows=[row],
+            )
+            await _executor(sender).apply_legacy_completion(healthy, attempt)
+
+        async with factory() as session:
+            state = await session.scalar(select(Setting).where(
+                Setting.key.like("scheduled_source_alerts:v1:%"),
+            ))
+            assert len(state.value["sources"]) <= 2
+            assert state.value["sources"]["1"]["incident"] == "active"
+
+        for _ in range(2):
+            healthy, attempt = await _job(factory, owner_id, backend_pid, source_id=1)
+            await _executor(sender).apply_legacy_completion(healthy, attempt)
+        assert sender.await_count == 2
+        assert "Source #1 (RSS) recovered" in sender.await_args.args[1]
+    finally:
+        await lease_conn.close()
+
+
+@pytest.mark.asyncio
 async def test_unknown_observation_and_real_job_failure_alert_immediately(executor_pg, monkeypatch):
     lease_conn, factory, owner_id, backend_pid = await _lease(executor_pg, monkeypatch)
     sender = AsyncMock(return_value=True)

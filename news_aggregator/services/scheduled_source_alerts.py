@@ -173,6 +173,9 @@ async def prepare_alert(session, identity, queue_position, job_id, observation, 
     # A missing source is not evidence of recovery or a consecutive failure.
     for raw_id, prior in list(sources_state.items()):
         if int(raw_id) not in current:
+            if prior.get("incident") == "none" and prior.get("event_job") is None:
+                sources_state.pop(raw_id)
+                continue
             prior["failed_streak"] = 0
             prior["healthy_streak"] = 0
             prior["last_state"] = "missing"

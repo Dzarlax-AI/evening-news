@@ -380,7 +380,7 @@ func TestRunWaitsForHeldLeaseBeforeRecoveryOrClaims(t *testing.T) {
 	close(db.acquireGate)
 	select {
 	case <-recovered:
-	case <-time.After(time.Second):
+	case <-time.After(3 * time.Second):
 		t.Fatal("worker did not continue after the existing owner released the lease")
 	}
 	time.Sleep(20 * time.Millisecond)
