@@ -1,5 +1,6 @@
 """Scheduled source warning hysteresis with isolated PostgreSQL and fake delivery."""
 
+import asyncio
 from datetime import datetime, timedelta
 import uuid
 from types import SimpleNamespace
@@ -203,6 +204,120 @@ async def test_unapplied_scheduled_job_breaks_consecutive_streak(executor_pg, mo
         await _executor(sender).apply_legacy_completion(third_bad, attempt)
         assert sender.await_count == 1
     finally:
+        await lease_conn.close()
+
+
+@pytest.mark.asyncio
+async def test_crashed_failure_delivery_becomes_unknown_without_replay(executor_pg, monkeypatch):
+    lease_conn, factory, owner_id, backend_pid = await _lease(executor_pg, monkeypatch)
+    sender = AsyncMock(return_value=True)
+    try:
+        first_bad, attempt = await _job(factory, owner_id, backend_pid, warning="transport_failed")
+        await _executor(sender).apply_legacy_completion(first_bad, attempt)
+
+        sender.side_effect = asyncio.CancelledError()
+        crashed_job, attempt = await _job(factory, owner_id, backend_pid, warning="transport_failed")
+        with pytest.raises(asyncio.CancelledError):
+            await _executor(sender).apply_legacy_completion(crashed_job, attempt)
+        sender.side_effect = None
+        async with factory() as session:
+            receipt = await session.get(BackgroundJobExecution, (crashed_job, attempt))
+            state = await session.scalar(select(Setting).where(
+                Setting.key.like("scheduled_source_alerts:v1:%"),
+            ))
+            assert receipt.legacy_completion_applied_at is not None
+            assert receipt.legacy_alert_state == "attempting"
+            assert state.value["sources"]["10"]["incident"] == "attempting"
+
+        # A fresh executor observes the orphan but never resends the old event.
+        next_bad, attempt = await _job(factory, owner_id, backend_pid, warning="transport_failed")
+        await _executor(sender).apply_legacy_completion(next_bad, attempt)
+        assert sender.await_count == 1
+        for _ in range(2):
+            healthy, attempt = await _job(factory, owner_id, backend_pid)
+            await _executor(sender).apply_legacy_completion(healthy, attempt)
+        for _ in range(2):
+            bad, attempt = await _job(factory, owner_id, backend_pid, warning="transport_failed")
+            await _executor(sender).apply_legacy_completion(bad, attempt)
+        assert sender.await_count == 2
+    finally:
+        await lease_conn.close()
+
+
+@pytest.mark.asyncio
+async def test_crashed_recovery_delivery_never_resends_or_claims_recovery(executor_pg, monkeypatch):
+    lease_conn, factory, owner_id, backend_pid = await _lease(executor_pg, monkeypatch)
+    sender = AsyncMock(return_value=True)
+    try:
+        for _ in range(2):
+            bad, attempt = await _job(factory, owner_id, backend_pid, warning="transport_failed")
+            await _executor(sender).apply_legacy_completion(bad, attempt)
+        healthy, attempt = await _job(factory, owner_id, backend_pid)
+        await _executor(sender).apply_legacy_completion(healthy, attempt)
+
+        sender.side_effect = asyncio.CancelledError()
+        recovery_job, attempt = await _job(factory, owner_id, backend_pid)
+        with pytest.raises(asyncio.CancelledError):
+            await _executor(sender).apply_legacy_completion(recovery_job, attempt)
+        sender.side_effect = None
+        async with factory() as session:
+            receipt = await session.get(BackgroundJobExecution, (recovery_job, attempt))
+            state = await session.scalar(select(Setting).where(
+                Setting.key.like("scheduled_source_alerts:v1:%"),
+            ))
+            assert receipt.legacy_alert_state == "attempting"
+            assert state.value["sources"]["10"]["incident"] == "recovering"
+
+        clean, attempt = await _job(factory, owner_id, backend_pid)
+        await _executor(sender).apply_legacy_completion(clean, attempt)
+        assert sender.await_count == 2
+        for _ in range(2):
+            bad, attempt = await _job(factory, owner_id, backend_pid, warning="transport_failed")
+            await _executor(sender).apply_legacy_completion(bad, attempt)
+        assert sender.await_count == 3
+    finally:
+        await lease_conn.close()
+
+
+@pytest.mark.asyncio
+async def test_reconciliation_preserves_marker_for_a_locally_inflight_sender(executor_pg, monkeypatch):
+    lease_conn, factory, owner_id, backend_pid = await _lease(executor_pg, monkeypatch)
+    started = asyncio.Event()
+    release = asyncio.Event()
+    sends = []
+
+    async def sender(title, message):
+        sends.append((title, message))
+        started.set()
+        await release.wait()
+        return True
+
+    try:
+        first_bad, attempt = await _job(factory, owner_id, backend_pid, warning="transport_failed")
+        await _executor(sender).apply_legacy_completion(first_bad, attempt)
+        inflight, attempt = await _job(factory, owner_id, backend_pid, warning="transport_failed")
+        task = asyncio.create_task(_executor(sender).apply_legacy_completion(inflight, attempt))
+        await asyncio.wait_for(started.wait(), timeout=5)
+
+        later_bad, attempt = await _job(factory, owner_id, backend_pid, warning="transport_failed")
+        await _executor(sender).apply_legacy_completion(later_bad, attempt)
+        async with factory() as session:
+            state = await session.scalar(select(Setting).where(
+                Setting.key.like("scheduled_source_alerts:v1:%"),
+            ))
+            assert state.value["sources"]["10"]["incident"] == "attempting"
+            assert state.value["sources"]["10"]["event_job"] == str(inflight)
+
+        release.set()
+        await task
+        assert len(sends) == 1
+        async with factory() as session:
+            state = await session.scalar(select(Setting).where(
+                Setting.key.like("scheduled_source_alerts:v1:%"),
+            ))
+            assert state.value["sources"]["10"]["incident"] == "active"
+    finally:
+        release.set()
         await lease_conn.close()
 
 

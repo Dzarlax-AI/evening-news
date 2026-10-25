@@ -51,10 +51,23 @@ _EXECUTOR_GUARD_HEALTHY = False
 _EXECUTOR_GUARD_LOCK = asyncio.Lock()
 _EXECUTOR_SERVER = None
 _EXECUTOR_GUARD_QUERY_TIMEOUT = 2.0
+MAX_TRACKED_SOURCE_ALERT_JOBS = 128
 
 # This two-key advisory lock is distinct from the Go worker lease key and its
 # retry coordination key. Only one private executor process may own a schema.
 _EXECUTOR_GUARD_KEY_XOR = 1145132609
+
+
+def _active_source_alert_job_ids():
+    """Snapshot bounded completion callbacks to protect pre-send markers."""
+    active = set()
+    for (job_id, _attempt), lock in _LEGACY_EVENT_LOCKS.items():
+        if not lock.locked():
+            continue
+        if len(active) >= MAX_TRACKED_SOURCE_ALERT_JOBS:
+            return None
+        active.add(str(job_id))
+    return frozenset(active)
 
 
 class InvalidEnvelope(ValueError):
@@ -807,6 +820,7 @@ class PythonJobExecutor:
                                 if observation is None:
                                     await scheduled_source_alerts.break_streaks(
                                         session, source_identity, job.queue_position,
+                                        _active_source_alert_job_ids(),
                                     )
                                 else:
                                     previous_position = await scheduled_source_alerts.previous_scheduled_position(
@@ -814,7 +828,7 @@ class PythonJobExecutor:
                                     )
                                     decision = await scheduled_source_alerts.prepare_alert(
                                         session, source_identity, job.queue_position, job.id, observation,
-                                        previous_position,
+                                        previous_position, _active_source_alert_job_ids(),
                                     )
                                     observation_valid = decision is not None
                                     if decision and decision.get("event"):

@@ -126,6 +126,13 @@ alert again, and an uncertain delivery is not blindly retried. Unknown
 warnings, failed jobs, and AI/delivery failures retain the immediate generic
 alert path. No new database migration or job-result field is required.
 
+If the executor stops after recording completion but before confirming an
+alert send, a later scheduled observation reconciles the orphaned delivery
+marker as uncertain. It does not depend on replaying the already-applied job
+completion. Live callbacks remain protected throughout their send and
+bookkeeping; an uncertain incident can retire silently after healthy evidence
+so it cannot permanently suppress a future incident.
+
 Selected-article `article_reprocess` initialization remains a one-time fenced
 Python operation. Retry counters and completed article stages survive worker
 recovery. The Python executor does not run a hidden queue consumer. The old

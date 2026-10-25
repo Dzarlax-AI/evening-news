@@ -16,6 +16,7 @@ RETRYABLE_SOURCE_CODES = frozenset({
 })
 MAX_SOURCES = 64
 MAX_STATE_BYTES = 12 * 1024
+MAX_ACTIVE_ALERT_JOBS = 128
 _HASH_RE = re.compile(r"[a-f0-9]{64}\Z")
 _TYPE_NAMES = {"rss": "RSS", "telegram": "Telegram", "custom": "Page Monitor"}
 
@@ -138,7 +139,8 @@ def classify_observation(job, run, sources):
     }
 
 
-async def prepare_alert(session, identity, queue_position, job_id, observation, previous_position):
+async def prepare_alert(session, identity, queue_position, job_id, observation, previous_position,
+                        active_job_ids):
     """Update per-schedule counters under a serialized Setting row lock."""
     key = _setting_key(identity)
     await session.execute(pg_insert(Setting).values(
@@ -151,7 +153,10 @@ async def prepare_alert(session, identity, queue_position, job_id, observation, 
     state = _valid_state(setting.value)
     if state is None:
         return None
+    reconciled = _reconcile_orphaned_deliveries(state, active_job_ids)
     if queue_position <= state["last_position"]:
+        if reconciled:
+            setting.value = state
         return {"event": None, "identity": identity, "source_ids": [], "recovery": False}
 
     sources_state = state["sources"]
@@ -238,13 +243,18 @@ async def prepare_alert(session, identity, queue_position, job_id, observation, 
             "events": events}
 
 
-async def break_streaks(session, identity, queue_position):
+async def break_streaks(session, identity, queue_position, active_job_ids):
     """A scheduled warning outside the accepted source case breaks consecutiveness."""
     setting = await session.scalar(select(Setting).where(
         Setting.key == _setting_key(identity),
     ).with_for_update())
     state = _valid_state(setting.value) if setting else None
-    if state is None or queue_position <= state["last_position"]:
+    if state is None:
+        return
+    reconciled = _reconcile_orphaned_deliveries(state, active_job_ids)
+    if queue_position <= state["last_position"]:
+        if reconciled:
+            setting.value = state
         return
     state["last_position"] = queue_position
     for prior in state["sources"].values():
@@ -252,6 +262,20 @@ async def break_streaks(session, identity, queue_position):
         prior["healthy_streak"] = 0
         prior["last_state"] = "missing"
     setting.value = state
+
+
+def _reconcile_orphaned_deliveries(state, active_job_ids):
+    """Downgrade durable pre-send markers after their process is no longer active."""
+    if active_job_ids is None:
+        return False
+    changed = False
+    for prior in state["sources"].values():
+        if (prior.get("incident") in {"attempting", "recovering"}
+                and prior.get("event_job") not in active_job_ids):
+            prior["incident"] = "unknown"
+            prior["event_job"] = None
+            changed = True
+    return changed
 
 
 async def finish_alert(session, identity, events, job_id, delivered):
