@@ -447,7 +447,10 @@ func TestBrowserCDPBlockedWriteHonorsContext(t *testing.T) {
 	}
 	cleanupCtx, cleanupCancel := context.WithTimeout(context.Background(), 250*time.Millisecond)
 	defer cleanupCancel()
-	_ = client.callCleanup(cleanupCtx, "", "Page.stopLoading", map[string]any{}, nil)
+	cleanupErr := client.callCleanup(cleanupCtx, "", "Page.stopLoading", map[string]any{}, nil)
+	if !errors.Is(cleanupErr, context.DeadlineExceeded) {
+		t.Fatalf("bounded cleanup did not report its deadline: %v", cleanupErr)
+	}
 	select {
 	case <-client.done:
 	case <-time.After(3 * time.Second):
