@@ -20,6 +20,8 @@ enters the render gate shared with article extraction and Page Monitor. See the
 
 The application requires `ARTICLE_INGESTION_URL` and
 `ARTICLE_INGESTION_TOKEN` at startup and has no Python collection fallback.
+Administrative Telegram source probes also require `EXTRACTION_SERVICE_URL`
+and `EXTRACTION_SERVICE_TOKEN`; missing service settings fail startup validation.
 AI, summaries, quality checks and delivery remain in Python; scheduling is owned
 by the Go scheduler service.
 
