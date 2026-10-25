@@ -474,7 +474,7 @@ func TestHeartbeatLockContentionReportsBoundedTimeoutAndReleasesLease(t *testing
 	if !errors.As(err, &diagnostic) || diagnostic.Stage != "update" || diagnostic.Reason != "timeout" || diagnostic.SQLState != "" {
 		t.Fatalf("heartbeat diagnostic = %#v, want update/timeout without SQLSTATE", diagnostic)
 	}
-	if diagnostic.MutexWait < 0 || diagnostic.BeginDuration < 0 || diagnostic.UpdateDuration < 0 || diagnostic.CommitDuration != 0 {
+	if diagnostic.MutexWait < 0 || diagnostic.BeginDuration < 0 || diagnostic.UpdateDuration <= 0 || diagnostic.CommitDuration != 0 {
 		t.Fatalf("heartbeat phase durations = %#v, want measured update wait and unstarted commit", diagnostic)
 	}
 	if got := err.Error(); strings.Contains(got, "UPDATE background_worker_status") || strings.Contains(got, "host=") {
@@ -516,7 +516,7 @@ func TestHeartbeatSeparatesLeaseMutexWaitFromBeginTimeout(t *testing.T) {
 	if !errors.Is(err, ErrLeaseLost) || !errors.As(err, &diagnostic) {
 		t.Fatalf("Heartbeat after mutex wait exhausted context = %v, want bounded lease-loss diagnostic", err)
 	}
-	if diagnostic.Stage != "begin" || diagnostic.Reason != "timeout" || diagnostic.MutexWait < 0 || diagnostic.BeginDuration < 0 || diagnostic.UpdateDuration != 0 || diagnostic.CommitDuration != 0 {
+	if diagnostic.Stage != "begin" || diagnostic.Reason != "timeout" || diagnostic.MutexWait <= 0 || diagnostic.BeginDuration < 0 || diagnostic.UpdateDuration != 0 || diagnostic.CommitDuration != 0 {
 		t.Fatalf("heartbeat phase durations = %#v, want mutex wait separated from timed-out begin", diagnostic)
 	}
 }
@@ -598,7 +598,7 @@ func TestHeartbeatDelayedCommitTimeoutReportsCommitDurationAndReleasesLease(t *t
 	if !errors.Is(err, ErrLeaseLost) || !errors.As(err, &diagnostic) {
 		t.Fatalf("Heartbeat with delayed commit = %v, want fail-closed lease-loss diagnostic", err)
 	}
-	if diagnostic.Stage != "commit" || diagnostic.Reason != "timeout" || diagnostic.CommitDuration < 0 || diagnostic.MutexWait < 0 || diagnostic.BeginDuration < 0 || diagnostic.UpdateDuration < 0 {
+	if diagnostic.Stage != "commit" || diagnostic.Reason != "timeout" || diagnostic.CommitDuration <= 0 || diagnostic.MutexWait < 0 || diagnostic.BeginDuration < 0 || diagnostic.UpdateDuration < 0 {
 		t.Fatalf("heartbeat phase durations = %#v, want delayed commit timing", diagnostic)
 	}
 	if got := err.Error(); strings.Contains(got, "pg_sleep") || strings.Contains(got, "CREATE FUNCTION") {
