@@ -12,7 +12,9 @@ from sqlalchemy.orm import sessionmaker
 from news_aggregator.migrations.background_jobs import BackgroundJobsMigration
 from news_aggregator.migrations.job_executor import JobExecutorMigration
 from news_aggregator.migrations.scheduled_job_metadata import ScheduledJobMetadataMigration
-from news_aggregator.models import ScheduleSettings
+from news_aggregator.models import (
+    ArticleIngestionRun, ArticleIngestionSourceRun, ScheduleSettings, Setting,
+)
 from news_aggregator.database import FencedAsyncSession
 
 
@@ -38,6 +40,9 @@ async def executor_pg():
             assert not await migration.check_needed(session)
         async with engine.begin() as conn:
             await conn.run_sync(lambda sync: ScheduleSettings.__table__.create(sync, checkfirst=True))
+            await conn.run_sync(lambda sync: Setting.__table__.create(sync, checkfirst=True))
+            await conn.run_sync(lambda sync: ArticleIngestionRun.__table__.create(sync, checkfirst=True))
+            await conn.run_sync(lambda sync: ArticleIngestionSourceRun.__table__.create(sync, checkfirst=True))
         yield engine, factory, schema
     finally:
         await engine.dispose()

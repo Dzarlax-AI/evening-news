@@ -6,10 +6,12 @@ import (
 	"fmt"
 	"net/url"
 	"os"
+	"strings"
 	"testing"
 	"time"
 
 	"github.com/jackc/pgx/v5"
+	"github.com/jackc/pgx/v5/pgconn"
 	"github.com/jackc/pgx/v5/pgxpool"
 )
 
@@ -151,6 +153,152 @@ func TestLeaseFenceRejectsStaleGenerationAfterTakeover(t *testing.T) {
 		t.Fatalf("stale Finish = %v, want ErrLeaseLost", err)
 	}
 	_ = second.Release(context.Background())
+}
+
+func TestAcquireRejectsCompetingStartup(t *testing.T) {
+	first, ctx, cleanup := testStore(t)
+	defer cleanup()
+	if _, err := first.Acquire(ctx); err != nil {
+		t.Fatal(err)
+	}
+	second := &Store{Pool: first.Pool}
+	if _, err := second.Acquire(ctx); !errors.Is(err, ErrLeaseHeld) {
+		t.Fatalf("competing Acquire = %v, want ErrLeaseHeld", err)
+	}
+	_ = first.Release(context.Background())
+	if _, err := second.Acquire(ctx); err != nil {
+		t.Fatalf("Acquire after owner release = %v, want success", err)
+	}
+	_ = second.Release(context.Background())
+}
+
+func TestHeartbeatLockContentionReportsBoundedTimeoutAndReleasesLease(t *testing.T) {
+	owner, ctx, cleanup := testStore(t)
+	defer cleanup()
+	if _, err := owner.Acquire(ctx); err != nil {
+		t.Fatal(err)
+	}
+
+	blockerConfig := owner.Pool.Config().ConnConfig.Copy()
+	blocker, err := pgx.ConnectConfig(ctx, blockerConfig)
+	if err != nil {
+		t.Fatalf("connect row-lock fixture: %v", err)
+	}
+	defer closeConn(blocker)
+	blockTx, err := blocker.Begin(ctx)
+	if err != nil {
+		t.Fatalf("begin row-lock fixture: %v", err)
+	}
+	defer rollbackTx(blockTx)
+	if _, err := blockTx.Exec(ctx, `UPDATE background_worker_status SET status=status WHERE id=1`); err != nil {
+		t.Fatalf("hold worker-status row lock: %v", err)
+	}
+
+	heartbeatCtx, cancel := context.WithTimeout(context.Background(), 150*time.Millisecond)
+	err = owner.Heartbeat(heartbeatCtx)
+	cancel()
+	if !errors.Is(err, ErrLeaseLost) {
+		t.Fatalf("Heartbeat under status-row contention = %v, want ErrLeaseLost", err)
+	}
+	var diagnostic *HeartbeatError
+	if !errors.As(err, &diagnostic) || diagnostic.Stage != "update" || diagnostic.Reason != "timeout" || diagnostic.SQLState != "" {
+		t.Fatalf("heartbeat diagnostic = %#v, want update/timeout without SQLSTATE", diagnostic)
+	}
+	if got := err.Error(); strings.Contains(got, "UPDATE background_worker_status") || strings.Contains(got, "host=") {
+		t.Fatalf("heartbeat diagnostic leaked driver or connection details: %q", got)
+	}
+
+	if err := blockTx.Rollback(ctx); err != nil && !errors.Is(err, pgx.ErrTxClosed) {
+		t.Fatalf("release fixture row lock: %v", err)
+	}
+	replacement := &Store{Pool: owner.Pool}
+	if _, err := replacement.Acquire(ctx); err != nil {
+		t.Fatalf("replacement Acquire after heartbeat invalidation = %v", err)
+	}
+	_ = replacement.Release(context.Background())
+}
+
+func TestHeartbeatReportsLeaseConnectionFailureAndAllowsReplacement(t *testing.T) {
+	owner, ctx, cleanup := testStore(t)
+	defer cleanup()
+	info, err := owner.Acquire(ctx)
+	if err != nil {
+		t.Fatal(err)
+	}
+	var terminated bool
+	if err := owner.Pool.QueryRow(ctx, `SELECT pg_terminate_backend($1)`, info.BackendPID).Scan(&terminated); err != nil || !terminated {
+		t.Fatalf("terminate lease backend: terminated=%v err=%v", terminated, err)
+	}
+
+	heartbeatCtx, cancel := context.WithTimeout(context.Background(), 2*time.Second)
+	err = owner.Heartbeat(heartbeatCtx)
+	cancel()
+	if !errors.Is(err, ErrLeaseLost) {
+		t.Fatalf("Heartbeat after backend termination = %v, want ErrLeaseLost", err)
+	}
+	var diagnostic *HeartbeatError
+	if !errors.As(err, &diagnostic) || diagnostic.Stage != "begin" {
+		t.Fatalf("heartbeat diagnostic = %#v, want begin stage", diagnostic)
+	}
+	switch diagnostic.Reason {
+	case "sqlstate":
+		if diagnostic.SQLState != "57P01" {
+			t.Fatalf("heartbeat SQLSTATE = %q, want 57P01", diagnostic.SQLState)
+		}
+	case "connection_closed", "other":
+		if diagnostic.SQLState != "" {
+			t.Fatalf("heartbeat SQLSTATE = %q, want empty when classifying %s", diagnostic.SQLState, diagnostic.Reason)
+		}
+	default:
+		t.Fatalf("heartbeat diagnostic reason = %q, want bounded connection failure classification", diagnostic.Reason)
+	}
+	if strings.Contains(err.Error(), "ERROR:") || strings.Contains(err.Error(), "postgres://") {
+		t.Fatalf("heartbeat diagnostic leaked driver or connection details: %q", err.Error())
+	}
+
+	replacement := &Store{Pool: owner.Pool}
+	if _, err := replacement.Acquire(ctx); err != nil {
+		t.Fatalf("replacement Acquire after dead lease backend = %v", err)
+	}
+	_ = replacement.Release(context.Background())
+}
+
+func TestHeartbeatDiagnosticClassifiesSQLStateWithoutDriverMessage(t *testing.T) {
+	err := heartbeatError("commit", &pgconn.PgError{Code: "40001", Message: "sensitive SQL and endpoint details"})
+	if err.Stage != "commit" || err.Reason != "sqlstate" || err.SQLState != "40001" {
+		t.Fatalf("heartbeat diagnostic = %#v", err)
+	}
+	if strings.Contains(err.Error(), "sensitive") || strings.Contains(err.Error(), "endpoint") {
+		t.Fatalf("diagnostic leaked driver message: %q", err.Error())
+	}
+}
+
+func TestHeartbeatDiagnosticsUseFiniteSafeReasons(t *testing.T) {
+	cases := []struct {
+		name   string
+		err    error
+		reason string
+	}{
+		{name: "timeout", err: context.DeadlineExceeded, reason: "timeout"},
+		{name: "canceled", err: context.Canceled, reason: "canceled"},
+		{name: "transaction closed", err: pgx.ErrTxClosed, reason: "transaction_closed"},
+		{name: "connection closed", err: pgconn.ErrConnClosed, reason: "connection_closed"},
+		{name: "other", err: errors.New("private driver details"), reason: "other"},
+	}
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			diagnostic := heartbeatError("begin", tc.err)
+			if diagnostic.Reason != tc.reason || diagnostic.SQLState != "" {
+				t.Fatalf("heartbeat diagnostic = %#v, want reason %q", diagnostic, tc.reason)
+			}
+			if strings.Contains(diagnostic.Error(), "private") {
+				t.Fatalf("diagnostic leaked original error: %q", diagnostic.Error())
+			}
+			if !errors.Is(diagnostic, ErrLeaseLost) {
+				t.Fatalf("diagnostic does not unwrap to ErrLeaseLost: %v", diagnostic)
+			}
+		})
+	}
 }
 
 func TestAttemptCapAndPendingCompletionRetention(t *testing.T) {

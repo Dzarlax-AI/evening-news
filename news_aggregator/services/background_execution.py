@@ -80,7 +80,11 @@ def _bounded_result(kind, value):
         for candidate in candidates:
             metric = value.get(candidate)
             if isinstance(metric, (int, float)) and not isinstance(metric, bool):
-                result[output] = max(0, min(1_000_000_000, metric))
+                bounded_metric = max(0, min(1_000_000_000, metric))
+                if output == "errors_count":
+                    result[output] = max(result.get(output, 0), bounded_metric)
+                else:
+                    result[output] = bounded_metric
                 break
     if kind == "reprocess_failed":
         result["dry_run"] = bool(value.get("status") == "dry_run")
