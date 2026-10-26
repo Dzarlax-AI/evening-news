@@ -79,35 +79,17 @@ Public data endpoints live under `/api/public/`; the authenticated management AP
 
 ## Local development
 
-The example Compose stack starts the Go web service, one background runtime, the private Python executor, the extractor, and separate PostgreSQL instances for News and scheduler data. A one-shot migration command uses the executor image before schema-dependent services start. It does not include the separately managed egress policy service or shared browser. This local example is not a production deployment description; the planned production container count is documented separately and remains subject to its own rollout approval. The minimal profile uses HTTP-only extraction and does not include browser rendering.
+The example Compose stack starts the Go web service, one background runtime, the private Python executor, the extractor, and separate PostgreSQL instances for News and scheduler data. A one-shot migration command uses the executor image before schema-dependent services start. It does not include the production egress policy service or shared browser. The production layout is documented separately; the minimal local profile uses HTTP-only extraction and does not include browser rendering.
 
-Create an ignored `.env` file or export the required local credentials before starting Compose. Use development-only values:
+Copy `.env.example` to `.env` and replace its development placeholders. It lists every required Compose key, including distinct web, executor, scheduler, worker, ingestion, and processing database URLs. Follow the local database setup sequence in [the News deployment guide](deploy/news/README.md) to migrate first, then provision the ingestion and processing roles before starting the background service. The local worker DSN uses `newsuser`; that owner role is only for the disposable local profile.
 
-```dotenv
-DB_PASSWORD=local-news-db-password
-SCHEDULER_DB_PASSWORD=local-scheduler-db-password
-ADMIN_PASSWORD=local-admin-password
-JWT_SECRET=local-jwt-signing-secret
-WEB_BACKEND_TOKEN=local-web-executor-token
-JOB_EXECUTOR_TOKEN=local-job-executor-token
-ARTICLE_AI_TOKEN=local-article-ai-token
-ARTICLE_PROCESSING_TOKEN=local-processing-token
-ARTICLE_INGESTION_TOKEN=local-ingestion-token
-EXTRACTION_SERVICE_TOKEN=local-extraction-token
-SCHEDULED_JOBS_TOKEN=local-scheduler-receiver-token
-SCHEDULER_API_TOKEN=local-scheduler-api-token
-GEMINI_API_KEY=your-development-provider-key
-TELEGRAM_TOKEN=your-development-bot-token
-TELEGRAM_CHAT_ID=your-development-channel-id
-# Supply these as complete DSNs for the separately provisioned runtime roles.
-WORKER_DATABASE_URL=postgres://<worker-role>:<password>@postgres:5432/newsdb
-INGESTION_DATABASE_URL=postgres://<ingestion-role>:<password>@postgres:5432/newsdb
-PROCESSING_DATABASE_URL=postgres://<processing-role>:<password>@postgres:5432/newsdb
+```sh
+cp .env.example .env
 ```
 
-Provider keys are passed to the Python executor because it owns provider operations. The Go web service receives the database URL, admin/JWT settings, `WEB_BACKEND_URL` and `WEB_BACKEND_TOKEN`, scheduler client settings, and HTTP trust configuration; it does not receive AI or Telegram provider keys.
+Provider keys are passed to the Python executor because it owns provider operations. The local Compose file maps `WEB_DATABASE_URL` to the web service's `DATABASE_URL` and `EXECUTOR_DATABASE_URL` to the executor and migration service's `DATABASE_URL`. The background components keep their separate database variables. The Go web service receives its database URL, admin/JWT settings, `WEB_BACKEND_URL` and `WEB_BACKEND_TOKEN`, scheduler client settings, and HTTP trust configuration; it does not receive AI or Telegram provider keys.
 
-Start the stack:
+Complete the migration and runtime-role provisioning sequence in [the News deployment guide](deploy/news/README.md#fresh-local-compose-database-setup) before starting the full stack. Then start the remaining services:
 
 ```sh
 docker compose -f docker-compose.example.yml up --build -d
@@ -135,7 +117,7 @@ PostgreSQL integration tests require `TEST_DATABASE_URL` to point to a dedicated
 
 ## Configuration and documentation
 
-The Compose example is the source of truth for the complete local service configuration. The Go web environment includes `DATABASE_URL`, `ADMIN_USERNAME`, `ADMIN_PASSWORD`, `JWT_SECRET`, `WEB_BACKEND_URL`, `WEB_BACKEND_TOKEN`, scheduler receiver settings, and HTTP trust settings. `WEB_BACKEND_URL` must be a fixed executor origin; the client does not accept arbitrary backend paths or URLs. The background runtime receives four component-specific database URLs; do not point them all at one privileged account.
+The Compose example is the source of truth for the complete local service configuration. The Go web environment includes `DATABASE_URL`, `ADMIN_USERNAME`, `ADMIN_PASSWORD`, `JWT_SECRET`, `WEB_BACKEND_URL`, `WEB_BACKEND_TOKEN`, scheduler receiver settings, and HTTP trust settings. `WEB_BACKEND_URL` must be a fixed executor origin; the client does not accept arbitrary backend paths or URLs. The background runtime receives four component-specific database URLs; do not point them all at one privileged account. Production environment preparation and explicit per-service mappings are documented in [the News deployment guide](deploy/news/README.md).
 
 English technical guides:
 
@@ -150,4 +132,4 @@ English technical guides:
 - [Page Monitor](docs/go-page-monitor.md)
 - [Native browser worker](docs/go-cloak-native-worker.md)
 
-The web/API migration was deployed to production on 2026-10-26: the Go web service replaced the Python public/admin application, while the private executor retained the domain operations described above. That historical web cutover does not mean this background consolidation has been released or deployed. The Compose example documents local development; production uses deployment-specific networking, database placement, browser integration, and pinned image digests.
+PR33's production consolidation was deployed on 2026-10-26. Production runs five News-owned containers: the Go web app, one Go background runtime, the Python executor, the extractor, and protective egress. The local Compose example omits production egress and browser integration and uses local PostgreSQL containers; production uses deployment-specific networking, database placement, browser integration, and pinned image digests.

@@ -28,7 +28,8 @@ CHECKS = {
     ),
     "executor": (
         "test -s /app/news_aggregator/executor.py && command -v pg_dump >/dev/null "
-        "&& python -c 'import importlib.util,magic,asyncpg,sqlalchemy; assert importlib.util.find_spec(\"pytest\") is None' "
+        "&& python -c 'import importlib.util,asyncpg,sqlalchemy; assert importlib.util.find_spec(\"pytest\") is None and all(importlib.util.find_spec(name) is None for name in (\"magic\",\"psutil\",\"chardet\",\"dateutil\"))' "
+        "&& ! dpkg-query -W -f='${Status}' libmagic1 libmagic1t64 2>/dev/null | grep -q 'install ok installed' "
         "&& test ! -d /app/scripts && test ! -d /app/web "
         "&& test ! -e /news-web && test ! -e /news-background "
         "&& ! command -v go >/dev/null 2>&1"

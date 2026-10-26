@@ -1,10 +1,15 @@
 # Core image build and release
 
-This guide documents local build commands and the repository's gated release
-workflow. It does not describe production deployment state or authorize an
-image publication. The background consolidation remains unreleased until a
-separate explicit action publishes it; a production rollout needs its own
-approval.
+This guide documents local build commands, release workflow, and the deployed
+PR33 production layout. It does not authorize a new image publication.
+
+## Production status
+
+PR33's production consolidation was deployed on 2026-10-26. News owns five
+production containers: the Go web app, one Go background runtime, the Python
+executor, the extractor, and protective egress. External PostgreSQL and browser
+infrastructure are outside that count. The single-env preparation process and
+role mapping are documented in [the News deployment guide](../deploy/news/README.md).
 
 ## Runtime images
 
@@ -15,7 +20,7 @@ graph:
 |---|---|---|---|
 | `web` | `evening-news-web:consolidation-fixture` | `ghcr.io/dzarlax-ai/rss-web` | Go web binary, templates, API contracts, web static files, CA certificates |
 | `background` | `evening-news-background:consolidation-fixture` | `ghcr.io/dzarlax-ai/rss-background` | One Go background process hosting scheduler, worker, ingestion, and processing components; CA certificates and timezone data |
-| `executor` | `evening-news-executor:consolidation-fixture` | `ghcr.io/dzarlax-ai/rss-summarizer` | Python domain runtime, migrations, runtime dependencies, PostgreSQL backup client, and `libmagic` runtime library |
+| `executor` | `evening-news-executor:consolidation-fixture` | `ghcr.io/dzarlax-ai/rss-summarizer` | Python domain runtime, migrations, runtime dependencies, and PostgreSQL backup client |
 
 Each image has its own runtime boundary and registry digest. They share a build
 graph, not a common final image. The background build embeds the same `REVISION`
@@ -91,10 +96,10 @@ News `DATABASE_URL`.
 
 The local example is intentionally HTTP-only and does not include production
 egress or a shared browser service. It has the core app roles, extractor, and
-two local database containers, plus a temporary migration command. The
-approved future production target is three core app containers plus extractor
-and protective egress; shared PostgreSQL and browser services are outside that
-count. That target is planned, not deployed by these source changes.
+two local database containers, plus a temporary migration command. Production
+uses external PostgreSQL placement and browser integration together with the
+separate egress container; its five News-owned containers include one
+background process hosting scheduler, worker, ingestion, and processing.
 
 ## CI and explicit publication
 
