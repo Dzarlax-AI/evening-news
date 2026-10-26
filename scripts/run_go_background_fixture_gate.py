@@ -42,6 +42,16 @@ SCHEDULER_SCHEMA = "scheduler_fixture"
 WORKER_DRAIN_SECONDS = 8
 
 
+def parse_docker_top_pid_args(output: str) -> list[tuple[int, str]]:
+    """Parse Docker Desktop/Linux `docker top -eo pid,args`, ignoring headers."""
+    rows = []
+    for line in output.splitlines():
+        fields = line.strip().split(None, 1)
+        if len(fields) == 2 and fields[0].isdigit():
+            rows.append((int(fields[0]), fields[1].strip()))
+    return rows
+
+
 class ConsolidatedBackgroundGate(GoWebGate):
     """Reuse the full synthetic web/article flow with one composed background PID."""
 
@@ -82,6 +92,21 @@ class ConsolidatedBackgroundGate(GoWebGate):
             env["ARTICLE_PROCESSING_TOKEN"] = ARTICLE_PROCESSING_TOKEN
             env["ARTICLE_AI_TOKEN"] = ARTICLE_AI_TOKEN
         return env
+
+    def run_container(self, name, **kwargs):
+        # The scheduler's frozen target URL resolves `web` on the internal
+        # network. The inherited GoWebGate topology omitted this alias because
+        # its former fake scheduler never made a real request to that target.
+        if name == self.prefix + "-web":
+            if not kwargs.get("alias"):
+                kwargs["alias"] = "web"
+            env = dict(kwargs.get("env") or {})
+            trusted_hosts = [host.strip() for host in env.get("TRUSTED_HOSTS", "").split(",") if host.strip()]
+            if "web" not in trusted_hosts:
+                trusted_hosts.append("web")
+            env["TRUSTED_HOSTS"] = ",".join(trusted_hosts)
+            kwargs["env"] = env
+        return super().run_container(name, **kwargs)
 
     def docker(self, *args, **kwargs):
         # The executor fixture needs one additional read-only probe mount. Keep
@@ -368,17 +393,30 @@ class ConsolidatedBackgroundGate(GoWebGate):
     def verify_single_background_runtime(self):
         running = self.docker("ps", "-q", "--filter", f"label={self.owner_label}={self.owner}").stdout.splitlines()
         bg_id = self.docker("inspect", "--format", "{{.Id}}", self.prefix + "-background").stdout.strip()
-        process = self.docker("top", self.prefix + "-background", "-eo", "args").stdout.lower()
-        inspect = self.docker("inspect", "--format", "{{.Path}} {{json .Args}} {{.State.Pid}} {{.RestartCount}} {{.State.OOMKilled}}",
+        top_result = self.docker("top", self.prefix + "-background", "-eo", "pid,args")
+        top_rows = parse_docker_top_pid_args(top_result.stdout)
+        inspect = self.docker("inspect", "--format", "{{.Path}}|{{json .Args}}|{{.State.Pid}}|{{.RestartCount}}|{{.State.OOMKilled}}",
                               self.prefix + "-background").stdout.strip()
-        fields = inspect.split(" ", 4)
+        fields = inspect.split("|", 4)
+        host_pid = int(fields[2]) if len(fields) > 2 and fields[2].isdigit() else None
+        expected_command = fields[0] if fields else ""
+        matching_process = next((row for row in top_rows
+                                 if host_pid is not None and row[0] == host_pid), None)
+        if matching_process is None:
+            matching_process = next((row for row in top_rows
+                                     if row[1].split(None, 1)[0] == expected_command), None)
+        init_command = matching_process[1] if matching_process else ""
         self.report["background_process"] = {
-            "path": fields[0] if fields else None,
+            "path": expected_command or None,
             "args": fields[1] if len(fields) > 1 else "[]",
-            "host_pid": int(fields[2]) if len(fields) > 2 and fields[2].isdigit() else None,
+            "host_pid": host_pid,
             "restart_count": int(fields[3]) if len(fields) > 3 and fields[3].isdigit() else None,
             "oom_killed": fields[4].lower() == "true" if len(fields) > 4 else None,
-            "top_contains_news_background": "/news-background" in process,
+            "top_process_count": len(top_rows),
+            "init_process_pid": matching_process[0] if matching_process else None,
+            "init_process_matches_inspect_pid": bool(matching_process and host_pid == matching_process[0]),
+            "init_process_command": init_command[:240] or None,
+            "top_contains_news_background": "/news-background" in init_command,
         }
         self.report["topology"] = {"web": 1, "background": 1, "executor": 1, "collector": 1}
         product_names = {self.prefix + "-web", self.prefix + "-background",
@@ -386,8 +424,10 @@ class ConsolidatedBackgroundGate(GoWebGate):
         self.check("exactly_one_container_per_product_role", product_names.issubset(set(
             self.docker("ps", "--format", "{{.Names}}", "--filter",
                         f"label={self.owner_label}={self.owner}").stdout.splitlines())))
-        self.check("one_background_runtime_pid1", bool(bg_id) and fields[:1] == ["/news-background"]
-                   and "/news-background" in process)
+        self.check("one_background_runtime_pid1", bool(bg_id) and expected_command == "/news-background"
+                   and host_pid is not None and host_pid > 0
+                   and bool(matching_process) and "/news-background" in init_command
+                   and (host_pid == matching_process[0] or len(top_rows) == 1))
         self.check("no_component_container_per_background_subsystem", not any(
             name.endswith(("-worker", "-scheduler", "-ingestion", "-processing"))
             for name in self.docker("ps", "--format", "{{.Names}}", "--filter",
@@ -490,6 +530,83 @@ class ConsolidatedBackgroundGate(GoWebGate):
             time.sleep(0.25)
         raise GateFailure("fixture_worker_heartbeat_did_not_wait_on_row_lock")
 
+    def worker_lease_snapshot(self):
+        value = self.pg_value(
+            "SELECT generation::text || '|' || status || '|' || (owner_id IS NOT NULL)::text || '|' || "
+            "COALESCE(round(EXTRACT(EPOCH FROM (clock_timestamp()-heartbeat_at))::numeric,3)::text,'') "
+            "FROM background_worker_status WHERE id=1"
+        )
+        try:
+            generation, status, owner_present, age = value.split("|", 3)
+            return {
+                "generation": int(generation),
+                "status": status if re.fullmatch(r"[a-z_]{1,32}", status) else None,
+                "owner_present": owner_present in {"t", "true"},
+                "heartbeat_age_seconds": float(age) if age else None,
+            }
+        except (ValueError, TypeError):
+            return {"generation": None, "status": None, "owner_present": None,
+                    "heartbeat_age_seconds": None}
+
+    def observe_worker_during_row_lock(self, holder, timeout=26):
+        started = time.monotonic()
+        deadline = started + timeout
+        samples = []
+        readiness_dropped = False
+        while time.monotonic() < deadline and holder.poll() is None:
+            readiness = self.health_request("/readyz")[0]
+            lease = self.worker_lease_snapshot()
+            readiness_dropped = readiness_dropped or readiness == 503
+            samples.append({
+                "elapsed_seconds": round(time.monotonic() - started, 3),
+                "readiness_http_status": readiness,
+                **lease,
+            })
+            time.sleep(0.75)
+        return samples[-32:], readiness_dropped
+
+    def sanitized_worker_json_phases(self):
+        result = self.docker("logs", "--since", "2m", self.prefix + "-background", check=False)
+        phases = []
+        details = re.compile(
+            r"heartbeat stage=([a-z_]+) reason=([a-z_]+) mutex_wait_ms=(\d+) "
+            r"begin_ms=(\d+) update_ms=(\d+) commit_ms=(\d+)"
+        )
+        for line in result.stdout.splitlines():
+            try:
+                record = json.loads(line)
+            except ValueError:
+                continue
+            message = record.get("msg")
+            if not isinstance(message, str) or not any(word in message.lower() for word in ("worker", "lease", "heartbeat")):
+                continue
+            phase = {"msg": message[:120]}
+            generation = record.get("generation")
+            if type(generation) is int:
+                phase["generation"] = generation
+            error = record.get("error")
+            match = details.search(error) if isinstance(error, str) else None
+            if match:
+                reason = match.group(2)
+                if re.fullmatch(r"[a-z_]{1,32}", reason):
+                    phase["reason"] = reason
+                phase["timings_ms"] = {
+                    "mutex_wait": int(match.group(3)),
+                    "begin": int(match.group(4)),
+                    "update": int(match.group(5)),
+                    "commit": int(match.group(6)),
+                }
+            phases.append(phase)
+        return phases[-20:]
+
+    def record_worker_lease_fault_diagnostics(self, scenario, samples, holder):
+        self.report.setdefault("worker_lease_fault_diagnostics", {})[scenario] = {
+            "row_lock_samples": samples,
+            "final_lease_snapshot": self.worker_lease_snapshot(),
+            "sanitized_worker_json_phases": self.sanitized_worker_json_phases(),
+            "row_lock_helper_exited": holder.poll() is not None,
+        }
+
     def verify_lease_loss_recovery(self, background_id, background_pid):
         baseline = self.fake_counters_http().get("providers", {}).get("gemini", 0)
         self.control_fake_services(gemini_mode="block")
@@ -504,19 +621,14 @@ class ConsolidatedBackgroundGate(GoWebGate):
             raise GateFailure("fixture_worker_lease_snapshot_invalid") from None
         command = ["docker", "exec", "--env", "WORKER_DATABASE_URL=" + self.background_environment()["WORKER_DATABASE_URL"],
                    self.prefix + "-executor", "python",
-                   "/consolidated-fixtures/lock_worker_status.py", "14"]
+                   "/consolidated-fixtures/lock_worker_status.py", "22"]
         holder = subprocess.Popen(command, stdout=subprocess.PIPE, stderr=subprocess.PIPE, text=True)
         try:
             self.wait_for_blocked_worker_heartbeat(timeout=30)
-            ready_dropped = False
-            deadline = time.monotonic() + 12
-            while time.monotonic() < deadline:
-                if self.health_request("/readyz")[0] == 503:
-                    ready_dropped = True
-                    break
-                time.sleep(0.25)
+            row_lock_samples, ready_dropped = self.observe_worker_during_row_lock(holder)
             self.report["checks"]["worker_lease_loss_drops_runtime_readiness"] = ready_dropped
             if not ready_dropped:
+                self.record_worker_lease_fault_diagnostics("worker_reprocess", row_lock_samples, holder)
                 raise GateFailure("background_readiness_did_not_drop_during_worker_lease_loss")
         finally:
             try:
@@ -583,13 +695,28 @@ class ConsolidatedBackgroundGate(GoWebGate):
         deadline = time.monotonic() + 60
         accepted_count = None
         while time.monotonic() < deadline:
-            count = self.fake_counters_http().get("providers", {}).get("telegram", 0)
+            counters = self.fake_counters_http()
+            count = counters.get("providers", {}).get("telegram", 0)
             if isinstance(count, int) and count > before:
                 accepted_count = count
                 break
             time.sleep(0.25)
         if accepted_count != before + 1:
             self.control_fake_services(telegram_mode="release")
+            current_counters = self.fake_counters_http()
+            status, current_job = self.request("GET", "/api/v1/jobs/" + job_id,
+                                               token=self.access_token)
+            self.report["ambiguous_delivery_wait_diagnostics"] = {
+                "job_http_status": status,
+                "job_status": current_job.get("status") if status == 200 and isinstance(current_job, dict) else None,
+                "job_error_code": current_job.get("error_code") if status == 200 and isinstance(current_job, dict)
+                    and isinstance(current_job.get("error_code"), str) else None,
+                "job_error_type": current_job.get("error_type") if status == 200 and isinstance(current_job, dict)
+                    and isinstance(current_job.get("error_type"), str) else None,
+                "telegram_count_before": before,
+                "telegram_count_current": current_counters.get("providers", {}).get("telegram"),
+                "telegram_endpoint_counts": current_counters.get("telegram_endpoints", {}),
+            }
             raise GateFailure("fake_telegram_did_not_accept_held_delivery")
         self.check("fake_telegram_accepted_delivery_before_reply", True)
 
@@ -602,20 +729,14 @@ class ConsolidatedBackgroundGate(GoWebGate):
             raise GateFailure("ambiguous_delivery_worker_lease_snapshot_invalid") from None
         command = ["docker", "exec", "--env", "WORKER_DATABASE_URL=" + self.background_environment()["WORKER_DATABASE_URL"],
                    self.prefix + "-executor", "python",
-                   "/consolidated-fixtures/lock_worker_status.py", "14"]
+                   "/consolidated-fixtures/lock_worker_status.py", "22"]
         holder = subprocess.Popen(command, stdout=subprocess.PIPE, stderr=subprocess.PIPE, text=True)
         try:
             self.wait_for_blocked_worker_heartbeat(timeout=30)
-            deadline = time.monotonic() + 12
-            readiness_lost = False
-            while time.monotonic() < deadline:
-                if self.health_request("/readyz")[0] == 503:
-                    readiness_lost = True
-                    break
-                time.sleep(0.25)
-            self.check("ambiguous_delivery_lease_loss_drops_readiness", readiness_lost)
+            row_lock_samples, readiness_lost = self.observe_worker_during_row_lock(holder)
             if not readiness_lost:
-                raise GateFailure("ambiguous_delivery_readiness_did_not_drop")
+                self.record_worker_lease_fault_diagnostics("ambiguous_delivery", row_lock_samples, holder)
+            self.check("ambiguous_delivery_lease_loss_drops_readiness", readiness_lost)
         finally:
             try:
                 holder.wait(timeout=30)
@@ -782,15 +903,54 @@ class ConsolidatedBackgroundGate(GoWebGate):
         self.check("embedded_scheduler_dispatch_fixture_armed", import_status == 200 and resume_status == 200)
         deadline = time.monotonic() + 40
         occurrence = None
+        occurrence_http_status = None
+        last_occurrence = None
         while time.monotonic() < deadline:
-            code, body = self.scheduler_request("GET", "/v1/occurrences?limit=100")
+            occurrence_http_status, body = self.scheduler_request("GET", "/v1/occurrences?limit=100")
             occurrence = next((item for item in (body or {}).get("occurrences", [])
                                if item.get("schedule_key") == "fixture:consolidated-dispatch"), None)
+            if occurrence:
+                last_occurrence = {
+                    "status": occurrence.get("status"),
+                    "attempts": occurrence.get("attempts"),
+                    "blocked_reason": None,
+                    "has_job_id": bool(occurrence.get("job_id")),
+                    "target_alias": occurrence.get("target_alias"),
+                }
             if occurrence and occurrence.get("status") in {"accepted", "blocked"}:
                 break
             time.sleep(0.5)
         accepted = bool(occurrence and occurrence.get("status") == "accepted"
                         and occurrence.get("job_id") and occurrence.get("attempts", 0) >= 1)
+        if not accepted:
+            schedule_status, schedule = self.scheduler_request(
+                "GET", "/v1/schedules/fixture:consolidated-dispatch")
+            operational_status, operational = self.scheduler_request("GET", "/v1/status")
+            # The public inventory intentionally omits retry error details. Read
+            # only the bounded error code from this disposable scheduler DB.
+            raw_error = self.docker(
+                "exec", self.prefix + "-postgres", "psql", "-U", "gate_user", "-d", "gate_scheduler",
+                "-Atc", "SELECT COALESCE(last_error_code,'') FROM " + SCHEDULER_SCHEMA
+                + ".occurrences WHERE schedule_key='fixture:consolidated-dispatch' "
+                "ORDER BY created_at DESC LIMIT 1", check=False,
+            )
+            error_code = raw_error.stdout.strip() if raw_error.returncode == 0 else ""
+            if not re.fullmatch(r"[a-z0-9_]{1,64}", error_code):
+                error_code = None
+            if last_occurrence is not None:
+                last_occurrence["blocked_reason"] = error_code
+            self.report["due_dispatch_diagnostics"] = {
+                "occurrence_http_status": occurrence_http_status,
+                "last_occurrence": last_occurrence,
+                "schedule_http_status": schedule_status,
+                "schedule_enabled": schedule.get("enabled") if schedule_status == 200 and isinstance(schedule, dict) else None,
+                "schedule_next_due_at": schedule.get("next_due_at") if schedule_status == 200 and isinstance(schedule, dict) else None,
+                "schedule_target_alias": schedule.get("target_alias") if schedule_status == 200 and isinstance(schedule, dict) else None,
+                "schedule_operation": schedule.get("operation") if schedule_status == 200 and isinstance(schedule, dict) else None,
+                "operational_http_status": operational_status,
+                "control_paused": operational.get("paused") if operational_status == 200 and isinstance(operational, dict) else None,
+                "pending_outbox": operational.get("pending_outbox") if operational_status == 200 and isinstance(operational, dict) else None,
+            }
         self.check("embedded_scheduler_due_occurrence_accepted", accepted)
         if not accepted:
             raise GateFailure("embedded_scheduler_due_occurrence_not_accepted")

@@ -18,7 +18,7 @@ if role == "web":
 
     AIClient.__init__ = _forbid_web_ai_client
 
-if role in {"web", "worker"}:
+if role in {"web", "worker", "executor"}:
     from news_aggregator.services.telegram_service import TelegramService
 
     _original_init = TelegramService.__init__

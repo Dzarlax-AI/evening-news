@@ -91,3 +91,52 @@ def test_ambiguous_delivery_uses_private_held_fake_provider_and_worker_lease_los
     assert "delivery_unknown" in gate_source
     assert "TELEGRAM_RELEASE.wait" in fake_source
     assert "COUNTERS[\"telegram\"] += 1" in fake_source
+    assert '"executor"' in (ROOT / "tests/fixtures/background-worker/sitecustomize.py").read_text()
+    assert '"telegram_endpoints"' in fake_source
+    assert '"ambiguous_delivery_wait_diagnostics"' in gate_source
+
+
+def test_docker_top_pid_args_parser_handles_headers_and_process_rows():
+    module = load_gate_module()
+    assert module.parse_docker_top_pid_args(
+        "PID ARGS\n123 /news-background\n124 helper --flag\n"
+    ) == [(123, "/news-background"), (124, "helper --flag")]
+
+
+def test_consolidated_web_container_gets_scheduler_target_alias(monkeypatch, tmp_path):
+    module = load_gate_module()
+    gate = module.ConsolidatedBackgroundGate(dict(module.DEFAULT_IMAGES), tmp_path)
+    captured = {}
+
+    def parent_run_container(_self, name, **kwargs):
+        captured["name"] = name
+        captured.update(kwargs)
+
+    monkeypatch.setattr(module.GoWebGate, "run_container", parent_run_container)
+    gate.run_container(gate.prefix + "-web", command=[], image="web:test",
+                       env={"TRUSTED_HOSTS": "127.0.0.1,localhost"})
+    assert captured["alias"] == "web"
+    assert captured["env"]["TRUSTED_HOSTS"] == "127.0.0.1,localhost,web"
+
+
+def test_worker_fault_diagnostics_only_keep_sanitized_json_fields(monkeypatch, tmp_path):
+    module = load_gate_module()
+    gate = module.ConsolidatedBackgroundGate(dict(module.DEFAULT_IMAGES), tmp_path)
+
+    class Result:
+        returncode = 0
+        stdout = (
+            '{"msg":"worker heartbeat failed; lease released","error":"worker lease is no longer current '
+            '(heartbeat stage=update reason=timeout mutex_wait_ms=0 begin_ms=0 update_ms=1000 commit_ms=0 '
+            'sqlstate=57014 secret=must-not-appear)"}\n'
+        )
+
+    monkeypatch.setattr(gate, "docker", lambda *args, **kwargs: Result())
+    phases = gate.sanitized_worker_json_phases()
+    assert phases == [{
+        "msg": "worker heartbeat failed; lease released",
+        "reason": "timeout",
+        "timings_ms": {"mutex_wait": 0, "begin": 0, "update": 1000, "commit": 0},
+    }]
+    assert "secret" not in repr(phases)
+    assert SCRIPT.read_text().count('/consolidated-fixtures/lock_worker_status.py", "22"') == 2
