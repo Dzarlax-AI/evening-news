@@ -97,6 +97,115 @@ func TestTelegramConfigurationUsesSanitizedPrivateEndpoint(t *testing.T) {
 	}
 }
 
+func TestEveryTypedOperationMatchesRegisteredPrivateExecutorRoute(t *testing.T) {
+	tests := []struct {
+		name, method, path, body string
+		call                     func(*Client) error
+		multipart                bool
+	}{
+		{name: "analyze categories", method: http.MethodPost, path: "/categories/ai-category-analysis",
+			body: `{"limit":3,"include_examples":true,"confidence_threshold":0.7}`,
+			call: func(c *Client) error {
+				_, err := c.AnalyzeCategories(context.Background(), CategoryAnalysisRequest{Limit: 3})
+				return err
+			}},
+		{name: "invalidate category cache", method: http.MethodPost, path: "/categories/invalidate-cache", body: `{}`,
+			call: func(c *Client) error { return c.InvalidateCategoryCache(context.Background()) }},
+		{name: "telegram configuration", method: http.MethodGet, path: "/telegram/configuration",
+			call: func(c *Client) error { _, err := c.TelegramConfiguration(context.Background()); return err }},
+		{name: "telegram test", method: http.MethodPost, path: "/telegram/test", body: `{}`,
+			call: func(c *Client) error { _, err := c.TestTelegram(context.Background()); return err }},
+		{name: "telegram settings updated", method: http.MethodPost, path: "/telegram/settings-updated", body: `{}`,
+			call: func(c *Client) error { return c.TelegramSettingsUpdated(context.Background()) }},
+		{name: "backup list", method: http.MethodGet, path: "/backups",
+			call: func(c *Client) error { _, err := c.ListBackups(context.Background()); return err }},
+		{name: "backup download", method: http.MethodGet, path: "/backups/fixture.tar.gz",
+			call: func(c *Client) error {
+				d, err := c.DownloadBackup(context.Background(), "fixture.tar.gz")
+				if err == nil {
+					err = d.Body.Close()
+				}
+				return err
+			}},
+		{name: "backup upload", method: http.MethodPost, path: "/backups/upload", multipart: true,
+			call: func(c *Client) error {
+				_, err := c.UploadBackup(context.Background(), "fixture.tar.gz", strings.NewReader("archive"), int64(len("archive")))
+				return err
+			}},
+		{name: "backup restore", method: http.MethodPost, path: "/backups/restore", body: `{"filename":"fixture.tar.gz"}`,
+			call: func(c *Client) error { _, err := c.RestoreBackup(context.Background(), "fixture.tar.gz"); return err }},
+		{name: "backup cleanup", method: http.MethodPost, path: "/backups/cleanup", body: `{"keep_count":2}`,
+			call: func(c *Client) error { _, err := c.CleanupBackups(context.Background(), 2); return err }},
+		{name: "backup schedule get", method: http.MethodGet, path: "/backups/schedule",
+			call: func(c *Client) error { _, err := c.BackupSchedule(context.Background()); return err }},
+		{name: "backup schedule update", method: http.MethodPut, path: "/backups/schedule",
+			body: `{"enabled":true,"frequency":"daily","time":"02:00","keep_count":5}`,
+			call: func(c *Client) error {
+				_, err := c.UpdateBackupSchedule(context.Background(), BackupScheduleRequest{Enabled: true, Frequency: "daily", Time: "02:00", KeepCount: 5})
+				return err
+			}},
+		{name: "process monitor", method: http.MethodGet, path: "/system/process-monitor",
+			call: func(c *Client) error { _, err := c.ProcessMonitor(context.Background()); return err }},
+		{name: "process cleanup", method: http.MethodPost, path: "/system/process-monitor/cleanup", body: `{}`,
+			call: func(c *Client) error { _, err := c.CleanupProcesses(context.Background()); return err }},
+		{name: "migrations run", method: http.MethodPost, path: "/migrations/run", body: `{}`,
+			call: func(c *Client) error { _, err := c.RunMigrations(context.Background()); return err }},
+	}
+
+	for _, tc := range tests {
+		t.Run(tc.name, func(t *testing.T) {
+			client, err := NewClient(Config{BaseURL: "http://executor.internal", Token: "private-token"})
+			if err != nil {
+				t.Fatal(err)
+			}
+			calls := 0
+			client.http.Transport = roundTripFunc(func(req *http.Request) (*http.Response, error) {
+				calls++
+				if req.Method != tc.method || req.URL.Path != "/internal/web/v1"+tc.path {
+					t.Errorf("request = %s %s, want %s /internal/web/v1%s", req.Method, req.URL.Path, tc.method, tc.path)
+				}
+				if got := req.Header.Get("Authorization"); got != "Bearer private-token" {
+					t.Errorf("authorization = %q", got)
+				}
+				if tc.multipart {
+					if !strings.HasPrefix(req.Header.Get("Content-Type"), "multipart/form-data; boundary=") {
+						t.Errorf("upload Content-Type = %q", req.Header.Get("Content-Type"))
+					}
+					var data []byte
+					data, readErr := io.ReadAll(req.Body)
+					if readErr != nil || !strings.Contains(string(data), `name="file"`) || !strings.Contains(string(data), "fixture.tar.gz") || !strings.Contains(string(data), "archive") {
+						t.Errorf("upload body invalid (read error %v)", readErr)
+					}
+				} else {
+					var data []byte
+					var readErr error
+					if req.Body != nil {
+						data, readErr = io.ReadAll(req.Body)
+					}
+					if readErr != nil {
+						t.Errorf("read request body: %v", readErr)
+					}
+					if string(data) != tc.body {
+						t.Errorf("request body = %q, want %q", data, tc.body)
+					}
+				}
+				resp := response(http.StatusOK, `{"success":true}`)
+				if tc.name == "backup download" {
+					resp = response(http.StatusOK, "archive")
+					resp.ContentLength = int64(len("archive"))
+				}
+				return resp, nil
+			})
+			if err := tc.call(client); err != nil {
+				t.Fatal(err)
+			}
+			if calls != 1 {
+				t.Fatalf("request count=%d, want exactly one", calls)
+			}
+		})
+	}
+}
+
 func TestClientSanitizesBackendErrorsAndPreservesStatus(t *testing.T) {
 	client, _ := NewClient(Config{BaseURL: "http://backend.internal", Token: "token"})
 	calls := 0

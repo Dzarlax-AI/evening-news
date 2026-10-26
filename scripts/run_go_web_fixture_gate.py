@@ -525,6 +525,10 @@ class GoWebGate(IngestionGate):
                    and isinstance(telegram_body, dict))
         self.check("private_backup_list", self.request("GET", "/api/v1/backup",
                    token=self.access_token)[0] == 200)
+        schedule_status, schedule_body = self.request("GET", "/api/v1/backup/schedule",
+                                                       token=self.access_token)
+        self.check("private_backup_schedule_static_route", schedule_status == 200
+                   and isinstance(schedule_body, dict) and schedule_body.get("frequency") == "daily")
         boundary = "go-web-fixture-boundary"
         file_name = "go-web-fixture.tar.gz"
         multipart = (f"--{boundary}\r\nContent-Disposition: form-data; name=\"file\"; filename=\"{file_name}\"\r\n"
@@ -546,6 +550,12 @@ class GoWebGate(IngestionGate):
         cleanup_status, _ = self.request("POST", "/api/v1/backup/cleanup?keep_count=5",
                                           token=self.access_token)
         self.check("worker_backup_cleanup_stays_disabled", cleanup_status == 409)
+        migration_status, migration_body = self.request("POST", "/api/v1/system/migrations/run",
+                                                          token=self.access_token, body={})
+        self.check("private_migration_route_reachable", migration_status == 200
+                   and isinstance(migration_body, dict)
+                   and migration_body.get("message") == "Migrations completed"
+                   and not migration_body.get("result", {}).get("errors"))
         self.report["provider_calls"] = self.fake_counters_http()
         providers = self.report["provider_calls"].get("providers", {})
         self.check("fake_provider_called_by_pipeline", int(providers.get("gemini", 0)) > 0)

@@ -241,7 +241,7 @@ func (c *Client) CleanupProcesses(ctx context.Context) (json.RawMessage, error) 
 	return c.json(ctx, http.MethodPost, "/system/process-monitor/cleanup", struct{}{})
 }
 func (c *Client) RunMigrations(ctx context.Context) (json.RawMessage, error) {
-	return c.json(ctx, http.MethodPost, "/system/migrations/run", struct{}{})
+	return c.json(ctx, http.MethodPost, "/migrations/run", struct{}{})
 }
 
 func (c *Client) json(ctx context.Context, method, endpoint string, value any) (json.RawMessage, error) {
