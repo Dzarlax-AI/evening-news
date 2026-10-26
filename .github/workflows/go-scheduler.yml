@@ -6,11 +6,13 @@ on:
     paths:
       - 'go-scheduler/**'
       - 'go-worker/**'
+      - 'go-processing/**'
       - 'news_aggregator/**'
       - 'web/**'
       - 'tests/**'
       - 'docker/**'
       - 'scripts/run_go_scheduler_fixture_gate.py'
+      - 'scripts/run_background_worker_fixture_gate.py'
       - 'scripts/scheduler_bridge.py'
       - 'scripts/check_ghcr_tag_absent.py'
       - 'tests/test_ghcr_tag_guard.py'
@@ -19,11 +21,13 @@ on:
     paths:
       - 'go-scheduler/**'
       - 'go-worker/**'
+      - 'go-processing/**'
       - 'news_aggregator/**'
       - 'web/**'
       - 'tests/**'
       - 'docker/**'
       - 'scripts/run_go_scheduler_fixture_gate.py'
+      - 'scripts/run_background_worker_fixture_gate.py'
       - 'scripts/scheduler_bridge.py'
       - 'scripts/check_ghcr_tag_absent.py'
       - 'tests/test_ghcr_tag_guard.py'
@@ -93,6 +97,8 @@ jobs:
           docker build --build-arg SCHEDULER_BUILD_ID="$SCHEDULER_FIXTURE_BUILD_ID" -t evening-news-scheduler:fixture go-scheduler
       - name: Build local Go job worker fixture image
         run: docker build -f go-worker/Dockerfile -t evening-news-job-worker:fixture .
+      - name: Build local Go article processing fixture image
+        run: docker build -f go-processing/Dockerfile -t evening-news-article-processing:fixture .
       - name: Fetch isolated PostgreSQL fixture image
         run: docker pull postgres:16-alpine
       - name: Verify isolated service integration
@@ -101,6 +107,7 @@ jobs:
           --app-image evening-news-scheduler-app:fixture
           --scheduler-image evening-news-scheduler:fixture
           --worker-image evening-news-job-worker:fixture
+          --processing-image evening-news-article-processing:fixture
           --output-dir artifacts/go-scheduler-fixture
       - name: Save acceptance evidence
         if: always()

@@ -6,7 +6,14 @@ import pytest
 from sqlalchemy.orm import Session
 
 from news_aggregator.models import Article, ArticleCategory, Category
-from tests.test_processing_batches import isolated, AsyncSessionAdapter
+from .processing_test_helpers import AsyncSessionAdapter, isolated_publication_database
+
+
+@pytest.fixture
+def isolated():
+    orchestrator, engine = isolated_publication_database()
+    yield orchestrator, engine
+    engine.dispose()
 
 
 @pytest.mark.asyncio

@@ -58,6 +58,8 @@ from .migrations.job_executor import JobExecutorMigration, ensure_job_executor_m
 migration_manager.register_migration(JobExecutorMigration())
 from .migrations.article_ingestion import ArticleIngestionMigration, ensure_article_ingestion_migration
 migration_manager.register_migration(ArticleIngestionMigration())
+from .migrations.article_processing import ArticleProcessingMigration, ensure_article_processing_service_migration
+migration_manager.register_migration(ArticleProcessingMigration())
 
 
 
@@ -84,6 +86,7 @@ async def lifespan(app: FastAPI):
         ensure_scheduled_job_metadata_migration(migration_results)
         ensure_job_executor_migration(migration_results)
         ensure_article_ingestion_migration(migration_results)
+        ensure_article_processing_service_migration(migration_results)
         
         if migration_results['migrations_run']:
             logger.info(f"✅ Applied {len(migration_results['migrations_run'])} migrations")

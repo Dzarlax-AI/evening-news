@@ -24,3 +24,10 @@ services:
     volumes:
       - ./news_aggregator:/app/news_aggregator:ro
       - ./web:/app/web:ro
+
+  article-processing:
+    environment:
+      MAX_WORKERS: "2"
+      NEWS_LIMIT_ENABLED: "true"
+      NEWS_LIMIT_MAX_ARTICLES: "2"
+      NEWS_LIMIT_PER_SOURCE: "2"

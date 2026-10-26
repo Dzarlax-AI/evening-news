@@ -19,6 +19,9 @@ def configured(**overrides):
         "SCHEDULED_JOBS_TOKEN": TOKEN,
         "ARTICLE_INGESTION_URL": "http://ingestion:8093",
         "ARTICLE_INGESTION_TOKEN": TOKEN,
+        "ARTICLE_PROCESSING_URL": "http://processing:8094",
+        "ARTICLE_PROCESSING_TOKEN": TOKEN,
+        "ARTICLE_AI_TOKEN": TOKEN,
         "BACKGROUND_EXECUTION_MODE": "worker",
     }
     values.update(overrides)
@@ -123,6 +126,15 @@ def test_runtime_rejects_invalid_service_urls_without_echoing_values():
         assert value not in str(error.value)
         assert "private" not in str(error.value)
         assert "secret" not in str(error.value)
+
+
+def test_article_processing_and_ai_callback_tokens_are_required():
+    with pytest.raises(RuntimeError, match="ARTICLE_PROCESSING_URL"):
+        configured(ARTICLE_PROCESSING_URL=None).validate_runtime_services()
+    with pytest.raises(RuntimeError, match="ARTICLE_PROCESSING_TOKEN"):
+        configured(ARTICLE_PROCESSING_TOKEN=None).validate_runtime_services()
+    with pytest.raises(RuntimeError, match="ARTICLE_AI_TOKEN"):
+        configured(ARTICLE_AI_TOKEN=None).validate_runtime_services()
 
 
 def test_scheduler_http_requires_explicit_opt_in_and_receiver_token_is_required():

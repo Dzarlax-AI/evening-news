@@ -6,6 +6,7 @@ import math
 import os
 import uuid
 from datetime import datetime, timedelta
+from unittest.mock import AsyncMock
 
 import pytest
 from sqlalchemy import delete, select, text, update
@@ -17,8 +18,9 @@ from news_aggregator.migrations.background_jobs import BackgroundJobsMigration
 from news_aggregator.migrations.scheduled_job_metadata import ScheduledJobMetadataMigration
 from news_aggregator.migrations.job_executor import JobExecutorMigration
 from news_aggregator.models import (
-    BackgroundJob, BackgroundJobIdempotencyKey, BackgroundWorkerStatus, ScheduleSettings,
+    Article, BackgroundJob, BackgroundJobIdempotencyKey, BackgroundWorkerStatus, ScheduleSettings, Source,
 )
+from news_aggregator.database import Base
 from news_aggregator.services.background_jobs import (
     BackgroundWorkerLease,
     IdempotencyConflict,
@@ -30,6 +32,7 @@ from news_aggregator.services.background_jobs import (
     finish_job,
     validate_payload,
 )
+from news_aggregator.services.background_execution import _bounded_result
 
 
 def _test_url():
@@ -182,6 +185,66 @@ async def test_identical_manual_active_work_coalesces_but_payloads_do_not(pg_job
             await enqueue_job_in_session(
                 session, "article_reprocess", {"article_ids": [99]}, "manual:b")
         await session.rollback()
+
+
+@pytest.mark.asyncio
+async def test_selected_article_outcome_survives_the_durable_job_receipt(pg_jobs, monkeypatch):
+    engine, factory = pg_jobs
+    async with engine.begin() as connection:
+        await connection.run_sync(lambda sync: Base.metadata.create_all(
+            sync, tables=[Source.__table__, Article.__table__]))
+    async with factory() as session:
+        session.add(Article(id=17, title="Selected result fixture",
+                            url="https://example.test/selected-result", content="Synthetic content"))
+        await session.commit()
+    lease = BackgroundWorkerLease(engine)
+    assert await lease.acquire()
+    try:
+        async with factory() as session:
+            queued = await enqueue_job_in_session(
+                session, "article_reprocess", {"article_ids": [17], "force": True},
+                "selected-result:17", coalesce_active=False)
+            await session.commit()
+        async with factory() as session:
+            claimed = await claim_next_job(session, lease)
+            await session.commit()
+            assert claimed.id == queued.id
+
+        result = _bounded_result("article_reprocess", {
+            "status": "retry_wait", "success": False, "settled": False,
+            "retryable": True, "processed": 0, "improved": 0,
+            "article_outcomes": [{
+                "article_id": 17, "state": "retry_wait", "reason": "missing_summary",
+            }],
+        })
+        async with factory() as session:
+            await finish_job(session, lease, queued.id, "succeeded",
+                             attempt_generation=claimed.attempt_generation, result=result)
+            await session.commit()
+        async with factory() as session:
+            persisted = await session.get(BackgroundJob, queued.id)
+            assert persisted.state == "succeeded"
+            assert persisted.result == result
+            assert persisted.result["status"] == "retry_wait"
+            assert persisted.result["settled"] is False
+            assert persisted.result["retryable"] is True
+            assert persisted.result["article_outcomes"] == [{
+                "article_id": 17, "state": "retry_wait", "reason": "missing_summary",
+            }]
+
+        # Exercise the public job-status response against the persisted receipt,
+        # as clients observe it after the selected reprocess request is queued.
+        from fastapi import Response
+        from importlib import import_module
+        jobs_api = import_module("news_aggregator.api.background_jobs_router")
+        monkeypatch.setattr(jobs_api, "AsyncSessionLocal", factory)
+        monkeypatch.setattr(jobs_api, "read_worker_status", AsyncMock(return_value={"healthy": True}))
+        public_receipt = await jobs_api.get_job(queued.id, Response())
+        assert public_receipt["status"] == "succeeded"
+        assert public_receipt["result"] == result
+        assert public_receipt["result"]["article_outcomes"][0]["state"] == "retry_wait"
+    finally:
+        await lease.release()
 
 
 @pytest.mark.asyncio

@@ -77,6 +77,11 @@ class Settings(BaseSettings):
     article_ingestion_token: Optional[SecretStr] = Field(
         default=None, repr=False, alias="ARTICLE_INGESTION_TOKEN"
     )
+    article_processing_url: Optional[str] = Field(default=None, alias="ARTICLE_PROCESSING_URL")
+    article_processing_token: Optional[SecretStr] = Field(
+        default=None, repr=False, alias="ARTICLE_PROCESSING_TOKEN"
+    )
+    article_ai_token: Optional[SecretStr] = Field(default=None, repr=False, alias="ARTICLE_AI_TOKEN")
     worker_poll_interval_seconds: int = Field(default=1, ge=1, le=10, alias="WORKER_POLL_INTERVAL_SECONDS")
     worker_shutdown_drain_seconds: int = Field(default=20, ge=0, le=120, alias="WORKER_SHUTDOWN_DRAIN_SECONDS")
     worker_job_retention_days: int = Field(default=7, ge=1, le=90, alias="WORKER_JOB_RETENTION_DAYS")
@@ -217,6 +222,26 @@ class Settings(BaseSettings):
         if not token or not 16 <= len(token) <= 4096 or any(
                 ord(ch) < 0x21 or ord(ch) > 0x7E for ch in token):
             raise RuntimeError("ARTICLE_INGESTION_TOKEN must be configured with a valid service token")
+        processing_url = self.article_processing_url
+        processing_token = (self.article_processing_token.get_secret_value()
+                            if self.article_processing_token else None)
+        try:
+            processing_parsed = urlsplit(processing_url or "")
+            _ = processing_parsed.port
+        except ValueError:
+            raise RuntimeError("ARTICLE_PROCESSING_URL must be a valid service URL") from None
+        if (processing_parsed.scheme not in {"http", "https"} or not processing_parsed.hostname
+                or processing_parsed.username or processing_parsed.password
+                or processing_parsed.query or processing_parsed.fragment
+                or any(ch.isspace() for ch in (processing_url or ""))):
+            raise RuntimeError("ARTICLE_PROCESSING_URL must be a valid service URL")
+        if not processing_token or not 16 <= len(processing_token) <= 4096 or any(
+                ord(ch) < 0x21 or ord(ch) > 0x7E for ch in processing_token):
+            raise RuntimeError("ARTICLE_PROCESSING_TOKEN must be configured with a valid service token")
+        ai_token = self.article_ai_token.get_secret_value() if self.article_ai_token else None
+        if not ai_token or not 16 <= len(ai_token) <= 4096 or any(
+                ord(ch) < 0x21 or ord(ch) > 0x7E for ch in ai_token):
+            raise RuntimeError("ARTICLE_AI_TOKEN must be configured with a valid service token")
         receiver_token = (self.scheduled_jobs_token.get_secret_value()
                           if self.scheduled_jobs_token else None)
         if not receiver_token or not 16 <= len(receiver_token) <= 4096 or any(

@@ -9,7 +9,6 @@ from rich.console import Console
 from rich.table import Table
 from rich.progress import Progress, SpinnerColumn, TextColumn
 
-from .orchestrator import NewsOrchestrator
 from .services.source_manager import SourceManager
 from .database import AsyncSessionLocal
 from .config import settings
@@ -46,30 +45,11 @@ def process(verbose: bool):
             task = progress.add_task("Processing news...", total=None)
             
             try:
-                if settings.background_execution_mode == "worker":
-                    import secrets
-                    from .services.background_jobs import enqueue_job
-                    job = await enqueue_job("news_processing", {}, secrets.token_hex(24))
-                    progress.update(task, description="✅ Processing queued")
-                    console.print(f"Background job accepted: {job.id} (status: {job.state})")
-                    return
-                orchestrator = NewsOrchestrator()
-                stats = await orchestrator.run_full_cycle()
-                progress.update(task, description="✅ Processing completed!")
-            
-                # Display results
-                console.print("\n[bold green]Processing Summary:[/bold green]")
-                console.print(f"• Articles fetched: {stats['articles_fetched']}")
-                console.print(f"• Articles processed: {stats['articles_processed']}")
-                console.print(f"• API calls made: {stats['api_calls_made']}")
-                console.print(f"• Duration: {stats.get('duration_seconds', 0):.1f}s")
-                
-                if stats['errors']:
-                    console.print(f"\n[bold yellow]Errors ({len(stats['errors'])}):[/bold yellow]")
-                    for error in stats['errors'][:5]:  # Show first 5 errors
-                        console.print(f"• {error}")
-                    if len(stats['errors']) > 5:
-                        console.print(f"• ... and {len(stats['errors']) - 5} more")
+                import secrets
+                from .services.background_jobs import enqueue_job
+                job = await enqueue_job("news_processing", {}, secrets.token_hex(24))
+                progress.update(task, description="✅ Processing queued")
+                console.print(f"Background job accepted: {job.id} (status: {job.state})")
                 
             except Exception as e:
                 progress.update(task, description="❌ Processing failed!")
@@ -220,14 +200,9 @@ async def test_source(source_id: int):
 @click.option('--days', '-d', default=7, help='Number of days to show stats for')
 async def stats(days: int):
     """Show processing statistics."""
-    orchestrator = None if settings.background_execution_mode == "worker" else NewsOrchestrator()
-    
     try:
-        if orchestrator is not None:
-            stats_data = await orchestrator.get_processing_stats(days)
-        else:
-            from .processing.processing_stats_service import get_processing_stats_service
-            stats_data = await get_processing_stats_service().get_processing_stats(days)
+        from .processing.processing_stats_service import get_processing_stats_service
+        stats_data = await get_processing_stats_service().get_processing_stats(days)
         
         # Show totals
         totals = stats_data['totals']
@@ -299,123 +274,14 @@ async def config():
 @click.option('--limit', default=50, help='Maximum number of articles to process')
 @click.option('--dry-run', is_flag=True, help='Only show candidates without processing')
 async def reprocess_failed(limit: int, dry_run: bool):
-    """Process due pending and retry-wait articles through the bounded pipeline."""
-    if settings.background_execution_mode == "worker":
-        import secrets
-        from .services.background_jobs import enqueue_job
-        job = await enqueue_job(
-            "reprocess_failed", {"limit": limit, "dry_run": bool(dry_run)}, secrets.token_hex(24)
-        )
-        console.print(f"Failed article reprocessing queued: {job.id}")
-        return
-    orchestrator = NewsOrchestrator()
-    
-    try:
-        await orchestrator.start()
+    """Queue due pending/retry-wait work through the durable Go processor."""
+    import secrets
+    from .services.background_jobs import enqueue_job
+    job = await enqueue_job(
+        "reprocess_failed", {"limit": limit, "dry_run": bool(dry_run)}, secrets.token_hex(24)
+    )
+    console.print(f"Failed article reprocessing queued: {job.id}")
         
-        if dry_run:
-            console.print(f"[bold yellow]🔍 Dry run: Finding due articles to process (limit: {limit})[/bold yellow]")
-        else:
-            console.print(f"[bold green]🔧 Processing due articles (limit: {limit})[/bold green]")
-        
-        # Run the reprocessing
-        results = await orchestrator.reprocess_failed_extractions(limit=limit, dry_run=dry_run)
-        
-        # Display results in a nice table
-        console.print(f"\n[bold blue]📊 Results:[/bold blue]")
-        
-        # Summary table
-        summary_table = Table()
-        summary_table.add_column("Metric", style="cyan")
-        summary_table.add_column("Value", style="white")
-        
-        if dry_run:
-            candidate_count = results.get('found_candidates', results.get('total_candidates'))
-            if candidate_count is not None:
-                summary_table.add_row("Found candidates", str(candidate_count))
-        else:
-            completed = results.get('processed', results.get('articles_processed', 0))
-            summaries = results.get('articles_summarized', results.get('improved'))
-            summary_table.add_row("Completed", str(completed))
-            if summaries is not None:
-                summary_table.add_row("Summaries generated", str(summaries))
-            summary_table.add_row("Errors", str(len(results.get('errors') or [])))
-        if results.get('status'):
-            summary_table.add_row("Status", str(results['status']))
-        
-        console.print(summary_table)
-        
-        # Show improvements if any
-        if not dry_run and results.get('improvements'):
-            console.print(f"\n[bold green]✅ Articles with improved content:[/bold green]")
-            
-            improvements_table = Table()
-            improvements_table.add_column("ID", style="cyan")
-            improvements_table.add_column("Title", style="white", max_width=50)
-            improvements_table.add_column("Original", style="red")
-            improvements_table.add_column("New", style="green")
-            improvements_table.add_column("Improvement", style="yellow")
-            
-            for improvement in results['improvements'][:10]:  # Show top 10
-                improvements_table.add_row(
-                    str(improvement['article_id']),
-                    improvement['title'],
-                    f"{improvement['original_length']} chars",
-                    f"{improvement['new_length']} chars",
-                    f"+{improvement['improvement']} (+{improvement['percentage']:.1f}%)"
-                )
-            
-            console.print(improvements_table)
-            
-            if len(results['improvements']) > 10:
-                console.print(f"[dim]... and {len(results['improvements']) - 10} more improvements[/dim]")
-        
-        # Show candidates in dry run mode
-        if dry_run and results.get('candidates'):
-            console.print(f"\n[bold yellow]🎯 Reprocessing candidates:[/bold yellow]")
-            
-            candidates_table = Table()
-            candidates_table.add_column("ID", style="cyan")
-            candidates_table.add_column("Title", style="white", max_width=50)
-            candidates_table.add_column("Domain", style="blue")
-            candidates_table.add_column("Content", style="red")
-            
-            for candidate in results['candidates'][:15]:  # Show top 15
-                candidates_table.add_row(
-                    str(candidate['id']),
-                    candidate['title'],
-                    candidate['domain'],
-                    f"{candidate['content_length']} chars"
-                )
-            
-            console.print(candidates_table)
-            
-            if len(results['candidates']) > 15:
-                console.print(f"[dim]... and {len(results['candidates']) - 15} more candidates[/dim]")
-            
-            console.print(f"\n[bold yellow]💡 Run without --dry-run to process these articles[/bold yellow]")
-        
-        # Show errors if any
-        if not dry_run and results.get('errors'):
-            console.print(f"\n[bold red]❌ Processing errors:[/bold red]")
-            
-            for error in results['errors'][:5]:  # Show first 5 errors
-                if isinstance(error, dict):
-                    message = error.get('error', error)
-                    article_id = error.get('article_id')
-                    prefix = f"Article {article_id}: " if article_id is not None else ""
-                    console.print(f"   {prefix}{message}")
-                else:
-                    console.print(f"   {error}")
-            
-            if len(results['errors']) > 5:
-                console.print(f"   [dim]... and {len(results['errors']) - 5} more errors[/dim]")
-        
-    except Exception as e:
-        console.print(f"[bold red]❌ Error during reprocessing: {e}[/bold red]")
-        raise
-    finally:
-        await orchestrator.stop()
 
 
 @cli.command()

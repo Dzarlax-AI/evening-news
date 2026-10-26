@@ -4,6 +4,7 @@ on:
   pull_request:
     paths:
       - 'go-ingestion/**'
+      - 'go-processing/**'
       - 'go/**'
       - 'go-worker/**'
       - 'news_aggregator/**'
@@ -20,6 +21,7 @@ on:
     branches: [main]
     paths:
       - 'go-ingestion/**'
+      - 'go-processing/**'
       - 'go/**'
       - 'go-worker/**'
       - 'news_aggregator/**'
@@ -72,6 +74,9 @@ jobs:
       TELEGRAM_TOKEN: fixture-only-telegram-token
       TELEGRAM_CHAT_ID: fixture-only-chat-id
       SCHEDULER_ENABLED: 'false'
+      ARTICLE_PROCESSING_URL: http://processing.invalid:8094
+      ARTICLE_PROCESSING_TOKEN: isolated-article-processing-token
+      ARTICLE_AI_TOKEN: isolated-article-ai-token
       ARTICLE_INGESTION_MODE: go
       ARTICLE_INGESTION_URL: http://ingestion.invalid:8093
       ARTICLE_INGESTION_TOKEN: isolated-article-ingestion-token
@@ -124,6 +129,7 @@ jobs:
           docker build -f docker/Dockerfile.extractor -t evening-news-collector:fixture go
           docker build -f go-worker/Dockerfile -t evening-news-job-worker:fixture .
           docker build --platform linux/amd64 -f go-ingestion/Dockerfile -t evening-news-ingestion:fixture .
+          docker build --platform linux/amd64 -f go-processing/Dockerfile -t evening-news-processing:fixture .
       - name: Run isolated synthetic ingestion acceptance
         run: >-
           python scripts/run_go_ingestion_fixture_gate.py
@@ -131,6 +137,7 @@ jobs:
           --worker-image evening-news-job-worker:fixture
           --collector-image evening-news-collector:fixture
           --ingestion-image evening-news-ingestion:fixture
+          --processing-image evening-news-processing:fixture
           --output-dir artifacts/go-ingestion-fixture
       - name: Save sanitized fixture evidence
         if: always()

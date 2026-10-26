@@ -13,7 +13,6 @@ import sqlalchemy
 
 from ..database import get_db
 from ..models import Article, ArticleCategory
-from ..orchestrator import NewsOrchestrator, reserve_processing_cycle, release_processing_cycle
 
 logger = logging.getLogger(__name__)
 
@@ -41,85 +40,16 @@ async def reprocess_article(
     db: AsyncSession = Depends(get_db),
     http_request: Request = None,
 ):
-    """Reprocess a single article with AI."""
-    from ..config import settings
-    if settings.background_execution_mode == "worker":
-        exists = await db.scalar(select(Article.id).where(Article.id == article_id))
-        if exists is None:
-            raise HTTPException(status_code=404, detail="Article not found")
-        from .background_jobs_router import accepted_response, enqueue_from_request
-        accepted = await enqueue_from_request("article_reprocess", {
-            "article_ids": [article_id], "force": request.force,
-            "reextract_media": request.reextract_media,
-        }, http_request)
-        return accepted_response(accepted)
-    reservation = reserve_processing_cycle()
-    if reservation is None:
-        raise HTTPException(status_code=409, detail="News processing is already running")
-    try:
-        # Get article
-        result = await db.execute(
-            select(Article)
-            .options(selectinload(Article.source))
-            .where(Article.id == article_id)
-        )
-        article = result.scalar_one_or_none()
-        
-        if not article:
-            raise HTTPException(status_code=404, detail="Article not found")
-        
-        needs_media_refresh = bool(request.reextract_media and article.source
-                                   and article.source.source_type == 'telegram')
-        # Release the request read before post HTTP or AI work.
-        await db.rollback()
-        if needs_media_refresh:
-            try:
-                from ..services.article_media_reextract import reextract_article_media
-                await reextract_article_media(article_id)
-            except Exception:
-                logger.warning('Telegram media refresh did not complete (article_id=%s)', article_id)
-
-        orchestrator = NewsOrchestrator()
-        stats = await orchestrator.process_selected_articles(
-            [article_id], reservation=reservation, force=request.force)
-        status = stats.get('status', 'incomplete')
-        outcome = next((item for item in stats.get('article_outcomes', [])
-                        if item['article_id'] == article_id), {})
-        reason = outcome.get('reason')
-        if status == 'rejected':
-            if reason == 'advertisement':
-                message = 'Статья распознана как реклама.'
-            elif reason == 'resource_limit':
-                message = 'Страница превышает допустимый размер. Автоматический повтор не запланирован.'
-            else:
-                message = 'Статья исключена из обработки. Автоматический повтор не запланирован.'
-        elif status == 'exhausted':
-            message = 'Лимит попыток обработки исчерпан. Автоматический повтор остановлен.'
-        elif stats.get('success'):
-            message = 'Статья обновлена.'
-        elif stats.get('retryable'):
-            message = 'Обработка временно не завершена. Повторная попытка запланирована.'
-        else:
-            message = 'Обработка статьи не завершена.'
-        return {
-            "message": message,
-            "article_id": article_id,
-            "success": stats.get('success', False),
-            "status": status,
-            "settled": stats.get('settled', False),
-            "retryable": stats.get('retryable', False),
-            "reason": reason,
-            "stats": stats,
-            "timestamp": datetime.utcnow().isoformat(),
-        }
-
-    except HTTPException:
-        raise
-    except Exception as e:
-        logger.info(f"Article reprocessing failed: {e}")
-        raise HTTPException(status_code=500, detail="Article reprocessing failed") from e
-    finally:
-        release_processing_cycle(reservation)
+    """Queue a single article reprocess under the durable worker fence."""
+    exists = await db.scalar(select(Article.id).where(Article.id == article_id))
+    if exists is None:
+        raise HTTPException(status_code=404, detail="Article not found")
+    from .background_jobs_router import accepted_response, enqueue_from_request
+    accepted = await enqueue_from_request("article_reprocess", {
+        "article_ids": [article_id], "force": request.force,
+        "reextract_media": request.reextract_media,
+    }, http_request)
+    return accepted_response(accepted)
 
 
 @router.get("/{article_id}")

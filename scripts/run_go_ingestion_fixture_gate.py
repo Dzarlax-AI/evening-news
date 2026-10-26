@@ -60,12 +60,13 @@ def has_host_port_binding(ports):
 
 
 class IngestionGate(GoJobWorkerGate):
-    def __init__(self, app_image, worker_image, collector_image, ingestion_image, output_dir):
-        super().__init__(app_image, worker_image, output_dir)
+    def __init__(self, app_image, worker_image, collector_image, ingestion_image, output_dir, processing_image):
+        super().__init__(app_image, worker_image, output_dir, processing_image)
         self.collector_image = collector_image
         self.ingestion_image = ingestion_image
+        self.processing_image = processing_image
         self.report.update(gate="go-article-ingestion-docker-fixture",
-                           actual_go_ingestion_tested=False, actual_go_collector_tested=False,
+                           actual_go_ingestion_tested=False, actual_go_processing_tested=False, actual_go_collector_tested=False,
                            actual_python_executor_tested=False, browser_tested=False,
                            actual_go_runtime_tested=False, actual_go_job_worker_tested=False,
                            production_database_used=False, production_origins_used=False,
@@ -208,7 +209,7 @@ class IngestionGate(GoJobWorkerGate):
             args.extend(["--mount", f"type=bind,src={GATE_FIXTURES},dst=/gate,readonly",
                          "--mount", f"type=bind,src={ROOT / 'tests/fixtures/background-worker'},dst=/background,readonly",
                          "--mount", f"type=bind,src={ORIGIN_FIXTURES},dst=/origin-fixtures,readonly"])
-        if name.endswith(("-origin", "-collector", "-ingestion")) and self.fixture_temp:
+        if name.endswith(("-origin", "-collector", "-ingestion", "-processing")) and self.fixture_temp:
             args.extend(["--mount", f"type=bind,src={self.fixture_temp},dst=/fixtures,readonly"])
         for host in self.extra_hosts:
             args.extend(["--add-host", f"{host}:{ORIGIN_IP}"])
@@ -232,6 +233,9 @@ class IngestionGate(GoJobWorkerGate):
     def app_environment(self, role):
         env = super().app_environment(role)
         env.update(
+            ARTICLE_PROCESSING_URL="http://processing:8094",
+            ARTICLE_PROCESSING_TOKEN="fixture-only-processing-token",
+            ARTICLE_AI_TOKEN="fixture-only-ai-token",
             ARTICLE_INGESTION_MODE="go",
             ARTICLE_INGESTION_URL="http://ingestion:8093",
             ARTICLE_INGESTION_TOKEN=TOKEN,
@@ -293,7 +297,7 @@ class IngestionGate(GoJobWorkerGate):
             except Exception as exc:
                 diagnostics[key + "_failure_type"] = type(exc).__name__
         logs = {}
-        for role in ("collector", "ingestion", "executor", "worker"):
+        for role in ("collector", "ingestion", "processing", "executor", "worker"):
             result = self.docker("logs", "--tail", "40", f"{self.prefix}-{role}", check=False)
             logs[role] = sanitize_fixture_log((result.stdout or "") + "\n" + (result.stderr or ""))
         diagnostics["sanitized_logs"] = logs
@@ -315,6 +319,18 @@ class IngestionGate(GoJobWorkerGate):
         self.docker("exec", f"{self.prefix}-postgres", "psql", "-v", "ON_ERROR_STOP=1",
                     "-v", "news_schema=public", "-U", "gate_user", "-d", "gate_db",
                     "-f", "/tmp/provision-fixture.sql", timeout=30)
+        processing = (ROOT / "deploy/news-processing/provision-runtime-role.sql").read_text()
+        if processing.count("\\password news_processing_runtime") != 1:
+            raise GateFailure("processing_role_password_prompt_missing")
+        processing = processing.replace("\\password news_processing_runtime",
+                                        "ALTER ROLE news_processing_runtime PASSWORD 'fixture-only-password';")
+        path = self.fixture_temp / "provision-processing.sql"
+        path.write_text(processing)
+        self.docker("cp", str(path), f"{self.prefix}-postgres:/tmp/provision-processing.sql")
+        self.docker("exec", f"{self.prefix}-postgres", "psql", "-v", "ON_ERROR_STOP=1",
+                    "-v", "news_schema=public", "-U", "gate_user", "-d", "gate_db",
+                    "-f", "/tmp/provision-processing.sql", timeout=30)
+
 
     def wait_http(self, name, url, *, timeout=90, auth=None):
         deadline = time.monotonic() + timeout
@@ -333,12 +349,13 @@ class IngestionGate(GoJobWorkerGate):
 
     def run(self):
         self.output_dir.mkdir(parents=True, exist_ok=True)
-        for image in (self.image, self.worker_image, self.collector_image, self.ingestion_image):
+        for image in (self.image, self.worker_image, self.collector_image, self.ingestion_image, self.processing_image):
             self.docker("image", "inspect", image, "--format", "{{.Id}}")
         self.report["image_ids"] = {
             key: self.docker("image", "inspect", value, "--format", "{{.Id}}").stdout.strip()
             for key, value in (("app", self.image), ("worker", self.worker_image),
-                               ("collector", self.collector_image), ("ingestion", self.ingestion_image))
+                               ("collector", self.collector_image), ("ingestion", self.ingestion_image),
+                               ("processing", self.processing_image))
         }
         if not shutil.which("openssl"):
             raise GateFailure("openssl_required_for_fixture_tls")
@@ -395,6 +412,21 @@ class IngestionGate(GoJobWorkerGate):
                                 "JOB_EXECUTOR_TOKEN": EXECUTOR_TOKEN,
                                 "SSL_CERT_FILE": "/fixtures/fixture-ca.crt"}, mounts=False,
                            memory="256m", health_cmd="wget -q -O /dev/null http://127.0.0.1:8093/healthz")
+        self.run_container(f"{self.prefix}-processing", command=[], alias="processing",
+                           image=self.processing_image,
+                           env={"ARTICLE_PROCESSING_LISTEN": ":8094",
+                                "DATABASE_URL": "postgres://news_processing_runtime:fixture-only-password@postgres:5432/gate_db?search_path=public",
+                                "ARTICLE_PROCESSING_TOKEN": "fixture-only-processing-token",
+                                "ARTICLE_AI_URL": "http://executor:8100",
+                                "ARTICLE_AI_TOKEN": "fixture-only-ai-token",
+                                "EXTRACTION_SERVICE_URL": "http://collector:8080",
+                                "EXTRACTION_SERVICE_TOKEN": COLLECTOR_TOKEN,
+                                "EXTRACTION_SERVICE_NATIVE_BROWSER": "false",
+                                "SSL_CERT_FILE": "/fixtures/fixture-ca.crt",
+                                "MAX_WORKERS": "1", "PROCESSING_BATCH_SIZE": "2"},
+                           mounts=False, memory="128m",
+                           health_cmd="wget -q -O /dev/null http://127.0.0.1:8094/healthz")
+        self.wait_ready(f"{self.prefix}-processing")
         self.wait_ready(f"{self.prefix}-collector")
         self.wait_ready(f"{self.prefix}-ingestion")
         self.create_worker()
@@ -418,6 +450,8 @@ class IngestionGate(GoJobWorkerGate):
                    and isinstance(accepted.get("response", {}).get("job_id"), str))
         job_id = accepted["response"]["job_id"]
         job = self.wait_job(job_id)
+        if job.get("status") != "succeeded":
+            self.capture_timeout_diagnostics(job_id)
         self.check("job_succeeded", job.get("status") == "succeeded")
         state = self.private_probe("snapshot").get("response", {})
         source_ids = set(before.get("source_ids", {}).values())
@@ -456,7 +490,9 @@ class IngestionGate(GoJobWorkerGate):
         origin_counters = self.private_probe("origin-counters").get("response", {})
         counters = self.private_probe("fake-counters").get("response", {})
         self.report["page_monitor_acceptance"] = {
-            "expected_title": "Learned Selector Gate Story",
+            "expected_ingested_title": "Learned Selector Gate Story",
+            "expected_processed_title": "Synthetic ingestion fixture story",
+            "original_title_seen_by_ai": int(counters.get("page_monitor_original_title", 0)) >= 1,
             "expected_url": "https://pm.fixture.test/news",
             "actual_titles": [article.get("title") for article in page_monitor_articles],
             "actual_urls": [article.get("url") for article in page_monitor_articles],
@@ -467,7 +503,8 @@ class IngestionGate(GoJobWorkerGate):
             "origin_page_fetches": int(origin_counters.get("page_fetches", 0)),
         }
         self.check("learned_selector_reparsed_captured_page", len(page_monitor_articles) == 1
-                   and page_monitor_articles[0].get("title") == "Learned Selector Gate Story"
+                   and page_monitor_articles[0].get("title") == "Synthetic ingestion fixture story"
+                   and counters.get("page_monitor_original_title", 0) >= 1
                    # Link selectors are not part of the existing PageAnalysis schema;
                    # the collector therefore uses the configured source URL fallback.
                    and page_monitor_articles[0].get("url") == "https://pm.fixture.test/news"
@@ -475,10 +512,12 @@ class IngestionGate(GoJobWorkerGate):
                    and page_monitor_receipt.get("saved") == 1
                    and re.fullmatch(r"[0-9a-f]{64}",
                                     page_monitor_receipt.get("selector_study_sha256") or "") is not None
-                   and origin_counters.get("page_fetches") == 1)
+                   and origin_counters.get("page_fetches") == 2)
         self.check("fake_ai_processed_articles", counters.get("gemini", 0) >= 2
                    and any(article.get("summary_processed") is True
                            for article in state.get("articles", [])))
+        self.check("go_processing_receipt_succeeded", "succeeded" in state.get("processing_run_states", []))
+        self.check("go_processing_items_recorded", bool(state.get("processing_item_states")))
         self.check("fake_selector_study_callback", counters.get("selector_study", 0) == 1)
         self.report["source_counts"] = {"types": 3, "receipts": len(source_runs),
                                          "persisted_articles": len(state.get("articles", []))}
@@ -486,7 +525,7 @@ class IngestionGate(GoJobWorkerGate):
                                                for key in ("gemini", "selector_study", "telegram")}
         self.report["fixture_container_roles"] = sorted(
             name.rsplit("-", 1)[-1] for name in self.containers)
-        self.report.update(actual_go_ingestion_tested=True, actual_go_collector_tested=True,
+        self.report.update(actual_go_processing_tested=True, actual_go_ingestion_tested=True, actual_go_collector_tested=True,
                            actual_python_executor_tested=True, actual_go_runtime_tested=True,
                            actual_go_job_worker_tested=True)
         self.report["result"] = "passed"
@@ -498,12 +537,13 @@ def main():
     parser.add_argument("--worker-image", required=True)
     parser.add_argument("--collector-image", required=True)
     parser.add_argument("--ingestion-image", required=True)
+    parser.add_argument("--processing-image", required=True)
     parser.add_argument("--output-dir", type=Path, default=ROOT / "artifacts/go-ingestion-fixture")
     args = parser.parse_args()
     if not shutil.which("docker"):
         parser.error("docker CLI is required")
     gate = IngestionGate(args.app_image, args.worker_image, args.collector_image,
-                         args.ingestion_image, args.output_dir)
+                         args.ingestion_image, args.output_dir, args.processing_image)
     try:
         gate.run()
     except Exception as exc:

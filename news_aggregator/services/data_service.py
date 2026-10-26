@@ -12,7 +12,7 @@ from datetime import datetime, timedelta
 from ..models import Article, Source, Category, ArticleCategory
 from ..database import get_db
 from fastapi import Depends
-from ..processing.processing_outcome import publication_filter
+from .publication import publication_filter
 
 
 class DataService:

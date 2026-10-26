@@ -17,6 +17,15 @@ def private(path, authenticated=True):
         return {"http_status": error.code}
 
 
+def processing_health():
+    request = Request("http://processing:8094/healthz")
+    try:
+        with urlopen(request, timeout=5) as response:
+            return {"http_status": response.status, "response": json.loads(response.read())}
+    except HTTPError as error:
+        return {"http_status": error.code}
+
+
 async def receipts():
     from sqlalchemy import text
     from news_aggregator.database import AsyncSessionLocal
@@ -30,6 +39,18 @@ async def receipts():
             SELECT generation, lock_backend_pid, status FROM background_worker_status WHERE id=1
         """))).mappings().first()
         return {"receipts": [dict(row) for row in rows], "worker": dict(status or {})}
+
+
+async def processing_runs():
+    from sqlalchemy import text
+    from news_aggregator.database import AsyncSessionLocal
+
+    async with AsyncSessionLocal() as session:
+        rows = (await session.execute(text("""
+            SELECT job_id::text, state, error_code
+            FROM article_processing_runs ORDER BY started_at
+        """))).mappings().all()
+        return {"runs": [dict(row) for row in rows]}
 
 
 async def enqueue_kind(kind):
@@ -77,6 +98,8 @@ if __name__ == "__main__":
     action = sys.argv[1]
     if action == "status":
         result = private("/internal/v1/status")
+    elif action == "processing-health":
+        result = processing_health()
     elif action == "unauthorized":
         result = private("/internal/v1/status", False)
     elif action == "legacy-lease":
@@ -90,6 +113,8 @@ if __name__ == "__main__":
             result = {"http_status": response.status}
     elif action == "receipts":
         result = asyncio.run(receipts())
+    elif action == "processing-runs":
+        result = asyncio.run(processing_runs())
     else:
         raise SystemExit("Unknown fixture action")
     print(json.dumps(result, sort_keys=True))

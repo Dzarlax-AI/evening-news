@@ -8,6 +8,7 @@ on:
       - 'web/**'
       - 'docker/**'
       - 'go-worker/**'
+      - 'go-processing/**'
       - 'db/**'
       - 'docker-compose.example.yml'
       - 'docker-compose.dev.yml'
@@ -25,6 +26,7 @@ on:
       - 'web/**'
       - 'docker/**'
       - 'go-worker/**'
+      - 'go-processing/**'
       - 'db/**'
       - 'docker-compose.example.yml'
       - 'docker-compose.dev.yml'
@@ -162,11 +164,14 @@ jobs:
         run: docker build -f docker/Dockerfile -t evening-news-job-app:fixture .
       - name: Build local Go job worker image
         run: docker build -f go-worker/Dockerfile -t evening-news-job-worker:fixture .
+      - name: Build local Go article processing image
+        run: docker build -f go-processing/Dockerfile -t evening-news-article-processing:fixture .
       - name: Run isolated Go worker and Python executor acceptance
         run: >-
           python scripts/run_go_job_worker_fixture_gate.py
           --image evening-news-job-app:fixture
           --worker-image evening-news-job-worker:fixture
+          --processing-image evening-news-article-processing:fixture
           --output-dir artifacts/go-job-worker-fixture
       - name: Upload fixture evidence
         if: always()

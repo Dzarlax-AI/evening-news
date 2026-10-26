@@ -220,8 +220,11 @@ def _safe_result(result: Optional[Dict[str, Any]]) -> Optional[Dict[str, Any]]:
     # Fixed scalar fields prevent content, URLs, prompts, and free-form errors
     # from being persisted even if an executor accidentally passes them.
     allowed = {
-        "status", "articles_fetched", "articles_processed", "summaries_generated",
-        "parts_sent", "errors_count", "duration_seconds", "backup_bytes",
+        "status", "success", "settled", "retryable", "articles_fetched", "articles_processed",
+        "articles_summarized", "articles_categorized", "articles_requeued", "articles_rejected",
+        "articles_retrying", "articles_exhausted", "total_candidates", "found_candidates",
+        "processed", "improved", "summaries_generated", "parts_sent", "errors_count",
+        "duration_seconds", "backup_bytes",
         "requeued_count", "dry_run", "connection_ok", "article_outcomes",
         "article_outcomes_total", "article_outcomes_omitted",
     }
@@ -231,12 +234,15 @@ def _safe_result(result: Optional[Dict[str, Any]]) -> Optional[Dict[str, Any]]:
         if key == "status":
             if not isinstance(value, str) or value not in {
                 "success", "warning", "deferred", "dry_run", "completed",
-                "rejected", "exhausted", "incomplete", "settled",
+                "rejected", "exhausted", "retry_wait", "incomplete", "settled", "busy",
             }:
                 raise ValueError("job result status is invalid")
         elif key == "article_outcomes":
             allowed_states = {"completed", "rejected", "exhausted", "pending", "retry_wait", "processing"}
-            allowed_reasons = {"advertisement", "resource_limit", "category_mapping_failed", "other"}
+            allowed_reasons = {
+                "advertisement", "resource_limit", "category_mapping_failed", "missing_summary",
+                "smart_filter_rejected", "extraction_challenge", "provider_timeout", "other",
+            }
             if not isinstance(value, list) or len(value) > MAX_SELECTED_IDS:
                 raise ValueError("article outcomes must be a bounded list")
             for item in value:
@@ -247,7 +253,7 @@ def _safe_result(result: Optional[Dict[str, Any]]) -> Optional[Dict[str, Any]]:
                         or item.get("state") not in allowed_states
                         or item.get("reason") not in allowed_reasons):
                     raise ValueError("article outcome contains an invalid field")
-        elif key in {"dry_run", "connection_ok"}:
+        elif key in {"dry_run", "connection_ok", "success", "settled", "retryable"}:
             if not isinstance(value, bool):
                 raise ValueError(f"job result {key} must be a boolean")
         elif (isinstance(value, bool) or not isinstance(value, (int, float))

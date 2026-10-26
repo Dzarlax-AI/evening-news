@@ -15,6 +15,7 @@ ROOTS = {
     "scheduler": "http://scheduler:8080",
     "fake": "http://fixture-services:8090",
     "executor": "http://executor:8100",
+    "processing": "http://processing:8094",
 }
 ADMIN = "Basic " + base64.b64encode(b"fixture-admin:fixture-admin-password").decode()
 SCHEDULER = "Bearer fixture-scheduler-only"

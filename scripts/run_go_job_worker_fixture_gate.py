@@ -9,18 +9,26 @@ import re
 import time
 from pathlib import Path
 
+try:
+    from scripts.article_processing_source_inventory import article_processing_inventory_matches
+except ModuleNotFoundError:
+    from article_processing_source_inventory import article_processing_inventory_matches
 from run_background_worker_fixture_gate import DockerGate, GateFailure, OWNER_LABEL, ROOT
 
 
 class GoJobWorkerGate(DockerGate):
-    def __init__(self, image, worker_image, output_dir):
+    def __init__(self, image, worker_image, output_dir, processing_image=None):
         super().__init__(image, output_dir)
         self.worker_image = worker_image
+        self.processing_image = processing_image
         self.report.update(gate="go-job-worker-docker-fixture", go_worker_image=worker_image,
+                           go_processing_image=processing_image,
                            actual_go_runtime_tested=True, actual_go_job_worker_tested=True,
-                           actual_go_collector_tested=False, browser_tested=False,
+                           actual_go_collector_tested=False, actual_go_processing_tested=False,
+                           browser_tested=False,
                            throughput_claimed=False)
         self.report["explicit_restarts"]["executor"] = 0
+        self.report["explicit_restarts"]["processing"] = 0
         self.backup_volume = self.prefix + "-backups"
 
     def app_environment(self, role):
@@ -76,6 +84,10 @@ class GoJobWorkerGate(DockerGate):
                              "/fixtures/go_worker_probe.py", action, *arguments).stdout.strip()
         return json.loads(output.splitlines()[-1])
 
+    def processing_runs(self):
+        result = self.private_probe("processing-runs")
+        return result.get("runs", [])
+
     def check(self, name, condition):
         self.report["checks"][name] = bool(condition)
         if not condition:
@@ -94,7 +106,7 @@ class GoJobWorkerGate(DockerGate):
         raise GateFailure("Private executor did not become ready")
 
     def capture_memory(self, label):
-        roles = ("web", "worker", "executor", "postgres")
+        roles = ("web", "worker", "executor", "processing", "postgres")
         names = [f"{self.prefix}-{role}" for role in roles]
         output = self.docker("stats", "--no-stream", "--format",
                              "{{.Name}}\t{{.MemUsage}}\t{{.CPUPerc}}", *names).stdout
@@ -115,17 +127,21 @@ class GoJobWorkerGate(DockerGate):
             state = json.loads(line)
             role = state.pop("name").rsplit("-", 1)[-1]
             resources[role].update(state)
-        measured = {role: resources[role]["memory_mib"] for role in ("web", "worker", "executor")}
+        measured = {role: resources[role]["memory_mib"] for role in
+                    ("web", "worker", "executor", "processing")}
         measured["combined"] = round(sum(measured.values()), 2)
         self.report["memory_mib"][label] = measured
         self.report.setdefault("resource_samples", {})[label] = resources
 
     def assert_fixture_mounts(self):
-        for role in ("web", "executor", "worker"):
+        for role in ("web", "executor", "worker", "processing"):
             raw = self.docker("inspect", "--format", "{{json .Mounts}}", f"{self.prefix}-{role}").stdout
             mounts = json.loads(raw)
             if role == "worker":
                 self.check("worker_has_no_host_mounts", not mounts)
+                continue
+            if role == "processing":
+                self.check("processing_has_no_host_mounts", not mounts)
                 continue
             fixture = [mount for mount in mounts if mount["Destination"] == "/fixtures"]
             backup = [mount for mount in mounts if mount["Destination"] == "/app/backups"]
@@ -165,8 +181,12 @@ class GoJobWorkerGate(DockerGate):
                            "--host", "0.0.0.0", "--port", "8000"], alias="web",
                            env=self.app_environment("web"), memory="512m")
         self.wait_http_probe("health")
-        self.check("runtime_source_matches_checkout", self.source_hashes() == self.source_hashes(
-            f"{self.prefix}-web"))
+        workspace_hashes = self.source_hashes()
+        runtime_hashes = self.source_hashes(f"{self.prefix}-web")
+        self.check("runtime_source_matches_checkout", workspace_hashes == runtime_hashes)
+        self.check("processing_client_callback_inventory_current",
+                   article_processing_inventory_matches(workspace_hashes)
+                   and article_processing_inventory_matches(runtime_hashes))
         login = self.exec_json(f"{self.prefix}-web", "admin-cookie-check")
         self.check("public_home_and_admin_login", self.private_probe("public-home")["http_status"] == 200
                    and login.get("http_status") == 200
@@ -198,6 +218,33 @@ class GoJobWorkerGate(DockerGate):
                            alias="executor", env=self.app_environment("worker"), memory="512m",
                            disable_healthcheck=True)
         first_instance = self.wait_executor()["executor_instance_id"]
+        if not self.processing_image:
+            raise GateFailure("A Go processing image is required for this fixture gate")
+        processing_env = {
+            "DATABASE_URL": "postgresql://gate_user:fixture-only-password@postgres:5432/gate_db",
+            "ARTICLE_PROCESSING_LISTEN": ":8094",
+            "ARTICLE_PROCESSING_TOKEN": ARTICLE_PROCESSING_TOKEN,
+            "ARTICLE_AI_URL": "http://executor:8100",
+            "ARTICLE_AI_TOKEN": ARTICLE_AI_TOKEN,
+            "EXTRACTION_SERVICE_URL": "http://fixture-services:8090",
+            "EXTRACTION_SERVICE_TOKEN": "fixture-only-token",
+            "EXTRACTION_SERVICE_NATIVE_BROWSER": "false",
+        }
+        self.run_container(f"{self.prefix}-processing", command=[], image=self.processing_image,
+                           alias="processing", env=processing_env, mounts=False, memory="256m")
+        deadline = time.monotonic() + 90
+        result = {}
+        while time.monotonic() < deadline:
+            try:
+                result = self.private_probe("processing-health")
+                if result.get("http_status") == 200:
+                    break
+            except (GateFailure, ValueError):
+                pass
+            time.sleep(1)
+        self.check("go_processing_healthz", result.get("http_status") == 200)
+        self.report["processing_image_id"] = self.docker(
+            "image", "inspect", self.processing_image, "--format", "{{.Id}}").stdout.strip()
         duplicate_executor = f"{self.prefix}-second-executor"
         self.run_container(duplicate_executor, command=["python", "-m", "news_aggregator.executor"],
                            env=self.app_environment("worker"), memory="128m", disable_healthcheck=True)
@@ -230,8 +277,11 @@ class GoJobWorkerGate(DockerGate):
         web_image = self.docker("inspect", "--format", "{{.Image}}", f"{self.prefix}-web").stdout.strip()
         executor_image = self.docker("inspect", "--format", "{{.Image}}", f"{self.prefix}-executor").stdout.strip()
         worker_image = self.docker("inspect", "--format", "{{.Image}}", worker).stdout.strip()
+        processing_image = self.docker("inspect", "--format", "{{.Image}}",
+                                       f"{self.prefix}-processing").stdout.strip()
         self.check("matching_role_images", web_image == executor_image == self.report["image_id"]
-                   and worker_image == self.report["worker_image_id"])
+                   and worker_image == self.report["worker_image_id"]
+                   and processing_image == self.report["processing_image_id"])
         self.wait_worker_healthy(worker)
         self.check("python_refuses_go_lease_owner", not self.private_probe("legacy-lease")["acquired"])
         self.wait_counter("gemini", 1, job_id=job_id)
@@ -251,6 +301,10 @@ class GoJobWorkerGate(DockerGate):
         snapshot = self.exec_json(f"{self.prefix}-web", "snapshot")["response"]
         articles = [row for row in snapshot["articles"] if row["state"] == "completed"]
         self.check("whole_python_pipeline_completed", bool(articles))
+        processing_runs = self.processing_runs()
+        self.check("go_processing_run_succeeded", any(row.get("state") == "succeeded"
+                   for row in processing_runs))
+        self.report["actual_go_processing_tested"] = True
         article_id = articles[0]["id"]
         counters = self.fake_counters()
         self.check("executor_used_ingestion_receipt_stub", counters.get("ingestion_stub_runs", 0) > 0)
@@ -347,7 +401,7 @@ class GoJobWorkerGate(DockerGate):
                    == after_send.get("telegram", 0))
         self.capture_memory("idle_final")
         self.report["provider_calls"]["final"] = self.fake_counters()
-        for role in ("web", "worker", "executor", "postgres"):
+        for role in ("web", "worker", "executor", "processing", "postgres"):
             self.check(role + "_no_oom", not self.report["resource_samples"]["idle_final"][role]["oom_killed"])
         self.report["receipt_snapshot"] = self.private_probe("receipts")
         self.report["result"] = "passed"
@@ -357,13 +411,19 @@ def main():
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument("--image", required=True)
     parser.add_argument("--worker-image", required=True)
+    parser.add_argument("--processing-image", required=True)
     parser.add_argument("--output-dir", type=Path, default=ROOT / "artifacts" / "go-job-worker")
     args = parser.parse_args()
-    gate = GoJobWorkerGate(args.image, args.worker_image, args.output_dir)
+    gate = GoJobWorkerGate(args.image, args.worker_image, args.output_dir, args.processing_image)
     try:
         gate.run()
     except Exception as error:
-        gate.report.update(result="failed", failure=str(error)[:500])
+        failure = str(error)
+        for secret in (ARTICLE_PROCESSING_TOKEN, ARTICLE_AI_TOKEN,
+                       "fixture-only-executor-token", "fixture-only-password",
+                       "fixture-admin-password", "fixture-only-gemini-key"):
+            failure = failure.replace(secret, "[redacted]")
+        gate.report.update(result="failed", failure=failure[:500])
     finally:
         gate.cleanup()
         args.output_dir.mkdir(parents=True, exist_ok=True)

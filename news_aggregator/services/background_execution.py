@@ -2,6 +2,7 @@
 
 import asyncio
 import logging
+import math
 import os
 import signal
 from contextlib import asynccontextmanager
@@ -60,15 +61,34 @@ def _bounded_result(kind, value):
     value = value if isinstance(value, dict) else {}
     result = {"status": "success"}
     status = value.get("status")
-    if status in {"warning", "deferred", "dry_run", "completed", "rejected", "exhausted", "incomplete", "settled"}:
+    article_statuses = {
+        "success", "warning", "deferred", "dry_run", "completed", "rejected",
+        "exhausted", "retry_wait", "settled", "incomplete", "busy",
+    }
+    explicit_status = status in article_statuses
+    if explicit_status:
         result["status"] = status
-    if value.get("success") is False or value.get("fatal_error") or value.get("errors") or value.get("error"):
+    for name in ("success", "settled", "retryable"):
+        if type(value.get(name)) is bool:
+            result[name] = value[name]
+    if ((value.get("success") is False or value.get("fatal_error") or value.get("errors") or value.get("error"))
+            and (not explicit_status or status == "success")):
         result["status"] = "warning"
     if isinstance(value.get("errors"), list):
         result["errors_count"] = min(len(value["errors"]), 1_000_000_000)
     mappings = {
         "articles_fetched": ("articles_fetched", "total_fetched"),
         "articles_processed": ("articles_processed", "processed"),
+        "articles_summarized": ("articles_summarized",),
+        "articles_categorized": ("articles_categorized",),
+        "articles_requeued": ("articles_requeued", "requeued_count"),
+        "articles_rejected": ("articles_rejected",),
+        "articles_retrying": ("articles_retrying",),
+        "articles_exhausted": ("articles_exhausted",),
+        "total_candidates": ("total_candidates",),
+        "found_candidates": ("found_candidates",),
+        "processed": ("processed",),
+        "improved": ("improved",),
         "summaries_generated": ("summaries_generated",),
         "parts_sent": ("parts_sent",),
         "backup_bytes": ("backup_bytes",),
@@ -79,7 +99,8 @@ def _bounded_result(kind, value):
     for output, candidates in mappings.items():
         for candidate in candidates:
             metric = value.get(candidate)
-            if isinstance(metric, (int, float)) and not isinstance(metric, bool):
+            if (isinstance(metric, (int, float)) and not isinstance(metric, bool)
+                    and (not isinstance(metric, float) or math.isfinite(metric))):
                 bounded_metric = max(0, min(1_000_000_000, metric))
                 if output == "errors_count":
                     result[output] = max(result.get(output, 0), bounded_metric)
@@ -94,7 +115,10 @@ def _bounded_result(kind, value):
             result["status"] = "warning"
     outcomes = value.get("article_outcomes")
     if isinstance(outcomes, list):
-        safe_reasons = {"advertisement", "resource_limit", "category_mapping_failed"}
+        safe_reasons = {
+            "advertisement", "resource_limit", "category_mapping_failed", "missing_summary",
+            "smart_filter_rejected", "extraction_challenge", "provider_timeout",
+        }
         valid_outcomes = [
             {"article_id": item["article_id"], "state": item["state"],
              "reason": item.get("reason") if item.get("reason") in safe_reasons else "other"}
@@ -113,7 +137,7 @@ def _bounded_result(kind, value):
             total = len(valid_outcomes)
         result["article_outcomes_total"] = total
         result["article_outcomes_omitted"] = max(0, total - len(result["article_outcomes"]))
-        if any(item["state"] != "completed" for item in valid_outcomes):
+        if any(item["state"] != "completed" for item in valid_outcomes) and result["status"] == "success":
             result["status"] = "warning"
     if value.get("status") == "dry_run":
         result["status"] = "dry_run"

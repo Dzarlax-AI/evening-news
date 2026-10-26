@@ -6,6 +6,7 @@ The Go job worker gate exercises the durable News queue and private Python execu
 python3 scripts/run_go_job_worker_fixture_gate.py \
   --image evening-news-app:test \
   --worker-image evening-news-job-worker:test \
+  --processing-image evening-news-article-processing:test \
   --output-dir artifacts/go-job-worker
 ```
 
@@ -23,7 +24,7 @@ python3 scripts/run_go_ingestion_fixture_gate.py \
 
 Both gates use disposable PostgreSQL and fake provider/receiver endpoints. The
 Go job-worker gate uses a deterministic ingestion receipt stub and a pre-seeded
-synthetic article to exercise executor/AI behavior; the Go ingestion gate tests
+synthetic article to exercise Go processing, its private Python AI callback, and executor behavior; the Go ingestion gate tests
 real Go collection and persistence. They do not publish ports or use real sites,
 credentials, AI providers, Telegram sends, or production services. The shared `run_background_worker_fixture_gate.py`
 module still provides Docker setup and cleanup helpers for these gates; its

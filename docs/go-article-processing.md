@@ -1,0 +1,29 @@
+# Go article processing
+
+This migration introduces a private Go service for article selection, extraction decisions, bounded processing, retry state, and atomic article/category persistence. The Python executor retains job composition, AI compute and prompts, selector learning, daily summaries, and delivery. This document describes the development target; it does not assert a production rollout.
+
+## Request flow
+
+The Go job worker owns the durable job and worker lease. It sends the fixed job attempt to the Python executor. After Go ingestion completes, the executor starts a processing run and polls its receipt. The processor reads canonical job options from PostgreSQL, claims due articles in bounded batches, calls the existing Go extraction service and narrow Python AI bridge, then commits results under the current worker/executor/item fence. AI and extraction never run inside a database transaction.
+
+Supported jobs are `news_processing`, `news_digest` with processing enabled, `article_reprocess`, and `reprocess_failed`. Existing article retry and publication states remain visible to the web/API. Normal cycles retain aggregate success/warning behavior; selected reprocessing retains per-article states. Normal run receipts keep at most 20 outcome samples with accurate total/omitted counts, and legacy error text is projected to finite reason codes without changing the stored article error. Busy admission refunds its attempt; genuine failures retain the finite retry budget. Successful partial stages survive a retry. Replaying a run returns its existing receipt, while a conflicting or stale fence is rejected.
+
+See the [versioned internal contract](contracts/article-processing-v1.md) for envelopes and callback identity. AI provider delivery remains potentially ambiguous after a connection loss; durable fencing prevents stale article/category writes, but cannot guarantee exactly-once provider billing.
+
+## Local setup
+
+The [example Compose stack](../docker-compose.example.yml) includes `article-processing` on its private network. Supply distinct `ARTICLE_PROCESSING_TOKEN` and `ARTICLE_AI_TOKEN` secrets. Python needs `ARTICLE_PROCESSING_URL=http://article-processing:8094` and the processing token. The Go service needs the restricted database URL, fixed `ARTICLE_AI_URL` for the Python executor, the AI token, and existing extraction service URL/token. Never give it the general job executor token or AI provider credentials. The web application installs the additive processing migration; it must start before processing readiness is required. The worker waits for both executor and processor health, avoiding a fresh-database bootstrap cycle.
+
+Processing concurrency, batch size, retry policy, date filters and source/cycle limits must match the reviewed deployment configuration. Go owns these settings after cutover; setting them only on the Python executor is insufficient. Text limits count Unicode characters rather than UTF-8 bytes. The private service does not connect to CDP or manage a browser.
+
+## Database and deployment
+
+The additive migration installs `article_processing_runs`, `article_processing_items`, and a dedicated SQL fence. Preserve receipt history. Pass the actual schema explicitly with `psql -v news_schema=<schema>` and use a matching `search_path` in the service database URL. Provision the restricted runtime role using [the reviewed SQL template](../deploy/news-processing/provision-runtime-role.sql); it must not own queue tables or have broad article deletion privileges. The [deployment template](../deploy/news-processing/compose.processing.yml) exposes no host ports or mounts and uses a read-only filesystem. Its memory budget requires synthetic acceptance evidence before a separate production approval.
+
+The Python AI callback authorizes the active executor job and article claim and validates the bounded input fingerprint. It exposes fixed analyze/context/feedback operations only. Provider prompts and parsing remain in Python. Learning feedback may update extraction metadata, never Article or ArticleCategory.
+
+## Verification and rollback
+
+The [frozen synthetic corpus](../tests/fixtures/article-processing-v1/README.md) records previous Python outcomes. Run Python client/callback/migration tests, Go unit/race/PostgreSQL checks, and Linux amd64/arm64 builds. The isolated ingestion fixture gate now includes the real Go processor and fake AI endpoints; it checks processing receipts as well as ingestion receipts, resource use, and restart counters. No real sites, providers, messaging, or production database belong in these gates.
+
+A later rollout must separately approve migration, restricted-role provisioning, the exact reviewed image digest, and application configuration. Before rollback to the previous Python runtime, stop or fence Go processing writers and active attempts. Keep article data and receipts; do not reset retries or restore the database. Browser and other shared clients are outside this migration.

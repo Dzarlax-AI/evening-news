@@ -14,7 +14,7 @@ from sqlalchemy.orm import selectinload
 
 from ..database import get_db
 from ..models import Article, ArticleCategory, Category
-from ..processing.processing_outcome import publication_filter
+from ..services.publication import publication_filter
 
 
 router = APIRouter()

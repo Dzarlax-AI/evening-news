@@ -22,9 +22,9 @@ Everything runs on a schedule you control, or you can trigger any step manually 
 
 ## Architecture
 
-The current application uses a standalone Go scheduler for calendar timing, a Go job worker for durable queue ownership, and a separate database-free Go collection service for RSS/Atom collection, Telegram channel capture/parsing, Page Monitor capture/parsing, and article extraction. Python retains source configuration and admin operations, News AI processing, and digest delivery. The Go job worker sends fixed, authenticated job attempts to the private Python executor, which runs the existing News domain functions.
+The current application uses a standalone Go scheduler for calendar timing, a Go job worker for durable queue ownership, and a separate database-free Go collection service for RSS/Atom collection, Telegram channel capture/parsing, Page Monitor capture/parsing, and article extraction. Python retains source configuration and admin operations, AI compute and prompts, and digest delivery. The private Go article processor owns article orchestration and persistence in the current development version. The Go job worker sends fixed, authenticated job attempts to the private Python executor, which runs the existing News domain functions.
 
-The Python executor uses the database-aware Go article ingestion service as the only configured-source collection and persistence path. It reads source configuration and collection progress from News PostgreSQL, calls the separate database-free Go collector, and commits articles and source receipts under the active executor fence. The executor then continues article quality checks, AI processing, summaries, and delivery. The `ARTICLE_INGESTION_MODE` setting defaults to `go`; the removed `python` value is rejected at startup. See the [Go article ingestion guide](docs/go-article-ingestion.md) for the private service contract, deployment template, and isolated acceptance.
+The Python executor uses the database-aware Go article ingestion service as the only configured-source collection and persistence path. It reads source configuration and collection progress from News PostgreSQL, calls the separate database-free Go collector, and commits articles and source receipts under the active executor fence. The executor then submits article processing to a separate private Go service, followed by Python daily summaries and delivery. See the [article processing guide](docs/go-article-processing.md) for the new service and its development status. The `ARTICLE_INGESTION_MODE` setting defaults to `go`; the removed `python` value is rejected at startup. See the [Go article ingestion guide](docs/go-article-ingestion.md) for the private service contract, deployment template, and isolated acceptance.
 
 The Python web app accepts scheduled and manual full-cycle commands into the durable News job queue. `BACKGROUND_EXECUTION_MODE=worker` is required at startup so every full cycle is fenced by the Go job worker; the embedded executor mode is no longer a supported startup configuration. Python still runs the fixed News jobs and returns durable receipts.
 
@@ -46,7 +46,7 @@ flowchart TD
         SourceClient[Source admin + observational Go probe client]
         Memory[Page Monitor state + selector learning]
         DB[(News PostgreSQL schema)]
-        Proc[Quality checks + article processing]
+        Proc[AI compute + prompts]
         Digest[Daily summaries + digest delivery]
         UI[FastAPI admin + public site]
     end
@@ -57,7 +57,8 @@ flowchart TD
         GoWorker -->|authenticated attempt| PyExecutor
     end
     GoWorker -->|claim + fence| Jobs
-    PyExecutor --> Proc
+    PyExecutor -->|fenced processing run| GoProcess
+    GoProcess -->|private AI callback| Proc
     PyExecutor --> Digest
     PyExecutor -->|fenced updates + receipt| DB
     AI[Google Gemini]
@@ -78,6 +79,12 @@ flowchart TD
         GoArticle[Article extraction]
         Admission[Native render admission<br/>production: 2 active, up to 8 waiting]
     end
+
+    subgraph processing["Private Go article processing"]
+        GoProcess[Selection + extraction policy + retries]
+    end
+    GoProcess -->|atomic fenced article + category writes| DB
+    GoProcess -->|private extraction API| GoArticle
 
     subgraph ingestion["Private Go article ingestion"]
         GoIngestion[Fenced collection run + persistence]
@@ -130,7 +137,7 @@ flowchart TD
     DB --> UI
 ```
 
-Production has used Go article ingestion since PR #22. This cleanup removes the dormant Python collection and persistence fallback; it does not deploy or switch production services. Go owns collection, ingestion persistence, extraction, scheduling, and durable queue coordination; Python owns source configuration, the executor, article quality and AI processing, and delivery. The Python executor accepts only fixed job envelopes over its private authenticated endpoint. See the [scheduler release record](deploy/news-scheduler/RELEASE_2026-10-23.md) for scheduler deployment verification.
+Production has used Go article ingestion since PR #22. This cleanup removes the dormant Python collection and persistence fallback; it does not deploy or switch production services. Go owns collection, ingestion persistence, extraction, scheduling, and durable queue coordination; Python owns source configuration, the executor, AI compute and prompts, and delivery. The current development version adds Go article processing; its separate production rollout remains pending. The Python executor accepts only fixed job envelopes over its private authenticated endpoint. See the [scheduler release record](deploy/news-scheduler/RELEASE_2026-10-23.md) for scheduler deployment verification.
 
 See the [source collection guide](docs/go-source-manager.md), [Telegram guide](docs/go-telegram-source.md), [Page Monitor guide](docs/go-page-monitor.md), [article ingestion guide](docs/go-article-ingestion.md), [native worker guide](docs/go-cloak-native-worker.md), and [deployment handoff](deploy/news-extractor/HANDOFF.md) for contracts, limits, and deployment boundaries.
 
@@ -176,7 +183,7 @@ Design follows the [dzarlax.dev](https://dzarlax.dev) brand system: warm ivory b
 
 ## Article extraction
 
-When a source yields a link rather than full text, the Python app sends it to the private Go extraction service. There is no Python extraction fallback. The HTTP-only local profile handles ordinary HTTP pages; JavaScript rendering requires the separately configured native Go browser deployment.
+When a source yields a link rather than full text, the Go article processor sends it to the private Go extraction service. There is no Python extraction fallback. The HTTP-only local profile handles ordinary HTTP pages; JavaScript rendering requires the separately configured native Go browser deployment.
 
 ---
 

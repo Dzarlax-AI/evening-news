@@ -15,6 +15,11 @@ import uuid
 from datetime import datetime, timedelta, timezone
 from pathlib import Path
 
+try:
+    from scripts.article_processing_source_inventory import article_processing_inventory_matches
+except ModuleNotFoundError:
+    from article_processing_source_inventory import article_processing_inventory_matches
+
 
 ROOT = Path(__file__).resolve().parents[1]
 FIXTURE_DIR = ROOT / "tests" / "fixtures" / "go-scheduler"
@@ -26,6 +31,8 @@ GENERIC_TOKEN = "fixture-generic-token"
 NEWS_PASSWORD = "fixture-news-only"
 SCHEDULER_PASSWORD = "fixture-scheduler-only"
 JOB_EXECUTOR_TOKEN = "fixture-job-executor-only-token"
+ARTICLE_PROCESSING_TOKEN = "fixture-only-article-processing-token"
+ARTICLE_AI_TOKEN = "fixture-only-article-ai-token"
 
 
 class GateFailure(RuntimeError):
@@ -42,10 +49,12 @@ def framed_source_hash(paths: list[Path], root: Path) -> str:
 
 
 class DockerGate:
-    def __init__(self, app_image: str, scheduler_image: str, worker_image: str, output_dir: Path):
+    def __init__(self, app_image: str, scheduler_image: str, worker_image: str,
+                 processing_image: str, output_dir: Path):
         self.app_image_ref = app_image
         self.scheduler_image_ref = scheduler_image
         self.worker_image_ref = worker_image
+        self.processing_image_ref = processing_image
         self.output_dir = output_dir
         self.run_id = uuid.uuid4().hex[:12]
         self.owner = f"fixture-{self.run_id}"
@@ -61,7 +70,7 @@ class DockerGate:
             "real_provider_credentials_used": False,
             "repository_mounts": False,
             "checks": {},
-            "restarts": {"web": 0, "worker": 0, "executor": 0, "scheduler": 0},
+            "restarts": {"web": 0, "worker": 0, "executor": 0, "processing": 0, "scheduler": 0},
             "cleanup_errors": [],
         }
         self.pinned_images: dict[str, str] = {}
@@ -73,6 +82,7 @@ class DockerGate:
             "web": self.prefix + "-web",
             "worker": self.prefix + "-worker",
             "executor": self.prefix + "-executor",
+            "processing": self.prefix + "-processing",
         }
 
     def docker(self, *args: str, check: bool = True, timeout: int = 60) -> subprocess.CompletedProcess:
@@ -180,6 +190,9 @@ class DockerGate:
             "ARTICLE_INGESTION_MODE": "go",
             "ARTICLE_INGESTION_URL": "http://fixture-services:8090",
             "ARTICLE_INGESTION_TOKEN": "fixture-only-article-ingestion-token",
+            "ARTICLE_PROCESSING_URL": "http://processing:8094",
+            "ARTICLE_PROCESSING_TOKEN": ARTICLE_PROCESSING_TOKEN,
+            "ARTICLE_AI_TOKEN": ARTICLE_AI_TOKEN,
             "EXTRACTION_SERVICE_MODE": "go",
             "EXTRACTION_SERVICE_PYTHON_FALLBACK": "false",
             "BROWSER_WS_ENDPOINT": "",
@@ -253,7 +266,7 @@ class DockerGate:
 
     def safe_failure_diagnostics(self) -> dict:
         diagnostics = {}
-        for role in ("web", "scheduler", "worker", "executor", "postgres", "fake"):
+        for role in ("web", "scheduler", "worker", "executor", "processing", "postgres", "fake"):
             name = self.container_names[role]
             state_result = self.docker("inspect", "--format", "{{.State.Status}} {{.State.ExitCode}}",
                                        name, check=False)
@@ -443,7 +456,7 @@ class DockerGate:
                 raise GateFailure(f"{role} has an unexpected filesystem mount")
             if mounts[0]["Destination"] != "/fixtures" or mounts[0]["RW"]:
                 raise GateFailure(f"{role} fixture mount is not read-only")
-        for role in ("scheduler", "postgres"):
+        for role in ("scheduler", "processing", "postgres"):
             output = self.docker("inspect", "--format", "{{json .Mounts}}", self.container_names[role]).stdout.strip()
             mounts = json.loads(output)
             if role == "postgres":
@@ -525,10 +538,25 @@ class DockerGate:
         self.executor_instance_id = executor_status.get("executor_instance_id")
         if not self.executor_instance_id:
             raise GateFailure("private executor did not report its process identity")
+        processing_env = {
+            "DATABASE_URL": f"postgres://news_role:{NEWS_PASSWORD}@postgres:5432/gate_db?sslmode=disable",
+            "ARTICLE_PROCESSING_LISTEN": ":8094",
+            "ARTICLE_PROCESSING_TOKEN": ARTICLE_PROCESSING_TOKEN,
+            "ARTICLE_AI_URL": "http://executor:8100",
+            "ARTICLE_AI_TOKEN": ARTICLE_AI_TOKEN,
+            "EXTRACTION_SERVICE_URL": "http://fixture-services:8090",
+            "EXTRACTION_SERVICE_TOKEN": "fixture-only-token",
+            "EXTRACTION_SERVICE_NATIVE_BROWSER": "false",
+        }
+        self.create_container(self.container_names["processing"], self.pinned_images["processing"],
+                              [], role="processing", alias="processing", memory="256m",
+                              env=processing_env, no_healthcheck=True)
+        self.wait_status("processing", "/healthz")
+        self.report["checks"]["processing_service_ready"] = True
         self.wait_status("scheduler", "/readyz")
         self.report["resource_limits"] = {
             "web_memory": "256m", "worker_memory": "512m", "executor_memory": "512m",
-            "scheduler_memory": "128m",
+            "scheduler_memory": "128m", "processing_memory": "256m",
             "postgres_memory": "256m", "fake_services_memory": "128m",
             "cpus_per_container": 1, "pids_per_container": 128,
         }
@@ -538,16 +566,22 @@ class DockerGate:
         runtime_app_hashes = self.probe(self.container_names["web"], "runtime-app-hashes")
         app_image_id = self.docker("inspect", "--format", "{{.Image}}", self.container_names["web"]).stdout.strip()
         scheduler_image_id = self.docker("inspect", "--format", "{{.Image}}", self.container_names["scheduler"]).stdout.strip()
+        processing_image_id = self.docker("inspect", "--format", "{{.Image}}", self.container_names["processing"]).stdout.strip()
         version_status, version = self.request("scheduler", "GET", "/version", auth="none")
         expected_scheduler_hash = self.scheduler_source_hash()
         checks = {
             "web_runtime_source_matches_checkout": workspace_app_hashes == runtime_app_hashes,
+            "processing_client_callback_inventory_current": (
+                article_processing_inventory_matches(workspace_app_hashes)
+                and article_processing_inventory_matches(runtime_app_hashes)
+            ),
             "web_container_uses_requested_immutable_image": app_image_id == self.pinned_images["app"],
             "executor_container_uses_requested_immutable_app_image": (
                 self.docker("inspect", "--format", "{{.Image}}", self.container_names["executor"]).stdout.strip()
                 == self.pinned_images["app"]
             ),
             "scheduler_container_uses_requested_immutable_image": scheduler_image_id == self.pinned_images["scheduler"],
+            "processing_container_uses_requested_immutable_image": processing_image_id == self.pinned_images["processing"],
             "scheduler_build_id_matches_checkout": version_status == 200 and version.get("build_id") == expected_scheduler_hash,
         }
         self.report["runtime_freshness"] = {
@@ -557,6 +591,7 @@ class DockerGate:
             "runtime_scheduler_build_id": version.get("build_id"),
             "app_image_id": app_image_id,
             "scheduler_image_id": scheduler_image_id,
+            "processing_image_id": processing_image_id,
         }
         self.report["checks"].update(checks)
         if not all(checks.values()):
@@ -774,9 +809,17 @@ class DockerGate:
         self.report["checks"]["fake_ingestion_stub_and_gemini_exercised"] = (
             providers.get("ingestion_stub_runs", 0) > 0 and providers.get("gemini", 0) > 0
         )
+        successful_processing_runs = self.psql(
+            "fixture_admin", "fixture-admin-only",
+            "SELECT count(*) FROM news.article_processing_runs WHERE state='succeeded'"
+        ).stdout.strip()
+        self.report["go_processing_runs_succeeded"] = int(successful_processing_runs)
+        self.report["checks"]["go_processing_run_succeeded"] = int(successful_processing_runs) > 0
         self.report["checks"]["fake_telegram_exercised"] = providers.get("telegram", 0) > 0
         if not self.report["checks"]["fake_ingestion_stub_and_gemini_exercised"]:
             raise GateFailure("scheduled News processing did not use the ingestion receipt stub and Gemini")
+        if not self.report["checks"]["go_processing_run_succeeded"]:
+            raise GateFailure("scheduled News processing did not finish through the Go processor")
         if not self.report["checks"]["fake_telegram_exercised"]:
             raise GateFailure("scheduled Telegram digest did not use the fake Telegram endpoint")
         self.report["checks"]["service_mode_does_not_write_legacy_schedule_rows"] = (
@@ -1127,6 +1170,7 @@ class DockerGate:
         self.resolve_image(self.app_image_ref, "app")
         self.resolve_image(self.scheduler_image_ref, "scheduler")
         self.resolve_image(self.worker_image_ref, "worker")
+        self.resolve_image(self.processing_image_ref, "processing")
         self.resolve_image("postgres:16-alpine", "postgres")
         self.report["workspace_source_hashes"] = {
             "app": self.app_source_hashes(),
@@ -1165,11 +1209,14 @@ def main() -> int:
     parser.add_argument("--app-image", required=True, help="Existing local News app image; never built or published here.")
     parser.add_argument("--scheduler-image", required=True, help="Existing local standalone scheduler image.")
     parser.add_argument("--worker-image", required=True, help="Existing local standalone Go job worker image.")
+    parser.add_argument("--processing-image", required=True,
+                        help="Existing local Go article processing image.")
     parser.add_argument("--output-dir", type=Path, required=True, help="Directory for a sanitized JSON gate report.")
     args = parser.parse_args()
     if not shutil.which("docker"):
         parser.error("docker CLI is required")
-    gate = DockerGate(args.app_image, args.scheduler_image, args.worker_image, args.output_dir)
+    gate = DockerGate(args.app_image, args.scheduler_image, args.worker_image,
+                      args.processing_image, args.output_dir)
     try:
         gate.run()
     except Exception as exc:
@@ -1178,7 +1225,7 @@ def main() -> int:
         for secret in (SCHEDULER_TOKEN, NEWS_TARGET_TOKEN, GENERIC_TOKEN, NEWS_PASSWORD,
                        SCHEDULER_PASSWORD, JOB_EXECUTOR_TOKEN, "fixture-admin-password", "fixture-admin-only",
                        "fixture-only-jwt-signing-value", "fixture-only-gemini-key",
-                       "fixture-only-token"):
+                       "fixture-only-token", ARTICLE_PROCESSING_TOKEN, ARTICLE_AI_TOKEN):
             failure = failure.replace(secret, "[redacted]")
         gate.report["failure"] = failure[:400]
         gate.report["failure_diagnostics"] = gate.safe_failure_diagnostics()
