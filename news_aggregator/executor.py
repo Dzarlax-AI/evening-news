@@ -17,7 +17,8 @@ from urllib.parse import urlsplit
 
 import uvicorn
 from fastapi import FastAPI, HTTPException, Request, Response
-from fastapi.responses import JSONResponse
+from starlette.datastructures import UploadFile
+from fastapi.responses import JSONResponse, FileResponse
 from sqlalchemy import select, text, update
 from sqlalchemy.ext.asyncio import AsyncConnection
 
@@ -34,6 +35,12 @@ from .services.background_jobs import (
 )
 from .services.job_fence import JobExecutionFence, current_job_fence
 from .services import scheduled_source_alerts
+from .services.web_backend import (
+    BackupCleanupRequest, BackupFilename, BackupScheduleRequest, BackupTooLarge,
+    CategoryAnalysisRequest, EmptyRequest, analyze_categories, backup_path,
+    cleanup_backups, invalidate_category_cache, list_backups, reset_telegram_service,
+    save_upload, telegram_configuration, telegram_test,
+)
 
 logger = logging.getLogger(__name__)
 app = FastAPI(title="Evening News private job executor", docs_url=None, redoc_url=None, openapi_url=None)
@@ -72,6 +79,153 @@ _EXECUTOR_GUARD_LOCK = asyncio.Lock()
 _EXECUTOR_SERVER = None
 _EXECUTOR_GUARD_QUERY_TIMEOUT = 2.0
 MAX_TRACKED_SOURCE_ALERT_JOBS = 128
+MAX_PRIVATE_JSON_BODY_BYTES = 64 * 1024
+MAX_PRIVATE_UPLOAD_BODY_BYTES = 64 * 1024 * 1024 + 64 * 1024
+PRIVATE_JSON_TIMEOUT_SECONDS = 70.0
+PRIVATE_STREAM_TIMEOUT_SECONDS = 120.0
+_WORKER_DISABLED_BACKUP_OPERATIONS = {
+    ("POST", "/internal/web/v1/backups/upload"):
+        "Backup uploads are disabled in worker mode; use offline maintenance with the worker stopped.",
+    ("POST", "/internal/web/v1/backups/cleanup"):
+        "Backup cleanup is disabled in worker mode; use offline maintenance with the worker stopped.",
+    ("POST", "/internal/web/v1/backups/restore"):
+        "Restore is disabled in worker mode; stop the worker and use offline maintenance.",
+}
+
+
+class WebBackendBoundaryMiddleware:
+    """Authenticate and bound private web-backend requests before parsing bodies."""
+
+    def __init__(self, app):
+        self.app = app
+
+    async def __call__(self, scope, receive, send):
+        if scope["type"] != "http" or not scope.get("path", "").startswith("/internal/web/v1/"):
+            await self.app(scope, receive, send)
+            return
+
+        headers = scope.get("headers", [])
+        auth_values = [value for name, value in headers if name.lower() == b"authorization"]
+        token = settings.web_backend_token.get_secret_value() if settings.web_backend_token else None
+        if not token:
+            await self._reject(send, 503, "Web backend authentication is unavailable")
+            return
+        expected = f"Bearer {token}".encode("utf-8")
+        if len(auth_values) != 1 or not hmac.compare_digest(auth_values[0], expected):
+            await self._reject(send, 401, "Unauthorized")
+            return
+
+        path = scope.get("path", "")
+        if settings.background_execution_mode == "worker":
+            detail = _WORKER_DISABLED_BACKUP_OPERATIONS.get((scope.get("method", ""), path))
+            if detail:
+                # Preserve the legacy precedence and reject before reading or
+                # spooling an upload body, parsing restore input, or touching
+                # the backup directory.
+                await self._reject(send, 409, detail)
+                return
+        is_upload = path == "/internal/web/v1/backups/upload" and scope.get("method") == "POST"
+        limit = MAX_PRIVATE_UPLOAD_BODY_BYTES if is_upload else MAX_PRIVATE_JSON_BODY_BYTES
+        lengths = [value for name, value in headers if name.lower() == b"content-length"]
+        if len(lengths) > 1:
+            await self._reject(send, 400, "Invalid Content-Length")
+            return
+        if lengths:
+            try:
+                content_length = int(lengths[0])
+            except ValueError:
+                await self._reject(send, 400, "Invalid Content-Length")
+                return
+            if content_length < 0:
+                await self._reject(send, 400, "Invalid Content-Length")
+                return
+            if content_length > limit:
+                await self._reject(send, 413, "Request body exceeds limit")
+                return
+
+        response_started = False
+
+        async def tracked_send(message):
+            nonlocal response_started
+            if message.get("type") == "http.response.start":
+                response_started = True
+            await send(message)
+
+        timeout = PRIVATE_STREAM_TIMEOUT_SECONDS if is_upload or scope.get("method") == "GET" else PRIVATE_JSON_TIMEOUT_SECONDS
+        try:
+            async with asyncio.timeout(timeout):
+                # Fully validate and spool the body before FastAPI sees it. This
+                # makes chunked/lying Content-Length uploads obey the same cap
+                # and prevents multipart parsing from spooling an oversized body.
+                import tempfile
+                with tempfile.SpooledTemporaryFile(max_size=1024 * 1024, mode="w+b") as spool:
+                    received = 0
+                    request_complete = False
+                    while True:
+                        message = await receive()
+                        if message.get("type") == "http.disconnect":
+                            # Never dispatch a partially received private
+                            # mutation. The peer is gone, so there is no useful
+                            # response to send and no handler side effect.
+                            return
+                        if message.get("type") != "http.request":
+                            continue
+                        chunk = message.get("body", b"")
+                        received += len(chunk)
+                        if received > limit:
+                            await self._reject(send, 413, "Request body exceeds limit")
+                            return
+                        spool.write(chunk)
+                        if not message.get("more_body", False):
+                            request_complete = True
+                            break
+                    if not request_complete:
+                        return
+                    spool.seek(0)
+                    remaining = received
+                    empty_request_pending = received == 0
+
+                    async def replay_receive():
+                        nonlocal remaining, empty_request_pending
+                        if remaining:
+                            chunk = spool.read(min(64 * 1024, remaining))
+                            remaining -= len(chunk)
+                            return {"type": "http.request", "body": chunk,
+                                    "more_body": remaining > 0}
+                        if empty_request_pending:
+                            empty_request_pending = False
+                            return {"type": "http.request", "body": b"", "more_body": False}
+                        # The replayed request body is complete. Continue
+                        # observing the real client receive channel so
+                        # FileResponse/StreamingResponse can distinguish a
+                        # live connection from an actual disconnect.
+                        return await receive()
+
+                    await self.app(scope, replay_receive, tracked_send)
+        except TimeoutError:
+            if not response_started:
+                detail = ("Operation timed out; outcome may be unknown. Verify before retrying."
+                          if scope.get("method") not in {"GET", "HEAD"}
+                          else "Operation timed out")
+                await self._reject(send, 504, detail)
+
+    @staticmethod
+    async def _reject(send, status, detail):
+        body = json.dumps({"detail": detail}, separators=(",", ":")).encode("utf-8")
+        await send({"type": "http.response.start", "status": status,
+                    "headers": [(b"content-type", b"application/json"),
+                                (b"content-length", str(len(body)).encode())]})
+        await send({"type": "http.response.body", "body": body})
+
+
+app.add_middleware(WebBackendBoundaryMiddleware)
+
+
+def _require_embedded_backup_mode(operation: str) -> None:
+    """Keep mutation handlers safe when invoked outside the ASGI middleware."""
+    detail = _WORKER_DISABLED_BACKUP_OPERATIONS.get(("POST", f"/internal/web/v1/backups/{operation}"))
+    if detail and settings.background_execution_mode == "worker":
+        raise HTTPException(status_code=409, detail=detail)
 
 # This two-key advisory lock is distinct from the Go worker lease key and its
 # retry coordination key. Only one private executor process may own a schema.
@@ -480,6 +634,201 @@ def _auth(request: Request) -> None:
     expected = f"Bearer {token}"
     if not hmac.compare_digest(supplied.encode("utf-8"), expected.encode("utf-8")):
         raise HTTPException(status_code=401, detail="Unauthorized")
+
+
+def _web_backend_auth(request: Request) -> None:
+    token = settings.web_backend_token.get_secret_value() if settings.web_backend_token else None
+    if not token:
+        raise HTTPException(status_code=503, detail="Web backend authentication is unavailable")
+    expected = f"Bearer {token}"
+    if not hmac.compare_digest(request.headers.get("authorization", "").encode(), expected.encode()):
+        raise HTTPException(status_code=401, detail="Unauthorized")
+
+
+async def _web_backend_ready(request: Request) -> None:
+    _web_backend_auth(request)
+    await _require_executor_guard()
+
+
+def _backup_root():
+    from pathlib import Path
+    return Path("backups").resolve()
+
+
+@app.post("/internal/web/v1/categories/ai-category-analysis")
+async def web_ai_category_analysis(payload: CategoryAnalysisRequest, request: Request):
+    await _web_backend_ready(request)
+    async with AsyncSessionLocal() as session:
+        return await analyze_categories(session, payload)
+
+
+@app.post("/internal/web/v1/categories/invalidate-cache")
+async def web_invalidate_category_cache(payload: EmptyRequest, request: Request):
+    await _web_backend_ready(request)
+    await invalidate_category_cache()
+    return {"success": True}
+
+
+@app.post("/internal/web/v1/telegram/test")
+async def web_telegram_test(payload: EmptyRequest, request: Request):
+    await _web_backend_ready(request)
+    async with AsyncSessionLocal() as session:
+        return await telegram_test(session)
+
+
+@app.get("/internal/web/v1/telegram/settings")
+@app.get("/internal/web/v1/telegram/configuration")
+async def web_telegram_settings(request: Request):
+    await _web_backend_ready(request)
+    async with AsyncSessionLocal() as session:
+        return await telegram_configuration(session)
+
+
+@app.post("/internal/web/v1/telegram/settings-updated")
+async def web_telegram_settings_updated(payload: EmptyRequest, request: Request):
+    await _web_backend_ready(request)
+    reset_telegram_service()
+    return {"success": True}
+
+
+@app.get("/internal/web/v1/backups")
+async def web_backup_list(request: Request):
+    await _web_backend_ready(request)
+    return list_backups(_backup_root())
+
+
+@app.get("/internal/web/v1/backups/schedule")
+async def web_backup_schedule_get(request: Request):
+    await _web_backend_ready(request)
+    return {"enabled": False, "frequency": "daily", "time": "02:00", "keep_count": 5,
+            "last_backup": None, "next_backup": None, "status": "disabled"}
+
+
+@app.put("/internal/web/v1/backups/schedule")
+async def web_backup_schedule_update(payload: BackupScheduleRequest, request: Request):
+    await _web_backend_ready(request)
+    from datetime import datetime
+    return {"message": "Backup schedule updated successfully", "settings": payload.model_dump(),
+            "timestamp": datetime.utcnow().isoformat()}
+
+
+@app.get("/internal/web/v1/backups/{filename}")
+async def web_backup_download(filename: str, request: Request):
+    await _web_backend_ready(request)
+    try:
+        path = backup_path(_backup_root(), filename)
+    except ValueError as exc:
+        raise HTTPException(status_code=400, detail="Invalid filename") from exc
+    if not path.is_file():
+        raise HTTPException(status_code=404, detail="Backup file not found")
+    if path.stat().st_size > 64 * 1024 * 1024:
+        raise HTTPException(status_code=413, detail="Backup exceeds download limit")
+    return FileResponse(path, filename=path.name, media_type="application/gzip")
+
+
+@app.post("/internal/web/v1/backups/upload")
+async def web_backup_upload(request: Request):
+    await _web_backend_ready(request)
+    _require_embedded_backup_mode("upload")
+    async with request.form(max_files=1, max_fields=1) as form:
+        file = form.get("file")
+        if not isinstance(file, UploadFile):
+            raise HTTPException(status_code=422, detail="A backup file is required")
+        return await _save_web_backup_upload(file)
+
+
+async def _save_web_backup_upload(file: UploadFile):
+    from datetime import datetime
+    try:
+        size = await save_upload(_backup_root(), file.filename or "", file.file)
+    except BackupTooLarge as exc:
+        raise HTTPException(status_code=413, detail="Backup exceeds upload limit") from exc
+    except ValueError as exc:
+        raise HTTPException(status_code=400, detail=str(exc)) from exc
+    finally:
+        await file.close()
+    return {"message": "Backup uploaded successfully", "filename": file.filename,
+            "size": size, "timestamp": datetime.utcnow().isoformat()}
+
+
+@app.post("/internal/web/v1/backups/restore")
+async def web_backup_restore(payload: BackupFilename, request: Request):
+    await _web_backend_ready(request)
+    _require_embedded_backup_mode("restore")
+    from .services.backup_service import BackupService
+    from datetime import datetime
+    try:
+        path = backup_path(_backup_root(), payload.filename)
+    except ValueError as exc:
+        raise HTTPException(status_code=400, detail="Invalid filename") from exc
+    if not path.is_file():
+        raise HTTPException(status_code=404, detail="Backup file not found")
+    restore = getattr(BackupService(), "restore_backup", None)
+    if restore is None:
+        # The legacy route references this absent method. Do not introduce an
+        # unreviewed tar extraction or shell restore implementation here.
+        raise HTTPException(status_code=501, detail="Backup restore is not implemented")
+    try:
+        await restore(path)
+    except Exception as exc:
+        raise HTTPException(status_code=400, detail="Backup restore failed") from exc
+    return {"message": "Backup restored successfully", "restored_from": payload.filename,
+            "timestamp": datetime.utcnow().isoformat()}
+
+
+@app.post("/internal/web/v1/backups/cleanup")
+async def web_backup_cleanup(payload: BackupCleanupRequest, request: Request):
+    await _web_backend_ready(request)
+    _require_embedded_backup_mode("cleanup")
+    return cleanup_backups(_backup_root(), payload.keep_count)
+
+
+@app.get("/internal/web/v1/system/process-monitor")
+async def web_process_monitor(request: Request):
+    await _web_backend_ready(request)
+    from datetime import datetime
+    from .services.process_monitor import ProcessMonitor
+    if settings.background_execution_mode == "worker":
+        from .services.background_jobs import read_worker_status
+        async with AsyncSessionLocal() as session:
+            worker = await read_worker_status(session)
+        status = {"running": bool(worker and worker["healthy"]), "mode": "worker",
+                  "worker_available": bool(worker and worker["healthy"])}
+    else:
+        status = await ProcessMonitor().get_status()
+    return {"status": status, "timestamp": datetime.utcnow().isoformat()}
+
+
+@app.post("/internal/web/v1/system/process-monitor/cleanup")
+async def web_process_cleanup(payload: EmptyRequest, request: Request):
+    await _web_backend_ready(request)
+    raise HTTPException(status_code=409, detail="Browser process cleanup is owned by the Go collector")
+
+
+@app.get("/internal/web/v1/system/info")
+async def web_system_info(request: Request):
+    await _web_backend_ready(request)
+    import shutil, subprocess, sys
+    from datetime import datetime
+    try:
+        git = subprocess.check_output(["git", "rev-parse", "--short", "HEAD"], cwd=".",
+                                      stderr=subprocess.DEVNULL, timeout=2).decode().strip()
+    except Exception:
+        git = "unknown"
+    disk = shutil.disk_usage(".")
+    return {"python_version": sys.version, "git_commit": git,
+            "disk_usage": {"total": disk.total, "used": disk.used, "free": disk.free},
+            "timestamp": datetime.utcnow().isoformat()}
+
+
+@app.post("/internal/web/v1/migrations/run")
+async def web_run_migrations(payload: EmptyRequest, request: Request):
+    await _web_backend_ready(request)
+    from datetime import datetime
+    from .migrate import run_migrations
+    result = await run_migrations()
+    return {"message": "Migrations completed", "result": result,
+            "timestamp": datetime.utcnow().isoformat()}
 
 
 def _article_ai_auth(request: Request) -> None:

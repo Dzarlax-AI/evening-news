@@ -1,0 +1,26 @@
+{
+  "fixture_version": 1,
+  "environment": "synthetic import settings; ASGI without lifespan, database, or network",
+  "responses": [
+    {"request": {"method": "GET", "path": "/health"}, "status": 200, "json": {"status": "healthy"}},
+    {"request": {"method": "GET", "path": "/api/v1/sources", "auth": "anonymous"}, "status": 401, "json": {"detail": "Invalid or missing credentials"}, "headers": {"www-authenticate": "Bearer"}},
+    {"request": {"method": "GET", "path": "/admin/", "auth": "anonymous"}, "status": 401, "json": {"detail": "Invalid credentials"}, "headers": {"www-authenticate": "Basic"}},
+    {"request": {"method": "GET", "path": "/admin/", "auth": "valid-basic"}, "status": 200, "content_type_prefix": "text/html", "headers_contains": {"set-cookie": ["admin_token=", "httponly", "samesite=lax", "path=/"]}},
+    {"request": {"method": "GET", "path": "/news"}, "status": 301, "headers": {"location": "/"}},
+    {"request": {"method": "GET", "path": "/health/"}, "status": 404},
+    {"request": {"method": "POST", "path": "/auth/login", "auth": "anonymous"}, "status": 401, "json": {"detail": "Not authenticated"}},
+    {"request": {"method": "POST", "path": "/auth/login", "auth": "valid-basic"}, "status": 500, "body": "Internal Server Error", "known_legacy_defect": "authenticate_admin_basic returns str; login dereferences credentials.username", "migration_allowlist": {"desired": "200 bearer TokenResponse with expiring access token; no cookie"}},
+    {"request": {"method": "GET", "path": "/auth/me", "auth": "anonymous"}, "status": 401, "json": {"detail": "Invalid or missing credentials"}, "headers": {"www-authenticate": "Bearer"}},
+    {"request": {"method": "GET", "path": "/auth/me", "auth": "valid-bearer-admin"}, "status": 200, "json_shape": {"username": "admin", "level": "admin", "expires_at": "ISO-8601 UTC string"}},
+    {"request": {"method": "GET", "path": "/auth/me", "auth": "valid-admin-cookie"}, "status": 200, "json_shape": {"username": "admin", "level": "admin", "expires_at": "ISO-8601 UTC string"}},
+    {"request": {"method": "GET", "path": "/auth/me", "auth": "valid-basic"}, "status": 500, "body": "Internal Server Error", "known_legacy_defect": "Basic fallback payload lacks exp; /auth/me dereferences it", "migration_allowlist": {"desired": "200 user identity with a defined 24-hour expiry"}},
+    {"request": {"method": "GET", "path": "/auth/me", "auth": "expired-bearer"}, "status": 401, "json": {"detail": "Invalid or missing credentials"}, "headers": {"www-authenticate": "Bearer"}},
+    {"request": {"method": "GET", "path": "/api/v1/sources", "auth": "valid-bearer-api-read"}, "status": 403, "json": {"detail": "Admin access required"}},
+    {"request": {"method": "POST", "path": "/auth/logout", "auth": "anonymous"}, "status": 200, "json_shape": {"message": "Logged out successfully. Please discard your token."}}
+  ],
+  "error_contracts": {
+    "http_exception": {"shape": {"detail": "endpoint-specific"}},
+    "validation": {"status": 422, "shape": {"detail": [{"loc": ["body", "field"], "msg": "...", "type": "..."}]}},
+    "uncaught_exception": {"status": 500, "content_type": "text/plain", "body": "Internal Server Error"}
+  }
+}

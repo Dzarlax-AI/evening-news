@@ -82,6 +82,7 @@ class Settings(BaseSettings):
         default=None, repr=False, alias="ARTICLE_PROCESSING_TOKEN"
     )
     article_ai_token: Optional[SecretStr] = Field(default=None, repr=False, alias="ARTICLE_AI_TOKEN")
+    web_backend_token: Optional[SecretStr] = Field(default=None, repr=False, alias="WEB_BACKEND_TOKEN")
     worker_poll_interval_seconds: int = Field(default=1, ge=1, le=10, alias="WORKER_POLL_INTERVAL_SECONDS")
     worker_shutdown_drain_seconds: int = Field(default=20, ge=0, le=120, alias="WORKER_SHUTDOWN_DRAIN_SECONDS")
     worker_job_retention_days: int = Field(default=7, ge=1, le=90, alias="WORKER_JOB_RETENTION_DAYS")

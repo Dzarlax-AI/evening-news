@@ -5,13 +5,9 @@ services:
     environment:
       LOG_LEVEL: DEBUG
       DEVELOPMENT: "true"
-      MAX_WORKERS: "2"
-      NEWS_LIMIT_ENABLED: "true"
-      NEWS_LIMIT_MAX_ARTICLES: "2"
-      NEWS_LIMIT_PER_SOURCE: "2"
     volumes:
-      - ./news_aggregator:/app/news_aggregator:ro
-      - ./web:/app/web:ro
+      - ./go-web/templates:/app/go-web/templates:ro
+      - ./web/static:/app/web/static:ro
 
   executor:
     environment:

@@ -1,0 +1,591 @@
+<div class="filters-sticky" id="filters-sticky" role="toolbar" aria-label="Фильтры новостей">
+  <!-- Mobile: single row of scrollable chips -->
+  <div class="filters-mobile-stack">
+    <div class="chips-row">
+      <div class="chips-container" id="chips-container">
+        <div class="chips-group chips-categories" id="chips-categories" style="display: flex; gap: 6px;">
+          <button class="chip chip-active" data-category="all" onclick="filterByCategory('all')">Все</button>
+        </div>
+        <div class="chips-group chips-sources" id="chips-sources" style="display: none; gap: 6px;">
+          <button class="chip chip-active" data-source="all" onclick="filterBySource('all')">Все</button>
+        </div>
+      </div>
+    </div>
+  </div>
+
+  <!-- Desktop -->
+  <div class="filters-desktop-inline">
+    <div class="filter-buttons" id="filter-buttons" aria-live="polite" style="display:none;"></div>
+
+    <div class="toolbar-group search-group">
+      <div class="search-container" id="search-container">
+        <div class="search-inline">
+          <svg class="search-inline-icon" width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><circle cx="11" cy="11" r="8"/><path d="m21 21-4.3-4.3"/></svg>
+          <input type="text" class="search-input" id="search-input"
+                 placeholder="Поиск..." autocomplete="off" spellcheck="false">
+        </div>
+        <div class="search-results" id="search-results" style="display: none;">
+          <div class="search-results-content" id="search-results-content"></div>
+        </div>
+      </div>
+    </div>
+
+    <div class="toolbar-group">
+      <div class="since-controls" aria-label="Период">
+        <button class="since-btn" data-since="24" onclick="setSinceHours(24)" aria-pressed="false">24ч</button>
+        <button class="since-btn" data-since="48" onclick="setSinceHours(48)" aria-pressed="false">48ч</button>
+        <button class="since-btn" data-since="168" onclick="setSinceHours(168)" aria-pressed="false">7д</button>
+      </div>
+    </div>
+
+    <div class="toolbar-group">
+      <button class="qt-btn" id="qt-hide-ads-desktop" onclick="toggleHideAds(!window.hideAds)" aria-pressed="true" title="Показать рекламные публикации">
+        <span class="btn-label">Без рекламы</span>
+      </button>
+    </div>
+  </div>
+</div>
+
+<script>
+// One-time init for sticky toolbar: navbar offset and auto-hide on scroll
+(function(){
+  try {
+    const nav = document.querySelector('.navbar');
+    const applyHeight = () => {
+      const h = (nav && nav.offsetHeight) ? nav.offsetHeight : 56;
+      document.documentElement.style.setProperty('--navbar-height', h + 'px');
+    };
+    applyHeight();
+    window.addEventListener('resize', applyHeight);
+  } catch {}
+
+  try {
+    const sticky = document.getElementById('filters-sticky');
+    let lastY = window.scrollY;
+    window.addEventListener('scroll', () => {
+      const y = window.scrollY;
+      const down = y > lastY;
+      const threshold = 20;
+      if (Math.abs(y - lastY) > threshold) {
+        if (down && y > 80) sticky?.classList.add('hide');
+        else sticky?.classList.remove('hide');
+        lastY = y;
+      }
+    }, { passive: true });
+  } catch {}
+})();
+</script>
+
+<script>
+// Search functionality
+let searchTimeout = null;
+let searchResults = [];
+
+function toggleSearch() {
+  const container = document.getElementById('search-container');
+  const toggle = document.getElementById('search-toggle');
+  const expanded = document.getElementById('search-expanded');
+  const input = document.getElementById('search-input');
+
+  if (!container || !input) return;
+
+  if (!toggle || !expanded) {
+    container.classList.add('search-active');
+    input.focus();
+    return;
+  }
+
+  const isExpanded = !toggle.style.display || toggle.style.display === 'block';
+
+  if (isExpanded) {
+    // Expand search
+    toggle.style.display = 'none';
+    expanded.style.display = 'flex';
+    container.classList.add('search-active');
+
+    // Focus input after animation
+    setTimeout(() => {
+      input.focus();
+    }, 150);
+  } else {
+    closeSearch();
+  }
+}
+
+function closeSearch() {
+  const container = document.getElementById('search-container');
+  const toggle = document.getElementById('search-toggle');
+  const expanded = document.getElementById('search-expanded');
+  const results = document.getElementById('search-results');
+  const input = document.getElementById('search-input');
+
+  // Hide elements
+  if (toggle) toggle.style.display = 'block';
+  if (expanded) expanded.style.display = 'none';
+  if (results) results.style.display = 'none';
+  if (container) container.classList.remove('search-active');
+
+  // Clear input
+  if (input) input.value = '';
+
+  // Clear any pending search
+  if (searchTimeout) {
+    clearTimeout(searchTimeout);
+    searchTimeout = null;
+  }
+}
+
+function performSearch() {
+  const input = document.getElementById('search-input');
+  if (!input) return;
+  const query = input.value.trim();
+
+  if (query.length >= 2) {
+    window.location.href = `/search?q=${encodeURIComponent(query)}`;
+  } else {
+    showSearchError('Поисковый запрос должен содержать минимум 2 символа');
+  }
+}
+
+function performLiveSearch(query) {
+  if (!query || query.length < 2) {
+    hideSearchResults();
+    return;
+  }
+
+  // Clear previous timeout
+  if (searchTimeout) {
+    clearTimeout(searchTimeout);
+  }
+
+  // Debounce search
+  searchTimeout = setTimeout(async () => {
+    try {
+      showSearchLoading();
+
+      const response = await fetch(`/api/public/search?q=${encodeURIComponent(query)}&limit=5`, {
+        method: 'GET',
+        headers: {
+          'Content-Type': 'application/json'
+        }
+      });
+
+      if (response.ok) {
+        const data = await response.json();
+        showSearchResults(data.articles || []);
+      } else {
+        showSearchError('Ошибка поиска');
+      }
+    } catch (error) {
+      console.error('Search error:', error);
+      showSearchError('Ошибка соединения');
+    }
+  }, 300);
+}
+
+function showSearchResults(articles) {
+  const results = document.getElementById('search-results');
+  const content = document.getElementById('search-results-content');
+  if (!results || !content) return;
+
+  if (!articles || articles.length === 0) {
+    content.innerHTML = '<div class="search-no-results">Ничего не найдено</div>';
+  } else {
+    content.innerHTML = articles.map(article => `
+      <div class="search-result-item" onclick="openArticleFromSearch(${article.id})">
+        <div class="search-result-title">${escapeHtml(article.title)}</div>
+        <div class="search-result-meta">
+          <span class="search-result-source">${escapeHtml(article.source_name || 'Неизвестный источник')}</span>
+          <span class="search-result-date">${formatSearchDate(article.published_at)}</span>
+        </div>
+      </div>
+    `).join('');
+  }
+
+  results.style.display = 'block';
+}
+
+function showSearchLoading() {
+  const results = document.getElementById('search-results');
+  const content = document.getElementById('search-results-content');
+  if (!results || !content) return;
+
+  content.innerHTML = '<div class="search-loading">⏳ Поиск...</div>';
+  results.style.display = 'block';
+}
+
+function showSearchError(message) {
+  const results = document.getElementById('search-results');
+  const content = document.getElementById('search-results-content');
+  if (!results || !content) return;
+
+  content.innerHTML = `<div class="search-error">❌ ${message}</div>`;
+  results.style.display = 'block';
+}
+
+function hideSearchResults() {
+  const results = document.getElementById('search-results');
+  if (results) results.style.display = 'none';
+}
+
+function openArticleFromSearch(articleId) {
+  // Close search first
+  closeSearch();
+
+  // Open article modal if available
+  if (typeof window.openArticleModal === 'function') {
+    window.openArticleModal(articleId);
+  } else {
+    // Fallback to article page
+    window.location.href = `/article/${articleId}`;
+  }
+}
+
+function formatSearchDate(dateString) {
+  if (!dateString) return '';
+
+  try {
+    const date = new Date(dateString);
+    const now = new Date();
+    const diffHours = Math.floor((now - date) / (1000 * 60 * 60));
+
+    if (diffHours < 1) return 'только что';
+    if (diffHours < 24) return `${diffHours}ч назад`;
+
+    const diffDays = Math.floor(diffHours / 24);
+    if (diffDays < 7) return `${diffDays}д назад`;
+
+    return date.toLocaleDateString('ru-RU');
+  } catch (e) {
+    return '';
+  }
+}
+
+function escapeHtml(text) {
+  if (!text) return '';
+  const div = document.createElement('div');
+  div.textContent = text;
+  return div.innerHTML;
+}
+
+// Setup search input events
+document.addEventListener('DOMContentLoaded', function() {
+  const input = document.getElementById('search-input');
+  if (input) {
+    // Live search on input
+    input.addEventListener('input', function(e) {
+      performLiveSearch(e.target.value);
+    });
+
+    // Submit on Enter
+    input.addEventListener('keydown', function(e) {
+      if (e.key === 'Enter') {
+        e.preventDefault();
+        performSearch();
+      } else if (e.key === 'Escape') {
+        closeSearch();
+      }
+    });
+  }
+
+  // Close search when clicking outside
+  document.addEventListener('click', function(e) {
+    const container = document.getElementById('search-container');
+    if (container && !container.contains(e.target)) {
+      closeSearch();
+    }
+  });
+
+  // Mobile search input
+  const mobileInput = document.getElementById('search-input-mobile');
+  if (mobileInput) {
+    mobileInput.addEventListener('keydown', function(e) {
+      if (e.key === 'Enter') {
+        e.preventDefault();
+        const query = e.target.value.trim();
+        if (query.length >= 2) {
+          window.location.href = `/search?q=${encodeURIComponent(query)}`;
+        }
+      }
+    });
+  }
+
+  // Time filter chips activation
+  document.querySelectorAll('.chip-time').forEach(chip => {
+    chip.addEventListener('click', function() {
+      // Remove active state from all time chips
+      document.querySelectorAll('.chip-time').forEach(c => {
+        c.setAttribute('aria-pressed', 'false');
+      });
+      // Set active state on clicked chip
+      this.setAttribute('aria-pressed', 'true');
+    });
+  });
+
+  // Initialize Hide Ads chip state
+  const hideAdsChip = document.getElementById('chip-hide-ads');
+  if (hideAdsChip && typeof window.hideAds !== 'undefined') {
+    hideAdsChip.setAttribute('aria-pressed', window.hideAds ? 'true' : 'false');
+  }
+
+  // Initialize category and source chips
+  populateCategoryChips();
+  populateSourceChips();
+});
+
+// Category filter function (for chips) — in-page, no redirect
+function filterByCategory(category) {
+  document.querySelectorAll('.chip[data-category]').forEach(chip => {
+    chip.classList.remove('chip-active');
+  });
+  const activeChip = document.querySelector(`.chip[data-category="${category}"]`);
+  if (activeChip) activeChip.classList.add('chip-active');
+
+  // Use the same in-page filter as sidebar
+  if (typeof window.selectSingleCategory === 'function') {
+    window.selectSingleCategory(category);
+  }
+}
+
+// Source filter function (for chips) — in-page, no redirect
+function filterBySource(source) {
+  document.querySelectorAll('.chip[data-source]').forEach(chip => {
+    chip.classList.remove('chip-active');
+  });
+  const activeChip = document.querySelector(`.chip[data-source="${source}"]`);
+  if (activeChip) activeChip.classList.add('chip-active');
+
+  if (typeof window.selectSingleSource === 'function') {
+    window.selectSingleSource(source);
+  }
+}
+
+// Tab switching function for segmented control
+function switchTab(tab) {
+  // Update segment buttons
+  document.querySelectorAll('.segment').forEach(segment => {
+    segment.classList.remove('segment-active');
+    if (segment.getAttribute('data-tab') === tab) {
+      segment.classList.add('segment-active');
+    }
+  });
+
+  // Show/hide chip groups
+  const categoriesGroup = document.getElementById('chips-categories');
+  const sourcesGroup = document.getElementById('chips-sources');
+
+  if (tab === 'categories') {
+    categoriesGroup.style.display = 'flex';
+    sourcesGroup.style.display = 'none';
+  } else if (tab === 'sources') {
+    categoriesGroup.style.display = 'none';
+    sourcesGroup.style.display = 'flex';
+  }
+}
+
+// Fetch and populate category chips
+async function populateCategoryChips() {
+  try {
+    const response = await fetch('/api/public/categories/config');
+    const data = await response.json();
+
+    const container = document.getElementById('chips-categories');
+    if (!container || !data.categories) return;
+
+    // Clear existing chips (keep "Все")
+    const allChip = container.querySelector('.chip[data-category="all"]');
+    container.innerHTML = '';
+    if (allChip) {
+      container.appendChild(allChip);
+    }
+
+    // Add category chips
+    Object.entries(data.categories).forEach(([key, value]) => {
+      if (key === 'all') return; // Skip "all" as it's already added
+
+      const chip = document.createElement('button');
+      chip.className = 'chip';
+      chip.setAttribute('data-category', key);
+      chip.onclick = () => filterByCategory(key);
+      chip.textContent = value.name || key;
+
+      container.appendChild(chip);
+    });
+  } catch (error) {
+    console.error('Failed to load categories:', error);
+  }
+}
+
+// Fetch and populate source chips
+async function populateSourceChips() {
+  try {
+    const response = await fetch('/api/public/sources');
+    const data = await response.json();
+
+    const container = document.getElementById('chips-sources');
+    if (!container || !data.source_names) return;
+
+    // Clear existing chips (keep "Все источники")
+    const allChip = container.querySelector('.chip[data-source="all"]');
+    container.innerHTML = '';
+    if (allChip) {
+      container.appendChild(allChip);
+    }
+
+    // Add source chips (sorted by count)
+    const sortedSources = Object.entries(data.sources)
+      .sort((a, b) => b[1] - a[1]) // Sort by count descending
+      .slice(0, 10); // Limit to top 10 sources
+
+    sortedSources.forEach(([sourceId, count]) => {
+      const sourceName = data.source_names[sourceId];
+      if (!sourceName) return;
+
+      const chip = document.createElement('button');
+      chip.className = 'chip';
+      chip.setAttribute('data-source', sourceId);
+      chip.onclick = () => filterBySource(sourceId);
+      chip.innerHTML = `${sourceName} <span style="opacity: 0.6; font-size: 12px; margin-left: 4px;">(${count})</span>`;
+
+      container.appendChild(chip);
+    });
+  } catch (error) {
+    console.error('Failed to load sources:', error);
+  }
+}
+</script>
+
+<style>
+/* ---- Search (Desktop) ---- */
+.search-container { position: relative; display: flex; align-items: center; }
+.search-inline {
+    display: flex; align-items: center; background: var(--surface);
+    border: 1px solid var(--border); border-radius: var(--radius);
+    padding: 0 12px; width: 220px; transition: border-color var(--transition);
+}
+.search-inline:focus-within { border-color: var(--accent); }
+.search-inline-icon { color: var(--text-tertiary); flex-shrink: 0; }
+.search-input {
+    flex: 1; border: none; outline: none; padding: 7px 8px;
+    font-size: 0.85rem; background: transparent; color: var(--text);
+    font-family: var(--font);
+}
+.search-input::placeholder { color: var(--text-tertiary); }
+
+/* Search results dropdown */
+.search-results {
+    position: absolute; top: 100%; left: 0; right: 0;
+    background: var(--surface); border: 1px solid var(--border);
+    border-radius: var(--radius); box-shadow: var(--shadow-lg);
+    z-index: 1000; margin-top: 4px; max-height: 400px; overflow-y: auto;
+}
+.search-results-content { padding: 8px; }
+.search-result-item {
+    padding: 12px; border-radius: var(--radius-sm); cursor: pointer;
+    transition: background var(--transition); border-bottom: 1px solid var(--border);
+}
+.search-result-item:last-child { border-bottom: none; }
+.search-result-item:hover { background: var(--surface-2); }
+.search-result-title {
+    font-weight: 600; color: var(--text); font-size: 0.9rem;
+    line-height: 1.4; margin-bottom: 4px;
+    display: -webkit-box; -webkit-line-clamp: 2; -webkit-box-orient: vertical; overflow: hidden;
+}
+.search-result-meta {
+    display: flex; justify-content: space-between; align-items: center;
+    font-size: 0.75rem; color: var(--text-tertiary);
+}
+.search-result-source { font-weight: 500; color: var(--text-secondary); }
+.search-result-date { color: var(--text-tertiary); }
+.search-loading, .search-error, .search-no-results {
+    padding: 16px; text-align: center; color: var(--text-tertiary); font-size: 0.9rem;
+}
+.search-error { color: var(--danger); }
+
+/* ---- Mobile layout ---- */
+.filters-mobile-stack {
+    display: flex; flex-direction: column; gap: 0;
+    padding: 8px 0; background: transparent;
+}
+.filters-desktop-inline { display: none; }
+.search-row { width: 100%; }
+
+/* Segmented control */
+.segmented-control-row { width: 100%; }
+.segmented-control {
+    display: flex; padding: 2px; background: var(--surface-2);
+    border-radius: var(--radius); gap: 2px;
+}
+.segment {
+    flex: 1; padding: 8px 16px; background: transparent; border: none;
+    border-radius: calc(var(--radius) - 2px); font-size: 0.9rem; font-weight: 500;
+    color: var(--text-tertiary); cursor: pointer; font-family: var(--font);
+    transition: all var(--transition); -webkit-tap-highlight-color: transparent;
+}
+.segment:active { transform: scale(0.98); }
+.segment-active {
+    background: var(--surface); color: var(--text);
+    box-shadow: var(--shadow); font-weight: 600;
+}
+
+/* Search input (mobile) */
+.search-input-wrapper { position: relative; width: 100%; display: flex; align-items: center; }
+.search-icon-svg { position: absolute; left: 12px; color: var(--text-tertiary); pointer-events: none; }
+.search-input-mobile {
+    width: 100%; padding: 10px 12px 10px 40px;
+    background: var(--surface-2); border: 1px solid var(--border);
+    border-radius: var(--radius); font-size: 1rem; color: var(--text);
+    font-family: var(--font); outline: none; transition: all var(--transition);
+    -webkit-appearance: none;
+}
+.search-input-mobile:focus {
+    background: var(--surface); border-color: var(--accent);
+    box-shadow: 0 0 0 2px rgba(24, 24, 27, 0.08);
+}
+[dark-mode] .search-input-mobile:focus {
+    box-shadow: 0 0 0 2px rgba(245, 245, 245, 0.08);
+}
+.search-input-mobile::placeholder { color: var(--text-tertiary); }
+
+/* Chips */
+.chips-row {
+    width: 100%; overflow-x: auto; overflow-y: hidden;
+    -webkit-overflow-scrolling: touch; scrollbar-width: none;
+}
+.chips-row::-webkit-scrollbar { display: none; }
+.chips-container { display: flex; gap: 8px; padding-bottom: 4px; white-space: nowrap; width: 100%; }
+.chips-group { display: flex; gap: 8px; white-space: nowrap; width: 100%; }
+.chip {
+    display: inline-flex; align-items: center;
+    padding: 5px 12px; background: transparent; border: 1px solid var(--border);
+    border-radius: 9999px; font-size: 0.8rem; font-weight: 500;
+    color: var(--text-tertiary); cursor: pointer; font-family: var(--font);
+    transition: all var(--transition); flex-shrink: 0;
+    -webkit-tap-highlight-color: transparent;
+}
+.chip:active { transform: scale(0.95); }
+.chip-active { background: var(--accent); color: var(--bg); border-color: var(--accent); }
+.chip-time { min-width: 48px; justify-content: center; }
+.chip-time[aria-pressed="true"] { background: var(--accent); color: var(--bg); border-color: var(--accent); }
+.chip-toggle { background: var(--surface-2); }
+.chip-toggle[aria-pressed="true"] { background: var(--good); color: #fff; border-color: var(--good); }
+.chip-separator { width: 1px; height: 20px; background: var(--border); align-self: center; flex-shrink: 0; }
+
+/* Breakpoints */
+@media (min-width: 993px) {
+    .filters-mobile-stack { display: none; }
+    .segmented-control-row { display: none; }
+    .filters-desktop-inline { display: flex; align-items: center; gap: 12px; padding: 10px 0; }
+}
+@media (max-width: 768px) {
+    .filters-sticky { padding: 0 !important; margin: 0 !important; width: 100% !important; }
+    .filters-mobile-stack { padding: 6px 0 !important; width: 100% !important; }
+    .chips-row { padding: 0 12px; }
+}
+@media (max-width: 480px) {
+    .search-container.search-active {
+        position: fixed; top: 10px; left: 10px; right: 10px; z-index: 1001; min-width: auto;
+    }
+    .search-expanded { min-width: auto; width: 100%; }
+}
+</style>

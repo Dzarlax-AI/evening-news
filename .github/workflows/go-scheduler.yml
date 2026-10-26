@@ -91,6 +91,8 @@ jobs:
           python-version: '3.12'
       - name: Build local application fixture image
         run: docker build -f docker/Dockerfile -t evening-news-scheduler-app:fixture .
+      - name: Build local Go web fixture image
+        run: docker build -f go-web/Dockerfile -t evening-news-web:fixture .
       - name: Build local scheduler fixture image
         run: |
           SCHEDULER_FIXTURE_BUILD_ID=$(python -c "import runpy; ns=runpy.run_path('scripts/run_go_scheduler_fixture_gate.py'); print(ns['DockerGate'].scheduler_source_hash(None))")
@@ -105,6 +107,7 @@ jobs:
         run: >-
           python scripts/run_go_scheduler_fixture_gate.py
           --app-image evening-news-scheduler-app:fixture
+          --web-image evening-news-web:fixture
           --scheduler-image evening-news-scheduler:fixture
           --worker-image evening-news-job-worker:fixture
           --processing-image evening-news-article-processing:fixture

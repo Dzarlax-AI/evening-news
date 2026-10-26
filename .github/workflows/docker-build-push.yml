@@ -162,6 +162,8 @@ jobs:
           python-version: '3.12'
       - name: Build local fixture application image
         run: docker build -f docker/Dockerfile -t evening-news-job-app:fixture .
+      - name: Build local Go web fixture image
+        run: docker build -f go-web/Dockerfile -t evening-news-web:fixture .
       - name: Build local Go job worker image
         run: docker build -f go-worker/Dockerfile -t evening-news-job-worker:fixture .
       - name: Build local Go article processing image
@@ -170,6 +172,7 @@ jobs:
         run: >-
           python scripts/run_go_job_worker_fixture_gate.py
           --image evening-news-job-app:fixture
+          --web-image evening-news-web:fixture
           --worker-image evening-news-job-worker:fixture
           --processing-image evening-news-article-processing:fixture
           --output-dir artifacts/go-job-worker-fixture

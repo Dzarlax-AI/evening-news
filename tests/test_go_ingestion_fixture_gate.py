@@ -1,6 +1,7 @@
 """Fast guards for the private deployment template and real fixture gate."""
 
 from pathlib import Path
+import importlib.util
 import re
 import sys
 
@@ -121,6 +122,38 @@ def test_unpublished_exposed_ports_are_not_host_bindings():
     assert has_host_port_binding({"8000/tcp": []}) is False
     assert has_host_port_binding({"8000/tcp": [{"HostIp": "0.0.0.0", "HostPort": "8080"}]}) is True
     assert has_host_port_binding({"8000/tcp": [{"HostIp": "127.0.0.1", "HostPort": ""}]}) is False
+
+
+def test_go_web_probe_uses_fixture_network_web_alias(monkeypatch):
+    """The probe runs in its own container, so loopback is not the web service."""
+    monkeypatch.setenv("GATE_WEB_URL", "http://fixture-web:8000")
+    spec = importlib.util.spec_from_file_location(
+        "go_ingestion_gate_probe", ROOT / "tests/fixtures/go-ingestion/gate_probe.py"
+    )
+    probe = importlib.util.module_from_spec(spec)
+    spec.loader.exec_module(probe)
+
+    requested = []
+
+    class Response:
+        status = 200
+
+        def __enter__(self):
+            return self
+
+        def __exit__(self, *_args):
+            return False
+
+        def read(self):
+            return b'{"ok":true}'
+
+    def fake_urlopen(request, timeout):
+        requested.append((request.full_url, timeout))
+        return Response()
+
+    monkeypatch.setattr(probe, "urlopen", fake_urlopen)
+    assert probe.request("GET", "/health") == (200, {"ok": True})
+    assert requested == [("http://fixture-web:8000/health", 5)]
 
 
 def test_selector_learning_fixture_requires_learned_selectors_and_same_snapshot_reparse():

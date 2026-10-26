@@ -4,9 +4,10 @@ The Go job worker gate exercises the durable News queue and private Python execu
 
 ```sh
 python3 scripts/run_go_job_worker_fixture_gate.py \
-  --image evening-news-app:test \
-  --worker-image evening-news-job-worker:test \
-  --processing-image evening-news-article-processing:test \
+  --image evening-news-web-app:components-20261026 \
+  --web-image evening-news-web:components-20261026 \
+  --worker-image evening-news-job-worker:web-components-20261026 \
+  --processing-image evening-news-processing:web-components-20261026 \
   --output-dir artifacts/go-job-worker
 ```
 
@@ -15,10 +16,12 @@ RSS, Telegram, and Page Monitor responses:
 
 ```sh
 python3 scripts/run_go_ingestion_fixture_gate.py \
-  --app-image evening-news-app:test \
-  --worker-image evening-news-job-worker:test \
-  --collector-image evening-news-collector:test \
-  --ingestion-image evening-news-ingestion:test \
+  --app-image evening-news-web-app:components-20261026 \
+  --web-image evening-news-web:components-20261026 \
+  --worker-image evening-news-job-worker:web-components-20261026 \
+  --collector-image evening-news-collector:web-components-20261026 \
+  --ingestion-image evening-news-ingestion:web-components-20261026 \
+  --processing-image evening-news-processing:web-components-20261026 \
   --output-dir artifacts/go-ingestion-fixture
 ```
 
@@ -28,4 +31,6 @@ synthetic article to exercise Go processing, its private Python AI callback, and
 real Go collection and persistence. They do not publish ports or use real sites,
 credentials, AI providers, Telegram sends, or production services. The shared `run_background_worker_fixture_gate.py`
 module still provides Docker setup and cleanup helpers for these gates; its
-retired Python worker CLI is not a supported test command.
+older Python-public-web implementation is no longer run. Its CLI now forwards
+to the Go web and Go job-worker acceptance gate; pass the same app, web,
+worker, and processing image tags shown above.

@@ -1,0 +1,77 @@
+{{define "admin-base"}}
+<!DOCTYPE html>
+<html lang="ru">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>{{template "page-title" .}} — Evening News</title>
+    <link href="/static/css/dzarlax.css" rel="stylesheet">
+    <link href="/static/css/main.css" rel="stylesheet">
+    <link href="/static/css/admin.css" rel="stylesheet">
+    <script src="/static/js/main.js" defer></script>
+    {{template "admin-extra-css" .}}
+</head>
+<body class="admin-body">
+<div class="admin-shell">
+
+    <!-- ===================== SIDEBAR ===================== -->
+    <aside class="admin-sidenav">
+        <a href="/admin" class="sidenav-brand">
+            <span class="brand-icon">📰</span>
+            <span class="brand-text">
+                Evening News
+                <span class="brand-sub">Admin</span>
+            </span>
+        </a>
+
+        <nav class="sidenav-nav">
+            <a href="/admin" class="sidenav-link {{if eq .ActiveMenu "dashboard"}}active{{end}}">
+                <span class="nav-icon">📊</span>
+                <span>Дашборд</span>
+            </a>
+            <a href="/admin/sources" class="sidenav-link {{if eq .ActiveMenu "sources"}}active{{end}}">
+                <span class="nav-icon">📰</span>
+                <span>Источники</span>
+            </a>
+            <a href="/admin/summaries" class="sidenav-link {{if eq .ActiveMenu "summaries"}}active{{end}}">
+                <span class="nav-icon">📄</span>
+                <span>Сводки</span>
+            </a>
+            <a href="/admin/categories" class="sidenav-link {{if eq .ActiveMenu "categories"}}active{{end}}">
+                <span class="nav-icon">🏷️</span>
+                <span>Категории</span>
+            </a>
+            <a href="/admin/stats" class="sidenav-link {{if eq .ActiveMenu "stats"}}active{{end}}">
+                <span class="nav-icon">📈</span>
+                <span>Статистика</span>
+            </a>
+            <a href="/admin/settings" class="sidenav-link {{if eq .ActiveMenu "settings"}}active{{end}}">
+                <span class="nav-icon">&#9881;&#65039;</span>
+                <span>Настройки</span>
+            </a>
+        </nav>
+
+        <div class="sidenav-bottom">
+            <a href="/" target="_blank" class="sidenav-link muted">
+                <span class="nav-icon">↗</span>
+                <span>На сайт</span>
+            </a>
+        </div>
+    </aside>
+
+    <!-- ==================== CONTENT ==================== -->
+    <div class="admin-content-wrap">
+        <div class="admin-main">
+            {{template "content" .}}
+        </div>
+    </div>
+
+</div>
+{{template "admin-extra-js" .}}
+</body>
+</html>
+{{end}}
+
+{{define "page-title"}}Админка{{end}}
+{{define "admin-extra-css"}}{{end}}
+{{define "admin-extra-js"}}{{end}}

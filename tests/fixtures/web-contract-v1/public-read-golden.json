@@ -1,0 +1,75 @@
+{
+  "GET /api/public/feed?limit=4&offset=2": {
+    "articles": [
+      {
+        "id": 42,
+        "article_id": 42,
+        "title": "Тестовый заголовок",
+        "summary": "Короткий пересказ",
+        "image_url": null,
+        "media_files": [],
+        "url": "https://example.test/story/42",
+        "domain": "example.test",
+        "category": "Технологии",
+        "categories": [
+          {"name": "tech", "display_name": "Технологии", "confidence": 0.91, "color": "#123456"}
+        ],
+        "ai_categories": [
+          {"ai_category": "Technology", "confidence": 0.91}
+        ],
+        "published_at": "2026-10-26T09:00:00",
+        "fetched_at": "2026-10-26T09:05:00",
+        "is_advertisement": false,
+        "ad_confidence": 0.0,
+        "ad_type": null,
+        "ad_reasoning": null,
+        "source_id": 7,
+        "source_name": "Fixture source",
+        "content": "Исходный текст"
+      }
+    ],
+    "total": 1,
+    "limit": 4,
+    "offset": 2
+  },
+  "GET /api/public/article/42": {
+    "id": 42,
+    "article_id": 42,
+    "title": "Тестовый заголовок",
+    "summary": "Короткий пересказ",
+    "image_url": null,
+    "media_files": [],
+    "url": "https://example.test/story/42",
+    "domain": "example.test",
+    "category": "Технологии",
+    "categories": [
+      {"name": "tech", "display_name": "Технологии", "confidence": 0.91, "color": "#123456"}
+    ],
+    "ai_categories": [
+      {"ai_category": "Technology", "confidence": 0.91}
+    ],
+    "published_at": "2026-10-26T09:00:00",
+    "fetched_at": "2026-10-26T09:05:00",
+    "is_advertisement": false,
+    "ad_confidence": 0.0,
+    "ad_type": null,
+    "ad_reasoning": null,
+    "source_id": 7,
+    "source_name": "Fixture source",
+    "content": "Полный исходный текст"
+  },
+  "GET /api/public/categories/config": {
+    "categories": {"tech": {"name": "Технологии", "color": "#123456"}}
+  },
+  "GET /api/public/categories?since_hours=24": {
+    "categories": {"all": 1, "tech": 1},
+    "total": 1,
+    "filters": {"since_hours": 24, "hide_ads": true}
+  },
+  "GET /api/public/sources?hide_ads=false": {
+    "sources": {"7": 1},
+    "source_names": {"7": "Fixture source"},
+    "total": 1,
+    "filters": {"since_hours": null, "hide_ads": false}
+  }
+}

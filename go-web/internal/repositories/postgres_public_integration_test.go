@@ -1,0 +1,161 @@
+package repositories
+
+import (
+	"context"
+	"crypto/rand"
+	"encoding/hex"
+	"net/url"
+	"os"
+	"testing"
+	"time"
+
+	"github.com/jackc/pgx/v5/pgxpool"
+)
+
+// This integration fixture deliberately uses an isolated schema and refuses
+// non-loopback hosts. It exercises the public read SQL against PostgreSQL 17.
+func TestPostgresPublicReaderMultiCategoryAndReadPaths(t *testing.T) {
+	dsn := os.Getenv("TEST_DATABASE_URL")
+	if dsn == "" {
+		t.Skip("TEST_DATABASE_URL is not set")
+	}
+	parsed, err := url.Parse(dsn)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if parsed.Hostname() != "127.0.0.1" && parsed.Hostname() != "localhost" {
+		t.Fatalf("refusing non-loopback TEST_DATABASE_URL host %q", parsed.Hostname())
+	}
+	ctx, cancel := context.WithTimeout(context.Background(), 20*time.Second)
+	defer cancel()
+	adminCfg, err := pgxpool.ParseConfig(dsn)
+	if err != nil {
+		t.Fatal(err)
+	}
+	admin, err := pgxpool.NewWithConfig(ctx, adminCfg)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer admin.Close()
+	var random [6]byte
+	if _, err := rand.Read(random[:]); err != nil {
+		t.Fatal(err)
+	}
+	schema := "web_public_" + hex.EncodeToString(random[:])
+	if _, err = admin.Exec(ctx, `CREATE SCHEMA `+schema); err != nil {
+		t.Fatal(err)
+	}
+	defer func() {
+		dropCtx, dropCancel := context.WithTimeout(context.Background(), 5*time.Second)
+		defer dropCancel()
+		_, _ = admin.Exec(dropCtx, `DROP SCHEMA `+schema+` CASCADE`)
+	}()
+	ddl := []string{
+		`CREATE TABLE ` + schema + `.sources(id bigint PRIMARY KEY,name text NOT NULL,enabled boolean NOT NULL DEFAULT true)`,
+		`CREATE TABLE ` + schema + `.categories(id bigint PRIMARY KEY,name text NOT NULL,display_name text NOT NULL,color text NOT NULL)`,
+		`CREATE TABLE ` + schema + `.articles(id bigint PRIMARY KEY,source_id bigint,title text NOT NULL,summary text,content text,url text NOT NULL,image_url text,media_files jsonb,published_at timestamp,fetched_at timestamp,is_advertisement boolean,ad_confidence real,ad_type text,ad_reasoning text,ad_markers jsonb,processing_state text,ad_processed boolean)`,
+		`CREATE TABLE ` + schema + `.article_categories(id bigint PRIMARY KEY,article_id bigint NOT NULL,category_id bigint NOT NULL,confidence real,ai_category text)`,
+		`CREATE TABLE ` + schema + `.daily_summaries(id bigint PRIMARY KEY,date date NOT NULL,category text NOT NULL,summary_text text NOT NULL,articles_count integer NOT NULL)`,
+	}
+	for _, statement := range ddl {
+		if _, err = admin.Exec(ctx, statement); err != nil {
+			t.Fatal(err)
+		}
+	}
+	seed := []string{
+		`INSERT INTO ` + schema + `.sources(id,name,enabled) VALUES(7,'Fixture source',true)`,
+		`INSERT INTO ` + schema + `.categories(id,name,display_name,color) VALUES(1,'tech','Технологии','#123456'),(2,'science','Наука','#abcdef')`,
+		`INSERT INTO ` + schema + `.articles(id,source_id,title,summary,content,url,image_url,media_files,published_at,fetched_at,is_advertisement,ad_confidence,processing_state,ad_processed,ad_markers) VALUES(42,7,'Тестовый заголовок','Краткое содержание: Короткий пересказ','Полный исходный текст','https://example.test/story/42',NULL,'[]','2026-10-26 09:00:00','2026-10-26 09:05:00',false,0,'completed',false,'[]')`,
+		// Python's DataService uses relationship iteration order for primary category.
+		// The deliberately lower confidence on the first link catches accidental
+		// reordering by confidence in the Go projection.
+		`INSERT INTO ` + schema + `.article_categories(id,article_id,category_id,confidence,ai_category) VALUES(1,42,1,0.2,'Technology'),(2,42,2,0.95,'Science')`,
+		`INSERT INTO ` + schema + `.daily_summaries(id,date,category,summary_text,articles_count) VALUES(1,'2026-10-26','Технологии','Новости дня',1)`,
+	}
+	for _, statement := range seed {
+		if _, err = admin.Exec(ctx, statement); err != nil {
+			t.Fatal(err)
+		}
+	}
+	readerCfg, err := pgxpool.ParseConfig(dsn)
+	if err != nil {
+		t.Fatal(err)
+	}
+	readerCfg.ConnConfig.RuntimeParams["search_path"] = schema
+	pool, err := pgxpool.NewWithConfig(ctx, readerCfg)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer pool.Close()
+	reader := &Postgres{pool: pool}
+	feed, err := reader.Feed(ctx, FeedQuery{Limit: 20, HideAds: true})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if feed.Total != 1 || len(feed.Articles) != 1 {
+		t.Fatalf("unexpected feed: %+v", feed)
+	}
+	if got := feed.Articles[0]["category"]; got != "Технологии" {
+		t.Fatalf("primary category order changed: %v", got)
+	}
+	categories, ok := feed.Articles[0]["categories"].([]any)
+	if !ok || len(categories) != 2 {
+		t.Fatalf("multi-category values lost: %#v", feed.Articles[0]["categories"])
+	}
+	article, err := reader.Article(ctx, 42, false)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if article == nil || article["content"] != "Полный исходный текст" {
+		t.Fatalf("article mapping differs: %#v", article)
+	}
+	search, err := reader.Search(ctx, SearchQuery{Query: "Тестовый", Limit: 20, Sort: "relevance", HideAds: true})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if search["results_count"] != 1 {
+		t.Fatalf("search result missing: %#v", search)
+	}
+	config, err := reader.CategoriesConfig(ctx)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, ok := config["categories"].(map[string]any)["tech"]; !ok {
+		t.Fatalf("category config missing: %#v", config)
+	}
+	stats, err := reader.Categories(ctx, StatsQuery{HideAds: true})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if stats["total"] != 1 {
+		t.Fatalf("category totals mismatch: %#v", stats)
+	}
+	sourceStats, err := reader.Sources(ctx, StatsQuery{HideAds: true})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if sourceStats["total"] != 1 {
+		t.Fatalf("source totals mismatch: %#v", sourceStats)
+	}
+	apiFeed, err := reader.APIFeed(ctx, APIFeedQuery{Limit: 20})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(apiFeed.Items) != 1 {
+		t.Fatalf("API feed missing: %+v", apiFeed)
+	}
+	rss, err := reader.RSS(ctx, 50)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(rss) != 1 {
+		t.Fatalf("RSS result missing: %+v", rss)
+	}
+	digest, err := reader.Digest(ctx, time.Date(2026, 10, 26, 0, 0, 0, 0, time.UTC))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(digest.Summaries) != 1 || len(digest.Categories) != 2 {
+		t.Fatalf("digest mapping mismatch: %+v", digest)
+	}
+}

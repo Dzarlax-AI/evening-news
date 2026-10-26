@@ -2,14 +2,17 @@
 
 import asyncio
 import json
+import os
 import sys
 from urllib.error import HTTPError, URLError
 from urllib.request import Request, urlopen
 
+WEB_BASE_URL = os.environ.get("GATE_WEB_URL", "http://127.0.0.1:8000").rstrip("/")
+
 
 def request(method, path, payload=None):
     data = json.dumps(payload).encode() if payload is not None else None
-    req = Request("http://127.0.0.1:8000" + path, data=data,
+    req = Request(WEB_BASE_URL + path, data=data,
                   headers={"Content-Type": "application/json", "Authorization":
                            "Basic Zml4dHVyZS1hZG1pbjpmaXh0dXJlLWFkbWluLXBhc3N3b3Jk"}, method=method)
     try:
