@@ -6,7 +6,7 @@ import threading
 from urllib.parse import urlsplit
 
 LOCK = threading.Lock()
-COUNTERS = {"gemini": 0, "selector_study": 0, "telegram": 0}
+COUNTERS = {"gemini": 0, "selector_study": 0, "telegram": 0, "page_monitor_original_title": 0}
 
 
 class Handler(BaseHTTPRequestHandler):
@@ -60,6 +60,9 @@ class Handler(BaseHTTPRequestHandler):
                     "suggested_config": {"max_articles_per_check": 2},
                 }
             else:
+                if "Learned Selector Gate Story" in prompt:
+                    with LOCK:
+                        COUNTERS["page_monitor_original_title"] += 1
                 result = {
                     "optimized_title": "Synthetic ingestion fixture story",
                     "summary": "A synthetic article was collected and processed inside the isolated fixture.",

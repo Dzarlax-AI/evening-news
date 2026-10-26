@@ -21,6 +21,9 @@ services:
       JWT_SECRET: ${JWT_SECRET:?Set JWT_SECRET}
       ALLOW_CREATE_ALL: "true"
       BACKGROUND_EXECUTION_MODE: worker
+      ARTICLE_AI_TOKEN: ${ARTICLE_AI_TOKEN:?Set ARTICLE_AI_TOKEN}
+      ARTICLE_PROCESSING_URL: http://article-processing:8094
+      ARTICLE_PROCESSING_TOKEN: ${ARTICLE_PROCESSING_TOKEN:?Set ARTICLE_PROCESSING_TOKEN}
       ARTICLE_INGESTION_MODE: go
       ARTICLE_INGESTION_URL: http://article-ingestion:8093
       ARTICLE_INGESTION_TOKEN: ${ARTICLE_INGESTION_TOKEN:?Set ARTICLE_INGESTION_TOKEN}
@@ -108,6 +111,8 @@ services:
         condition: service_healthy
       executor:
         condition: service_healthy
+      article-processing:
+        condition: service_healthy
     restart: unless-stopped
 
   article-ingestion:
@@ -129,6 +134,42 @@ services:
         condition: service_healthy
       extractor:
         condition: service_healthy
+    restart: unless-stopped
+
+  article-processing:
+    build:
+      context: .
+      dockerfile: go-processing/Dockerfile
+    environment:
+      ARTICLE_PROCESSING_LISTEN: ":8094"
+      ARTICLE_PROCESSING_TOKEN: ${ARTICLE_PROCESSING_TOKEN:?Set ARTICLE_PROCESSING_TOKEN}
+      ARTICLE_PROCESSING_DB_MAX_CONNS: "5"
+      DATABASE_URL: postgres://newsuser:${DB_PASSWORD:?Set DB_PASSWORD}@postgres:5432/newsdb
+      ARTICLE_AI_URL: http://executor:8100
+      ARTICLE_AI_TOKEN: ${ARTICLE_AI_TOKEN:?Set ARTICLE_AI_TOKEN}
+      EXTRACTION_SERVICE_URL: http://extractor:8080
+      EXTRACTION_SERVICE_TOKEN: ${EXTRACTION_SERVICE_TOKEN:?Set EXTRACTION_SERVICE_TOKEN}
+      MAX_WORKERS: ${MAX_WORKERS:-5}
+      PROCESSING_BATCH_SIZE: ${PROCESSING_BATCH_SIZE:-25}
+      PROCESSING_MAX_ATTEMPTS: ${PROCESSING_MAX_ATTEMPTS:-3}
+      PROCESSING_RETRY_INITIAL_SECONDS: ${PROCESSING_RETRY_INITIAL_SECONDS:-1800}
+      PROCESSING_RETRY_LATER_SECONDS: ${PROCESSING_RETRY_LATER_SECONDS:-21600}
+      PROCESSING_ATTEMPT_TIMEOUT_SECONDS: ${PROCESSING_ATTEMPT_TIMEOUT_SECONDS:-600}
+      EXTRACTION_HTTP_MAX_BYTES: ${EXTRACTION_HTTP_MAX_BYTES:-5242880}
+      EXTRACTION_TEXT_MAX_CHARS: ${EXTRACTION_TEXT_MAX_CHARS:-100000}
+      NEWS_LIMIT_ENABLED: ${NEWS_LIMIT_ENABLED:-false}
+      NEWS_LIMIT_DAYS: ${NEWS_LIMIT_DAYS:-1}
+      NEWS_LIMIT_MAX_ARTICLES: ${NEWS_LIMIT_MAX_ARTICLES:-50}
+      NEWS_LIMIT_PER_SOURCE: ${NEWS_LIMIT_PER_SOURCE:-50}
+      NEWS_LIMIT_NEWEST_DATE: ${NEWS_LIMIT_NEWEST_DATE:-}
+    depends_on:
+      postgres:
+        condition: service_healthy
+      extractor:
+        condition: service_healthy
+    read_only: true
+    cap_drop: [ALL]
+    security_opt: [no-new-privileges:true]
     restart: unless-stopped
 
   postgres:

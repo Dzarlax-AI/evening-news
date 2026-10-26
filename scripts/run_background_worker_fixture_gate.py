@@ -14,10 +14,17 @@ import time
 import uuid
 from pathlib import Path
 
+try:
+    from scripts.article_processing_source_inventory import article_processing_inventory_matches
+except ModuleNotFoundError:
+    from article_processing_source_inventory import article_processing_inventory_matches
+
 
 ROOT = Path(__file__).resolve().parents[1]
 FIXTURE_DIR = ROOT / "tests" / "fixtures" / "background-worker"
 OWNER_LABEL = "io.evening-news.background-worker-gate"
+ARTICLE_PROCESSING_TOKEN = "fixture-only-article-processing-token"
+ARTICLE_AI_TOKEN = "fixture-only-article-ai-token"
 class GateFailure(RuntimeError):
     pass
 
@@ -181,6 +188,9 @@ class DockerGate:
             "ARTICLE_INGESTION_MODE": "go",
             "ARTICLE_INGESTION_URL": "http://fixture-services:8090",
             "ARTICLE_INGESTION_TOKEN": "fixture-only-article-ingestion-token",
+            "ARTICLE_PROCESSING_URL": "http://processing:8094",
+            "ARTICLE_PROCESSING_TOKEN": ARTICLE_PROCESSING_TOKEN,
+            "ARTICLE_AI_TOKEN": ARTICLE_AI_TOKEN,
             "SCHEDULER_API_URL": "http://fixture-services:8090",
             "SCHEDULER_API_TOKEN": "fixture-only-scheduler-token",
             "SCHEDULER_API_ALLOW_HTTP": "true",
@@ -452,6 +462,12 @@ class DockerGate:
             "image": image_hashes,
         }
         self.report["checks"]["image_matches_runtime_checkout"] = workspace_hashes == image_hashes
+        self.report["checks"]["processing_client_callback_inventory_current"] = (
+            article_processing_inventory_matches(workspace_hashes)
+            and article_processing_inventory_matches(image_hashes)
+        )
+        if not self.report["checks"]["processing_client_callback_inventory_current"]:
+            raise GateFailure("App image is missing the processing API boundary or contains a removed Python processor")
         if not self.report["checks"]["image_matches_runtime_checkout"]:
             raise GateFailure("App image runtime source does not match the current checkout")
         self.docker("exec", f"{self.prefix}-web", "python", "/fixtures/seed_fixture.py", timeout=30)

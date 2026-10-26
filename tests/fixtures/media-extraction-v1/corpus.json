@@ -1,0 +1,46 @@
+{
+  "version": 1,
+  "reference": "news_aggregator.processing.media_extractor.MediaExtractor",
+  "cases": [
+    {
+      "case": "img-and-dedup",
+      "content": "<img src=\"../images/first.PNG?size=2\" alt=\"首图\"><img alt=\"later\" src=\"https://cdn.synthetic.test/a.jpg\"><a href=\"https://cdn.synthetic.test/a.jpg\">duplicate link</a>",
+      "base_url": "https://publisher.synthetic.test/section/story",
+      "expected": [
+        {"url":"https://publisher.synthetic.test/images/first.PNG?size=2","type":"image","media_type":"image/png","alt_text":"首图","source":"img_tag"},
+        {"url":"https://cdn.synthetic.test/a.jpg","type":"image","media_type":"image/jpg","alt_text":"later","source":"img_tag"}
+      ]
+    },
+    {
+      "case": "video-embed-links",
+      "content": "<video src=\"/video/clip.mp4\"></video><video><source src=\"https://cdn.synthetic.test/clip.webm\"></video> https://www.youtube.com/watch?v=SYNTHETIC_1 https://youtu.be/EXAMPLE-2 <a href=\"/docs/report.PDF?download=1\">report</a><a href=\"mailto:editor@example.test\">mail</a>",
+      "base_url": "https://publisher.synthetic.test/path/page",
+      "expected": [
+        {"url":"https://publisher.synthetic.test/video/clip.mp4","type":"video","media_type":"video","source":"video_tag"},
+        {"url":"https://cdn.synthetic.test/clip.webm","type":"video","media_type":"video","source":"source_tag"},
+        {"url":"https://www.youtube.com/watch?v=SYNTHETIC_1","type":"video","media_type":"video/embed","source":"embedded_video"},
+        {"url":"https://youtu.be/EXAMPLE-2","type":"video","media_type":"video/embed","source":"embedded_video"},
+        {"url":"https://publisher.synthetic.test/docs/report.PDF?download=1","type":"document","media_type":"document/pdf","source":"href_link"}
+      ]
+    },
+    {
+      "case": "protocol-relative-and-no-base",
+      "content": "<img src=\"//images.synthetic.test/cover.webp\" alt=\"cover\"><img src=\"data:image/png;base64,abc\"><a href=\"poster.svg#cover\">poster</a><a href=\"https://docs.synthetic.test/file.txt#part\">text</a>",
+      "base_url": "https://publisher.synthetic.test/story/index.html",
+      "expected": [
+        {"url":"https://images.synthetic.test/cover.webp","type":"image","media_type":"image/webp","alt_text":"cover","source":"img_tag"},
+        {"url":"https://publisher.synthetic.test/story/poster.svg#cover","type":"image","media_type":"image/svg","source":"href_link"},
+        {"url":"https://docs.synthetic.test/file.txt#part","type":"document","media_type":"document/txt","source":"href_link"}
+      ]
+    },
+    {
+      "case": "filters-and-relative-without-base",
+      "content": "<img src=\"relative.jpg\" alt=\"local\"><img src=\"https://cdn.synthetic.test/image?format=png\"><video src=\"data:video/mp4,abc\"></video><a href=\"#section\">anchor</a><a href=\"javascript:void(0)\">script</a><a href=\"https://files.synthetic.test/clip.MOV?download=1\">movie</a>",
+      "base_url": "",
+      "expected": [
+        {"url":"https://cdn.synthetic.test/image?format=png","type":"image","media_type":"image","alt_text":"","source":"img_tag"},
+        {"url":"https://files.synthetic.test/clip.MOV?download=1","type":"video","media_type":"video/mov","source":"href_link"}
+      ]
+    }
+  ]
+}

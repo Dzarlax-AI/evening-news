@@ -31,6 +31,8 @@ async def snapshot():
                                                  Article.processing_state, Article.summary_processed))).all()
         runs = (await session.execute(select(ArticleIngestionRun.state, ArticleIngestionRun.result,
                                             ArticleIngestionRun.error_code))).all()
+        processing_runs = (await session.execute(text("SELECT state FROM article_processing_runs"))).scalars().all()
+        processing_items = (await session.execute(text("SELECT state FROM article_processing_items"))).scalars().all()
         source_runs = (await session.execute(select(ArticleIngestionSourceRun.source_id,
                                                     ArticleIngestionSourceRun.state,
                                                     ArticleIngestionSourceRun.candidates,
@@ -50,6 +52,8 @@ async def snapshot():
                               "url": row.url,
                               "processing_state": row.processing_state,
                               "summary_processed": row.summary_processed} for row in articles],
+                "processing_run_states": list(processing_runs),
+                "processing_item_states": list(processing_items),
                 "duplicate_article": (None if duplicate is None else {
                     "id": duplicate.id,
                     "title": duplicate.title,

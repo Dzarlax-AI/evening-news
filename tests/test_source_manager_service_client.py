@@ -260,7 +260,10 @@ def test_go_modes_are_defaults_and_runtime_config_is_validated_at_startup():
         SCHEDULER_API_TOKEN='scheduler-token-value',
         SCHEDULED_JOBS_TOKEN='receiver-token-value',
         ARTICLE_INGESTION_URL='http://ingestion:8093',
-        ARTICLE_INGESTION_TOKEN='ingestion-token-value')
+        ARTICLE_INGESTION_TOKEN='ingestion-token-value',
+        ARTICLE_PROCESSING_URL='http://processing:8094',
+        ARTICLE_PROCESSING_TOKEN='processing-token-value',
+        ARTICLE_AI_TOKEN='ai-callback-token-value')
     assert configured.validate_runtime_services() is True
 
 

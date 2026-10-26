@@ -58,16 +58,19 @@ async function main() {
       assert.match(error.message, new RegExp(input.scenario.error));
     }
   } else {
+    let resolved;
     try {
-      const result = await window.resolveBackgroundResponse({status:202},
+      resolved = await window.resolveBackgroundResponse({status:202},
         {job_id:'fixture-job',status_url:'/api/v1/jobs/fixture-job'}, value => updates.push(value.status));
-      assert.equal(result.success, input.scenario.success);
-      assert.equal(result.status, input.scenario.status);
+      assert.equal(resolved.success, input.scenario.success);
+      assert.equal(resolved.status, input.scenario.status);
     } catch (error) {
       if (!input.scenario.error) throw error;
       assert.match(error.message, typeof input.scenario.error === 'string'
         ? new RegExp(input.scenario.error) : /session expired/);
     }
+    if (input.scenario.message) assert.match(resolved.message, new RegExp(input.scenario.message));
+    input.scenario.resolvedMessage = resolved && resolved.message;
   }
   await Promise.resolve();
   assert.equal(responses.length, 0);
@@ -75,7 +78,7 @@ async function main() {
   if (input.scenario.label) assert.ok(history.some(value => value.includes(input.scenario.label)));
   if (input.scenario.noErrors) assert.ok(!alerts.some(value => value.includes('Не удалось')));
   if (input.scenario.updates) assert.deepEqual(updates, input.scenario.updates);
-  process.stdout.write(JSON.stringify({calls:calls.length,reloads}));
+  process.stdout.write(JSON.stringify({calls:calls.length,reloads,message:input.scenario.resolvedMessage}));
 }
 main().catch(error => {console.error(error); process.exitCode=1;});
 """
@@ -108,6 +111,30 @@ def test_poller_stops_on_authentication_failure():
 def test_unknown_delivery_is_not_success():
     run_ui({"responses": [{"body": {"status": "delivery_unknown"}}],
             "success": False, "status": "delivery_unknown"})
+
+
+@pytest.mark.parametrize("result,success,message", [
+    ({"status": "retry_wait", "success": False, "settled": False, "retryable": True,
+      "article_outcomes": [{"article_id": 7, "state": "retry_wait"}]},
+     False, "another attempt"),
+    ({"status": "exhausted", "success": False, "settled": False,
+      "article_outcomes": [{"article_id": 7, "state": "exhausted"}]},
+     False, "article-level outcomes"),
+    ({"status": "rejected", "success": False, "settled": True,
+      "article_outcomes": [{"article_id": 7, "state": "rejected"}]},
+     False, "article-level outcomes"),
+    ({"status": "settled", "success": True, "settled": True,
+      "article_outcomes": [{"article_id": 7, "state": "completed"}]},
+     True, None),
+    ({"status": "settled", "success": True, "settled": True,
+      "article_outcomes": [{"article_id": 7, "state": "rejected"}]},
+     False, "article-level outcomes"),
+    ({"status": "incomplete", "success": False, "settled": False, "retryable": True},
+     False, "another attempt"),
+])
+def test_poller_preserves_article_processing_states(result, success, message):
+    run_ui({"responses": [{"body": {"status": "succeeded", "result": result}}],
+            "success": success, "status": "succeeded", "message": message})
 
 
 def test_proxy_html_error_preserves_http_status():

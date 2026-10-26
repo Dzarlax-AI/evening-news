@@ -5,9 +5,11 @@ import hashlib
 import hmac
 import json
 import logging
+import math
 import re
 import signal
 import uuid
+from collections import OrderedDict
 from contextlib import asynccontextmanager
 from datetime import datetime, timedelta, timezone
 from typing import Any
@@ -34,14 +36,32 @@ from .services.job_fence import JobExecutionFence, current_job_fence
 from .services import scheduled_source_alerts
 
 logger = logging.getLogger(__name__)
+app = FastAPI(title="Evening News private job executor", docs_url=None, redoc_url=None, openapi_url=None)
 
 MAX_ENVELOPE_BYTES = 8192
 MAX_SELECTOR_CALLBACK_BYTES = 5 * 1024 * 1024 + MAX_ENVELOPE_BYTES
 MAX_SELECTOR_CALLBACK_HTML_BYTES = 5 * 1024 * 1024
+MAX_ARTICLE_AI_CALLBACK_BYTES = 5 * 1024 * 1024 + MAX_ENVELOPE_BYTES
+MAX_ARTICLE_AI_RESPONSE_BYTES = 1024 * 1024
 MAX_DEADLINE_SECONDS = 24 * 60 * 60
 EXECUTOR_INSTANCE_ID = uuid.uuid4()
 _ACTIVE: dict[tuple[uuid.UUID, int], asyncio.Task] = {}
 _ACTIVE_FENCES: dict[tuple[uuid.UUID, int], JobExecutionFence] = {}
+_ARTICLE_AI_CACHE = OrderedDict()
+_ARTICLE_AI_CACHE_BYTES = 0
+_ARTICLE_AI_ACTIVE = set()
+_ARTICLE_AI_ADMISSION_LOCK = asyncio.Lock()
+_ARTICLE_AI_CONTEXT_PATTERNS = OrderedDict()
+MAX_ARTICLE_AI_ACTIVE = 16
+MAX_ARTICLE_AI_CACHE_ENTRIES = 64
+MAX_ARTICLE_AI_CACHE_BYTES = 1024 * 1024
+MAX_ARTICLE_AI_CONTEXT_PATTERNS = 128
+ARTICLE_EXTRACTION_METHODS = frozenset({
+    "source_content", "enhanced_selectors", "readability", "browser_rendering",
+    "browser_heuristics", "fallback_extraction", "json_ld", "open_graph",
+    "meta_description", "enhanced_heuristics", "reddit_json", "reddit_linked_article",
+    "learned_pattern_browser_rendering", "learned_pattern_browser_heuristics",
+})
 _ADMISSION_LOCK = asyncio.Lock()
 _LEGACY_EVENT_LOCKS: dict[tuple[uuid.UUID, int], asyncio.Lock] = {}
 _ALERT_ACTIVE: set[tuple[uuid.UUID, int]] = set()
@@ -368,10 +388,18 @@ class ArticleIngestionCallbackFence:
                 raise StaleWorker("Page Monitor source changed during selector study")
             yield
 
-    @asynccontextmanager
-    async def publication_fence(self, session):
-        async with self.transaction_fence(session, self.job_id, self.attempt_generation):
-            yield
+
+class ArticleProcessingCallbackFence:
+    """Bind callback metadata to one active Go item claim."""
+
+    def __init__(self, lease, *, run_id, envelope_digest, article_id,
+                 article_attempt, input_fingerprint):
+        self.lease = lease
+        self.run_id = run_id
+        self.envelope_digest = envelope_digest
+        self.article_id = article_id
+        self.article_attempt = article_attempt
+        self.input_fingerprint = input_fingerprint
 
 
 def _reject_duplicate_pairs(pairs):
@@ -452,6 +480,461 @@ def _auth(request: Request) -> None:
     expected = f"Bearer {token}"
     if not hmac.compare_digest(supplied.encode("utf-8"), expected.encode("utf-8")):
         raise HTTPException(status_code=401, detail="Unauthorized")
+
+
+def _article_ai_auth(request: Request) -> None:
+    token = settings.article_ai_token.get_secret_value() if settings.article_ai_token else None
+    if not token:
+        raise HTTPException(status_code=503, detail="Article AI authentication is unavailable")
+    supplied = request.headers.get("authorization", "")
+    if not hmac.compare_digest(supplied.encode("utf-8"), f"Bearer {token}".encode("utf-8")):
+        raise HTTPException(status_code=401, detail="Unauthorized")
+
+
+def _article_ai_envelope_digest(envelope):
+    ordered = {name: envelope[name] for name in (
+        "version", "job_id", "attempt_generation", "owner_id", "generation",
+        "backend_pid", "executor_instance_id", "deadline_at",
+    )}
+    return hashlib.sha256(json.dumps(ordered, separators=(",", ":"), ensure_ascii=False).encode("utf-8")).hexdigest()
+
+
+def _article_ai_input_fingerprint(value):
+    identity = {key: value[key] for key in ("title", "content", "url")}
+    if "original_context" in value:
+        identity["original_context"] = value["original_context"]
+    encoded = json.dumps(identity, sort_keys=True, separators=(",", ":"),
+                         ensure_ascii=False).replace("\u2028", "\\u2028").replace("\u2029", "\\u2029")
+    return hashlib.sha256(encoded.encode("utf-8")).hexdigest()
+
+
+def _article_ai_callback_key(body):
+    payload = json.dumps(body["input"], sort_keys=True, separators=(",", ":"), ensure_ascii=False)
+    payload = payload.replace("\u2028", "\\u2028").replace("\u2029", "\\u2029")
+    identity = (body["run_id"], body["article_id"], body["article_attempt"],
+                body["input_fingerprint"], body["operation"], hashlib.sha256(payload.encode("utf-8")).hexdigest())
+    return identity
+
+
+def _article_ai_claim_key(body):
+    return (body["run_id"], body["article_id"], body["article_attempt"], body["input_fingerprint"])
+
+
+async def _remember_article_ai_context(body, selector, method):
+    async with _ARTICLE_AI_ADMISSION_LOCK:
+        key = _article_ai_claim_key(body)
+        _ARTICLE_AI_CONTEXT_PATTERNS[key] = (selector, method)
+        _ARTICLE_AI_CONTEXT_PATTERNS.move_to_end(key)
+        while len(_ARTICLE_AI_CONTEXT_PATTERNS) > MAX_ARTICLE_AI_CONTEXT_PATTERNS:
+            _ARTICLE_AI_CONTEXT_PATTERNS.popitem(last=False)
+
+
+async def _take_article_ai_context(body):
+    async with _ARTICLE_AI_ADMISSION_LOCK:
+        return _ARTICLE_AI_CONTEXT_PATTERNS.pop(_article_ai_claim_key(body), (None, None))
+
+
+async def _begin_article_ai_callback(key):
+    async with _ARTICLE_AI_ADMISSION_LOCK:
+        cached = _ARTICLE_AI_CACHE.get(key)
+        if cached is not None:
+            _ARTICLE_AI_CACHE.move_to_end(key)
+            return cached[0]
+        if key in _ARTICLE_AI_ACTIVE:
+            raise HTTPException(status_code=429, detail="Article AI callback is already running",
+                                headers={"Retry-After": "1"})
+        if len(_ARTICLE_AI_ACTIVE) >= MAX_ARTICLE_AI_ACTIVE:
+            raise HTTPException(status_code=429, detail="Article AI admission is full",
+                                headers={"Retry-After": "1"})
+        _ARTICLE_AI_ACTIVE.add(key)
+        return None
+
+
+async def _finish_article_ai_callback(key, response):
+    global _ARTICLE_AI_CACHE_BYTES
+    async with _ARTICLE_AI_ADMISSION_LOCK:
+        _ARTICLE_AI_ACTIVE.discard(key)
+        if response is None:
+            return
+        try:
+            size = len(json.dumps(response, ensure_ascii=False, allow_nan=False).encode("utf-8"))
+        except (TypeError, ValueError):
+            return
+        if size > MAX_ARTICLE_AI_CACHE_BYTES:
+            return
+        previous = _ARTICLE_AI_CACHE.pop(key, None)
+        if previous is not None:
+            _ARTICLE_AI_CACHE_BYTES -= previous[1]
+        _ARTICLE_AI_CACHE[key] = (response, size)
+        _ARTICLE_AI_CACHE_BYTES += size
+        while (_ARTICLE_AI_CACHE
+               and (len(_ARTICLE_AI_CACHE) > MAX_ARTICLE_AI_CACHE_ENTRIES
+                    or _ARTICLE_AI_CACHE_BYTES > MAX_ARTICLE_AI_CACHE_BYTES)):
+            _, (_, removed_size) = _ARTICLE_AI_CACHE.popitem(last=False)
+            _ARTICLE_AI_CACHE_BYTES -= removed_size
+
+
+def _validate_ai_envelope(envelope):
+    required = {"version", "job_id", "attempt_generation", "owner_id", "generation",
+                "backend_pid", "executor_instance_id", "deadline_at"}
+    if not isinstance(envelope, dict) or set(envelope) != required:
+        raise InvalidEnvelope("article AI envelope fields are invalid")
+    if type(envelope["version"]) is not int or envelope["version"] != 1:
+        raise InvalidEnvelope("article AI envelope version is invalid")
+    try:
+        job_id, owner_id, executor_id = (uuid.UUID(envelope[name]) for name in
+                                         ("job_id", "owner_id", "executor_instance_id"))
+        deadline = datetime.fromisoformat(envelope["deadline_at"].replace("Z", "+00:00"))
+    except (ValueError, TypeError, AttributeError) as exc:
+        raise InvalidEnvelope("article AI envelope identity is invalid") from exc
+    if (str(job_id) != envelope["job_id"] or str(owner_id) != envelope["owner_id"]
+            or str(executor_id) != envelope["executor_instance_id"] or deadline.tzinfo is None):
+        raise InvalidEnvelope("article AI envelope identity is invalid")
+    for name in ("attempt_generation", "generation", "backend_pid"):
+        if type(envelope[name]) is not int or envelope[name] <= 0 or envelope[name] > 2_147_483_647:
+            raise InvalidEnvelope("article AI envelope counter is invalid")
+    return job_id, owner_id, executor_id, deadline.astimezone(timezone.utc)
+
+
+def _validate_article_ai_input(operation, value):
+    if not isinstance(value, dict):
+        raise InvalidEnvelope("article AI input is invalid")
+    if operation == "analyze":
+        allowed = {"title", "content", "url", "original_context"}
+        if set(value) not in (allowed - {"original_context"}, allowed):
+            raise InvalidEnvelope("article AI analysis fields are invalid")
+        if any(not isinstance(value.get(name), str) for name in ("title", "content", "url")):
+            raise InvalidEnvelope("article AI analysis fields are invalid")
+        if "original_context" in value and value["original_context"] is not None and not isinstance(value["original_context"], str):
+            raise InvalidEnvelope("article AI analysis fields are invalid")
+        from .core.resource_limits import enforce_text_limit
+        try:
+            enforce_text_limit(value["title"])
+            enforce_text_limit(value["content"])
+            enforce_text_limit(value.get("original_context") or "")
+        except ValueError as exc:
+            raise HTTPException(status_code=413, detail="Article AI text exceeds its limit") from exc
+        parsed = urlsplit(value["url"])
+        if (len(value["url"].encode("utf-8")) > 8192
+                or parsed.scheme not in {"http", "https"} or not parsed.hostname):
+            raise InvalidEnvelope("article AI URL is invalid")
+    elif operation == "extraction_context":
+        if (set(value) != {"url"} or not isinstance(value.get("url"), str)
+                or len(value["url"].encode("utf-8")) > 8192):
+            raise InvalidEnvelope("article extraction context fields are invalid")
+        parsed = urlsplit(value["url"])
+        if parsed.scheme not in {"http", "https"} or not parsed.hostname:
+            raise InvalidEnvelope("article extraction context URL is invalid")
+    elif operation == "extraction_feedback":
+        required = {"url", "method", "success", "observations"}
+        allowed = required | {"selector_used", "content_length", "extraction_time_ms",
+                             "quality_score", "error_code"}
+        if not required <= set(value) or not set(value) <= allowed:
+            raise InvalidEnvelope("article extraction feedback fields are invalid")
+        if (not isinstance(value["url"], str) or len(value["url"].encode("utf-8")) > 8192
+                or value["method"] not in ARTICLE_EXTRACTION_METHODS
+                or type(value["success"]) is not bool):
+            raise InvalidEnvelope("article extraction feedback fields are invalid")
+        parsed = urlsplit(value["url"])
+        if parsed.scheme not in {"http", "https"} or not parsed.hostname:
+            raise InvalidEnvelope("article extraction feedback URL is invalid")
+        selector = value.get("selector_used")
+        if selector is not None and (not isinstance(selector, str) or len(selector.encode("utf-8")) > 2048):
+            raise InvalidEnvelope("article extraction feedback selector is invalid")
+        observations = value["observations"]
+        if (not isinstance(observations, list) or len(observations) > 64
+                or any(not isinstance(item, dict) or set(item) != {"selector", "method", "success"}
+                       or not isinstance(item["selector"], str)
+                       or len(item["selector"].encode("utf-8")) > 2048
+                       or item["method"] not in ARTICLE_EXTRACTION_METHODS
+                       or type(item["success"]) is not bool for item in observations)):
+            raise InvalidEnvelope("article extraction feedback observations are invalid")
+        for name in ("content_length", "extraction_time_ms"):
+            number = value.get(name)
+            if number is not None and (type(number) is not int or not 0 <= number <= 10_000_000):
+                raise InvalidEnvelope("article extraction feedback metric is invalid")
+        score = value.get("quality_score")
+        if score is not None and (isinstance(score, bool) or not isinstance(score, (int, float))
+                                  or not math.isfinite(float(score)) or not 0 <= score <= 1):
+            raise InvalidEnvelope("article extraction feedback quality is invalid")
+        code = value.get("error_code")
+        if code is not None and (not isinstance(code, str) or re.fullmatch(r"[a-z0-9_-]{1,40}", code) is None):
+            raise InvalidEnvelope("article extraction feedback code is invalid")
+    else:
+        raise InvalidEnvelope("article AI operation is unsupported")
+
+
+@app.post("/internal/v1/article-ai")
+async def article_ai_callback(request: Request):
+    """Run existing AI compute or bounded learning for one claimed processor item."""
+    _article_ai_auth(request)
+    await _require_executor_guard()
+    try:
+        raw = await _read_body_bounded(request, MAX_ARTICLE_AI_CALLBACK_BYTES)
+        body = json.loads(raw.decode("utf-8"), object_pairs_hook=_reject_duplicate_pairs,
+                          parse_constant=lambda _: (_ for _ in ()).throw(InvalidEnvelope("invalid JSON number")))
+        required = {"version", "run_id", "envelope", "article_id", "article_attempt",
+                    "input_fingerprint", "operation", "input"}
+        if (not isinstance(body, dict) or set(body) != required or type(body["version"]) is not int
+                or body["version"] != 1 or type(body["article_id"]) is not int or body["article_id"] <= 0
+                or type(body["article_attempt"]) is not int or body["article_attempt"] <= 0
+                or not isinstance(body["input_fingerprint"], str)
+                or re.fullmatch(r"[0-9a-f]{64}", body["input_fingerprint"]) is None
+                or body["operation"] not in {"analyze", "extraction_context", "extraction_feedback"}):
+            raise InvalidEnvelope("article AI callback fields are invalid")
+        job_id, owner_id, executor_id, deadline = _validate_ai_envelope(body["envelope"])
+        run_id = uuid.UUID(body["run_id"])
+        if str(run_id) != body["run_id"]:
+            raise InvalidEnvelope("article AI run identifier is invalid")
+        _validate_article_ai_input(body["operation"], body["input"])
+        if (body["operation"] == "analyze"
+                and _article_ai_input_fingerprint(body["input"]) != body["input_fingerprint"]):
+            raise InvalidEnvelope("article AI input identity does not match the active item")
+    except HTTPException:
+        raise
+    except (json.JSONDecodeError, UnicodeDecodeError, InvalidEnvelope, ValueError, TypeError, AttributeError) as exc:
+        raise HTTPException(status_code=422, detail="Article AI callback request is invalid") from exc
+
+    from .services.article_processing_client import _run_id
+    attempt = body["envelope"]["attempt_generation"]
+    if run_id != uuid.UUID(_run_id(job_id, attempt)):
+        raise HTTPException(status_code=409, detail="Article AI run identifier does not match its job")
+    active = _ACTIVE_FENCES.get((job_id, attempt))
+    if (active is None or not active.active or active.executor_instance_id != executor.instance_id
+            or executor_id != executor.instance_id):
+        raise HTTPException(status_code=409, detail="Python execution receipt is not active")
+    lease = active.lease
+    provided_deadline = deadline.replace(tzinfo=None)
+    if (active.job_id != job_id or active.attempt_generation != attempt
+            or lease.owner_id != owner_id or lease.generation != body["envelope"]["generation"]
+            or lease.backend_pid != body["envelope"]["backend_pid"] or lease.deadline_at != provided_deadline):
+        raise HTTPException(status_code=409, detail="Article AI execution fence does not match")
+    callback_fence = ArticleProcessingCallbackFence(
+        lease, run_id=run_id,
+        envelope_digest=_article_ai_envelope_digest(body["envelope"]),
+        article_id=body["article_id"], article_attempt=body["article_attempt"],
+        input_fingerprint=body["input_fingerprint"],
+    )
+
+    async def validate_claim():
+        try:
+            async with AsyncSessionLocal() as session:
+                async with lease.transaction_fence(session, job_id, attempt):
+                    guarded = (await session.execute(text("""
+                        SELECT run_id,run_state FROM fence_article_processing_attempt(
+                            :run_id,:job_id,:attempt,:envelope_sha256,:owner_id,:worker_generation,
+                            :backend_pid,:executor_instance_id,:deadline_at)
+                    """), {
+                        "run_id": run_id, "job_id": job_id, "attempt": attempt,
+                        "envelope_sha256": callback_fence.envelope_digest,
+                        "owner_id": owner_id, "worker_generation": body["envelope"]["generation"],
+                        "backend_pid": body["envelope"]["backend_pid"],
+                        "executor_instance_id": executor_id, "deadline_at": provided_deadline,
+                    })).mappings().one_or_none()
+                    item = (await session.execute(text("""
+                        SELECT article_attempt,input_fingerprint,state FROM article_processing_items
+                        WHERE run_id=:run_id AND article_id=:article_id
+                    """), {"run_id": run_id, "article_id": body["article_id"]})).mappings().one_or_none()
+                    article_identity = (await session.execute(text(
+                        "SELECT processing_attempts,url FROM articles WHERE id=:article_id"),
+                        {"article_id": body["article_id"]})
+                    ).mappings().one_or_none()
+                    if (guarded is None or str(guarded["run_id"]) != str(run_id)
+                            or guarded["run_state"] != "running" or item is None
+                            or item["article_attempt"] != body["article_attempt"]
+                            or item["input_fingerprint"] != body["input_fingerprint"]
+                            or item["state"] != "running" or article_identity is None
+                            or article_identity["processing_attempts"] != body["article_attempt"]
+                            or article_identity["url"] != body["input"]["url"]):
+                        raise StaleWorker("processor item claim is stale")
+                    await session.rollback()
+        except StaleWorker as exc:
+            raise HTTPException(status_code=409, detail="Article AI item claim is stale") from exc
+
+    await validate_claim()
+    operation, data = body["operation"], body["input"]
+    callback_key = _article_ai_callback_key(body)
+    cached = await _begin_article_ai_callback(callback_key)
+    if cached is not None:
+        await validate_claim()
+        return cached
+    try:
+        if operation == "extraction_context":
+            from .services.extraction_memory import get_extraction_memory
+            domain = (urlsplit(data["url"]).hostname or "").lower()
+            pattern = await (await get_extraction_memory()).get_successful_pattern(domain)
+            selector = pattern.get("selector") if pattern else None
+            method = pattern.get("method") if pattern else None
+            result = {
+                "selector": selector if isinstance(selector, str) and len(selector.encode("utf-8")) <= 2048 else None,
+                "method": method if method in ARTICLE_EXTRACTION_METHODS else None,
+            }
+            await _remember_article_ai_context(body, result["selector"], result["method"])
+        elif operation == "analyze":
+            from .services.ai_client import get_ai_client
+            result = await get_ai_client().analyze_article_complete(
+                data["title"], data["content"], data["url"], original_context=data.get("original_context"))
+        else:
+            try:
+                learned_selector, learned_method = await _take_article_ai_context(body)
+                await _record_article_extraction_feedback(
+                    lease, job_id, attempt, callback_fence, data,
+                    learned_selector=learned_selector, learned_method=learned_method)
+                result = {"recorded": True}
+            except StaleWorker as exc:
+                raise HTTPException(status_code=409, detail="Article AI learning claim is stale") from exc
+            except Exception as exc:
+                logger.warning("Article extraction learning failed (%s)", type(exc).__name__)
+                result = {"recorded": False}
+        await validate_claim()
+        response_body = {"version": 1, "run_id": str(run_id), "article_id": body["article_id"],
+                         "article_attempt": body["article_attempt"],
+                         "input_fingerprint": body["input_fingerprint"],
+                         "operation": operation, "result": result}
+        try:
+            response_bytes = json.dumps(response_body, ensure_ascii=False, allow_nan=False,
+                                        separators=(",", ":")).encode("utf-8")
+        except (TypeError, ValueError, UnicodeError) as exc:
+            raise HTTPException(status_code=502, detail="Article AI result is invalid") from exc
+        if len(response_bytes) > MAX_ARTICLE_AI_RESPONSE_BYTES:
+            raise HTTPException(status_code=502, detail="Article AI result exceeded its response limit")
+        await _finish_article_ai_callback(callback_key, response_body)
+        return response_body
+    finally:
+        await _finish_article_ai_callback(callback_key, None)
+
+
+async def _record_article_extraction_feedback(lease, job_id, attempt_generation, fence, metadata,
+                                               *, learned_selector=None, learned_method=None):
+    """Write extraction analytics under the active Go item and Python job fences."""
+    parsed = urlsplit(metadata["url"])
+    domain = (parsed.hostname or "").lower()
+    elapsed = metadata.get("extraction_time_ms") or 0
+    content_length = metadata.get("content_length") or 0
+    success, method, selector = metadata["success"], metadata["method"], metadata.get("selector_used")
+    supplied_quality = metadata.get("quality_score")
+    quality = float(supplied_quality if supplied_quality is not None else (0.8 if success else 0.0))
+    observations = metadata["observations"]
+    async with AsyncSessionLocal() as session:
+        async with lease.transaction_fence(session, job_id, attempt_generation):
+            guarded = (await session.execute(text("""
+                SELECT run_id,run_state FROM fence_article_processing_attempt(
+                    :run_id,:job_id,:attempt,:envelope_sha256,:owner_id,:worker_generation,
+                    :backend_pid,:executor_instance_id,:deadline_at)
+            """), {
+                "run_id": fence.run_id, "job_id": job_id, "attempt": attempt_generation,
+                "envelope_sha256": fence.envelope_digest, "owner_id": lease.owner_id,
+                "worker_generation": lease.generation, "backend_pid": lease.backend_pid,
+                "executor_instance_id": executor.instance_id, "deadline_at": lease.deadline_at,
+            })).mappings().one_or_none()
+            item = (await session.execute(text("""
+                SELECT article_attempt,input_fingerprint,state FROM article_processing_items
+                WHERE run_id=:run_id AND article_id=:article_id FOR UPDATE
+            """), {"run_id": fence.run_id, "article_id": fence.article_id})).mappings().one_or_none()
+            if (item is None or item["article_attempt"] != fence.article_attempt
+                    or item["input_fingerprint"] != fence.input_fingerprint or item["state"] != "running"
+                    or guarded is None or str(guarded["run_id"]) != str(fence.run_id)
+                    or guarded["run_state"] != "running"):
+                raise StaleWorker("processor item claim is stale")
+            article = (await session.execute(text(
+                "SELECT processing_attempts,url FROM articles WHERE id=:article_id FOR UPDATE"),
+                {"article_id": fence.article_id})).mappings().one_or_none()
+            if (article is None or article["processing_attempts"] != fence.article_attempt
+                    or article["url"] != metadata["url"]):
+                raise StaleWorker("article identity changed before learning write")
+            await session.execute(text("""
+                INSERT INTO extraction_attempts
+                    (article_url,domain,extraction_strategy,selector_used,success,content_length,
+                     quality_score,extraction_time_ms,error_message)
+                VALUES (:url,:domain,:method,:selector,:success,:content_length,:quality,:elapsed,:error)
+            """), {"url": metadata["url"], "domain": domain, "method": method,
+                    "selector": selector, "success": success, "content_length": content_length,
+                    "quality": quality if success else None, "elapsed": elapsed,
+                    "error": metadata.get("error_code")})
+            for observation in observations:
+                await session.execute(text("""
+                    INSERT INTO extraction_attempts
+                        (article_url,domain,extraction_strategy,selector_used,success,
+                         content_length,quality_score,extraction_time_ms,error_message)
+                    VALUES (:url,:domain,:method,:selector,:success,NULL,NULL,NULL,:error)
+                """), {"url": metadata["url"], "domain": domain,
+                        "method": observation["method"], "selector": observation["selector"],
+                        "success": observation["success"],
+                        "error": metadata.get("error_code") if not observation["success"] else None})
+            if selector:
+                if success:
+                    await session.execute(text("""
+                        INSERT INTO extraction_patterns
+                            (domain,selector_pattern,extraction_strategy,success_count,failure_count,
+                             quality_score_avg,content_length_avg,discovered_by,is_stable,
+                             consecutive_successes,consecutive_failures,first_success_at,last_success_at)
+                        VALUES (:domain,:selector,:method,1,0,:quality,:content_length,'manual',false,1,0,NOW(),NOW())
+                        ON CONFLICT (domain,selector_pattern,extraction_strategy) DO UPDATE SET
+                            success_count=COALESCE(extraction_patterns.success_count,0)+1,
+                            quality_score_avg=(COALESCE(extraction_patterns.quality_score_avg,0)*
+                              COALESCE(extraction_patterns.success_count,0)+EXCLUDED.quality_score_avg)/
+                              (COALESCE(extraction_patterns.success_count,0)+1),
+                            content_length_avg=(COALESCE(extraction_patterns.content_length_avg,0)*
+                              COALESCE(extraction_patterns.success_count,0)+EXCLUDED.content_length_avg)/
+                              (COALESCE(extraction_patterns.success_count,0)+1),
+                            consecutive_successes=COALESCE(extraction_patterns.consecutive_successes,0)+1,
+                            consecutive_failures=0,
+                            is_stable=COALESCE(extraction_patterns.consecutive_successes,0)+1>=3,
+                            first_success_at=COALESCE(extraction_patterns.first_success_at,NOW()),
+                            last_success_at=NOW(),updated_at=NOW()
+                    """), {"domain": domain, "selector": selector, "method": method,
+                            "quality": quality, "content_length": content_length})
+            if learned_selector and learned_method:
+                degraded = set()
+                for observation in metadata.get("observations", []):
+                    if (not observation["success"] and observation["selector"] == learned_selector
+                            and observation["method"] == learned_method
+                            and (observation["selector"], observation["method"]) not in degraded):
+                        degraded.add((observation["selector"], observation["method"]))
+                        await session.execute(text("""
+                            UPDATE extraction_patterns SET failure_count=COALESCE(failure_count,0)+1,
+                                consecutive_failures=COALESCE(consecutive_failures,0)+1,
+                                consecutive_successes=0,is_stable=false,updated_at=NOW()
+                            WHERE domain=:domain AND selector_pattern=:selector AND extraction_strategy=:method
+                        """), {"domain": domain, "selector": learned_selector, "method": learned_method})
+            await session.commit()
+    from .services.extraction_memory import ExtractionMemoryEntry, get_extraction_memory
+    memory = await get_extraction_memory()
+    await memory._ensure_initialized()
+    if success and selector:
+        patterns = memory._patterns.setdefault(domain, [])
+        entry = next((item for item in patterns if item.selector_pattern == selector
+                      and item.extraction_strategy == method), None)
+        if entry is None:
+            entry = ExtractionMemoryEntry(domain, selector, method)
+            patterns.append(entry)
+        entry.success_count += 1
+        entry.consecutive_successes += 1
+        entry.consecutive_failures = 0
+        entry.success_rate = (entry.success_count / max(1, entry.success_count + entry.failure_count)) * 100
+        entry.quality_score_avg = ((entry.quality_score_avg * (entry.success_count - 1) + quality)
+                                   / entry.success_count)
+        entry.content_length_avg = int((entry.content_length_avg * (entry.success_count - 1) + content_length)
+                                       / entry.success_count)
+        entry.is_stable = entry.consecutive_successes >= 3
+    if learned_selector and learned_method:
+        learned = next((item for item in memory._patterns.get(domain, [])
+                        if item.selector_pattern == learned_selector
+                        and item.extraction_strategy == learned_method), None)
+        learned_failed = any(
+            not observation["success"] and observation["selector"] == learned_selector
+            and observation["method"] == learned_method for observation in observations)
+        if learned is not None and learned_failed:
+            learned.failure_count += 1
+            learned.consecutive_failures += 1
+            learned.consecutive_successes = 0
+            learned.is_stable = False
+            learned.success_rate = (learned.success_count / max(1, learned.success_count + learned.failure_count)) * 100
+    if success:
+        from .services.domain_stability_tracker import get_stability_tracker
+        (await get_stability_tracker()).update_domain_stats(
+            domain=domain, success=True, extraction_time_ms=elapsed,
+            content_length=content_length, quality_score=quality, method=method)
 
 
 def _validate_executor_runtime() -> None:
@@ -967,7 +1450,6 @@ async def _execution_context(fence):
 
 
 executor = PythonJobExecutor()
-app = FastAPI(title="Evening News private job executor", docs_url=None, redoc_url=None, openapi_url=None)
 
 
 @app.get("/internal/v1/status")

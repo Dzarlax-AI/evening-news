@@ -856,40 +856,6 @@ async def test_service_failure_never_falls_back_to_python():
 
 
 
-@pytest.mark.parametrize('force', [False, True])
-@pytest.mark.parametrize('code,retryable,state', [('busy', True, 'retry_wait'),
-    ('resource_limit', False, 'rejected'), ('invalid_input', False, 'rejected'),
-    ('unauthorized', False, 'retry_wait'), ('native_browser_target_crashed', False, 'retry_wait')])
-@pytest.mark.asyncio
-async def test_typed_processing_outage_retries_without_stale_ai_or_terminal_outcome(force, code, retryable, state):
-    from news_aggregator.processing.ai_processor import AIProcessor
-    from news_aggregator.services.ai_client import AIClient
-    client = AIClient.__new__(AIClient)
-    client.analyze_article_complete = AsyncMock()
-    value = AIProcessor.__new__(AIProcessor)
-    value.ai_client = client
-    extractor = AsyncMock()
-    extractor.extract_article_content_with_metadata.side_effect = ExtractionServiceError(code, retryable, 12)
-    context = AsyncMock()
-    context.__aenter__.return_value = extractor
-    article = {'id': 1, 'url': URL, 'title': 'Existing article title', 'published_at': None,
-        'content': 'An older article contains enough information for an incorrect stale fallback. ' * 5,
-        'source_type': 'rss', 'media_files': [{'type': 'image', 'url': URL}],
-        'summary_processed': False, 'category_processed': False, 'ad_processed': False}
-    smart_filter = Mock()
-    smart_filter.should_process_with_ai = AsyncMock(return_value=(True, 'accepted'))
-    with patch('news_aggregator.extraction.ContentExtractor', return_value=context), \
-            patch('news_aggregator.services.smart_filter.get_smart_filter', return_value=smart_filter):
-        result = await value.process_article_outcome(article, {}, force_refresh=force)
-    assert result.state == state
-    assert result.error == code
-    assert result.retry_after_seconds == 12
-    assert result.fields == {}
-    extractor.extract_article_content_with_metadata.assert_awaited_once()
-    extractor.extract_article_content.assert_not_called()
-    client.analyze_article_complete.assert_not_called()
-
-
 @pytest.mark.asyncio
 async def test_failed_metadata_content_fallback_does_not_restart_service_budget():
     settings, core, memory = routing()
@@ -953,15 +919,6 @@ async def test_malformed_port_is_reported_as_invalid_input():
             patch('news_aggregator.extraction.core_extractor.get_extraction_memory', AsyncMock(return_value=memory)):
         with pytest.raises(ExtractionServiceError, match='invalid_input'):
             await core.extract_article_content_with_metadata('https://example.org:bad/article')
-
-
-def test_processing_enrichment_preserves_source_media_and_maps_new_media():
-    from news_aggregator.processing.ai_processor import extraction_update_fields
-    media = [{'type': 'image', 'url': 'https://example.org/photo.jpg'}]
-    metadata = {'content': 'New useful body. ' * 20, 'media_files': media,
-                'image_url': 'https://example.org/photo.jpg'}
-    assert extraction_update_fields({'content': 'Short source'}, metadata)['media_files'] == media
-    assert 'media_files' not in extraction_update_fields({'content': 'Short source', 'media_files': media}, metadata)
 
 
 @pytest.mark.asyncio
@@ -1174,37 +1131,8 @@ async def test_low_quality_http_success_is_rejected_without_learning_go_success(
     memory.record_extraction_attempt.assert_not_called()
 
 
-@pytest.mark.parametrize('code,expected_state', [('upstream_rate_limited', 'retry_wait'), ('public_url_denied', 'rejected')])
 @pytest.mark.asyncio
-async def test_force_real_service_failure_preserves_retry_after_without_native_or_ai(code, expected_state):
-    from news_aggregator.processing.ai_processor import AIProcessor
-    settings, core, memory = routing()
-    value = AIProcessor.__new__(AIProcessor)
-    value.ai_client = SimpleNamespace(analyze_article_complete=AsyncMock())
-    context = AsyncMock()
-    context.__aenter__.return_value = core
-    article = {'id': 1, 'url': URL, 'title': 'Existing article', 'content': 'Archival source. ' * 20,
-        'source_type': 'rss', 'media_files': [{'type': 'image', 'url': URL}], 'published_at': None,
-        'summary_processed': False, 'category_processed': False, 'ad_processed': False}
-    async def handler(request):
-        return web.json_response(response_for(await request.json(), outcome='failed',
-            error={'code': code, 'retryable': code == 'upstream_rate_limited', 'retry_after_seconds': 54}))
-    async with server(handler) as endpoint:
-        settings.extraction_service_url = endpoint
-        with patch('news_aggregator.config.get_settings', return_value=settings), \
-                patch('news_aggregator.extraction.core_extractor.get_extraction_memory', AsyncMock(return_value=memory)), \
-                patch('news_aggregator.extraction.ContentExtractor', return_value=context):
-            result = await value.process_article_outcome(article, {}, force_refresh=True)
-    assert result.state == expected_state
-    assert result.error == code
-    assert result.retry_after_seconds == 54
-    assert result.fields == {}
-    core._extract_article_content_python.assert_not_called()
-    value.ai_client.analyze_article_complete.assert_not_called()
-
-
-@pytest.mark.parametrize('retry_after', [-1, 86401, True, '45'])
-@pytest.mark.asyncio
+@pytest.mark.parametrize('retry_after', [1.5, -1, 'soon', True])
 async def test_runtime_retry_after_rejects_invalid_wire_values(retry_after):
     async def handler(request):
         return web.json_response(response_for(await request.json(), outcome='failed',

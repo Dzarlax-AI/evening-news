@@ -141,7 +141,8 @@ def test_selector_learning_fixture_requires_learned_selectors_and_same_snapshot_
     assert 'action == "origin-counters"' in probe
     assert '"learned_selector_reparsed_captured_page"' in gate
     assert 're.fullmatch(r"[0-9a-f]{64}"' in gate
-    assert 'origin_counters.get("page_fetches") == 1' in gate
+    assert 'origin_counters.get("page_fetches") == 2' in gate
+    assert 'counters.get("page_monitor_original_title", 0) >= 1' in gate
     assert 'counters.get("selector_study", 0) == 1' in gate
 
 

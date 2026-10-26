@@ -141,32 +141,3 @@ async def test_manual_digest_reservation_lasts_through_cleanup_and_releases_on_f
         with pytest.raises(RuntimeError, match='cleanup failed'):
             await send_telegram_digest()
     assert not processing_cycle_busy()
-
-
-@pytest.mark.asyncio
-@pytest.mark.parametrize('cleanup_failure', [False, True])
-async def test_manual_processing_reservation_lasts_through_cleanup(monkeypatch, cleanup_failure):
-    from news_aggregator.config import settings
-    monkeypatch.setattr(settings, 'admin_password', 'test-only-password')
-    from news_aggregator.api.processing_router import _run_processing_cycle
-    from news_aggregator.orchestrator import (
-        NewsOrchestrator, processing_cycle_busy, reserve_processing_cycle,
-        release_processing_cycle,
-    )
-    orchestrator = NewsOrchestrator.__new__(NewsOrchestrator)
-    orchestrator.start = AsyncMock()
-    orchestrator._run_full_cycle = AsyncMock(return_value={'status': 'success'})
-    async def stop():
-        assert processing_cycle_busy()
-        if cleanup_failure:
-            raise RuntimeError('cleanup failed')
-    orchestrator.stop = AsyncMock(side_effect=stop)
-    reservation = reserve_processing_cycle()
-    assert reservation is not None
-    try:
-        with patch('news_aggregator.api.processing_router.NewsOrchestrator', return_value=orchestrator):
-            await _run_processing_cycle(reservation)
-        orchestrator.stop.assert_awaited_once()
-        assert not processing_cycle_busy()
-    finally:
-        release_processing_cycle(reservation)

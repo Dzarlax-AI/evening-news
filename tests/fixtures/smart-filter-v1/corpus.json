@@ -1,0 +1,458 @@
+[
+  {
+    "version": 1,
+    "case": "too_short_content",
+    "article": {
+      "title": "Long enough synthetic title",
+      "content": "123456789",
+      "url": "https://example.test/story",
+      "source_type": "rss",
+      "allow_extraction": true
+    },
+    "scenario": {
+      "note": "trimmed body lower bound",
+      "check_duplicates": false
+    },
+    "expected": {
+      "should_process": false,
+      "reason": "Content too short (9 chars < 10)"
+    }
+  },
+  {
+    "version": 1,
+    "case": "minimum_content_codepoints",
+    "article": {
+      "title": "Synthetic title at boundary",
+      "content": "абвгдеёжзи",
+      "url": "https://example.test/story",
+      "source_type": "rss",
+      "allow_extraction": false
+    },
+    "scenario": {
+      "note": "10 Unicode codepoints",
+      "check_duplicates": false
+    },
+    "expected": {
+      "should_process": true,
+      "reason": "Passed all filters (quality: 0.65)"
+    }
+  },
+  {
+    "version": 1,
+    "case": "minimum_title_codepoints",
+    "article": {
+      "title": "123456789",
+      "content": "The research team reports several new observations about the changing conditions across multiple regions today.",
+      "url": "https://example.test/story",
+      "source_type": "rss",
+      "allow_extraction": false
+    },
+    "scenario": {
+      "note": "title length boundary",
+      "check_duplicates": false
+    },
+    "expected": {
+      "should_process": false,
+      "reason": "Title too short or low quality (9 chars)"
+    }
+  },
+  {
+    "version": 1,
+    "case": "navigation_prefix",
+    "article": {
+      "title": "Menu synthetic title",
+      "content": "Navigation and links collected from synthetic page",
+      "url": "https://example.test/story",
+      "source_type": "rss",
+      "allow_extraction": false
+    },
+    "scenario": {
+      "note": "ordered prefix navigation",
+      "check_duplicates": false
+    },
+    "expected": {
+      "should_process": false,
+      "reason": "Navigation/boilerplate content detected"
+    }
+  },
+  {
+    "version": 1,
+    "case": "navigation_terms_prefix",
+    "article": {
+      "title": "Terms synthetic title",
+      "content": "Terms of service and legal notices are displayed here.",
+      "url": "https://example.test/story",
+      "source_type": "rss",
+      "allow_extraction": false
+    },
+    "scenario": {
+      "note": "terms navigation",
+      "check_duplicates": false
+    },
+    "expected": {
+      "should_process": true,
+      "reason": "Passed all filters (quality: 0.65)"
+    }
+  },
+  {
+    "version": 1,
+    "case": "language_intermediate_ratio",
+    "article": {
+      "title": "Synthetic title for language check",
+      "content": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaяяяяяяяяяя",
+      "url": "https://example.test/story",
+      "source_type": "rss",
+      "allow_extraction": false
+    },
+    "scenario": {
+      "note": "Cyrillic ratio between accepted bands",
+      "check_duplicates": false
+    },
+    "expected": {
+      "should_process": false,
+      "reason": "Content not in target language (Russian/English)"
+    }
+  },
+  {
+    "version": 1,
+    "case": "language_cyrillic_lower_boundary",
+    "article": {
+      "title": "Synthetic title for language check",
+      "content": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaяяяяяяяяяяяяяяя",
+      "url": "https://example.test/story",
+      "source_type": "rss",
+      "allow_extraction": false
+    },
+    "scenario": {
+      "note": "Cyrillic ratio exactly 0.3",
+      "check_duplicates": false
+    },
+    "expected": {
+      "should_process": true,
+      "reason": "Passed all filters (quality: 0.65)"
+    }
+  },
+  {
+    "version": 1,
+    "case": "language_latin_upper_boundary",
+    "article": {
+      "title": "Synthetic title for language check",
+      "content": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaяяяяя",
+      "url": "https://example.test/story",
+      "source_type": "rss",
+      "allow_extraction": false
+    },
+    "scenario": {
+      "note": "Cyrillic ratio exactly 0.1",
+      "check_duplicates": false
+    },
+    "expected": {
+      "should_process": true,
+      "reason": "Passed all filters (quality: 0.65)"
+    }
+  },
+  {
+    "version": 1,
+    "case": "spam_unicode_boundary",
+    "article": {
+      "title": "Synthetic title for spam boundary",
+      "content": "кликни здесь The research team reports several new observations about the changing conditions across multiple regions today.",
+      "url": "https://example.test/story",
+      "source_type": "rss",
+      "allow_extraction": false
+    },
+    "scenario": {
+      "note": "Unicode word boundaries",
+      "check_duplicates": false
+    },
+    "expected": {
+      "should_process": false,
+      "reason": "Content not in target language (Russian/English)"
+    }
+  },
+  {
+    "version": 1,
+    "case": "spam_phrase_inside_word",
+    "article": {
+      "title": "Synthetic title for spam boundary",
+      "content": "xclick herey The research team reports several new observations about the changing conditions across multiple regions today.",
+      "url": "https://example.test/story",
+      "source_type": "rss",
+      "allow_extraction": false
+    },
+    "scenario": {
+      "note": "word boundary prevents substring match",
+      "check_duplicates": false
+    },
+    "expected": {
+      "should_process": true,
+      "reason": "Passed all filters (quality: 0.65)"
+    }
+  },
+  {
+    "version": 1,
+    "case": "spam_exclamation_four",
+    "article": {
+      "title": "Synthetic title for punctuation boundary",
+      "content": "!!!! The research team reports several new observations about the changing conditions across multiple regions today.",
+      "url": "https://example.test/story",
+      "source_type": "rss",
+      "allow_extraction": false
+    },
+    "scenario": {
+      "note": "spam regex literal semantics at four marks",
+      "check_duplicates": false
+    },
+    "expected": {
+      "should_process": true,
+      "reason": "Passed all filters (quality: 0.65)"
+    }
+  },
+  {
+    "version": 1,
+    "case": "spam_exclamation_five",
+    "article": {
+      "title": "Synthetic title for punctuation boundary",
+      "content": "!!!!! The research team reports several new observations about the changing conditions across multiple regions today.",
+      "url": "https://example.test/story",
+      "source_type": "rss",
+      "allow_extraction": false
+    },
+    "scenario": {
+      "note": "spam regex literal semantics at five marks",
+      "check_duplicates": false
+    },
+    "expected": {
+      "should_process": false,
+      "reason": "Spam patterns detected"
+    }
+  },
+  {
+    "version": 1,
+    "case": "metadata_month_day_nonextractable",
+    "article": {
+      "title": "Synthetic title for metadata case",
+      "content": "Sep 05 The research team reports several new observations about the changing conditions across multiple regions today.",
+      "url": "https://example.test/story",
+      "source_type": "rss",
+      "allow_extraction": false
+    },
+    "scenario": {
+      "note": "metadata rejected without extraction",
+      "check_duplicates": false
+    },
+    "expected": {
+      "should_process": false,
+      "reason": "Metadata/low-quality content detected (no extraction possible)"
+    }
+  },
+  {
+    "version": 1,
+    "case": "metadata_month_day_extractable",
+    "article": {
+      "title": "Synthetic title for metadata case",
+      "content": "Sep 05 The research team reports several new observations about the changing conditions across multiple regions today.",
+      "url": "https://example.test/story",
+      "source_type": "rss",
+      "allow_extraction": true
+    },
+    "scenario": {
+      "note": "metadata asks for extraction",
+      "check_duplicates": false
+    },
+    "expected": {
+      "should_process": false,
+      "reason": "Content suspiciously short (118 chars, 17 words) for detailed title (needs extraction)"
+    }
+  },
+  {
+    "version": 1,
+    "case": "metadata_skip_domain",
+    "article": {
+      "title": "Synthetic title for metadata case",
+      "content": "Sep 05 The research team reports several new observations about the changing conditions across multiple regions today.",
+      "url": "https://x.com/story",
+      "source_type": "rss",
+      "allow_extraction": true
+    },
+    "scenario": {
+      "note": "skip domain precedence",
+      "check_duplicates": false
+    },
+    "expected": {
+      "should_process": false,
+      "reason": "Metadata/low-quality content detected (non-extractable URL)"
+    }
+  },
+  {
+    "version": 1,
+    "case": "metadata_russian_subscribe",
+    "article": {
+      "title": "Synthetic title for metadata case",
+      "content": "Подписаться The research team reports several new observations about the changing conditions across multiple regions today.",
+      "url": "https://example.test/story",
+      "source_type": "rss",
+      "allow_extraction": false
+    },
+    "scenario": {
+      "note": "Cyrillic metadata token boundaries",
+      "check_duplicates": false
+    },
+    "expected": {
+      "should_process": false,
+      "reason": "Content not in target language (Russian/English)"
+    }
+  },
+  {
+    "version": 1,
+    "case": "metadata_repetitive",
+    "article": {
+      "title": "Synthetic title for repetitive case",
+      "content": "notice notice notice notice notice notice",
+      "url": "https://example.test/story",
+      "source_type": "rss",
+      "allow_extraction": false
+    },
+    "scenario": {
+      "note": "short repetitive content",
+      "check_duplicates": false
+    },
+    "expected": {
+      "should_process": false,
+      "reason": "Metadata/low-quality content detected (no extraction possible)"
+    }
+  },
+  {
+    "version": 1,
+    "case": "short_detailed_title_needs_extraction",
+    "article": {
+      "title": "A detailed synthetic research title with several meaningful words",
+      "content": "Brief synthetic summary.",
+      "url": "https://example.test/story",
+      "source_type": "rss",
+      "allow_extraction": true
+    },
+    "scenario": {
+      "note": "detailed title short body",
+      "check_duplicates": false
+    },
+    "expected": {
+      "should_process": false,
+      "reason": "Content suspiciously short (24 chars, 3 words) for detailed title (needs extraction)"
+    }
+  },
+  {
+    "version": 1,
+    "case": "short_body_needs_extraction",
+    "article": {
+      "title": "Synthetic title for short body",
+      "content": "Brief summary only.",
+      "url": "https://example.test/story",
+      "source_type": "rss",
+      "allow_extraction": true
+    },
+    "scenario": {
+      "note": "very short body",
+      "check_duplicates": false
+    },
+    "expected": {
+      "should_process": false,
+      "reason": "Content suspiciously short (19 chars, 3 words) for detailed title (needs extraction)"
+    }
+  },
+  {
+    "version": 1,
+    "case": "short_body_skip_url",
+    "article": {
+      "title": "Synthetic title for short body",
+      "content": "Brief summary only.",
+      "url": "https://t.me/synthetic",
+      "source_type": "rss",
+      "allow_extraction": true
+    },
+    "scenario": {
+      "note": "URL skip-domain behavior",
+      "check_duplicates": false
+    },
+    "expected": {
+      "should_process": true,
+      "reason": "Passed all filters (quality: 0.65)"
+    }
+  },
+  {
+    "version": 1,
+    "case": "quality_threshold_extraction",
+    "article": {
+      "title": "Synthetic title for quality threshold",
+      "content": "Only a few words in this small synthetic report.",
+      "url": "https://example.test/story",
+      "source_type": "extraction",
+      "allow_extraction": false
+    },
+    "scenario": {
+      "note": "extraction-specific quality threshold",
+      "check_duplicates": false
+    },
+    "expected": {
+      "should_process": true,
+      "reason": "Passed all filters (quality: 0.70)"
+    }
+  },
+  {
+    "version": 1,
+    "case": "quality_threshold_other",
+    "article": {
+      "title": "Synthetic title for quality threshold",
+      "content": "Only a few words in this small synthetic report.",
+      "url": "https://example.test/story",
+      "source_type": "custom",
+      "allow_extraction": false
+    },
+    "scenario": {
+      "note": "default quality threshold",
+      "check_duplicates": false
+    },
+    "expected": {
+      "should_process": true,
+      "reason": "Passed all filters (quality: 0.60)"
+    }
+  },
+  {
+    "version": 1,
+    "case": "personal_service_penalty",
+    "article": {
+      "title": "Synthetic title about professional services",
+      "content": "Я программист и предлагаю услуги. Мой опыт подтверждает это. Свяжитесь со мной.",
+      "url": "https://example.test/story",
+      "source_type": "rss",
+      "allow_extraction": false
+    },
+    "scenario": {
+      "note": "personal service score penalty",
+      "check_duplicates": false
+    },
+    "expected": {
+      "should_process": false,
+      "reason": "Content quality too low (score: 0.00)"
+    }
+  },
+  {
+    "version": 1,
+    "case": "normal_english_pass",
+    "article": {
+      "title": "Synthetic title about research observations",
+      "content": "The research team reports several new observations about the changing conditions across multiple regions today.",
+      "url": "https://example.test/story",
+      "source_type": "rss",
+      "allow_extraction": false
+    },
+    "scenario": {
+      "note": "normal valid article",
+      "check_duplicates": false
+    },
+    "expected": {
+      "should_process": true,
+      "reason": "Passed all filters (quality: 0.65)"
+    }
+  }
+]

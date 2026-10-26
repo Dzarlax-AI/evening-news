@@ -472,7 +472,7 @@ async def search_articles(
             raise HTTPException(status_code=400, detail="Search query must be at least 2 characters")
         
         # Build base query with relationships
-        from .processing.processing_outcome import publication_filter
+        from .services.publication import publication_filter
         query = select(Article).options(
             selectinload(Article.source),
             selectinload(Article.article_categories).selectinload(ArticleCategory.category)

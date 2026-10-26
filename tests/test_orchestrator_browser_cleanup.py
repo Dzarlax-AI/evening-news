@@ -12,22 +12,21 @@ def make_orchestrator() -> NewsOrchestrator:
     orchestrator = NewsOrchestrator.__new__(NewsOrchestrator)
     orchestrator.db_queue_manager = MagicMock()
     orchestrator.db_queue_manager.execute_write = AsyncMock(side_effect=[{}, None])
-    orchestrator._process_unprocessed_articles = AsyncMock(
-        return_value={
-            "articles_processed": 0,
-            "articles_summarized": 0,
-            "articles_categorized": 0,
-        }
-    )
     return orchestrator
 
 
 @pytest.mark.asyncio
 async def test_full_cycle_releases_reservation_after_success(monkeypatch):
     from news_aggregator.services.article_ingestion_client import ArticleIngestionClient
+    from news_aggregator.services import article_processing_client
     monkeypatch.setattr(ArticleIngestionClient, 'collect_and_save', AsyncMock(return_value={
         'sources_synced': 0, 'articles_fetched': 0, 'errors': [], 'errors_count': 0,
     }))
+    processor = type('Processor', (), {'process_current_job': AsyncMock(return_value={
+        'status': 'success', 'articles_processed': 0, 'articles_summarized': 0,
+        'articles_categorized': 0, 'errors': [],
+    })})()
+    monkeypatch.setattr(article_processing_client, 'ArticleProcessingClient', lambda: processor)
     orchestrator = make_orchestrator()
 
     result = await orchestrator.run_full_cycle()
@@ -39,16 +38,15 @@ async def test_full_cycle_releases_reservation_after_success(monkeypatch):
 @pytest.mark.asyncio
 async def test_full_cycle_releases_reservation_after_warning_result(monkeypatch):
     from news_aggregator.services.article_ingestion_client import ArticleIngestionClient
+    from news_aggregator.services import article_processing_client
     monkeypatch.setattr(ArticleIngestionClient, 'collect_and_save', AsyncMock(return_value={
         'sources_synced': 0, 'articles_fetched': 0, 'errors': [], 'errors_count': 0,
     }))
+    processor = type('Processor', (), {'process_current_job': AsyncMock(return_value={
+        'status': 'warning', 'articles_processed': 0, 'errors': ['one article failed'],
+    })})()
+    monkeypatch.setattr(article_processing_client, 'ArticleProcessingClient', lambda: processor)
     orchestrator = make_orchestrator()
-    orchestrator._process_unprocessed_articles.return_value = {
-        "articles_processed": 0,
-        "articles_summarized": 0,
-        "articles_categorized": 0,
-        "errors": ["one article failed"],
-    }
 
     result = await orchestrator.run_full_cycle()
 

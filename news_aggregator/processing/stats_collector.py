@@ -19,11 +19,6 @@ class StatsCollector:
         processing_stats_service = get_processing_stats_service()
         return await processing_stats_service.get_processing_stats(days)
     
-    async def reprocess_failed_extractions(self, limit: int = 50, dry_run: bool = False) -> Dict[str, Any]:
-        """Compatibility entry point using the authoritative bounded state pipeline."""
-        from ..orchestrator import NewsOrchestrator
-        return await NewsOrchestrator().reprocess_failed_extractions(limit, dry_run)
-
     async def get_content_extraction_stats(self) -> Dict[str, Any]:
         """Get statistics about content extraction quality."""
         from ..services.database_queue import get_db_queue_manager

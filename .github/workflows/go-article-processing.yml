@@ -1,0 +1,144 @@
+name: Go article processing
+
+on:
+  pull_request:
+    paths:
+      - 'go-processing/**'
+      - 'news_aggregator/**'
+      - 'tests/**'
+      - 'deploy/news-processing/**'
+      - 'scripts/check_ghcr_tag_absent.py'
+      - 'docker-compose*.yml'
+      - '.github/workflows/go-article-processing.yml'
+  push:
+    branches: [main]
+    paths:
+      - 'go-processing/**'
+      - 'news_aggregator/**'
+      - 'tests/**'
+      - 'deploy/news-processing/**'
+      - 'scripts/check_ghcr_tag_absent.py'
+      - '.github/workflows/go-article-processing.yml'
+  workflow_dispatch:
+    inputs:
+      publish:
+        description: Publish the Go article-processing image from main
+        type: boolean
+        default: false
+
+permissions:
+  contents: read
+
+jobs:
+  processing:
+    runs-on: ubuntu-latest
+    timeout-minutes: 25
+    strategy:
+      fail-fast: false
+      matrix:
+        postgres: ['16', '17']
+    services:
+      postgres:
+        image: postgres:${{ matrix.postgres }}-alpine
+        env:
+          POSTGRES_USER: fixture_admin
+          POSTGRES_PASSWORD: fixture-only
+          POSTGRES_DB: processing_tests
+        ports: ['5432:5432']
+        options: >-
+          --health-cmd "pg_isready -h 127.0.0.1 -U fixture_admin -d processing_tests"
+          --health-interval 5s --health-timeout 5s --health-retries 10
+    env:
+      TEST_DATABASE_URL: postgresql://fixture_admin:fixture-only@127.0.0.1:5432/processing_tests
+      DATABASE_URL: postgresql+asyncpg://fixture_admin:fixture-only@127.0.0.1:5432/processing_tests
+      ADMIN_PASSWORD: fixture-admin-password
+      JWT_SECRET: fixture-only-jwt-signing-value
+      GEMINI_API_KEY: fixture-only-gemini-key
+      GEMINI_API_ENDPOINT: http://127.0.0.1:9/v1/models
+      SCHEDULER_ENABLED: 'false'
+      BACKGROUND_EXECUTION_MODE: worker
+      ARTICLE_PROCESSING_URL: http://processing.invalid:8094
+      ARTICLE_PROCESSING_TOKEN: fixture-only-processing-token
+      ARTICLE_AI_TOKEN: fixture-only-ai-token
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          persist-credentials: false
+      - uses: actions/setup-go@v5
+        with:
+          go-version-file: go-processing/go.mod
+          cache-dependency-path: go-processing/go.sum
+      - uses: actions/setup-python@v5
+        with:
+          python-version: '3.12'
+      - run: python -m pip install -r requirements.txt
+      - name: Go checks and Linux architecture builds
+        working-directory: go-processing
+        run: |
+          go mod verify
+          go test -race -count=1 ./...
+          go vet ./...
+          CGO_ENABLED=0 GOOS=linux GOARCH=amd64 go build -o /tmp/news-processing-amd64 ./cmd/news-processing
+          CGO_ENABLED=0 GOOS=linux GOARCH=arm64 go build -o /tmp/news-processing-arm64 ./cmd/news-processing
+      - name: Python protocol, callback, migration and parity checks
+        env:
+          TEST_DATABASE_URL: postgresql+asyncpg://fixture_admin:fixture-only@127.0.0.1:5432/processing_tests
+        run: python -m pytest -q tests/test_article_processing*.py tests/test_article_ai_callback.py
+      - name: Build private service image without publication
+        if: matrix.postgres == '17'
+        run: docker build -f go-processing/Dockerfile -t evening-news-processing:fixture .
+
+  publish:
+    needs: processing
+    if: ${{ github.event_name == 'workflow_dispatch' && inputs.publish && github.ref == 'refs/heads/main' }}
+    concurrency:
+      group: go-article-processing-publish-${{ github.sha }}
+      cancel-in-progress: false
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    permissions:
+      contents: read
+      packages: write
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          persist-credentials: false
+      - uses: docker/setup-buildx-action@v3
+      - uses: docker/login-action@v3
+        with:
+          registry: ghcr.io
+          username: ${{ github.actor }}
+          password: ${{ secrets.GITHUB_TOKEN }}
+      - name: Refuse to overwrite an existing SHA tag
+        env:
+          IMAGE_TAG: ghcr.io/dzarlax-ai/rss-article-processing:sha-${{ github.sha }}
+          GHCR_REPOSITORY: dzarlax-ai/rss-article-processing
+          GHCR_USERNAME: ${{ github.actor }}
+          GHCR_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: python3 scripts/check_ghcr_tag_absent.py
+      - name: Publish verified Go article-processing image
+        id: image
+        uses: docker/build-push-action@v5
+        with:
+          context: .
+          file: ./go-processing/Dockerfile
+          platforms: linux/amd64
+          push: true
+          tags: ghcr.io/dzarlax-ai/rss-article-processing:sha-${{ github.sha }}
+          labels: |
+            org.opencontainers.image.source=${{ github.server_url }}/${{ github.repository }}
+            org.opencontainers.image.revision=${{ github.sha }}
+            org.opencontainers.image.title=Evening News Go article processing
+          cache-from: type=gha,scope=go-article-processing
+          cache-to: type=gha,mode=max,scope=go-article-processing
+      - name: Record exact published image digest
+        env:
+          IMAGE_DIGEST: ${{ steps.image.outputs.digest }}
+        run: |
+          test -n "$IMAGE_DIGEST"
+          printf 'ghcr.io/dzarlax-ai/rss-article-processing@%s\n' "$IMAGE_DIGEST" > article-processing-image.txt
+      - uses: actions/upload-artifact@v4
+        with:
+          name: go-article-processing-image
+          path: article-processing-image.txt
+          retention-days: 14

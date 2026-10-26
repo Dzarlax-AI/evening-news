@@ -90,28 +90,37 @@ async function resolveBackgroundResponse(response, data, onUpdate) {
             onUpdate?.(job);
             if (['succeeded', 'failed', 'delivery_unknown'].includes(job.status)) {
                 const resultStatus = job.result && job.result.status;
+                const processingResult = job.result || {};
                 const articleOutcomes = job.result && job.result.article_outcomes;
                 const articleFailure = Array.isArray(articleOutcomes) && articleOutcomes.some(
                     item => item && item.state !== 'completed'
                 );
-                const nonSuccess = ['warning', 'deferred', 'rejected', 'exhausted', 'incomplete'];
+                const nonSuccess = ['warning', 'deferred', 'rejected', 'exhausted', 'retry_wait', 'incomplete', 'busy'];
                 let message;
                 if (job.status === 'delivery_unknown') {
                     message = 'The delivery outcome is unknown; the message was not resent.';
-                } else if (job.status === 'interrupted') {
-                    message = 'The job was interrupted and is waiting for worker recovery.';
-                } else if (resultStatus === 'deferred') {
-                    message = 'The work was deferred and will be retried later.';
                 } else if (resultStatus === 'dry_run') {
                     message = 'The dry run completed without changing articles.';
-                } else if (resultStatus === 'rejected' || resultStatus === 'exhausted' || articleFailure) {
+                } else if (resultStatus === 'retry_wait' || resultStatus === 'busy'
+                    || processingResult.retryable === true) {
+                    message = 'Some articles need another attempt; see the returned details.';
+                } else if (resultStatus === 'deferred') {
+                    message = 'The work was deferred and will be retried later.';
+                } else if (resultStatus === 'rejected' || resultStatus === 'exhausted'
+                    || articleFailure) {
                     message = 'The job finished with article-level outcomes; see the returned details.';
-                } else if (resultStatus === 'warning' || resultStatus === 'incomplete') {
+                } else if (resultStatus === 'warning' || resultStatus === 'incomplete'
+                    || processingResult.settled === false) {
                     message = 'The job finished with warnings or incomplete work.';
                 }
                 return {
                     ...job,
-                    success: job.status === 'succeeded' && !nonSuccess.includes(resultStatus) && !articleFailure,
+                    success: job.status === 'succeeded'
+                        && processingResult.success !== false
+                        && processingResult.settled !== false
+                        && processingResult.retryable !== true
+                        && !nonSuccess.includes(resultStatus)
+                        && !articleFailure,
                     message,
                 };
             }

@@ -126,14 +126,14 @@ def test_large_selected_result_is_bounded_without_losing_aggregate():
     assert result["article_outcomes_total"] == 100
     assert result["article_outcomes_omitted"] == 80
     assert len(result["article_outcomes"]) == 20
-    assert result["status"] == "warning"
+    assert result["status"] == "incomplete"
     assert _safe_result(result) == result
     persisted = _bounded_result("article_reprocess", {
         **result, "duration_seconds": 1.25,
     })
     assert persisted["article_outcomes_total"] == 100
     assert persisted["article_outcomes_omitted"] == 80
-    assert persisted["status"] == "warning"
+    assert persisted["status"] == "incomplete"
     assert persisted["duration_seconds"] == 1.25
     backup = _bounded_result("backup", {"status": "success", "backup_bytes": 4096})
     assert backup["backup_bytes"] == 4096

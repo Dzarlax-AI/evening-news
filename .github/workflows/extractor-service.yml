@@ -4,6 +4,7 @@ on:
   pull_request:
     paths:
       - 'go/**'
+      - 'go-processing/**'
       - 'news_aggregator/extraction/**'
       - 'news_aggregator/telegram/**'
       - 'news_aggregator/sources/**'
@@ -37,6 +38,7 @@ on:
   push:
     paths:
       - 'go/**'
+      - 'go-processing/**'
       - 'news_aggregator/extraction/**'
       - 'news_aggregator/telegram/**'
       - 'news_aggregator/sources/**'
@@ -105,6 +107,9 @@ jobs:
       ARTICLE_INGESTION_MODE: go
       ARTICLE_INGESTION_URL: http://ingestion.invalid:8093
       ARTICLE_INGESTION_TOKEN: isolated-article-ingestion-token
+      ARTICLE_PROCESSING_URL: http://processing.invalid:8094
+      ARTICLE_PROCESSING_TOKEN: isolated-article-processing-token
+      ARTICLE_AI_TOKEN: isolated-article-ai-token
       TEST_DATABASE_URL: postgresql+asyncpg://postgres:test-only@127.0.0.1:5432/evening_news_test
     steps:
       - uses: actions/checkout@v4

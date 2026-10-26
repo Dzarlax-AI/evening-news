@@ -111,28 +111,3 @@ async def test_refresh_closes_read_and_preserves_media_on_missing_post(monkeypat
             assert article.image_url == (result[0]['url'] if result else None)
         assert article.source.enabled is False
     engine.dispose()
-
-
-@pytest.mark.asyncio
-async def test_embedded_route_releases_request_read_before_media_network(monkeypatch):
-    from unittest.mock import AsyncMock
-    from news_aggregator.config import settings
-    monkeypatch.setattr(settings, 'admin_password', 'fixture-admin-password')
-    monkeypatch.setattr(settings, 'background_execution_mode', 'embedded')
-    import importlib
-    route = importlib.import_module('news_aggregator.api.articles_router')
-    row = SimpleNamespace(source=SimpleNamespace(source_type='telegram'))
-    db = SimpleNamespace(
-        execute=AsyncMock(return_value=SimpleNamespace(scalar_one_or_none=lambda: row)),
-        rollback=AsyncMock())
-    async def fetch(article_id):
-        db.rollback.assert_awaited_once()
-        return True
-    runner = SimpleNamespace(process_selected_articles=AsyncMock(return_value={
-        'success': True, 'status': 'completed'}))
-    monkeypatch.setattr(route, 'NewsOrchestrator', lambda: runner)
-    monkeypatch.setattr(route, 'reserve_processing_cycle', lambda: object())
-    monkeypatch.setattr(route, 'release_processing_cycle', lambda *_: None)
-    monkeypatch.setattr(refresh, 'reextract_article_media', fetch)
-    result = await route.reprocess_article(1, route.ReprocessRequest(reextract_media=True), db)
-    assert result['success'] is True

@@ -15,6 +15,9 @@ def test_background_worker_fixture_provides_isolated_go_service_settings(role):
         "ARTICLE_INGESTION_MODE": environment["ARTICLE_INGESTION_MODE"],
         "ARTICLE_INGESTION_URL": environment["ARTICLE_INGESTION_URL"],
         "ARTICLE_INGESTION_TOKEN": environment["ARTICLE_INGESTION_TOKEN"],
+        "ARTICLE_PROCESSING_URL": environment["ARTICLE_PROCESSING_URL"],
+        "ARTICLE_PROCESSING_TOKEN": environment["ARTICLE_PROCESSING_TOKEN"],
+        "ARTICLE_AI_TOKEN": environment["ARTICLE_AI_TOKEN"],
         "SCHEDULER_API_URL": environment["SCHEDULER_API_URL"],
         "SCHEDULER_API_TOKEN": environment["SCHEDULER_API_TOKEN"],
         "SCHEDULER_API_ALLOW_HTTP": environment["SCHEDULER_API_ALLOW_HTTP"],
@@ -25,6 +28,7 @@ def test_background_worker_fixture_provides_isolated_go_service_settings(role):
     assert settings.validate_runtime_services() is True
     assert environment["SCHEDULER_API_URL"] == "http://fixture-services:8090"
     assert all("fixture-only" in environment[key] for key in (
-        "EXTRACTION_SERVICE_TOKEN", "ARTICLE_INGESTION_TOKEN",
+        "EXTRACTION_SERVICE_TOKEN", "ARTICLE_INGESTION_TOKEN", "ARTICLE_PROCESSING_TOKEN",
+        "ARTICLE_AI_TOKEN",
         "SCHEDULER_API_TOKEN", "SCHEDULED_JOBS_TOKEN"
     ))
