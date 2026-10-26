@@ -75,31 +75,6 @@ def publication_db(monkeypatch):
 
 
 @pytest.mark.asyncio
-async def test_json_and_rss_feeds_only_publish_completed_articles(publication_db):
-    from news_aggregator.api.feed_router import get_main_feed, get_rss_feed
-    json_feed = await get_main_feed(
-        limit=100, offset=0, since_hours=None, category=None, db=publication_db
-    )
-    assert {item["title"] for item in json_feed["items"]} == {
-        "completed news", "completed ad",
-    }
-
-    explicit_ads_feed = await get_main_feed(
-        limit=100, offset=0, since_hours=None, category="advertisements", db=publication_db
-    )
-    assert {item["title"] for item in explicit_ads_feed["items"]} == {
-        "completed ad", "classified rejected ad",
-    }
-
-    rss_response = await get_rss_feed(limit=100, db=publication_db)
-    rss = rss_response.body.decode("utf-8")
-    assert "completed news" in rss
-    assert "completed ad" not in rss
-    for unpublished in (
-        "pending article", "retry article", "classified rejected ad",
-        "rejected article", "exhausted article", "unknown ad article",
-    ):
-        assert unpublished not in rss
 
 
 @pytest.mark.asyncio
@@ -129,17 +104,6 @@ async def test_public_article_by_id_rejects_unpublished_work_but_allows_admin_pr
 
 
 @pytest.mark.asyncio
-async def test_public_modal_only_bypasses_publication_for_authenticated_admin(publication_db, monkeypatch):
-    from fastapi import HTTPException
-    from news_aggregator import public
-    service = DataService(publication_db)
-    monkeypatch.setattr(public, '_has_public_admin_access', lambda request: False)
-    with pytest.raises(HTTPException) as error:
-        await public.get_public_article(2, object(), service)
-    assert error.value.status_code == 404
-    monkeypatch.setattr(public, '_has_public_admin_access', lambda request: True)
-    result = await public.get_public_article(2, object(), service)
-    assert result['id'] == 2
 
 
 @pytest.mark.asyncio

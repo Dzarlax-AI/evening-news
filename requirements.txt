@@ -38,15 +38,8 @@ python-magic>=0.4.27  # MIME type detection for media files
 
 # Task scheduling (removed - using direct async processing)
 
-# Templates
-jinja2>=3.1.2
-
 # Static files
 python-multipart>=0.0.6
-
-# Security and authentication
-PyJWT>=2.8.0                  # JWT tokens
-slowapi>=0.1.9                # Rate limiting
 
 # CLI interface
 click>=8.1.7

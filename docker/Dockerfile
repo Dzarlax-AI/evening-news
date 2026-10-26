@@ -1,4 +1,4 @@
-# Python web/worker image; collection and browser operations are owned by Go.
+# Private domain executor and migration image; public HTTP/UI has its own image.
 FROM python:3.12-slim
 
 # Build arguments for metadata
@@ -47,10 +47,10 @@ COPY web/ ./web/
 # Copy main application code LAST (most frequently changed)
 COPY news_aggregator/ ./news_aggregator/
 
-EXPOSE 8000
+EXPOSE 8100
 
 # Health check
 HEALTHCHECK --interval=30s --timeout=10s --start-period=60s --retries=3 \
-    CMD curl -f http://localhost:8000/health || exit 1
+    CMD python -c "import json,os,urllib.request; r=urllib.request.Request('http://127.0.0.1:8100/internal/v1/status',headers={'Authorization':'Bearer '+os.environ['JOB_EXECUTOR_TOKEN']}); assert json.load(urllib.request.urlopen(r,timeout=5))['ready']" || exit 1
 
-CMD ["uvicorn", "news_aggregator.main:app", "--host", "0.0.0.0", "--port", "8000"]
+CMD ["python", "-m", "news_aggregator.executor"]

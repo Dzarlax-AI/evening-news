@@ -188,7 +188,7 @@ async def test_identical_manual_active_work_coalesces_but_payloads_do_not(pg_job
 
 
 @pytest.mark.asyncio
-async def test_selected_article_outcome_survives_the_durable_job_receipt(pg_jobs, monkeypatch):
+async def test_selected_article_outcome_survives_the_durable_job_receipt(pg_jobs):
     engine, factory = pg_jobs
     async with engine.begin() as connection:
         await connection.run_sync(lambda sync: Base.metadata.create_all(
@@ -232,17 +232,6 @@ async def test_selected_article_outcome_survives_the_durable_job_receipt(pg_jobs
                 "article_id": 17, "state": "retry_wait", "reason": "missing_summary",
             }]
 
-        # Exercise the public job-status response against the persisted receipt,
-        # as clients observe it after the selected reprocess request is queued.
-        from fastapi import Response
-        from importlib import import_module
-        jobs_api = import_module("news_aggregator.api.background_jobs_router")
-        monkeypatch.setattr(jobs_api, "AsyncSessionLocal", factory)
-        monkeypatch.setattr(jobs_api, "read_worker_status", AsyncMock(return_value={"healthy": True}))
-        public_receipt = await jobs_api.get_job(queued.id, Response())
-        assert public_receipt["status"] == "succeeded"
-        assert public_receipt["result"] == result
-        assert public_receipt["result"]["article_outcomes"][0]["state"] == "retry_wait"
     finally:
         await lease.release()
 

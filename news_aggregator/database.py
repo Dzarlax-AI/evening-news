@@ -76,8 +76,8 @@ async def init_db():
             await session.execute(text("SELECT 1"))
             logger.info("✅ Database initialized and all tables created")
 
-        # Migrations will be run by the migration manager in main.py
-        logger.info("ℹ️  Migrations will be run by the universal migration manager")
+        # Schema bootstrap is owned by the explicit one-shot migration command.
+        logger.info("Schema migrations are managed by news_aggregator.migrate")
 
     except Exception as init_error:
         logger.error(f"❌ Database initialization failed: {init_error}")

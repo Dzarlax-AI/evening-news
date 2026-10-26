@@ -380,11 +380,16 @@ class GoWebGate(IngestionGate):
                                 "EXTRACTOR_MAX_CONCURRENT": "1", "EXTRACTOR_SERVICE_TOKEN": COLLECTOR_TOKEN,
                                 "SSL_CERT_FILE": "/fixtures/fixture-ca.crt"},
                            mounts=False, memory="192m")
-        self.run_container(self.prefix + "-executor", command=["python", "-m", "news_aggregator.executor"],
+        self.run_container(self.prefix + "-executor", command=[],
                            alias="executor", env=self.app_environment("executor"), memory="512m",
                            disable_healthcheck=True)
         self.wait_http(self.prefix + "-executor", "http://127.0.0.1:8100/internal/v1/status",
                        auth=EXECUTOR_TOKEN)
+        retired = self.docker("exec", self.prefix + "-executor", "python", "-c",
+            "from pathlib import Path; paths=[Path('news_aggregator/main.py'),Path('news_aggregator/public.py')]; "
+            "paths+=list(Path('news_aggregator/api').rglob('*.py'))+list(Path('web/templates').rglob('*.html')); "
+            "print(any(p.is_file() for p in paths))")
+        self.check("python_public_web_absent_from_executor_image", retired.stdout.strip() == "False")
         self.run_container(self.prefix + "-ingestion", command=[], alias="ingestion",
                            image=self.ingestion_image,
                            env={"ARTICLE_INGESTION_LISTEN": ":8093",
