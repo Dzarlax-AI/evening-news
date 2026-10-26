@@ -33,6 +33,7 @@ SCHEDULER_PASSWORD = "fixture-scheduler-only"
 JOB_EXECUTOR_TOKEN = "fixture-job-executor-only-token"
 ARTICLE_PROCESSING_TOKEN = "fixture-only-article-processing-token"
 ARTICLE_AI_TOKEN = "fixture-only-article-ai-token"
+DEFAULT_GO_WEB_IMAGE = "evening-news-web:components-20261026"
 
 
 class GateFailure(RuntimeError):
@@ -50,8 +51,9 @@ def framed_source_hash(paths: list[Path], root: Path) -> str:
 
 class DockerGate:
     def __init__(self, app_image: str, scheduler_image: str, worker_image: str,
-                 processing_image: str, output_dir: Path):
+                 processing_image: str, output_dir: Path, web_image: str = DEFAULT_GO_WEB_IMAGE):
         self.app_image_ref = app_image
+        self.web_image_ref = web_image
         self.scheduler_image_ref = scheduler_image
         self.worker_image_ref = worker_image
         self.processing_image_ref = processing_image
@@ -80,6 +82,8 @@ class DockerGate:
             "fake": self.prefix + "-fake",
             "scheduler": self.prefix + "-scheduler",
             "web": self.prefix + "-web",
+            "probe": self.prefix + "-probe",
+            "migrate": self.prefix + "-migrate",
             "worker": self.prefix + "-worker",
             "executor": self.prefix + "-executor",
             "processing": self.prefix + "-processing",
@@ -193,6 +197,7 @@ class DockerGate:
             "ARTICLE_PROCESSING_URL": "http://processing:8094",
             "ARTICLE_PROCESSING_TOKEN": ARTICLE_PROCESSING_TOKEN,
             "ARTICLE_AI_TOKEN": ARTICLE_AI_TOKEN,
+            "WEB_BACKEND_TOKEN": "fixture-only-web-backend-token",
             "EXTRACTION_SERVICE_MODE": "go",
             "EXTRACTION_SERVICE_PYTHON_FALLBACK": "false",
             "BROWSER_WS_ENDPOINT": "",
@@ -211,7 +216,40 @@ class DockerGate:
             "CACHE_DIR": "/tmp/go-scheduler-gate-cache",
         }
 
+    def web_environment(self) -> dict[str, str]:
+        return {
+            "DATABASE_URL": f"postgres://news_role:{NEWS_PASSWORD}@postgres:5432/gate_db?sslmode=disable",
+            "WEB_LISTEN_ADDRESS": ":8000", "ADMIN_USERNAME": "fixture-admin",
+            "ADMIN_PASSWORD": "fixture-admin-password", "JWT_SECRET": "fixture-only-jwt-signing-value",
+            "DEVELOPMENT": "true", "BACKGROUND_EXECUTION_MODE": "worker",
+            "SCHEDULE_DISPATCH_MODE": "service", "SCHEDULER_API_URL": "http://scheduler:8080",
+            "SCHEDULER_API_TOKEN": SCHEDULER_TOKEN, "SCHEDULER_API_ALLOW_HTTP": "true",
+            "SCHEDULED_JOBS_TOKEN": NEWS_TARGET_TOKEN, "SCHEDULED_JOBS_RECEIPT_LIMIT": "100000",
+            "WEB_BACKEND_URL": "http://executor:8100",
+            "WEB_BACKEND_TOKEN": "fixture-only-web-backend-token",
+            "SITE_BASE_URL": "https://fixture.invalid", "ALLOWED_ORIGINS": "",
+            "TRUSTED_HOSTS": "localhost,127.0.0.1,web",
+        }
+
+    def assert_go_web_environment_safe(self) -> None:
+        raw = self.docker("inspect", "--format", "{{json .Config.Env}}",
+                          self.container_names["web"]).stdout
+        try:
+            names = {item.split("=", 1)[0] for item in json.loads(raw)}
+        except (ValueError, TypeError):
+            raise GateFailure("could not inspect Go web environment") from None
+        forbidden = {"GEMINI_API_KEY", "GEMINI_API_ENDPOINT", "TELEGRAM_TOKEN", "TELEGRAM_CHAT_ID",
+                     "TELEGRAM_SERVICE_CHAT_ID", "TELEGRAPH_ACCESS_TOKEN", "ARTICLE_AI_TOKEN",
+                     "ARTICLE_INGESTION_TOKEN", "ARTICLE_PROCESSING_TOKEN", "EXTRACTION_SERVICE_TOKEN",
+                     "JOB_EXECUTOR_TOKEN", "BROWSER_WS_ENDPOINT"}
+        leaked = names & forbidden
+        if leaked:
+            raise GateFailure("provider or worker credential variable on Go web: " + ",".join(sorted(leaked)))
+        self.report["checks"]["go_web_provider_secrets_absent"] = True
+
     def probe(self, container: str, *args: str, timeout: int = 20) -> dict:
+        if container == self.container_names["web"]:
+            container = self.container_names["probe"]
         output = self.docker("exec", container, "python", "/fixtures/probe.py", *args,
                              timeout=timeout).stdout.strip()
         try:
@@ -447,7 +485,7 @@ class DockerGate:
         if internal.lower() != "true":
             raise GateFailure("fixture Docker network is not internal-only")
         self.report["checks"]["network_internal_only"] = True
-        fixture_roles = ["web", "fake", "executor"]
+        fixture_roles = ["probe", "fake", "executor"]
         for role in fixture_roles:
             name = self.container_names[role]
             output = self.docker("inspect", "--format", "{{json .Mounts}}", name).stdout.strip()
@@ -456,7 +494,7 @@ class DockerGate:
                 raise GateFailure(f"{role} has an unexpected filesystem mount")
             if mounts[0]["Destination"] != "/fixtures" or mounts[0]["RW"]:
                 raise GateFailure(f"{role} fixture mount is not read-only")
-        for role in ("scheduler", "processing", "postgres"):
+        for role in ("scheduler", "processing", "postgres", "web", "migrate"):
             output = self.docker("inspect", "--format", "{{json .Mounts}}", self.container_names[role]).stdout.strip()
             mounts = json.loads(output)
             if role == "postgres":
@@ -518,11 +556,22 @@ class DockerGate:
         self.create_container(self.container_names["scheduler"], self.pinned_images["scheduler"],
                              ["serve"], role="scheduler", alias="scheduler",
                              memory="128m", env=scheduler_env, no_healthcheck=True)
-        web_env = self.app_environment("web")
-        self.create_container(self.container_names["web"], self.pinned_images["app"],
-                             ["uvicorn", "news_aggregator.main:app", "--host", "0.0.0.0", "--port", "8000"],
-                             role="web", alias="web", fixture_mount=True, memory="256m", env=web_env,
+        self.create_container(self.container_names["migrate"], self.pinned_images["app"],
+                             ["python", "-m", "news_aggregator.migrate"], role="migrate",
+                             env={"DATABASE_URL": f"postgresql+asyncpg://news_role:{NEWS_PASSWORD}@postgres:5432/gate_db",
+                                  "ALLOW_CREATE_ALL": "true", "DEVELOPMENT": "true"},
+                             memory="512m", no_healthcheck=True)
+        migration_exit = self.docker("wait", self.container_names["migrate"], timeout=120).stdout.strip()
+        if migration_exit != "0":
+            raise GateFailure("explicit migration bootstrap failed")
+        self.report["checks"]["explicit_migration_bootstrap"] = True
+        self.create_container(self.container_names["probe"], self.pinned_images["app"],
+                             ["sleep", "86400"], role="probe", alias="probe",
+                             fixture_mount=True, memory="256m", env=self.app_environment("probe"),
                              no_healthcheck=True)
+        self.create_container(self.container_names["web"], self.pinned_images["web"],
+                             [], role="web", alias="web", memory="384m", env=self.web_environment())
+        self.assert_go_web_environment_safe()
         self.wait_status("web", "/health")
         executor_env = self.app_environment("executor")
         executor_env.update({
@@ -564,7 +613,8 @@ class DockerGate:
     def verify_source_freshness(self) -> None:
         workspace_app_hashes = self.app_source_hashes()
         runtime_app_hashes = self.probe(self.container_names["web"], "runtime-app-hashes")
-        app_image_id = self.docker("inspect", "--format", "{{.Image}}", self.container_names["web"]).stdout.strip()
+        app_image_id = self.docker("inspect", "--format", "{{.Image}}", self.container_names["probe"]).stdout.strip()
+        web_image_id = self.docker("inspect", "--format", "{{.Image}}", self.container_names["web"]).stdout.strip()
         scheduler_image_id = self.docker("inspect", "--format", "{{.Image}}", self.container_names["scheduler"]).stdout.strip()
         processing_image_id = self.docker("inspect", "--format", "{{.Image}}", self.container_names["processing"]).stdout.strip()
         version_status, version = self.request("scheduler", "GET", "/version", auth="none")
@@ -575,7 +625,8 @@ class DockerGate:
                 article_processing_inventory_matches(workspace_app_hashes)
                 and article_processing_inventory_matches(runtime_app_hashes)
             ),
-            "web_container_uses_requested_immutable_image": app_image_id == self.pinned_images["app"],
+            "probe_container_uses_requested_immutable_app_image": app_image_id == self.pinned_images["app"],
+            "go_web_container_uses_requested_immutable_image": web_image_id == self.pinned_images["web"],
             "executor_container_uses_requested_immutable_app_image": (
                 self.docker("inspect", "--format", "{{.Image}}", self.container_names["executor"]).stdout.strip()
                 == self.pinned_images["app"]
@@ -590,6 +641,7 @@ class DockerGate:
             "expected_scheduler_build_id": expected_scheduler_hash,
             "runtime_scheduler_build_id": version.get("build_id"),
             "app_image_id": app_image_id,
+            "web_image_id": web_image_id,
             "scheduler_image_id": scheduler_image_id,
             "processing_image_id": processing_image_id,
         }
@@ -685,7 +737,7 @@ class DockerGate:
         )
 
     def prepare_and_dispatch(self) -> dict[str, dict]:
-        seed = self.docker("exec", self.container_names["web"], "python", "/fixtures/seed_fixture.py").stdout.strip()
+        seed = self.docker("exec", self.container_names["probe"], "python", "/fixtures/seed_fixture.py").stdout.strip()
         try:
             self.report["fixture_seed"] = json.loads(seed.splitlines()[-1])
         except (ValueError, IndexError):
@@ -1168,6 +1220,7 @@ class DockerGate:
     def run(self) -> None:
         self.output_dir.mkdir(parents=True, exist_ok=True)
         self.resolve_image(self.app_image_ref, "app")
+        self.resolve_image(self.web_image_ref, "web")
         self.resolve_image(self.scheduler_image_ref, "scheduler")
         self.resolve_image(self.worker_image_ref, "worker")
         self.resolve_image(self.processing_image_ref, "processing")
@@ -1207,6 +1260,8 @@ class DockerGate:
 def main() -> int:
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument("--app-image", required=True, help="Existing local News app image; never built or published here.")
+    parser.add_argument("--web-image", default=DEFAULT_GO_WEB_IMAGE,
+                        help="Existing local Go web image; the gate never builds or publishes it.")
     parser.add_argument("--scheduler-image", required=True, help="Existing local standalone scheduler image.")
     parser.add_argument("--worker-image", required=True, help="Existing local standalone Go job worker image.")
     parser.add_argument("--processing-image", required=True,
@@ -1216,7 +1271,7 @@ def main() -> int:
     if not shutil.which("docker"):
         parser.error("docker CLI is required")
     gate = DockerGate(args.app_image, args.scheduler_image, args.worker_image,
-                      args.processing_image, args.output_dir)
+                      args.processing_image, args.output_dir, args.web_image)
     try:
         gate.run()
     except Exception as exc:

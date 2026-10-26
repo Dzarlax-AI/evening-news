@@ -236,7 +236,7 @@ class DataService:
 
     def _article_to_dict(self, article: Article, include_content: bool = False) -> Dict[str, Any]:
         """Convert article to dict format."""
-        from ..api.feed_router import extract_domain, clean_html_entities, clean_summary_text
+        from .feed_formatters import extract_domain, clean_html_entities, clean_summary_text
         
         domain = extract_domain(article.url) if article.url else "unknown"
         cleaned_summary = clean_summary_text(article.summary) if article.summary else None

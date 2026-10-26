@@ -2,10 +2,66 @@ services:
   web:
     build:
       context: .
-      dockerfile: docker/Dockerfile
+      dockerfile: go-web/Dockerfile
     ports:
       - "8000:8000"
-    environment: &app-environment
+    environment:
+      DATABASE_URL: postgres://newsuser:${DB_PASSWORD:?Set DB_PASSWORD}@postgres:5432/newsdb
+      WEB_LISTEN_ADDRESS: ":8000"
+      ADMIN_USERNAME: ${ADMIN_USERNAME:-admin}
+      ADMIN_PASSWORD: ${ADMIN_PASSWORD:?Set ADMIN_PASSWORD}
+      JWT_SECRET: ${JWT_SECRET:?Set JWT_SECRET}
+      DEVELOPMENT: ${DEVELOPMENT:-false}
+      TRUST_FORWARD_AUTH: ${TRUST_FORWARD_AUTH:-false}
+      TRUSTED_PROXY_CIDRS: ${TRUSTED_PROXY_CIDRS:-}
+      BACKGROUND_EXECUTION_MODE: worker
+      SCHEDULE_DISPATCH_MODE: service
+      SCHEDULED_JOBS_TOKEN: ${SCHEDULED_JOBS_TOKEN:?Set SCHEDULED_JOBS_TOKEN}
+      SCHEDULED_JOBS_RECEIPT_LIMIT: ${SCHEDULED_JOBS_RECEIPT_LIMIT:-100000}
+      WEB_BACKEND_URL: http://executor:8100
+      WEB_BACKEND_TOKEN: ${WEB_BACKEND_TOKEN:?Set WEB_BACKEND_TOKEN}
+      SCHEDULER_API_URL: http://scheduler:8080
+      SCHEDULER_API_TOKEN: ${SCHEDULER_API_TOKEN:?Set SCHEDULER_API_TOKEN}
+      SCHEDULER_API_ALLOW_HTTP: "true"
+      SITE_BASE_URL: ${SITE_BASE_URL:-http://localhost:8000}
+      ALLOWED_ORIGINS: ${ALLOWED_ORIGINS:-http://localhost:8000}
+      TRUSTED_HOSTS: ${TRUSTED_HOSTS:-localhost,127.0.0.1,web}
+    depends_on:
+      migrate:
+        condition: service_completed_successfully
+      executor:
+        condition: service_healthy
+      scheduler:
+        condition: service_healthy
+    restart: unless-stopped
+    healthcheck:
+      test: ["CMD", "wget", "-q", "-O", "/dev/null", "http://localhost:8000/health"]
+      interval: 30s
+      timeout: 10s
+      retries: 3
+      start_period: 15s
+
+  migrate:
+    build:
+      context: .
+      dockerfile: docker/Dockerfile
+    command: ["python", "-m", "news_aggregator.migrate"]
+    environment:
+      DATABASE_URL: postgresql+asyncpg://newsuser:${DB_PASSWORD:?Set DB_PASSWORD}@postgres:5432/newsdb
+      ALLOW_CREATE_ALL: "true"
+      DEVELOPMENT: ${DEVELOPMENT:-false}
+    depends_on:
+      postgres:
+        condition: service_healthy
+    restart: "no"
+
+  executor:
+    stop_grace_period: 180s
+    build:
+      context: .
+      dockerfile: docker/Dockerfile
+    command: ["python", "-m", "news_aggregator.executor"]
+    environment: &python-environment
       DATABASE_URL: postgresql+asyncpg://newsuser:${DB_PASSWORD:?Set DB_PASSWORD}@postgres:5432/newsdb
       GEMINI_API_KEY: ${GEMINI_API_KEY:?Set GEMINI_API_KEY}
       GEMINI_API_ENDPOINT: https://generativelanguage.googleapis.com/v1/models
@@ -24,6 +80,7 @@ services:
       ARTICLE_AI_TOKEN: ${ARTICLE_AI_TOKEN:?Set ARTICLE_AI_TOKEN}
       ARTICLE_PROCESSING_URL: http://article-processing:8094
       ARTICLE_PROCESSING_TOKEN: ${ARTICLE_PROCESSING_TOKEN:?Set ARTICLE_PROCESSING_TOKEN}
+      WEB_BACKEND_TOKEN: ${WEB_BACKEND_TOKEN:?Set WEB_BACKEND_TOKEN}
       ARTICLE_INGESTION_MODE: go
       ARTICLE_INGESTION_URL: http://article-ingestion:8093
       ARTICLE_INGESTION_TOKEN: ${ARTICLE_INGESTION_TOKEN:?Set ARTICLE_INGESTION_TOKEN}
@@ -46,40 +103,17 @@ services:
       CACHE_DIR: /app/cache
       ALLOWED_ORIGINS: ${ALLOWED_ORIGINS:-http://localhost:8000}
       TRUSTED_HOSTS: ${TRUSTED_HOSTS:-localhost,127.0.0.1,web}
+      JOB_EXECUTOR_TOKEN: ${JOB_EXECUTOR_TOKEN:?Set JOB_EXECUTOR_TOKEN}
+      JOB_EXECUTOR_HOST: 0.0.0.0
+      JOB_EXECUTOR_PORT: "8100"
     depends_on:
-      postgres:
-        condition: service_healthy
+      migrate:
+        condition: service_completed_successfully
       article-ingestion:
         condition: service_healthy
       extractor:
         condition: service_healthy
       scheduler:
-        condition: service_healthy
-    volumes:
-      - app_cache:/app/cache:ro
-      - app_logs:/app/logs
-      - app_backups:/app/backups:ro
-    restart: unless-stopped
-    healthcheck:
-      test: ["CMD", "curl", "-f", "http://localhost:8000/health"]
-      interval: 30s
-      timeout: 10s
-      retries: 3
-      start_period: 40s
-
-  executor:
-    stop_grace_period: 180s
-    build:
-      context: .
-      dockerfile: docker/Dockerfile
-    command: ["python", "-m", "news_aggregator.executor"]
-    environment:
-      <<: *app-environment
-      JOB_EXECUTOR_TOKEN: ${JOB_EXECUTOR_TOKEN:?Set JOB_EXECUTOR_TOKEN}
-      JOB_EXECUTOR_HOST: 0.0.0.0
-      JOB_EXECUTOR_PORT: "8100"
-    depends_on:
-      web:
         condition: service_healthy
     volumes:
       - app_cache:/app/cache
@@ -130,8 +164,8 @@ services:
       JOB_EXECUTOR_URL: http://executor:8100
       JOB_EXECUTOR_TOKEN: ${JOB_EXECUTOR_TOKEN:?Set JOB_EXECUTOR_TOKEN}
     depends_on:
-      postgres:
-        condition: service_healthy
+      migrate:
+        condition: service_completed_successfully
       extractor:
         condition: service_healthy
     restart: unless-stopped
@@ -163,8 +197,8 @@ services:
       NEWS_LIMIT_PER_SOURCE: ${NEWS_LIMIT_PER_SOURCE:-50}
       NEWS_LIMIT_NEWEST_DATE: ${NEWS_LIMIT_NEWEST_DATE:-}
     depends_on:
-      postgres:
-        condition: service_healthy
+      migrate:
+        condition: service_completed_successfully
       extractor:
         condition: service_healthy
     read_only: true

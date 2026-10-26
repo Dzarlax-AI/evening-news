@@ -17,12 +17,15 @@ from run_background_worker_fixture_gate import (
     ARTICLE_AI_TOKEN, ARTICLE_PROCESSING_TOKEN, DockerGate, GateFailure, OWNER_LABEL, ROOT,
 )
 
+DEFAULT_GO_WEB_IMAGE = "evening-news-web:components-20261026"
+
 
 class GoJobWorkerGate(DockerGate):
-    def __init__(self, image, worker_image, output_dir, processing_image=None):
+    def __init__(self, image, worker_image, output_dir, processing_image=None, web_image=DEFAULT_GO_WEB_IMAGE):
         super().__init__(image, output_dir)
         self.worker_image = worker_image
         self.processing_image = processing_image
+        self.web_image = web_image
         self.report.update(gate="go-job-worker-docker-fixture", go_worker_image=worker_image,
                            go_processing_image=processing_image,
                            actual_go_runtime_tested=True, actual_go_job_worker_tested=True,
@@ -36,7 +39,8 @@ class GoJobWorkerGate(DockerGate):
     def app_environment(self, role):
         environment = super().app_environment(role)
         environment.update(JOB_EXECUTOR_TOKEN="fixture-only-executor-token",
-                           JOB_EXECUTOR_HOST="0.0.0.0", JOB_EXECUTOR_PORT="8100")
+                           JOB_EXECUTOR_HOST="0.0.0.0", JOB_EXECUTOR_PORT="8100",
+                           WEB_BACKEND_TOKEN="fixture-only-web-backend-token")
         return environment
 
     def docker(self, *args, **kwargs):
@@ -53,12 +57,10 @@ class GoJobWorkerGate(DockerGate):
                 index = arguments.index("postgres:17-alpine")
                 arguments[index:index] = ["--tmpfs", "/var/lib/postgresql/data:rw,size=512m"]
                 args = tuple(arguments)
-            if name in {self.prefix + "-web", self.prefix + "-executor"}:
+            if name == self.prefix + "-executor":
                 arguments = list(args)
                 index = arguments.index(self.image)
                 mount = "type=volume,src=" + self.backup_volume + ",dst=/app/backups"
-                if name.endswith("-web"):
-                    mount += ",readonly"
                 arguments[index:index] = ["--mount", mount]
                 args = tuple(arguments)
         return super().docker(*args, **kwargs)
@@ -82,9 +84,49 @@ class GoJobWorkerGate(DockerGate):
         return name
 
     def private_probe(self, action, *arguments):
-        output = self.docker("exec", f"{self.prefix}-web", "python",
+        output = self.docker("exec", f"{self.prefix}-probe", "python",
                              "/fixtures/go_worker_probe.py", action, *arguments).stdout.strip()
         return json.loads(output.splitlines()[-1])
+
+    def exec_json(self, container: str, *args: str, timeout: int = 20) -> dict:
+        output = self.docker("exec", f"{self.prefix}-probe", "python", "/fixtures/probe.py",
+                             *args, timeout=timeout).stdout.strip()
+        try:
+            return json.loads(output.splitlines()[-1])
+        except (ValueError, IndexError):
+            raise GateFailure("Invalid fixture probe response") from None
+
+    def web_environment(self):
+        return {
+            "DATABASE_URL": "postgres://gate_user:fixture-only-password@postgres:5432/gate_db",
+            "ADMIN_USERNAME": "fixture-admin", "ADMIN_PASSWORD": "fixture-admin-password",
+            "JWT_SECRET": "fixture-only-jwt-signing-value", "DEVELOPMENT": "true",
+            "BACKGROUND_EXECUTION_MODE": "worker", "SCHEDULE_DISPATCH_MODE": "service",
+            "SCHEDULED_JOBS_TOKEN": "fixture-only-scheduled-jobs-token",
+            "SCHEDULED_JOBS_RECEIPT_LIMIT": "100000",
+            "WEB_BACKEND_URL": "http://executor:8100",
+            "WEB_BACKEND_TOKEN": "fixture-only-web-backend-token",
+            "SCHEDULER_API_URL": "http://fixture-services:8090",
+            "SCHEDULER_API_TOKEN": "fixture-only-scheduler-token",
+            "SCHEDULER_API_ALLOW_HTTP": "true", "SITE_BASE_URL": "https://fixture.example.test",
+            "ALLOWED_ORIGINS": "", "TRUSTED_HOSTS": "localhost,127.0.0.1,web",
+        }
+
+    def assert_go_web_environment_safe(self):
+        raw = self.docker("inspect", "--format", "{{json .Config.Env}}",
+                          f"{self.prefix}-web").stdout
+        try:
+            names = {item.split("=", 1)[0] for item in json.loads(raw)}
+        except (ValueError, TypeError):
+            raise GateFailure("could_not_inspect_go_web_environment") from None
+        forbidden = {"GEMINI_API_KEY", "GEMINI_API_ENDPOINT", "TELEGRAM_TOKEN", "TELEGRAM_CHAT_ID",
+                     "TELEGRAM_SERVICE_CHAT_ID", "TELEGRAPH_ACCESS_TOKEN", "ARTICLE_AI_TOKEN",
+                     "ARTICLE_INGESTION_TOKEN", "ARTICLE_PROCESSING_TOKEN", "EXTRACTION_SERVICE_TOKEN",
+                     "JOB_EXECUTOR_TOKEN", "BROWSER_WS_ENDPOINT"}
+        leaked = names & forbidden
+        if leaked:
+            raise GateFailure("provider_or_worker_credentials_configured_on_go_web:" + ",".join(sorted(leaked)))
+        self.report["checks"]["go_web_provider_secrets_absent"] = True
 
     def processing_runs(self):
         result = self.private_probe("processing-runs")
@@ -136,10 +178,10 @@ class GoJobWorkerGate(DockerGate):
         self.report.setdefault("resource_samples", {})[label] = resources
 
     def assert_fixture_mounts(self):
-        for role in ("web", "executor", "worker", "processing"):
+        for role in ("probe", "executor", "worker", "processing"):
             raw = self.docker("inspect", "--format", "{{json .Mounts}}", f"{self.prefix}-{role}").stdout
             mounts = json.loads(raw)
-            if role == "worker":
+            if role in {"worker", "processing"}:
                 self.check("worker_has_no_host_mounts", not mounts)
                 continue
             if role == "processing":
@@ -147,15 +189,20 @@ class GoJobWorkerGate(DockerGate):
                 continue
             fixture = [mount for mount in mounts if mount["Destination"] == "/fixtures"]
             backup = [mount for mount in mounts if mount["Destination"] == "/app/backups"]
-            self.check(role + "_owned_mounts_only", len(mounts) == 2 and len(fixture) == len(backup) == 1
+            expected_mount_count = 1 if role == "probe" else 2
+            self.check(role + "_owned_mounts_only", len(mounts) == expected_mount_count
+                       and len(fixture) == 1 and (len(backup) == (0 if role == "probe" else 1))
                        and fixture[0]["Type"] == "bind" and not fixture[0]["RW"]
                        and Path(fixture[0]["Source"]).resolve() == (ROOT / "tests/fixtures/background-worker").resolve()
-                       and backup[0]["Type"] == "volume" and backup[0]["Name"] == self.backup_volume
-                       and backup[0]["RW"] == (role == "executor"))
+                       and (role == "probe" or (backup[0]["Type"] == "volume"
+                       and backup[0]["Name"] == self.backup_volume
+                       and backup[0]["RW"] is True)))
 
     def run(self):
         self.output_dir.mkdir(parents=True, exist_ok=True)
         self.report["image_id"] = self.image_id()
+        self.report["web_image_id"] = self.docker(
+            "image", "inspect", self.web_image, "--format", "{{.Id}}").stdout.strip()
         self.report["worker_image_id"] = self.docker(
             "image", "inspect", self.worker_image, "--format", "{{.Id}}").stdout.strip()
         self.create_network()
@@ -179,12 +226,29 @@ class GoJobWorkerGate(DockerGate):
         self.check("worker_fails_closed_without_schema", self.wait_container_exit(missing_worker) != 0)
         self.check("fixture_network_internal", self.docker("network", "inspect", "--format",
                    "{{.Internal}}", self.network).stdout.strip().lower() == "true")
-        self.run_container(f"{self.prefix}-web", command=["uvicorn", "news_aggregator.main:app",
-                           "--host", "0.0.0.0", "--port", "8000"], alias="web",
-                           env=self.app_environment("web"), memory="512m")
+        migrate = f"{self.prefix}-migrate"
+        self.run_container(migrate, command=["python", "-m", "news_aggregator.migrate"],
+                           env={"DATABASE_URL": "postgresql+asyncpg://gate_user:fixture-only-password@postgres:5432/gate_db",
+                                "ALLOW_CREATE_ALL": "true", "DEVELOPMENT": "true"},
+                           mounts=False, memory="512m",
+                           detached=False)
+        self.docker("start", "-a", migrate, timeout=120)
+        self.report["checks"]["explicit_migration_bootstrap"] = True
+        probe_environment = self.app_environment("probe")
+        probe_environment["GATE_WEB_URL"] = "http://web:8000"
+        self.run_container(f"{self.prefix}-probe", command=["sh", "-c", "sleep 86400"],
+                           alias="probe", env=probe_environment, memory="256m",
+                           disable_healthcheck=True)
+        self.run_container(f"{self.prefix}-executor", command=["python", "-m", "news_aggregator.executor"],
+                           alias="executor", env=self.app_environment("worker"), memory="512m",
+                           disable_healthcheck=True)
+        first_instance = self.wait_executor()["executor_instance_id"]
+        self.run_container(f"{self.prefix}-web", command=[], image=self.web_image, alias="web",
+                           env=self.web_environment(), mounts=False, memory="384m")
+        self.assert_go_web_environment_safe()
         self.wait_http_probe("health")
         workspace_hashes = self.source_hashes()
-        runtime_hashes = self.source_hashes(f"{self.prefix}-web")
+        runtime_hashes = self.source_hashes(f"{self.prefix}-probe")
         self.check("runtime_source_matches_checkout", workspace_hashes == runtime_hashes)
         self.check("processing_client_callback_inventory_current",
                    article_processing_inventory_matches(workspace_hashes)
@@ -201,7 +265,7 @@ class GoJobWorkerGate(DockerGate):
         self.check("public_reprocess_contract_in_openapi", openapi.get("http_status") == 200
                    and all(openapi.get("response", {}).get(key) is True
                            for key in ("auth_login", "public_reprocess", "api_reprocess")))
-        self.docker("exec", f"{self.prefix}-web", "python", "/fixtures/seed_fixture.py")
+        self.docker("exec", f"{self.prefix}-probe", "python", "/fixtures/seed_fixture.py")
         self.check("unauthorized_job_status_rejected", self.exec_json(
             f"{self.prefix}-web", "unauthorized").get("http_status") == 401)
         dashboard = self.exec_json(f"{self.prefix}-web", "dashboard")
@@ -216,10 +280,6 @@ class GoJobWorkerGate(DockerGate):
         telegram = self.exec_json(f"{self.prefix}-web", "telegram-test")
         self.check("web_telegram_diagnostic_uses_fake", telegram.get("http_status") == 200
                    and telegram.get("response", {}).get("success") is True)
-        self.run_container(f"{self.prefix}-executor", command=["python", "-m", "news_aggregator.executor"],
-                           alias="executor", env=self.app_environment("worker"), memory="512m",
-                           disable_healthcheck=True)
-        first_instance = self.wait_executor()["executor_instance_id"]
         if not self.processing_image:
             raise GateFailure("A Go processing image is required for this fixture gate")
         processing_env = {
@@ -281,7 +341,8 @@ class GoJobWorkerGate(DockerGate):
         worker_image = self.docker("inspect", "--format", "{{.Image}}", worker).stdout.strip()
         processing_image = self.docker("inspect", "--format", "{{.Image}}",
                                        f"{self.prefix}-processing").stdout.strip()
-        self.check("matching_role_images", web_image == executor_image == self.report["image_id"]
+        self.check("matching_role_images", web_image == self.report["web_image_id"]
+                   and executor_image == self.report["image_id"]
                    and worker_image == self.report["worker_image_id"]
                    and processing_image == self.report["processing_image_id"])
         self.wait_worker_healthy(worker)
@@ -323,7 +384,7 @@ class GoJobWorkerGate(DockerGate):
             terminal = self.wait_job(extra["job_id"], {"succeeded"})
             self.check("job_kind_" + kind, terminal.get("status") == "succeeded")
             self.check("job_kind_" + kind + "_no_error_code", terminal.get("error_code") is None)
-        archive_count = self.docker("exec", f"{self.prefix}-web", "python", "-c",
+        archive_count = self.docker("exec", f"{self.prefix}-executor", "python", "-c",
             "from pathlib import Path; print(len(list(Path('/app/backups').glob('*.tar.gz'))))"
         ).stdout.strip()
         self.check("backup_visible_from_web_shared_storage", int(archive_count) >= 1)
@@ -414,9 +475,12 @@ def main():
     parser.add_argument("--image", required=True)
     parser.add_argument("--worker-image", required=True)
     parser.add_argument("--processing-image", required=True)
+    parser.add_argument("--web-image", default=DEFAULT_GO_WEB_IMAGE,
+                        help="Existing locally built Go web image; this gate never builds it.")
     parser.add_argument("--output-dir", type=Path, default=ROOT / "artifacts" / "go-job-worker")
     args = parser.parse_args()
-    gate = GoJobWorkerGate(args.image, args.worker_image, args.output_dir, args.processing_image)
+    gate = GoJobWorkerGate(args.image, args.worker_image, args.output_dir,
+                           args.processing_image, args.web_image)
     try:
         gate.run()
     except Exception as error:

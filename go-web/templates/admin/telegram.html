@@ -1,0 +1,383 @@
+{{define "page-title"}}Настройки Telegram - Evening News v2{{end}}
+
+
+
+{{define "content"}}
+<div style="display: flex; justify-content: space-between; align-items: center; margin-bottom: 20px;">
+    <h1>Настройки Telegram</h1>
+    <div id="connection-status" class="status-badge status-unknown">Загрузка...</div>
+</div>
+
+<!-- Current status card -->
+<div class="card" id="status-card">
+    <div class="card-header">Текущая конфигурация</div>
+    <div class="card-body" id="status-body">
+        <div class="loading">Загрузка...</div>
+    </div>
+</div>
+
+<!-- Settings form -->
+<div class="card">
+    <div class="card-header">Настройки каналов</div>
+    <div class="card-body">
+        <p class="hint">
+            Оставьте поле пустым, чтобы использовать значение из переменной окружения (<code>.env</code>).
+            Заполненное значение сохраняется в БД и перекрывает переменную окружения.
+        </p>
+
+        <div class="form-group">
+            <label for="chat_id">Основной канал <span class="badge badge-blue">TELEGRAM_CHAT_ID</span></label>
+            <input type="text" id="chat_id" placeholder="Из .env (не трогать если не нужно менять)">
+            <small>Сюда отправляются дайджесты с новостями</small>
+        </div>
+
+        <div class="form-group">
+            <label for="service_chat_id">Сервисный канал <span class="badge badge-gray">TELEGRAM_SERVICE_CHAT_ID</span></label>
+            <input type="text" id="service_chat_id" placeholder="Из .env (если пусто — используется основной канал)">
+            <small>Сюда отправляются ошибки и системные алерты</small>
+        </div>
+
+        <div class="form-actions">
+            <button class="btn btn--primary" onclick="saveSettings()">Сохранить</button>
+            <button class="btn btn--secondary" onclick="resetToEnv()">Сбросить (использовать .env)</button>
+        </div>
+        <div id="save-result" class="result-msg" style="display:none;"></div>
+    </div>
+</div>
+
+<!-- Actions card -->
+<div class="card">
+    <div class="card-header">Действия</div>
+    <div class="card-body">
+        <div class="actions-row">
+            <div class="action-item">
+                <div class="action-title">Тест подключения</div>
+                <div class="action-desc">Отправит тестовое сообщение в сервисный канал</div>
+                <button class="btn btn--secondary" onclick="testConnection()">Отправить тест</button>
+            </div>
+            <div class="action-item">
+                <div class="action-title">Отправить дайджест</div>
+                <div class="action-desc">Сгенерирует и отправит дайджест прямо сейчас</div>
+                <button class="btn btn--primary" onclick="sendDigest()">Отправить дайджест</button>
+            </div>
+        </div>
+        <div id="action-result" class="result-msg" style="display:none;"></div>
+    </div>
+</div>
+
+<style>
+.card {
+    background: #fff;
+    border: 1px solid #e1e5e9;
+    border-radius: 8px;
+    margin-bottom: 20px;
+    box-shadow: 0 2px 4px rgba(0,0,0,0.05);
+}
+.card-header {
+    padding: 14px 20px;
+    font-weight: 600;
+    font-size: 15px;
+    border-bottom: 1px solid #e1e5e9;
+    color: #333;
+}
+.card-body {
+    padding: 20px;
+}
+.form-group {
+    margin-bottom: 18px;
+}
+.form-group label {
+    display: block;
+    font-weight: 500;
+    font-size: 14px;
+    margin-bottom: 6px;
+    color: #444;
+}
+.form-group input {
+    width: 100%;
+    max-width: 400px;
+    padding: 9px 12px;
+    border: 1px solid #ddd;
+    border-radius: 5px;
+    font-size: 14px;
+    font-family: monospace;
+    box-sizing: border-box;
+}
+.form-group input:focus {
+    outline: none;
+    border-color: #007bff;
+    box-shadow: 0 0 0 2px rgba(0,123,255,0.2);
+}
+.form-group small {
+    display: block;
+    margin-top: 4px;
+    color: #888;
+    font-size: 12px;
+}
+.hint {
+    font-size: 13px;
+    color: #666;
+    margin-bottom: 18px;
+    padding: 10px 14px;
+    background: #f8f9fa;
+    border-radius: 5px;
+    border-left: 3px solid #007bff;
+}
+.hint code {
+    background: #e9ecef;
+    padding: 1px 5px;
+    border-radius: 3px;
+    font-size: 12px;
+}
+.form-actions {
+    display: flex;
+    gap: 10px;
+    margin-top: 20px;
+}
+.btn {
+    padding: 9px 20px;
+    border: none;
+    border-radius: 5px;
+    cursor: pointer;
+    font-size: 14px;
+    font-weight: 500;
+    transition: background 0.2s;
+}
+.btn--primary { background: #007bff; color: #fff; }
+.btn--primary:hover { background: #0056b3; }
+.btn--secondary { background: #6c757d; color: #fff; }
+.btn--secondary:hover { background: #545b62; }
+.btn:disabled { opacity: 0.6; cursor: not-allowed; }
+
+.badge {
+    font-size: 11px;
+    padding: 2px 7px;
+    border-radius: 10px;
+    font-weight: 400;
+    vertical-align: middle;
+    margin-left: 6px;
+}
+.badge-blue { background: #e7f0ff; color: #0056b3; }
+.badge-gray { background: #f0f0f0; color: #555; }
+
+.status-badge {
+    padding: 6px 14px;
+    border-radius: 20px;
+    font-size: 13px;
+    font-weight: 500;
+}
+.status-ok { background: #d4edda; color: #155724; }
+.status-error { background: #f8d7da; color: #721c24; }
+.status-unknown { background: #f0f0f0; color: #666; }
+
+.config-grid {
+    display: grid;
+    grid-template-columns: 1fr 1fr;
+    gap: 14px;
+}
+.config-row {
+    display: flex;
+    flex-direction: column;
+    gap: 3px;
+}
+.config-label {
+    font-size: 12px;
+    color: #888;
+    text-transform: uppercase;
+    letter-spacing: 0.5px;
+}
+.config-value {
+    font-family: monospace;
+    font-size: 14px;
+    color: #333;
+}
+.config-value.empty { color: #aaa; font-style: italic; }
+.source-tag {
+    font-size: 11px;
+    padding: 1px 6px;
+    border-radius: 8px;
+    margin-left: 5px;
+}
+.source-db { background: #fff3cd; color: #856404; }
+.source-env { background: #d4edda; color: #155724; }
+.source-fallback { background: #f0f0f0; color: #666; }
+
+.actions-row {
+    display: grid;
+    grid-template-columns: 1fr 1fr;
+    gap: 20px;
+}
+.action-item {
+    border: 1px solid #e1e5e9;
+    border-radius: 6px;
+    padding: 16px;
+}
+.action-title {
+    font-weight: 600;
+    font-size: 14px;
+    margin-bottom: 5px;
+}
+.action-desc {
+    font-size: 13px;
+    color: #666;
+    margin-bottom: 12px;
+}
+
+.result-msg {
+    margin-top: 14px;
+    padding: 10px 14px;
+    border-radius: 5px;
+    font-size: 13px;
+}
+.result-ok { background: #d4edda; color: #155724; }
+.result-err { background: #f8d7da; color: #721c24; }
+
+.loading { color: #888; font-size: 14px; }
+</style>
+
+<script>
+document.addEventListener('DOMContentLoaded', loadSettings);
+
+async function loadSettings() {
+    try {
+        const r = await fetch('/api/v1/telegram/settings');
+        if (!r.ok) throw new Error(await r.text());
+        const d = await window.readApiResponse(r);
+        renderStatus(d);
+        prefillForm(d);
+    } catch (e) {
+        document.getElementById('status-body').innerHTML =
+            `<div class="result-msg result-err">Ошибка загрузки: ${e.message}</div>`;
+    }
+}
+
+function renderStatus(d) {
+    const tokenOk = d.token_configured;
+    const badge = document.getElementById('connection-status');
+    badge.textContent = tokenOk ? 'Токен настроен' : 'Токен не задан';
+    badge.className = 'status-badge ' + (tokenOk ? 'status-ok' : 'status-error');
+
+    const sourceLabel = s => {
+        if (s === 'db') return '<span class="source-tag source-db">БД</span>';
+        if (s === 'env') return '<span class="source-tag source-env">env</span>';
+        return '<span class="source-tag source-fallback">fallback</span>';
+    };
+
+    document.getElementById('status-body').innerHTML = `
+        <div class="config-grid">
+            <div class="config-row">
+                <div class="config-label">Токен бота</div>
+                <div class="config-value">${tokenOk ? '••••••••••••••••••••' : '<span class="empty">не задан</span>'}</div>
+            </div>
+            <div class="config-row">
+                <div class="config-label">Источник</div>
+                <div class="config-value">только .env / переменные окружения</div>
+            </div>
+            <div class="config-row">
+                <div class="config-label">Основной канал (дайджесты)</div>
+                <div class="config-value">
+                    ${d.chat_id ? d.chat_id : '<span class="empty">не задан</span>'}
+                    ${sourceLabel(d.chat_id_source)}
+                </div>
+            </div>
+            <div class="config-row">
+                <div class="config-label">Сервисный канал (ошибки)</div>
+                <div class="config-value">
+                    ${d.service_chat_id ? d.service_chat_id : '<span class="empty">не задан</span>'}
+                    ${sourceLabel(d.service_chat_id_source)}
+                </div>
+            </div>
+        </div>
+    `;
+}
+
+function prefillForm(d) {
+    // Only pre-fill if value came from DB (env values stay as placeholder)
+    if (d.chat_id_source === 'db') document.getElementById('chat_id').value = d.chat_id || '';
+    if (d.service_chat_id_source === 'db') document.getElementById('service_chat_id').value = d.service_chat_id || '';
+}
+
+async function saveSettings() {
+    const chat_id = document.getElementById('chat_id').value.trim();
+    const service_chat_id = document.getElementById('service_chat_id').value.trim();
+
+    try {
+        setBtn('save', true, 'Сохранение...');
+        const r = await fetch('/api/v1/telegram/settings', {
+            method: 'POST',
+            headers: { 'Content-Type': 'application/json' },
+            body: JSON.stringify({ chat_id, service_chat_id }),
+        });
+        const d = await window.readApiResponse(r);
+        if (!r.ok) throw new Error(d.detail || JSON.stringify(d));
+
+        showResult('save-result', true, d.message || 'Сохранено');
+        await loadSettings();
+    } catch (e) {
+        showResult('save-result', false, `Ошибка: ${e.message}`);
+    } finally {
+        setBtn('save', false, 'Сохранить');
+    }
+}
+
+async function resetToEnv() {
+    if (!confirm('Удалить переопределения из БД и вернуться к значениям из .env?')) return;
+    document.getElementById('chat_id').value = '';
+    document.getElementById('service_chat_id').value = '';
+    await saveSettings();
+}
+
+async function testConnection() {
+    try {
+        setActionBtn(0, true, 'Отправка...');
+        const r = await fetch('/api/v1/telegram/test', { method: 'POST' });
+        const d = await window.readApiResponse(r);
+        if (!r.ok) throw new Error(d.detail || JSON.stringify(d));
+        showResult('action-result', d.success, d.message || (d.success ? 'Дайджест отправлен.' : `Задание завершилось: ${d.status || 'ошибка'}`));
+    } catch (e) {
+        showResult('action-result', false, `Ошибка: ${e.message}`);
+    } finally {
+        setActionBtn(0, false, 'Отправить тест');
+    }
+}
+
+async function sendDigest() {
+    try {
+        setActionBtn(1, true, 'Отправка...');
+        const r = await fetch('/api/v1/telegram/send-digest', { method: 'POST' });
+        const data = await window.readApiResponse(r);
+        if (!r.ok) throw new Error(data.detail || JSON.stringify(data));
+        const d = await window.resolveBackgroundResponse(r, data, job => {
+            showResult('action-result', true, job.status === 'queued' ? 'Дайджест принят в очередь.' : job.status === 'interrupted' ? 'Дайджест ожидает восстановления обработчиком...' : 'Дайджест отправляется...');
+        });
+        showResult('action-result', d.success, d.message);
+    } catch (e) {
+        showResult('action-result', false, `Ошибка: ${e.message}`);
+    } finally {
+        setActionBtn(1, false, 'Отправить дайджест');
+    }
+}
+
+function showResult(id, ok, msg) {
+    const el = document.getElementById(id);
+    el.textContent = msg;
+    el.className = 'result-msg ' + (ok ? 'result-ok' : 'result-err');
+    el.style.display = 'block';
+    setTimeout(() => { el.style.display = 'none'; }, 6000);
+}
+
+function setBtn(type, disabled, text) {
+    const btns = document.querySelectorAll('.form-actions .btn');
+    btns.forEach(b => { if (!disabled) { b.disabled = false; } });
+    if (disabled) btns[0].disabled = true;
+    btns[0].textContent = type === 'save' ? text : btns[0].textContent;
+}
+
+function setActionBtn(idx, disabled, text) {
+    const btns = document.querySelectorAll('.actions-row .btn');
+    if (btns[idx]) { btns[idx].disabled = disabled; btns[idx].textContent = text; }
+}
+</script>
+{{end}}
+
+{{template "admin-base" .}}

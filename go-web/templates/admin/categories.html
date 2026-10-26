@@ -1,0 +1,219 @@
+{{define "page-title"}}{{.Title}}{{end}}
+
+
+
+{{define "content"}}
+<div style="display:flex;justify-content:space-between;align-items:center;margin-bottom:1rem;">
+    <h1 style="margin:0;">Категории</h1>
+    <button class="btn btn--primary" onclick="document.getElementById('add-section').style.display = document.getElementById('add-section').style.display === 'none' ? '' : 'none'">+ Добавить</button>
+</div>
+
+<div id="alert-container"></div>
+
+<!-- Add category (hidden by default) -->
+<div id="add-section" class="cat-add-section" style="display:none;">
+    <form id="add-category-form" class="cat-add-form">
+        <input type="text" id="new-cat-name" placeholder="Системное имя (EN)" class="cat-input" required>
+        <input type="text" id="new-cat-display" placeholder="Отображаемое имя" class="cat-input" required>
+        <input type="color" id="new-cat-color" value="#6c757d" class="cat-color-input">
+        <button type="submit" class="btn btn--primary">Добавить</button>
+    </form>
+</div>
+
+<!-- Categories table -->
+<div class="table-container">
+    <table class="table" id="categories-table">
+        <thead>
+            <tr>
+                <th style="width:4px;padding:0;"></th>
+                <th>Категория</th>
+                <th>Отображаемое имя</th>
+                <th style="text-align:center;">Локальная</th>
+                <th style="text-align:right;">Статей</th>
+                <th style="width:80px;"></th>
+            </tr>
+        </thead>
+        <tbody id="categories-tbody">
+            <tr><td colspan="5" style="text-align:center;padding:2rem;color:var(--text-muted);">Загрузка...</td></tr>
+        </tbody>
+    </table>
+</div>
+
+<!-- Edit modal -->
+<div id="edit-modal" class="cat-modal" style="display:none;">
+    <div class="cat-modal-content">
+        <div class="cat-modal-header">
+            <h3 style="margin:0;">Редактировать категорию</h3>
+            <button class="btn btn--ghost" onclick="closeEditModal()" style="padding:.5rem;">&#10005;</button>
+        </div>
+        <form id="edit-form" style="padding:1rem;">
+            <input type="hidden" id="edit-id">
+            <div class="cat-form-group">
+                <label>Системное имя</label>
+                <input type="text" id="edit-name" class="cat-input" readonly style="opacity:.6;">
+            </div>
+            <div class="cat-form-group">
+                <label>Отображаемое имя</label>
+                <input type="text" id="edit-display" class="cat-input" required>
+            </div>
+            <div class="cat-form-group">
+                <label>Цвет</label>
+                <input type="color" id="edit-color" class="cat-color-input" style="width:100%;height:40px;">
+            </div>
+            <div class="cat-form-group">
+                <label>Описание</label>
+                <textarea id="edit-desc" class="cat-input" style="height:60px;resize:vertical;"></textarea>
+            </div>
+            <div class="cat-form-group">
+                <label style="display:flex;align-items:center;gap:.5rem;cursor:pointer;">
+                    <input type="checkbox" id="edit-is-local">
+                    Локальная категория
+                </label>
+                <small style="color:var(--text-muted);font-size:.75rem;">Новости этой категории будут изолированы от других лент. Только одна категория может быть локальной.</small>
+            </div>
+            <div style="display:flex;gap:.5rem;justify-content:flex-end;margin-top:1rem;">
+                <button type="button" class="btn btn--secondary" onclick="closeEditModal()">Отмена</button>
+                <button type="submit" class="btn btn--primary">Сохранить</button>
+            </div>
+        </form>
+    </div>
+</div>
+
+<style>
+.cat-add-section {
+    background: var(--surface-hover, #f8f9fa);
+    border: 1px dashed var(--border, #e1e5e9);
+    border-radius: 8px;
+    padding: 16px;
+    margin-bottom: 1rem;
+}
+.cat-add-form { display: flex; gap: 8px; align-items: center; flex-wrap: wrap; }
+.cat-input {
+    padding: 8px 12px; border: 1px solid var(--border, #ddd); border-radius: 5px;
+    font-size: .875rem; background: var(--surface, #fff); color: var(--text-color);
+}
+.cat-color-input { width: 40px; height: 36px; padding: 2px; border: 1px solid var(--border); border-radius: 5px; cursor: pointer; }
+.cat-form-group { margin-bottom: 12px; }
+.cat-form-group label { display: block; font-size: .8rem; font-weight: 500; margin-bottom: 4px; color: var(--text-color); }
+.cat-form-group .cat-input { width: 100%; }
+
+.cat-modal { position: fixed; top: 0; left: 0; width: 100%; height: 100%; background: rgba(0,0,0,.5); display: flex; align-items: center; justify-content: center; z-index: 1000; }
+.cat-modal-content { background: var(--surface, #fff); border-radius: 8px; width: 90%; max-width: 440px; max-height: 90vh; overflow-y: auto; box-shadow: 0 4px 20px rgba(0,0,0,.15); }
+.cat-modal-header { display: flex; justify-content: space-between; align-items: center; padding: 1rem; border-bottom: 1px solid var(--border, #e0e0e0); }
+
+.cat-color-dot { display: inline-block; width: 14px; height: 14px; border-radius: 3px; vertical-align: middle; }
+.cat-count { font-variant-numeric: tabular-nums; }
+</style>
+
+<script>
+let categories = [];
+
+document.addEventListener('DOMContentLoaded', loadCategories);
+
+async function loadCategories() {
+    try {
+        const r = await fetch('/api/v1/categories/');
+        if (!r.ok) throw new Error('HTTP ' + r.status);
+        const data = await r.json();
+        categories = (data.categories || data || []).filter(c => c.category !== 'advertisements');
+        renderTable();
+    } catch (e) {
+        document.getElementById('categories-tbody').innerHTML =
+            `<tr><td colspan="5" style="text-align:center;padding:2rem;color:var(--error-color);">Ошибка: ${e.message}</td></tr>`;
+    }
+}
+
+function renderTable() {
+    const tbody = document.getElementById('categories-tbody');
+    if (!categories.length) {
+        tbody.innerHTML = '<tr><td colspan="5" style="text-align:center;padding:2rem;color:var(--text-muted);">Нет категорий</td></tr>';
+        return;
+    }
+
+    tbody.innerHTML = categories.map(c => {
+        const name = c.category || c.name;
+        return `
+        <tr>
+            <td style="padding:0;width:4px;background:${c.color || '#757575'};"></td>
+            <td><strong>${esc(name)}</strong></td>
+            <td>${esc(c.display_name || name)}</td>
+            <td style="text-align:center;">${c.is_local ? '<span title="Изолирована от других лент">&#127760;</span>' : ''}</td>
+            <td style="text-align:right;" class="cat-count">${c.count || 0}</td>
+            <td>
+                <button class="btn btn-sm" onclick="openEditModal(${c.id}, '${esc(name)}', '${esc(c.display_name||'')}', '${c.color||'#757575'}', '${esc(c.description||'')}', ${!!c.is_local})" title="Редактировать" style="background:var(--primary-color);color:white;">&#9998;</button>
+            </td>
+        </tr>`;
+    }).join('');
+}
+
+// Add category
+document.getElementById('add-category-form').addEventListener('submit', async (e) => {
+    e.preventDefault();
+    const name = document.getElementById('new-cat-name').value.trim();
+    const display = document.getElementById('new-cat-display').value.trim();
+    const color = document.getElementById('new-cat-color').value;
+    if (!name || !display) return;
+
+    try {
+        const r = await fetch('/api/v1/categories/', {
+            method: 'POST', headers: {'Content-Type': 'application/json'},
+            body: JSON.stringify({name, display_name: display, color})
+        });
+        if (!r.ok) throw new Error((await r.json()).detail || 'Ошибка');
+        document.getElementById('new-cat-name').value = '';
+        document.getElementById('new-cat-display').value = '';
+        document.getElementById('add-section').style.display = 'none';
+        showAlert('Категория добавлена');
+        await loadCategories();
+    } catch (e) { showAlert(e.message, 'error'); }
+});
+
+// Edit modal
+function openEditModal(id, name, display, color, desc, isLocal) {
+    document.getElementById('edit-id').value = id;
+    document.getElementById('edit-name').value = name;
+    document.getElementById('edit-display').value = display;
+    document.getElementById('edit-color').value = color;
+    document.getElementById('edit-desc').value = desc;
+    document.getElementById('edit-is-local').checked = !!isLocal;
+    document.getElementById('edit-modal').style.display = 'flex';
+}
+
+function closeEditModal() { document.getElementById('edit-modal').style.display = 'none'; }
+
+document.getElementById('edit-form').addEventListener('submit', async (e) => {
+    e.preventDefault();
+    const id = document.getElementById('edit-id').value;
+    try {
+        const r = await fetch('/api/v1/categories/' + id, {
+            method: 'PUT', headers: {'Content-Type': 'application/json'},
+            body: JSON.stringify({
+                display_name: document.getElementById('edit-display').value.trim(),
+                color: document.getElementById('edit-color').value,
+                description: document.getElementById('edit-desc').value.trim(),
+                is_local: document.getElementById('edit-is-local').checked
+            })
+        });
+        if (!r.ok) throw new Error((await r.json()).detail || 'Ошибка');
+        closeEditModal();
+        showAlert('Категория обновлена');
+        await loadCategories();
+    } catch (e) { showAlert(e.message, 'error'); }
+});
+
+// Helpers
+function esc(s) { return (s||'').replace(/&/g,'&amp;').replace(/</g,'&lt;').replace(/>/g,'&gt;').replace(/"/g,'&quot;').replace(/'/g,'&#39;'); }
+
+function showAlert(msg, type = 'success') {
+    const colors = {success: ['#d1fae5','#065f46'], error: ['#fee2e2','#dc2626']};
+    const [bg, fg] = colors[type] || colors.success;
+    const el = document.createElement('div');
+    el.style.cssText = `background:${bg};color:${fg};border:1px solid;padding:.6rem 1rem;border-radius:6px;font-size:.8rem;margin-bottom:.5rem;display:flex;align-items:center;gap:.4rem;`;
+    el.innerHTML = `<span>${type==='success'?'&#10003;':'&#10007;'}</span><span>${msg}</span><button onclick="this.parentElement.remove()" style="margin-left:auto;background:none;border:none;color:inherit;cursor:pointer;">&#215;</button>`;
+    document.getElementById('alert-container').prepend(el);
+    setTimeout(() => el.remove(), 5000);
+}
+</script>
+{{end}}
+
+{{template "admin-base" .}}

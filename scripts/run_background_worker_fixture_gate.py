@@ -401,289 +401,7 @@ class DockerGate:
                 raise GateFailure(f"{role} fixture mount is not read-only")
 
     def run(self) -> None:
-        self.output_dir.mkdir(parents=True, exist_ok=True)
-        self.report["image_id"] = self.image_id()
-        self.create_network()
-        self.run_container(f"{self.prefix}-postgres", command=["postgres"], alias="postgres",
-                           env={"POSTGRES_DB": "gate_db", "POSTGRES_USER": "gate_user",
-                                "POSTGRES_PASSWORD": "fixture-only-password"}, image="postgres:16-alpine",
-                           mounts=False, memory="256m")
-        self.run_container(f"{self.prefix}-fake", command=["python", "/fixtures/fake_services.py"],
-                           alias="fixture-services", memory="128m", disable_healthcheck=True)
-        self.docker("exec", "--env", "PGPASSWORD=fixture-only-password",
-                    f"{self.prefix}-postgres", "sh", "-lc",
-                    "until pg_isready -h 127.0.0.1 -U gate_user -d gate_db >/dev/null 2>&1; do sleep 1; done",
-                    timeout=90)
-        self.docker("exec", "--env", "PGPASSWORD=fixture-only-password",
-                    f"{self.prefix}-postgres", "createdb", "-h", "127.0.0.1",
-                    "-U", "gate_user", "empty_gate_db")
-
-        # The worker must refuse to start when the additive queue schema is absent.
-        schema_check_name = f"{self.prefix}-schema-check-worker"
-        schema_environment = self.app_environment("worker")
-        schema_environment["DATABASE_URL"] = (
-            "postgresql+asyncpg://gate_user:fixture-only-password@postgres:5432/empty_gate_db"
-        )
-        self.run_container(schema_check_name, command=["python", "-m", "news_aggregator.worker"],
-                           env=schema_environment, memory="512m", disable_healthcheck=True)
-        schema_exit = self.wait_container_exit(schema_check_name, timeout=45)
-        self.report["checks"]["worker_fails_closed_without_schema"] = schema_exit != 0
-        if schema_exit == 0:
-            raise GateFailure("Worker unexpectedly started without the required jobs schema")
-
-        self.run_container(f"{self.prefix}-web", command=["uvicorn", "news_aggregator.main:app",
-                                                           "--host", "0.0.0.0", "--port", "8000"],
-                           alias="web", env=self.app_environment("web"), memory="512m")
-        self.wait_http_probe("health")
-        openapi = self.exec_json(f"{self.prefix}-web", "openapi-check")
-        self.report["checks"]["public_reprocess_contract_in_openapi"] = (
-            openapi.get("http_status") == 200
-            and openapi.get("response", {}).get("auth_login") is True
-            and openapi.get("response", {}).get("public_reprocess") is True
-            and openapi.get("response", {}).get("api_reprocess") is True
-        )
-        if not self.report["checks"]["public_reprocess_contract_in_openapi"]:
-            raise GateFailure("Live OpenAPI schema did not expose the expected public/login routes")
-        login_probe = self.exec_json(f"{self.prefix}-web", "auth-login-check")
-        login_response = login_probe.get("response", {})
-        self.report["admin_login_diagnostic"] = {
-            "http_status": login_response.get("http_status"),
-            "response_fields": login_response.get("response_fields", []),
-            "token_returned": login_response.get("token_returned") is True,
-        }
-        if login_response.get("http_status") != 200:
-            self.report["admin_login_diagnostic"]["safe_exception"] = self.safe_app_trace(
-                f"{self.prefix}-web"
-            )
-        workspace_hashes = self.source_hashes()
-        image_hashes = self.source_hashes(f"{self.prefix}-web")
-        self.report["runtime_source_hashes"] = {
-            "workspace": workspace_hashes,
-            "image": image_hashes,
-        }
-        self.report["checks"]["image_matches_runtime_checkout"] = workspace_hashes == image_hashes
-        self.report["checks"]["processing_client_callback_inventory_current"] = (
-            article_processing_inventory_matches(workspace_hashes)
-            and article_processing_inventory_matches(image_hashes)
-        )
-        if not self.report["checks"]["processing_client_callback_inventory_current"]:
-            raise GateFailure("App image is missing the processing API boundary or contains a removed Python processor")
-        if not self.report["checks"]["image_matches_runtime_checkout"]:
-            raise GateFailure("App image runtime source does not match the current checkout")
-        self.docker("exec", f"{self.prefix}-web", "python", "/fixtures/seed_fixture.py", timeout=30)
-        self.report["checks"]["unauthorized_job_status"] = self.exec_json(
-            f"{self.prefix}-web", "unauthorized").get("http_status") == 401
-        dashboard = self.exec_json(f"{self.prefix}-web", "dashboard")
-        process_status = self.exec_json(f"{self.prefix}-web", "status")
-        self.report["checks"]["persisted_dashboard_without_web_orchestrator"] = (
-            dashboard.get("http_status") == 200
-            and isinstance(dashboard.get("response", {}).get("queue_stats"), dict)
-            and "worker_available" in dashboard["response"]["queue_stats"]
-            and process_status.get("http_status") == 200
-            and "worker_available" in process_status.get("response", {})
-        )
-        if not self.report["checks"]["persisted_dashboard_without_web_orchestrator"]:
-            raise GateFailure("Worker-mode dashboard/status did not return persisted worker state")
-        self.report["checks"]["source_not_found"] = self.exec_json(
-            f"{self.prefix}-web", "source-not-found", "source-missing-key").get("http_status") == 404
-        if not self.report["checks"]["unauthorized_job_status"]:
-            raise GateFailure("Job status endpoint did not reject an unauthenticated request")
-        if not self.report["checks"]["source_not_found"]:
-            raise GateFailure("Source connection test did not preserve not-found behavior")
-        telegram_test = self.exec_json(f"{self.prefix}-web", "telegram-test")
-        self.report["checks"]["web_telegram_diagnostic_uses_fixture"] = (
-            telegram_test.get("http_status") == 200
-            and telegram_test.get("response", {}).get("success") is True
-        )
-        if not self.report["checks"]["web_telegram_diagnostic_uses_fixture"]:
-            raise GateFailure("Web Telegram connection diagnostic did not use the fixture receiver")
-
-        # Block fixture AI, accept one real pipeline job, and confirm idempotent acceptance.
-        self.fake_control(ai="block")
-        accepted = self.exec_json(f"{self.prefix}-web", "enqueue-process", "gate-process-request-1")
-        if accepted.get("http_status") != 202:
-            raise GateFailure(f"Processing request did not return HTTP 202: {accepted.get('http_status')}")
-        process_job_id = accepted["response"]["job_id"]
-        repeated = self.exec_json(f"{self.prefix}-web", "enqueue-process", "gate-process-request-1")
-        if repeated.get("http_status") != 202 or repeated["response"].get("job_id") != process_job_id:
-            raise GateFailure("Repeated idempotency key did not return the accepted job")
-        conflict = self.exec_json(f"{self.prefix}-web", "enqueue-digest", "gate-process-request-1")
-        self.report["checks"]["idempotency_replay"] = repeated["response"].get("job_id") == process_job_id
-        self.report["checks"]["idempotency_conflict"] = conflict.get("http_status") == 409
-        if not self.report["checks"]["idempotency_conflict"]:
-            raise GateFailure("Reusing the idempotency key with a different job kind was not rejected")
-
-        worker_name = self.create_worker()
-        self.assert_owned_mounts()
-        self.report["checks"]["fixture_mount_only_read_only"] = True
-        time.sleep(2)
-        web_image = self.docker("inspect", "--format", "{{.Image}}", f"{self.prefix}-web").stdout.strip()
-        worker_image = self.docker("inspect", "--format", "{{.Image}}", worker_name).stdout.strip()
-        self.report["checks"]["same_image_matches"] = web_image == worker_image == self.image_id()
-        if not self.report["checks"]["same_image_matches"]:
-            raise GateFailure("Web and worker are not running the same local image")
-        self.report["resource_limits"] = {
-            "postgres_memory": "256m", "web_memory": "512m", "worker_memory": "512m",
-            "fixture_services_memory": "128m", "cpus_per_container": "1",
-            "pids_per_container": 128,
-        }
-        self.report["actual_go_runtime_tested"] = False
-        self.report["browser_tested"] = False
-        self.report["throughput_claimed"] = False
-        internal = self.docker("network", "inspect", "--format", "{{.Internal}}", self.network).stdout.strip()
-        if internal.lower() != "true":
-            raise GateFailure("Fixture Docker network is not internal-only")
-        self.capture_memory("idle_before")
-        # Ensure the owner is active in the AI provider before restarting web.
-        counters = self.wait_counter("gemini", 1, job_id=process_job_id)
-        if self.job(process_job_id).get("status") != "running":
-            raise GateFailure("Processing job was not running while its synthetic AI call was blocked")
-        self.capture_memory("active_ai_blocked")
-        self.wait_worker_healthy(worker_name)
-        self.report["checks"]["worker_healthcheck_healthy"] = True
-        self.report["retry_deadline_advanced_for_fixture"] = False
-
-        # An independently started worker must exit without claiming/doing work.
-        duplicate_name = self.create_worker(suffix="second-worker")
-        duplicate_exit = self.wait_container_exit(duplicate_name)
-        self.report["checks"]["second_worker_refused"] = duplicate_exit == 2
-        self.report["provider_calls"]["before_web_restart"] = counters
-        if not self.report["checks"]["second_worker_refused"]:
-            raise GateFailure("A second worker did not exit after the singleton lease was refused")
-
-        self.docker("restart", f"{self.prefix}-web", timeout=90)
-        self.report["explicit_restarts"]["web"] += 1
-        self.wait_http_probe("health")
-        self.report["checks"]["accepted_job_survived_web_restart"] = self.job(process_job_id).get("status") == "running"
-        if not self.report["checks"]["accepted_job_survived_web_restart"]:
-            raise GateFailure("Web restart disrupted the accepted running job")
-        self.fake_control(ai="release")
-        process_terminal = self.wait_job(process_job_id, {"succeeded", "failed"})
-        if process_terminal.get("status") != "succeeded":
-            raise GateFailure("Synthetic processing pipeline did not complete successfully")
-        snapshot = self.exec_json(f"{self.prefix}-web", "snapshot")["response"]
-        completed_articles = [article for article in snapshot["articles"]
-                              if article["title"] == "Fixture technology article" and article["state"] == "completed"]
-        if not completed_articles:
-            raise GateFailure("Synthetic article was not persisted as completed")
-        article_id = completed_articles[0]["id"]
-        counters = self.fake_counters()
-        self.report["provider_calls"]["after_processing"] = counters
-        if not counters.get("source_collection") or not counters.get("extraction") or not counters.get("gemini"):
-            raise GateFailure("Processing did not exercise all fake Go/extraction/Gemini services")
-        self.report["checks"]["article_completed_in_database"] = True
-        self.report["checks"]["manual_acceptance_no_scheduler_jobs"] = (
-            snapshot["due_schedules"] > 0 and not any(job["scheduled"] for job in snapshot["jobs"])
-        )
-        if not self.report["checks"]["manual_acceptance_no_scheduler_jobs"]:
-            raise GateFailure("Disabled scheduler consumed a due synthetic schedule")
-
-        # Reprocess the actual stored article, block AI, kill worker, and prove takeover resumes the job.
-        self.fake_control(ai="block")
-        public_unauthorized = self.exec_json(
-            f"{self.prefix}-web", "public-reprocess-unauthorized", str(article_id)
-        )
-        self.report["checks"]["public_reprocess_requires_admin_cookie"] = (
-            public_unauthorized.get("http_status") == 401
-        )
-        if not self.report["checks"]["public_reprocess_requires_admin_cookie"]:
-            raise GateFailure("Public article reprocess accepted a request without the admin cookie")
-        reprocess = self.exec_json(f"{self.prefix}-web", "reprocess", str(article_id), "gate-reprocess-request")
-        if reprocess.get("http_status") != 202:
-            response_body = reprocess.get("response", {})
-            detail = response_body.get("detail") if isinstance(response_body, dict) else None
-            if isinstance(detail, str):
-                detail = detail[:240]
-            else:
-                detail = None
-            self.report["public_reprocess_rejection"] = {
-                "http_status": reprocess.get("http_status"),
-                "detail": detail,
-                "response_fields": sorted(response_body) if isinstance(response_body, dict) else [],
-            }
-            self.report["public_reprocess_exception"] = self.safe_app_trace(f"{self.prefix}-web")
-            raise GateFailure(
-                f"Public article reprocess did not return HTTP 202 "
-                f"(status={reprocess.get('http_status')}, detail={detail!r}, "
-                f"exception_types={self.report['public_reprocess_exception']['exception_types']})"
-            )
-        reprocess_id = reprocess["response"]["job_id"]
-        admin_flow = reprocess["response"].get("fixture_admin_flow", {})
-        self.report["checks"]["public_reprocess_real_admin_cookie_flow"] = (
-            admin_flow.get("admin_page_http_status") == 200
-            and admin_flow.get("admin_cookie_received") is True
-            and admin_flow.get("public_admin_check_http_status") == 404
-            and admin_flow.get("public_admin_check_authorized") is True
-        )
-        if not self.report["checks"]["public_reprocess_real_admin_cookie_flow"]:
-            raise GateFailure("Public reprocess did not use the real admin page cookie flow")
-        before_kill = self.wait_counter("gemini", counters["gemini"] + 1, job_id=reprocess_id)
-        if self.job(reprocess_id).get("status") != "running":
-            raise GateFailure("Article reprocess was not running while its synthetic AI call was blocked")
-        self.docker("kill", worker_name)
-        self.report["checks"]["worker_killed_during_processing"] = True
-        # Advance only the synthetic row's long retry deadline; preserve its attempts and stages.
-        retry_advance = self.exec_json(f"{self.prefix}-web", "advance-retry", str(article_id))["response"]
-        self.report["retry_deadline_advanced_for_fixture"] = bool(
-            retry_advance.get("advanced")
-            and retry_advance.get("attempts_preserved")
-            and retry_advance.get("stages_preserved")
-        )
-        if not self.report["retry_deadline_advanced_for_fixture"]:
-            raise GateFailure("Could not safely advance the synthetic article retry deadline")
-        # Start a new owner. It must recover the running attempt and continue the same durable job.
-        self.docker("start", worker_name)
-        self.report["explicit_restarts"]["worker"] += 1
-        self.wait_job(reprocess_id, {"running"}, timeout=60)
-        deadline = time.monotonic() + 60
-        recovered_attempt = False
-        while time.monotonic() < deadline:
-            snap = self.exec_json(f"{self.prefix}-web", "snapshot")["response"]
-            row = next((job for job in snap["jobs"] if job["id"] == reprocess_id), None)
-            if row and row["attempt_generation"] >= 2 and row["state"] == "running":
-                recovered_attempt = True
-                break
-            time.sleep(0.5)
-        if not recovered_attempt:
-            raise GateFailure("Worker takeover did not claim the interrupted processing job again")
-        recovered_provider_calls = self.wait_counter("gemini", before_kill["gemini"] + 1)
-        self.fake_control(ai="release")
-        if self.wait_job(reprocess_id, {"succeeded", "failed"}).get("status") != "succeeded":
-            raise GateFailure("Recovered article reprocess did not succeed")
-        self.report["checks"]["processing_recovered_after_worker_kill"] = True
-        self.report["provider_calls"]["after_processing_recovery"] = recovered_provider_calls
-
-        # A receiver accepts the digest request then withholds its response; kill the worker in that ambiguity window.
-        self.fake_control(telegram="block")
-        digest = self.exec_json(f"{self.prefix}-web", "enqueue-digest", "gate-delivery-ambiguous")
-        if digest.get("http_status") != 202:
-            raise GateFailure("Digest request did not return HTTP 202")
-        digest_id = digest["response"]["job_id"]
-        before_send = self.fake_counters().get("telegram", 0)
-        after_send = self.wait_counter("telegram", before_send + 1, job_id=digest_id)
-        if self.job(digest_id).get("status") != "running":
-            raise GateFailure("Digest job was not running while its fixture delivery response was blocked")
-        self.docker("kill", worker_name)
-        self.docker("start", worker_name)
-        self.report["explicit_restarts"]["worker"] += 1
-        delivery_terminal = self.wait_job(digest_id, {"delivery_unknown", "succeeded", "failed"}, timeout=60)
-        if delivery_terminal.get("status") != "delivery_unknown":
-            raise GateFailure("Ambiguous delivery was not marked delivery_unknown")
-        self.fake_control(telegram="release")
-        time.sleep(3)
-        final_counters = self.fake_counters()
-        if final_counters.get("telegram", 0) != after_send.get("telegram", 0):
-            raise GateFailure("Ambiguous digest was resent automatically after worker recovery")
-        self.report["provider_calls"]["final"] = final_counters
-        self.report["checks"]["ambiguous_delivery_not_resent"] = True
-
-        self.capture_memory("idle_final")
-        self.report["checks"]["scheduler_disabled"] = True
-        self.report["checks"]["delivery_crash_recovered_without_replay"] = True
-        false_checks = [name for name, value in self.report["checks"].items() if value is not True]
-        if false_checks:
-            raise GateFailure("Acceptance checks failed: " + ", ".join(false_checks))
-        self.report["result"] = "passed"
+        raise GateFailure("legacy Python public web fixture retired; use the Go web job-worker gate")
 
     def cleanup(self) -> None:
         for name in reversed(self.containers):
@@ -703,20 +421,31 @@ class DockerGate:
 
 def main() -> int:
     parser = argparse.ArgumentParser(description=__doc__)
-    parser.add_argument("--image", default="evening-news-background-worker:test-20261023",
-                        help="Existing local app image; the gate never builds or publishes images.")
-    parser.add_argument("--output-dir", type=Path, default=ROOT / "artifacts" / "background-worker-gate",
-                        help="Directory for a sanitized JSON acceptance report.")
+    parser.add_argument("--image", required=True, help="Existing private Python app/executor image.")
+    parser.add_argument("--web-image", default="evening-news-web:components-20261026",
+                        help="Existing Go web image; this entrypoint never builds images.")
+    parser.add_argument("--worker-image", required=True, help="Existing Go job-worker image.")
+    parser.add_argument("--processing-image", required=True, help="Existing Go processing image.")
+    parser.add_argument("--output-dir", type=Path, default=ROOT / "artifacts" / "go-job-worker-fixture",
+                        help="Directory for the Go web acceptance report.")
     args = parser.parse_args()
-    docker = shutil.which("docker")
-    if not docker:
+    if not shutil.which("docker"):
         parser.error("docker CLI is required")
-    gate = DockerGate(args.image, args.output_dir)
+    try:
+        from scripts.run_go_job_worker_fixture_gate import GoJobWorkerGate
+    except ModuleNotFoundError:
+        from run_go_job_worker_fixture_gate import GoJobWorkerGate
+    gate = GoJobWorkerGate(args.image, args.worker_image, args.output_dir,
+                           args.processing_image, args.web_image)
     try:
         gate.run()
     except Exception as exc:
-        gate.report["result"] = "failed"
-        gate.report["failure"] = str(exc)[:500]
+        failure = str(exc)
+        for secret in (ARTICLE_PROCESSING_TOKEN, ARTICLE_AI_TOKEN,
+                       "fixture-only-executor-token", "fixture-only-password",
+                       "fixture-admin-password", "fixture-only-gemini-key"):
+            failure = failure.replace(secret, "[redacted]")
+        gate.report.update(result="failed", failure=failure[:500])
     finally:
         gate.cleanup()
         report_path = gate.output_dir / f"{gate.run_id}.json"

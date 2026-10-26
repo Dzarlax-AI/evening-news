@@ -1,0 +1,852 @@
+{{define "page-title"}}Источники - Evening News v2{{end}}
+
+
+
+{{define "content"}}
+        <div class="sources-header flex justify-between items-center mb-6">
+            <h1>Управление источниками RSS</h1>
+            <button class="btn btn--primary" onclick="showAddSourceModal()" data-tooltip="Добавить новый RSS источник">
+                <span>➕</span>
+                <span>Добавить источник</span>
+            </button>
+        </div>
+
+        <div class="sources-inline-stats">
+            <span><strong id="total-sources">-</strong> всего</span>
+            <span class="stat-sep">·</span>
+            <span><strong id="active-sources">-</strong> активных</span>
+            <span class="stat-sep">·</span>
+            <span><strong id="error-sources">-</strong> с ошибками</span>
+            <span class="stat-sep">·</span>
+            <span>Синхронизация: <strong id="last-sync">-</strong></span>
+        </div>
+
+        <div class="sources-filters flex gap-4 mb-6">
+            <div class="filter-group">
+                <label class="form-label">Фильтр по статусу:</label>
+                <select class="form-input" id="status-filter" onchange="filterSources()">
+                    <option value="">Все источники</option>
+                    <option value="active">Активные</option>
+                    <option value="inactive">Неактивные</option>
+                    <option value="error">С ошибками</option>
+                </select>
+            </div>
+
+            <div class="filter-group">
+                <label class="form-label">Поиск:</label>
+                <input type="text" class="form-input" id="search-input" placeholder="Поиск по названию или URL"
+                    onkeyup="filterSources()">
+            </div>
+
+            <div class="filter-actions flex items-end">
+                <button class="btn btn--ghost" onclick="refreshSources()" data-tooltip="Обновить список источников">
+                    <span>🔄</span>
+                    <span>Обновить</span>
+                </button>
+            </div>
+        </div>
+
+        <div class="table-container">
+            <table class="table" id="sources-table">
+                <thead>
+                    <tr>
+                        <th>Название</th>
+                        <th>URL</th>
+                        <th>Тип источника</th>
+                        <th>Статус</th>
+                        <th>Последнее обновление</th>
+                        <th>Статьи</th>
+                        <th>Действия</th>
+                    </tr>
+                </thead>
+                <tbody id="sources-tbody">
+                    <tr>
+                        <td colspan="7" class="text-center">
+                            <div class="loading">Загрузка источников...</div>
+                        </td>
+                    </tr>
+                </tbody>
+            </table>
+        </div>
+
+<!-- Add Source Modal -->
+<div id="add-source-modal" class="modal" style="display: none;">
+    <div class="modal-content">
+        <div class="modal-header">
+            <h2>Добавить новый источник RSS</h2>
+            <button class="modal-close" onclick="hideAddSourceModal()">&times;</button>
+        </div>
+
+        <form id="add-source-form" onsubmit="addSource(event)">
+            <div class="modal-body">
+                <div class="form-group">
+                    <label class="form-label" for="source-name">Название источника:</label>
+                    <input type="text" id="source-name" class="form-input" required placeholder="Например: Хабр">
+                </div>
+
+                <div class="form-group">
+                    <label class="form-label" for="source-url">URL RSS:</label>
+                    <input type="url" id="source-url" class="form-input" required placeholder="https://example.com/rss">
+                </div>
+
+                <div class="form-group">
+                    <label class="form-label" for="source-type">Тип источника:</label>
+                    <select id="source-type" class="form-input" required>
+                        <option value="">Выберите тип источника</option>
+                        <option value="rss">RSS-канал</option>
+                        <option value="telegram">Telegram-канал</option>
+                        <option value="custom">Кастомный парсер</option>
+                    </select>
+                </div>
+
+                <div class="form-group">
+                    <label class="form-label" for="source-active">
+                        <input type="checkbox" id="source-active" checked> Активный источник
+                    </label>
+                </div>
+            </div>
+
+            <div class="modal-footer">
+                <button type="button" class="btn btn--ghost" onclick="hideAddSourceModal()">Отмена</button>
+                <button type="submit" class="btn btn--primary">Добавить источник</button>
+            </div>
+        </form>
+    </div>
+</div>
+
+<!-- Edit Source Modal -->
+<div id="edit-source-modal" class="modal" style="display: none;">
+    <div class="modal-content">
+        <div class="modal-header">
+            <h2>Редактировать источник</h2>
+            <button class="modal-close" onclick="hideEditSourceModal()">&times;</button>
+        </div>
+
+        <form id="edit-source-form" onsubmit="updateSource(event)">
+            <div class="modal-body">
+                <input type="hidden" id="edit-source-id">
+
+                <div class="form-group">
+                    <label class="form-label" for="edit-source-name">Название источника:</label>
+                    <input type="text" id="edit-source-name" class="form-input" required placeholder="Например: Хабр">
+                </div>
+
+                <div class="form-group">
+                    <label class="form-label" for="edit-source-url">URL:</label>
+                    <input type="url" id="edit-source-url" class="form-input" required
+                        placeholder="https://example.com/rss">
+                </div>
+
+                <div class="form-group">
+                    <label class="form-label" for="edit-source-type">Тип источника:</label>
+                    <select id="edit-source-type" class="form-input" required>
+                        <option value="">Выберите тип источника</option>
+                        <option value="rss">RSS-канал</option>
+                        <option value="telegram">Telegram-канал</option>
+                        <option value="custom">Кастомный парсер</option>
+                    </select>
+                </div>
+
+                <div class="form-group">
+                    <label class="form-label" for="edit-source-active">
+                        <input type="checkbox" id="edit-source-active"> Активный источник
+                    </label>
+                </div>
+            </div>
+
+            <div class="modal-footer">
+                <button type="button" class="btn btn--ghost" onclick="hideEditSourceModal()">Отмена</button>
+                <button type="submit" class="btn btn--primary">Сохранить изменения</button>
+            </div>
+        </form>
+    </div>
+</div>
+
+<!-- Delete Source Modal -->
+<div id="delete-source-modal" class="modal" style="display: none;">
+    <div class="modal-content">
+        <div class="modal-header">
+            <h2>Удалить источник?</h2>
+            <button class="modal-close" onclick="hideDeleteSourceModal()">&times;</button>
+        </div>
+
+        <div class="modal-body">
+            <input type="hidden" id="delete-source-id">
+            <p>Вы действительно хотите удалить источник <strong id="delete-source-name-display"></strong>?</p>
+            <p class="text-muted small">Это действие нельзя отменить.</p>
+
+            <div class="form-group mt-4">
+                <label class="form-label text-danger" for="delete-source-articles">
+                    <input type="checkbox" id="delete-source-articles">
+                    Удалить все скачанные статьи из этого источника
+                </label>
+            </div>
+        </div>
+
+        <div class="modal-footer">
+            <button type="button" class="btn btn--ghost" onclick="hideDeleteSourceModal()">Отмена</button>
+            <button type="button" class="btn btn--danger" onclick="confirmDeleteSource()">Удалить навсегда</button>
+        </div>
+    </div>
+</div>
+
+<style>
+    /* Sources-specific styles */
+    .sources-header {
+        border-bottom: 2px solid var(--border-color);
+        padding-bottom: 1.5rem;
+    }
+
+    .sources-inline-stats {
+        display: flex;
+        align-items: center;
+        gap: .5rem;
+        flex-wrap: wrap;
+        font-size: .875rem;
+        color: #64748b;
+        margin: 1rem 0 1.5rem;
+    }
+
+    .sources-inline-stats strong {
+        color: #1e293b;
+        font-weight: 600;
+    }
+
+    .stat-sep {
+        color: #cbd5e1;
+    }
+
+    .sources-filters {
+        background: var(--surface-hover);
+        padding: 1.5rem;
+        border-radius: var(--border-radius-sm);
+        border: 1px solid var(--border-color);
+        flex-wrap: wrap;
+    }
+
+    .filter-group {
+        flex: 1;
+        min-width: 200px;
+    }
+
+    .filter-actions {
+        gap: 0.5rem;
+    }
+
+    /* Enhanced table styling */
+    .table tbody tr:hover {
+        background: var(--surface-hover);
+        cursor: pointer;
+    }
+
+    .table td {
+        vertical-align: middle;
+    }
+
+    /* Action buttons in table */
+    .table-actions {
+        display: flex;
+        gap: 0.5rem;
+        justify-content: center;
+    }
+
+    .btn--small {
+        padding: 0.375rem 0.75rem;
+        font-size: 0.75rem;
+        border-radius: 0.25rem;
+        min-width: auto;
+    }
+
+    /* Modal styles */
+    .modal {
+        position: fixed;
+        top: 0;
+        left: 0;
+        right: 0;
+        bottom: 0;
+        background: rgba(0, 0, 0, 0.7);
+        z-index: 1000;
+        display: flex;
+        align-items: center;
+        justify-content: center;
+        padding: 1rem;
+    }
+
+    .modal-content {
+        background: var(--surface-color);
+        border-radius: var(--border-radius-lg);
+        box-shadow: var(--shadow-xl);
+        max-width: 500px;
+        width: 100%;
+        max-height: 90vh;
+        overflow-y: auto;
+    }
+
+    .modal-header {
+        display: flex;
+        justify-content: space-between;
+        align-items: center;
+        padding: 1.5rem;
+        border-bottom: 1px solid var(--border-color);
+    }
+
+    .modal-header h2 {
+        margin: 0;
+        font-size: 1.5rem;
+        font-weight: 600;
+    }
+
+    .modal-close {
+        background: none;
+        border: none;
+        font-size: 1.5rem;
+        cursor: pointer;
+        color: var(--text-muted);
+        padding: 0.25rem;
+        border-radius: 0.25rem;
+        transition: all 0.2s ease;
+    }
+
+    .modal-close:hover {
+        color: var(--text-color);
+        background: var(--surface-hover);
+    }
+
+    .modal-body {
+        padding: 1.5rem;
+    }
+
+    .modal-footer {
+        display: flex;
+        justify-content: flex-end;
+        gap: 0.75rem;
+        padding: 1.5rem;
+        border-top: 1px solid var(--border-color);
+    }
+
+    /* Status indicators and source type badges */
+    .badge {
+        display: inline-flex;
+        align-items: center;
+        gap: 0.25rem;
+        padding: 0.25rem 0.75rem;
+        border-radius: 9999px;
+        font-size: 0.75rem;
+        font-weight: 600;
+        text-transform: uppercase;
+        letter-spacing: 0.05em;
+    }
+
+    .badge-rss {
+        background: var(--primary-color);
+        color: white;
+    }
+
+    .badge-telegram {
+        background: #0088cc;
+        color: white;
+    }
+
+    .badge-custom {
+        background: var(--secondary-color);
+        color: white;
+    }
+
+    .badge-other {
+        background: var(--secondary-color);
+        color: white;
+    }
+
+    .badge.badge--success {
+        background: var(--success-color);
+        color: white;
+    }
+
+    .badge.badge--neutral {
+        background: var(--secondary-color);
+        color: white;
+    }
+
+    .badge.badge--danger {
+        background: var(--danger-color);
+        color: white;
+    }
+
+    /* Loading state for table */
+    .table-loading {
+        opacity: 0.6;
+        pointer-events: none;
+    }
+
+    /* Form enhancements */
+    .form-group label[for*="active"] {
+        display: flex;
+        align-items: center;
+        gap: 0.5rem;
+        font-weight: 500;
+        cursor: pointer;
+    }
+
+    .form-group input[type="checkbox"] {
+        width: auto;
+        margin: 0;
+    }
+
+    /* Responsive */
+    @media (max-width: 768px) {
+        .sources-header {
+            flex-direction: column;
+            gap: 1rem;
+            align-items: stretch;
+        }
+
+        .sources-filters {
+            flex-direction: column;
+            gap: 1rem;
+        }
+
+        .filter-actions {
+            justify-content: stretch;
+        }
+
+        .filter-actions .btn {
+            justify-content: center;
+        }
+
+        .table-container {
+            overflow-x: auto;
+        }
+
+        .table {
+            min-width: 600px;
+        }
+
+        .modal-content {
+            margin: 1rem;
+            max-width: none;
+        }
+    }
+</style>
+
+<script>
+    let sourcesData = [];
+
+    document.addEventListener('DOMContentLoaded', function () {
+        loadSourcesData();
+        loadSourcesStats();
+    });
+
+    async function loadSourcesData() {
+        const tableBody = document.getElementById('sources-tbody');
+        const table = document.getElementById('sources-table');
+
+        try {
+            table.classList.add('table-loading');
+
+            const response = await NewsAggregator.apiRequest('/api/v1/sources');
+            sourcesData = response.sources || [];
+
+            displaySources(sourcesData);
+
+        } catch (error) {
+            console.error('Error loading sources:', error);
+            tableBody.innerHTML = `
+            <tr>
+                <td colspan="7" class="text-center">
+                    <p class="text-muted">Ошибка загрузки источников</p>
+                </td>
+            </tr>
+        `;
+            NewsAggregator.showNotification('Ошибка загрузки источников', 'error');
+        } finally {
+            table.classList.remove('table-loading');
+        }
+    }
+
+    async function loadSourcesStats() {
+        try {
+            const response = await NewsAggregator.apiRequest('/api/v1/stats/dashboard');
+
+            NewsAggregator.animateNumber(
+                document.getElementById('total-sources'),
+                response.total_sources || 0
+            );
+
+            NewsAggregator.animateNumber(
+                document.getElementById('active-sources'),
+                response.active_sources || 0
+            );
+
+            NewsAggregator.animateNumber(
+                document.getElementById('error-sources'),
+                0 // Error count not available in current API
+            );
+
+            const lastSyncEl = document.getElementById('last-sync');
+            if (response.last_update) {
+                const date = new Date(response.last_update);
+                lastSyncEl.textContent = date.toLocaleTimeString('ru-RU', {
+                    hour: '2-digit',
+                    minute: '2-digit'
+                });
+            } else {
+                lastSyncEl.textContent = 'Никогда';
+            }
+
+        } catch (error) {
+            console.error('Error loading sources stats:', error);
+        }
+    }
+
+    function displaySources(sources) {
+        const tableBody = document.getElementById('sources-tbody');
+
+        if (!sources || sources.length === 0) {
+            tableBody.innerHTML = `
+            <tr>
+                <td colspan="7" class="text-center">
+                    <p class="text-muted">Источники не найдены</p>
+                </td>
+            </tr>
+        `;
+            return;
+        }
+
+        const sourcesHtml = sources.map(source => `
+        <tr data-source-id="${source.id}" onclick="editSource(${source.id})" style="cursor: pointer;" title="Нажмите для редактирования">
+            <td>
+                <strong>${source.name}</strong>
+            </td>
+            <td>
+                <a href="${source.url}" target="_blank" class="text-primary" onclick="event.stopPropagation()">
+                    ${truncateUrl(source.url)}
+                </a>
+            </td>
+            <td>
+                <span class="badge badge-${source.source_type || 'other'}">
+                    ${getSourceTypeName(source.source_type)}
+                </span>
+            </td>
+            <td>
+                <span class="badge badge--${source.is_active ? 'success' : 'neutral'}">
+                    ${source.is_active ? 'Активен' : 'Неактивен'}
+                </span>
+            </td>
+            <td>
+                ${source.last_updated ? formatDateTime(source.last_updated) : 'Никогда'}
+            </td>
+            <td>
+                <span class="badge badge-info">${source.articles_count || 0}</span>
+            </td>
+            <td onclick="event.stopPropagation()">
+                <div class="table-actions">
+                    <button class="btn btn--small btn--primary" onclick="editSource(${source.id})" data-tooltip="Редактировать источник">
+                        ✏️
+                    </button>
+                    <button class="btn btn--small ${source.is_active ? 'btn--warning' : 'btn--success'}"
+                            onclick="toggleSource(${source.id})"
+                            data-tooltip="${source.is_active ? 'Деактивировать' : 'Активировать'} источник">
+                        ${source.is_active ? '⏸️' : '▶️'}
+                    </button>
+                    <button class="btn btn--small btn--danger" onclick="deleteSource(${source.id})" data-tooltip="Удалить источник">
+                        🗑️
+                    </button>
+                </div>
+            </td>
+        </tr>
+    `).join('');
+
+        tableBody.innerHTML = sourcesHtml;
+    }
+
+    function filterSources() {
+        const statusFilter = document.getElementById('status-filter').value;
+        const searchQuery = document.getElementById('search-input').value.toLowerCase();
+
+        let filteredSources = sourcesData;
+
+        // Filter by status
+        if (statusFilter) {
+            filteredSources = filteredSources.filter(source => {
+                switch (statusFilter) {
+                    case 'active':
+                        return source.is_active;
+                    case 'inactive':
+                        return !source.is_active;
+                    case 'error':
+                        return source.has_errors;
+                    default:
+                        return true;
+                }
+            });
+        }
+
+        // Filter by search query
+        if (searchQuery) {
+            filteredSources = filteredSources.filter(source =>
+                source.name.toLowerCase().includes(searchQuery) ||
+                source.url.toLowerCase().includes(searchQuery)
+            );
+        }
+
+        displaySources(filteredSources);
+    }
+
+    function showAddSourceModal() {
+        document.getElementById('add-source-modal').style.display = 'flex';
+        document.getElementById('source-name').focus();
+    }
+
+    function hideAddSourceModal() {
+        document.getElementById('add-source-modal').style.display = 'none';
+        document.getElementById('add-source-form').reset();
+    }
+
+    async function addSource(event) {
+        event.preventDefault();
+
+        const form = event.target;
+        const formData = new FormData(form);
+
+        const sourceData = {
+            name: document.getElementById('source-name').value,
+            url: document.getElementById('source-url').value,
+            source_type: document.getElementById('source-type').value,
+            is_active: document.getElementById('source-active').checked
+        };
+
+        if (!NewsAggregator.validateForm(form)) {
+            return;
+        }
+
+        const submitButton = form.querySelector('button[type="submit"]');
+        submitButton.classList.add('btn--loading');
+        submitButton.disabled = true;
+
+        try {
+            console.log('Sending source data:', sourceData);
+            const response = await NewsAggregator.apiRequest('/api/v1/sources', {
+                method: 'POST',
+                body: JSON.stringify(sourceData)
+            });
+
+            if (response.id) {
+                NewsAggregator.showNotification('Источник успешно добавлен', 'success');
+                hideAddSourceModal();
+                loadSourcesData();
+                loadSourcesStats();
+            } else {
+                throw new Error('Ошибка добавления источника');
+            }
+
+        } catch (error) {
+            console.error('Error adding source:', error);
+            NewsAggregator.showNotification('Ошибка добавления источника: ' + error.message, 'error');
+        } finally {
+            submitButton.classList.remove('btn--loading');
+            submitButton.disabled = false;
+        }
+    }
+
+    async function testSource(sourceId) {
+        try {
+            const response = await NewsAggregator.apiRequest(`/api/v1/sources/${sourceId}/toggle`, {
+                method: 'PATCH'
+            });
+
+            if (response.success) {
+                NewsAggregator.showNotification(response.message, 'success');
+                loadSourcesData();
+                loadSourcesStats();
+            } else {
+                NewsAggregator.showNotification('Ошибка изменения статуса источника', 'error');
+            }
+
+        } catch (error) {
+            console.error('Error toggling source:', error);
+            NewsAggregator.showNotification('Ошибка изменения статуса источника', 'error');
+        }
+    }
+
+    async function editSource(sourceId) {
+        try {
+            // Find source data in current sourcesData
+            const source = sourcesData.find(s => s.id === sourceId);
+            if (!source) {
+                NewsAggregator.showNotification('Источник не найден', 'error');
+                return;
+            }
+
+            // Fill form with current data
+            document.getElementById('edit-source-id').value = source.id;
+            document.getElementById('edit-source-name').value = source.name;
+            document.getElementById('edit-source-url').value = source.url;
+            document.getElementById('edit-source-type').value = source.source_type;
+            document.getElementById('edit-source-active').checked = source.is_active;
+
+            // Show modal
+            document.getElementById('edit-source-modal').style.display = 'flex';
+            document.getElementById('edit-source-name').focus();
+
+        } catch (error) {
+            console.error('Error opening edit modal:', error);
+            NewsAggregator.showNotification('Ошибка открытия редактора', 'error');
+        }
+    }
+
+    function hideEditSourceModal() {
+        document.getElementById('edit-source-modal').style.display = 'none';
+        document.getElementById('edit-source-form').reset();
+    }
+
+    async function updateSource(event) {
+        event.preventDefault();
+
+        const form = event.target;
+        const sourceId = document.getElementById('edit-source-id').value;
+
+        const sourceData = {
+            name: document.getElementById('edit-source-name').value,
+            url: document.getElementById('edit-source-url').value,
+            source_type: document.getElementById('edit-source-type').value,
+            is_active: document.getElementById('edit-source-active').checked
+        };
+
+        if (!NewsAggregator.validateForm(form)) {
+            return;
+        }
+
+        const submitButton = form.querySelector('button[type="submit"]');
+        submitButton.classList.add('btn--loading');
+        submitButton.disabled = true;
+
+        try {
+            const response = await NewsAggregator.apiRequest(`/api/v1/sources/${sourceId}`, {
+                method: 'PUT',
+                body: JSON.stringify(sourceData)
+            });
+
+            if (response.success) {
+                NewsAggregator.showNotification('Источник успешно обновлен', 'success');
+                hideEditSourceModal();
+                loadSourcesData();
+                loadSourcesStats();
+            } else {
+                throw new Error('Ошибка обновления источника');
+            }
+
+        } catch (error) {
+            console.error('Error updating source:', error);
+            NewsAggregator.showNotification('Ошибка обновления источника: ' + error.message, 'error');
+        } finally {
+            submitButton.classList.remove('btn--loading');
+            submitButton.disabled = false;
+        }
+    }
+
+    async function deleteSource(sourceId) {
+        const source = sourcesData.find(s => s.id === sourceId);
+        if (!source) return;
+
+        document.getElementById('delete-source-id').value = sourceId;
+        document.getElementById('delete-source-name-display').textContent = source.name;
+        document.getElementById('delete-source-articles').checked = false; // Default to unchecked
+
+        document.getElementById('delete-source-modal').style.display = 'flex';
+    }
+
+    function hideDeleteSourceModal() {
+        document.getElementById('delete-source-modal').style.display = 'none';
+    }
+
+    async function confirmDeleteSource() {
+        const sourceId = document.getElementById('delete-source-id').value;
+        const deleteArticles = document.getElementById('delete-source-articles').checked;
+        const deleteBtn = document.querySelector('#delete-source-modal .btn--danger');
+
+        try {
+            deleteBtn.classList.add('btn--loading');
+            deleteBtn.disabled = true;
+
+            const url = `/api/v1/sources/${sourceId}${deleteArticles ? '?delete_articles=true' : ''}`;
+
+            const response = await NewsAggregator.apiRequest(url, {
+                method: 'DELETE'
+            });
+
+            if (response.success || response.message) {
+                NewsAggregator.showNotification('Источник удален', 'success');
+                if (response.deleted_articles && response.deleted_articles > 0) {
+                    NewsAggregator.showNotification(`Удалено статей: ${response.deleted_articles}`, 'info');
+                }
+                hideDeleteSourceModal();
+                loadSourcesData();
+                loadSourcesStats();
+            } else {
+                throw new Error(response.error || 'Ошибка удаления источника');
+            }
+
+        } catch (error) {
+            console.error('Error deleting source:', error);
+            NewsAggregator.showNotification('Ошибка удаления источника: ' + (error.detail || error.message), 'error');
+        } finally {
+            deleteBtn.classList.remove('btn--loading');
+            deleteBtn.disabled = false;
+        }
+    }
+
+    function refreshSources() {
+        loadSourcesData();
+        loadSourcesStats();
+        NewsAggregator.showNotification('Данные обновлены', 'info');
+    }
+
+    // Utility functions
+    function truncateUrl(url, maxLength = 40) {
+        return url.length > maxLength ? url.substring(0, maxLength) + '...' : url;
+    }
+
+    function getSourceTypeName(sourceType) {
+        const sourceTypes = {
+            'rss': 'RSS-канал',
+            'telegram': 'Telegram',
+            'custom': 'Кастомный'
+        };
+        return sourceTypes[sourceType] || 'Неизвестно';
+    }
+
+    function formatDateTime(dateString) {
+        const date = new Date(dateString);
+        return date.toLocaleString('ru-RU', {
+            day: '2-digit',
+            month: '2-digit',
+            year: 'numeric',
+            hour: '2-digit',
+            minute: '2-digit'
+        });
+    }
+
+    // Close modal on escape key
+    document.addEventListener('keydown', function (e) {
+        if (e.key === 'Escape') {
+            hideAddSourceModal();
+            hideEditSourceModal();
+        }
+    });
+
+    // Close modal on background click
+    document.getElementById('add-source-modal').addEventListener('click', function (e) {
+        if (e.target === this) {
+            hideAddSourceModal();
+        }
+    });
+
+    document.getElementById('edit-source-modal').addEventListener('click', function (e) {
+        if (e.target === this) {
+            hideEditSourceModal();
+        }
+    });
+</script>
+{{end}}
+
+{{template "admin-base" .}}

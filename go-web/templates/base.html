@@ -1,0 +1,14 @@
+{{define "base"}}<!doctype html>
+<html lang="ru"><head>
+<meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1">
+<title>{{.Title}} — Evening News</title>
+<link href="/static/css/dzarlax.css" rel="stylesheet"><link href="/static/css/main.css" rel="stylesheet">
+<script src="/static/js/main.js"></script>
+<script>(function(){var s=localStorage.getItem('theme');if(s==='dark'||(!s&&window.matchMedia('(prefers-color-scheme: dark)').matches))document.documentElement.setAttribute('dark-mode','')})();</script>
+{{block "extra-head" .}}{{end}}
+</head><body>
+<nav class="navbar"><div class="nav-container"><div class="nav-brand"><a href="/">Evening News</a></div><div class="nav-menu"><a href="/" class="nav-hide-mobile">Новости</a><a href="/search">Поиск</a><button class="theme-toggle" onclick="toggleTheme()" title="Переключить тему"><span class="theme-icon">☀️</span></button></div></div></nav>
+<main class="main-content">{{template "content" .}}</main>
+<footer class="footer"><div class="footer-content"><p>&copy; 2025 Evening News</p></div></footer>
+<script>function toggleTheme(){var d=document.documentElement;if(d.hasAttribute('dark-mode')){d.removeAttribute('dark-mode');localStorage.setItem('theme','light')}else{d.setAttribute('dark-mode','');localStorage.setItem('theme','dark')}updateThemeIcon()}function updateThemeIcon(){var dark=document.documentElement.hasAttribute('dark-mode');document.querySelectorAll('.theme-icon').forEach(function(el){el.textContent=dark?'🌙':'☀️'})}document.addEventListener('DOMContentLoaded',updateThemeIcon);</script>
+{{block "page-scripts" .}}{{end}}</body></html>{{end}}

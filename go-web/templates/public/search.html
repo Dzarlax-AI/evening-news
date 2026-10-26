@@ -1,0 +1,343 @@
+{{define "content"}}
+<div class="search-page">
+    <!-- Search Header -->
+    <div class="search-header">
+        <div class="search-container">
+            <h1>🔍 Поиск новостей</h1>
+            <p>Найдите нужную информацию среди тысяч статей</p>
+        </div>
+    </div>
+
+    <div class="search-container">
+        <!-- Search Form -->
+        <div class="search-main">
+            <form class="search-form" id="searchForm">
+                <div class="search-input-group">
+                    <input
+                        type="text"
+                        id="searchQuery"
+                        class="search-input"
+                        placeholder="Поиск по заголовкам, описанию и содержимому статей..."
+                        required
+                        minlength="2"
+                    >
+                </div>
+
+                <div class="search-filters">
+                    <div class="filter-group">
+                        <label for="categoryFilter">Категория</label>
+                        <select id="categoryFilter" class="filter-select">
+                            <option value="">Все категории</option>
+                            <option value="business">Бизнес</option>
+                            <option value="tech">Технологии</option>
+                            <option value="science">Наука</option>
+                            <option value="serbia">Сербия</option>
+                            <option value="other">Прочее</option>
+                        </select>
+                    </div>
+
+                    <div class="filter-group">
+                        <label for="timeFilter">Период</label>
+                        <select id="timeFilter" class="filter-select">
+                            <option value="">Все время</option>
+                            <option value="24">Последние 24 часа</option>
+                            <option value="72">Последние 3 дня</option>
+                            <option value="168">Последняя неделя</option>
+                            <option value="720">Последний месяц</option>
+                        </select>
+                    </div>
+
+                    <div class="filter-group">
+                        <label for="hideAdsFilter">Реклама</label>
+                        <select id="hideAdsFilter" class="filter-select">
+                            <option value="true">Скрыть рекламу</option>
+                            <option value="false">Показать все</option>
+                        </select>
+                    </div>
+                </div>
+
+                <button type="submit" class="search-button" id="searchButton">
+                    <span class="search-icon">🔍</span>
+                    <span class="search-text">Найти</span>
+                </button>
+            </form>
+        </div>
+
+        <!-- Search Results -->
+        <div id="searchResults" class="search-results" style="display: none;">
+            <div class="results-header">
+                <div class="results-info">
+                    <span id="resultsCount">0</span> результатов для "<span class="results-query" id="resultsQuery"></span>"
+                </div>
+                <div class="sort-options">
+                    <button class="sort-btn active" data-sort="relevance">По релевантности</button>
+                    <button class="sort-btn" data-sort="date">По дате</button>
+                    <button class="sort-btn" data-sort="title">По названию</button>
+                </div>
+            </div>
+
+            <div id="resultsList"></div>
+
+            <div id="pagination" class="pagination" style="display: none;">
+                <button id="prevPage" onclick="goToPrevPage()">‹ Предыдущая</button>
+                <span id="pageInfo">Страница 1</span>
+                <button id="nextPage" onclick="goToNextPage()">Следующая ›</button>
+            </div>
+        </div>
+
+        <!-- Loading State -->
+        <div id="loading" class="loading" style="display: none;">
+            <div class="loading-spinner"></div>
+            <div>Поиск в базе новостей...</div>
+        </div>
+
+        <!-- No Results -->
+        <div id="noResults" class="no-results" style="display: none;">
+            <div class="no-results-icon">🔍</div>
+            <h3>Ничего не найдено</h3>
+            <p>Попробуйте изменить запрос или настройки фильтров</p>
+        </div>
+    </div>
+</div>
+
+<!-- Include Article Modal -->
+{{end}}
+{{define "page-scripts"}}{{.FeedFragments.Modal}}{{.FeedFragments.Core}}<script>
+let currentPage = 0;
+let currentLimit = 20;
+let currentSort = 'relevance';
+let lastSearchParams = {};
+
+// Search form submission
+document.getElementById('searchForm').addEventListener('submit', function(e) {
+    e.preventDefault();
+    currentPage = 0;
+    performSearch();
+});
+
+// Sort buttons
+document.querySelectorAll('.sort-btn').forEach(btn => {
+    btn.addEventListener('click', function() {
+        document.querySelectorAll('.sort-btn').forEach(b => b.classList.remove('active'));
+        this.classList.add('active');
+        currentSort = this.dataset.sort;
+        currentPage = 0;
+        performSearch();
+    });
+});
+
+async function performSearch() {
+    const query = document.getElementById('searchQuery').value.trim();
+    if (query.length < 2) {
+        alert('Поисковый запрос должен содержать минимум 2 символа');
+        return;
+    }
+
+    // Update search button state
+    const searchButton = document.getElementById('searchButton');
+    const searchIcon = searchButton.querySelector('.search-icon');
+    const searchText = searchButton.querySelector('.search-text');
+
+    searchButton.disabled = true;
+    searchIcon.textContent = '⏳';
+    searchText.textContent = 'Поиск...';
+
+    // Show loading
+    document.getElementById('loading').style.display = 'block';
+    document.getElementById('searchResults').style.display = 'none';
+    document.getElementById('noResults').style.display = 'none';
+
+    // Build search parameters
+    const params = new URLSearchParams({
+        q: query,
+        limit: currentLimit,
+        offset: currentPage * currentLimit,
+        sort: currentSort
+    });
+
+    const category = document.getElementById('categoryFilter').value;
+    if (category) params.append('category', category);
+
+    const timeFilter = document.getElementById('timeFilter').value;
+    if (timeFilter) params.append('since_hours', timeFilter);
+
+    const hideAds = document.getElementById('hideAdsFilter').value;
+    params.append('hide_ads', hideAds);
+
+    lastSearchParams = Object.fromEntries(params);
+
+    try {
+        const response = await fetch(`/api/public/search?${params}`);
+        const data = await response.json();
+
+        if (!response.ok) {
+            throw new Error(data.detail || 'Search failed');
+        }
+
+        displayResults(data);
+
+    } catch (error) {
+        console.error('Search error:', error);
+        document.getElementById('loading').style.display = 'none';
+        alert('Ошибка поиска: ' + error.message);
+    } finally {
+        // Reset search button state
+        const searchButton = document.getElementById('searchButton');
+        const searchIcon = searchButton.querySelector('.search-icon');
+        const searchText = searchButton.querySelector('.search-text');
+
+        searchButton.disabled = false;
+        searchIcon.textContent = '🔍';
+        searchText.textContent = 'Найти';
+    }
+}
+
+function displayResults(data) {
+    document.getElementById('loading').style.display = 'none';
+
+    if (data.articles.length === 0) {
+        document.getElementById('noResults').style.display = 'block';
+        return;
+    }
+
+    // Update results info
+    document.getElementById('resultsCount').textContent = data.pagination.total;
+    document.getElementById('resultsQuery').textContent = data.query;
+
+    // Generate results HTML
+    const resultsList = document.getElementById('resultsList');
+    resultsList.innerHTML = data.articles.map(article => {
+        // Format categories
+        const categoriesHtml = article.categories && article.categories.length > 0
+            ? `<div class="result-categories">
+                ${article.categories.slice(0, 3).map(cat =>
+                    `<span class="category-badge category-${escapeHtml(cat.name)}">${escapeHtml(cat.display_name || cat.name)}</span>`
+                ).join('')}
+                ${article.categories.length > 3 ?
+                    `<span class="category-badge category-more">+${article.categories.length - 3}</span>` : ''
+                }
+               </div>`
+            : '';
+
+        return `
+        <div class="search-result" onclick="openArticle(${article.id})">
+            <div class="result-title">${escapeHtml(article.title)}</div>
+            ${categoriesHtml}
+            <div class="result-summary">${escapeHtml(article.summary || 'Нет описания')}</div>
+            <div class="result-meta">
+                <div class="result-source">${escapeHtml(article.source_name)}</div>
+                <div class="result-meta-right">
+                    <span class="result-relevance">Релевантность: ${article.relevance_score}%</span>
+                    <span class="result-date">${article.published_at ? new Date(article.published_at).toLocaleDateString('ru-RU') : ''}</span>
+                </div>
+            </div>
+        </div>`;
+    }).join('');
+
+    // Update pagination
+    updatePagination(data.pagination);
+
+    // Show results with animation
+    const searchResults = document.getElementById('searchResults');
+    searchResults.style.display = 'block';
+
+    // Add staggered animation to results
+    const resultElements = searchResults.querySelectorAll('.search-result');
+    resultElements.forEach((element, index) => {
+        element.style.opacity = '0';
+        element.style.transform = 'translateY(20px)';
+
+        setTimeout(() => {
+            element.style.transition = 'all 0.3s ease-out';
+            element.style.opacity = '1';
+            element.style.transform = 'translateY(0)';
+        }, 100 + (index * 50));
+    });
+}
+
+function updatePagination(pagination) {
+    const paginationDiv = document.getElementById('pagination');
+    const prevButton = document.getElementById('prevPage');
+    const nextButton = document.getElementById('nextPage');
+    const pageInfo = document.getElementById('pageInfo');
+
+    if (pagination.total > pagination.limit) {
+        paginationDiv.style.display = 'flex';
+
+        prevButton.disabled = pagination.offset === 0;
+        nextButton.disabled = !pagination.has_more;
+
+        const currentPageNum = Math.floor(pagination.offset / pagination.limit) + 1;
+        const totalPages = Math.ceil(pagination.total / pagination.limit);
+        pageInfo.textContent = `Страница ${currentPageNum} из ${totalPages}`;
+    } else {
+        paginationDiv.style.display = 'none';
+    }
+}
+
+function goToPrevPage() {
+    if (currentPage > 0) {
+        currentPage--;
+        performSearch();
+    }
+}
+
+function goToNextPage() {
+    currentPage++;
+    performSearch();
+}
+
+function openArticle(articleId) {
+    // Add visual feedback for article opening
+    const clickedElement = event.target.closest('.search-result');
+    if (clickedElement) {
+        clickedElement.style.opacity = '0.7';
+        clickedElement.style.transform = 'scale(0.98)';
+
+        // Reset styles after a short delay
+        setTimeout(() => {
+            clickedElement.style.opacity = '';
+            clickedElement.style.transform = '';
+        }, 200);
+    }
+
+    // Use existing modal function if available, otherwise open in new tab
+    if (typeof window.openArticleModal === 'function') {
+        window.openArticleModal(articleId);
+    } else {
+        // Fallback: open article URL
+        fetch(`/api/public/article/${articleId}`)
+            .then(response => response.json())
+            .then(article => {
+                if (article && article.url) {
+                    window.open(article.url, '_blank');
+                } else {
+                    console.error('Article URL not found');
+                }
+            })
+            .catch(error => {
+                console.error('Error opening article:', error);
+                alert('Ошибка при открытии статьи. Попробуйте еще раз.');
+            });
+    }
+}
+
+function escapeHtml(text) {
+    if (!text) return '';
+    const div = document.createElement('div');
+    div.textContent = text;
+    return div.innerHTML;
+}
+
+// Auto-search on URL parameters
+document.addEventListener('DOMContentLoaded', function() {
+    const urlParams = new URLSearchParams(window.location.search);
+    const query = urlParams.get('q');
+    if (query) {
+        document.getElementById('searchQuery').value = query;
+        performSearch();
+    }
+});
+</script>{{end}}
+{{define "extra-head"}}{{.FeedFragments.SearchStyles}}{{end}}
+{{template "base" .}}

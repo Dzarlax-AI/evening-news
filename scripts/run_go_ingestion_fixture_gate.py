@@ -60,8 +60,10 @@ def has_host_port_binding(ports):
 
 
 class IngestionGate(GoJobWorkerGate):
-    def __init__(self, app_image, worker_image, collector_image, ingestion_image, output_dir, processing_image):
-        super().__init__(app_image, worker_image, output_dir, processing_image)
+    def __init__(self, app_image, worker_image, collector_image, ingestion_image, output_dir, processing_image,
+                 web_image=None):
+        super().__init__(app_image, worker_image, output_dir, processing_image, web_image or
+                         "evening-news-web:components-20261026")
         self.collector_image = collector_image
         self.ingestion_image = ingestion_image
         self.processing_image = processing_image
@@ -247,7 +249,7 @@ class IngestionGate(GoJobWorkerGate):
         return env
 
     def private_probe(self, action, *arguments):
-        output = self.docker("exec", f"{self.prefix}-web", "python", "/gate/gate_probe.py",
+        output = self.docker("exec", f"{self.prefix}-probe", "python", "/gate/gate_probe.py",
                              action, *arguments).stdout.strip()
         try:
             return json.loads(output.splitlines()[-1])
@@ -304,7 +306,7 @@ class IngestionGate(GoJobWorkerGate):
         self.report["timeout_diagnostics"] = diagnostics
 
     def seed(self):
-        self.docker("exec", f"{self.prefix}-web", "python", "/gate/gate_seed.py", timeout=30)
+        self.docker("exec", f"{self.prefix}-probe", "python", "/gate/gate_seed.py", timeout=30)
         return self.private_probe("snapshot")
 
     def provision_runtime_role(self):
@@ -336,6 +338,16 @@ class IngestionGate(GoJobWorkerGate):
     def wait_http(self, name, url, *, timeout=90, auth=None):
         deadline = time.monotonic() + timeout
         while time.monotonic() < deadline:
+            if name.endswith("-web"):
+                result = self.private_probe("health")
+                if result.get("http_status") == 200:
+                    return
+                state = self.docker("inspect", "--format", "{{.State.Status}}", name,
+                                    check=False).stdout.strip()
+                if state != "running":
+                    raise GateFailure("fixture_service_exited:web")
+                time.sleep(1)
+                continue
             headers = {"Authorization": "Bearer " + auth} if auth else {}
             script = ("import urllib.request; r=urllib.request.Request(" + repr(url) + ",headers="
                       + repr(headers) + "); print(urllib.request.urlopen(r,timeout=2).status)")
@@ -350,11 +362,12 @@ class IngestionGate(GoJobWorkerGate):
 
     def run(self):
         self.output_dir.mkdir(parents=True, exist_ok=True)
-        for image in (self.image, self.worker_image, self.collector_image, self.ingestion_image, self.processing_image):
+        for image in (self.image, self.web_image, self.worker_image, self.collector_image,
+                      self.ingestion_image, self.processing_image):
             self.docker("image", "inspect", image, "--format", "{{.Id}}")
         self.report["image_ids"] = {
             key: self.docker("image", "inspect", value, "--format", "{{.Id}}").stdout.strip()
-            for key, value in (("app", self.image), ("worker", self.worker_image),
+            for key, value in (("app", self.image), ("web", self.web_image), ("worker", self.worker_image),
                                ("collector", self.collector_image), ("ingestion", self.ingestion_image),
                                ("processing", self.processing_image))
         }
@@ -385,11 +398,22 @@ class IngestionGate(GoJobWorkerGate):
         self.wait_ready(f"{self.prefix}-postgres")
         self.wait_http(f"{self.prefix}-origin", "http://rss.fixture.test/rss.xml")
         env = self.app_environment("web")
-        self.run_container(f"{self.prefix}-web", command=["uvicorn", "news_aggregator.main:app",
-                           "--host", "0.0.0.0", "--port", "8000"], alias="web", env=env,
-                           memory="768m")
+        migration = f"{self.prefix}-migrate"
+        self.run_container(migration, command=["python", "-m", "news_aggregator.migrate"],
+                           env={"DATABASE_URL": f"postgresql+asyncpg://gate_user:{DB_PASSWORD}@postgres:5432/gate_db",
+                                "ALLOW_CREATE_ALL": "true",
+                                "DEVELOPMENT": "true"}, mounts=False, memory="512m", detached=False)
+        self.docker("start", "-a", migration, timeout=120)
+        self.report["checks"]["explicit_migration_bootstrap"] = True
+        self.run_container(f"{self.prefix}-web", command=[], image=self.web_image, alias="web",
+                           env=self.web_environment(), mounts=False, memory="384m")
+        self.assert_go_web_environment_safe()
+        probe_env = self.app_environment("probe")
+        probe_env["GATE_WEB_URL"] = "http://web:8000"
+        self.run_container(f"{self.prefix}-probe", command=["sh", "-c", "sleep 86400"],
+                           alias="probe", env=probe_env, memory="256m", disable_healthcheck=True)
         self.wait_http(f"{self.prefix}-web", "http://127.0.0.1:8000/health")
-        self.docker("exec", f"{self.prefix}-web", "python", "/gate/gate_seed.py", timeout=30)
+        self.docker("exec", f"{self.prefix}-probe", "python", "/gate/gate_seed.py", timeout=30)
         self.provision_runtime_role()
         collector_env = {"LISTEN_ADDR": ":8080", "EXTRACTOR_HTTP_ONLY": "true",
                          "EXTRACTOR_MAX_CONCURRENT": "1", "EXTRACTOR_SERVICE_TOKEN": COLLECTOR_TOKEN,
@@ -539,12 +563,14 @@ def main():
     parser.add_argument("--collector-image", required=True)
     parser.add_argument("--ingestion-image", required=True)
     parser.add_argument("--processing-image", required=True)
+    parser.add_argument("--web-image", default="evening-news-web:components-20261026")
     parser.add_argument("--output-dir", type=Path, default=ROOT / "artifacts/go-ingestion-fixture")
     args = parser.parse_args()
     if not shutil.which("docker"):
         parser.error("docker CLI is required")
     gate = IngestionGate(args.app_image, args.worker_image, args.collector_image,
-                         args.ingestion_image, args.output_dir, args.processing_image)
+                         args.ingestion_image, args.output_dir, args.processing_image,
+                         args.web_image)
     try:
         gate.run()
     except Exception as exc:

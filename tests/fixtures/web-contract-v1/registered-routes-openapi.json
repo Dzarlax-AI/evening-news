@@ -1,0 +1,5309 @@
+{
+  "openapi": {
+    "components": {
+      "schemas": {
+        "AICategoryAnalysisBatchResponse": {
+          "description": "Response model for batch AI category analysis.",
+          "properties": {
+            "execution_time_seconds": {
+              "title": "Execution Time Seconds",
+              "type": "number"
+            },
+            "suggestions": {
+              "items": {
+                "$ref": "#/components/schemas/AICategoryAnalysisResponse"
+              },
+              "title": "Suggestions",
+              "type": "array"
+            },
+            "total_analyzed": {
+              "title": "Total Analyzed",
+              "type": "integer"
+            }
+          },
+          "required": [
+            "suggestions",
+            "total_analyzed",
+            "execution_time_seconds"
+          ],
+          "title": "AICategoryAnalysisBatchResponse",
+          "type": "object"
+        },
+        "AICategoryAnalysisRequest": {
+          "description": "Request model for AI category analysis.",
+          "properties": {
+            "confidence_threshold": {
+              "anyOf": [
+                {
+                  "type": "number"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "default": 0.7,
+              "title": "Confidence Threshold"
+            },
+            "include_examples": {
+              "anyOf": [
+                {
+                  "type": "boolean"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "default": true,
+              "title": "Include Examples"
+            },
+            "limit": {
+              "anyOf": [
+                {
+                  "type": "integer"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "default": 50,
+              "title": "Limit"
+            }
+          },
+          "title": "AICategoryAnalysisRequest",
+          "type": "object"
+        },
+        "AICategoryAnalysisResponse": {
+          "description": "Response model for AI category analysis.",
+          "properties": {
+            "ai_category": {
+              "title": "Ai Category",
+              "type": "string"
+            },
+            "all_suggestions": {
+              "items": {
+                "$ref": "#/components/schemas/AISuggestion"
+              },
+              "title": "All Suggestions",
+              "type": "array"
+            },
+            "confidence": {
+              "title": "Confidence",
+              "type": "number"
+            },
+            "example_articles": {
+              "items": {
+                "type": "string"
+              },
+              "title": "Example Articles",
+              "type": "array"
+            },
+            "reasoning": {
+              "title": "Reasoning",
+              "type": "string"
+            },
+            "suggested_fixed_category": {
+              "title": "Suggested Fixed Category",
+              "type": "string"
+            },
+            "usage_count": {
+              "title": "Usage Count",
+              "type": "integer"
+            }
+          },
+          "required": [
+            "ai_category",
+            "suggested_fixed_category",
+            "confidence",
+            "usage_count",
+            "example_articles",
+            "reasoning",
+            "all_suggestions"
+          ],
+          "title": "AICategoryAnalysisResponse",
+          "type": "object"
+        },
+        "AICategoryMappingApprovalRequest": {
+          "description": "Request model for approving AI category mappings.",
+          "properties": {
+            "ai_category": {
+              "title": "Ai Category",
+              "type": "string"
+            },
+            "approved_fixed_category": {
+              "title": "Approved Fixed Category",
+              "type": "string"
+            },
+            "confidence_threshold": {
+              "anyOf": [
+                {
+                  "type": "number"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "default": 0.7,
+              "title": "Confidence Threshold"
+            },
+            "description": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "title": "Description"
+            }
+          },
+          "required": [
+            "ai_category",
+            "approved_fixed_category"
+          ],
+          "title": "AICategoryMappingApprovalRequest",
+          "type": "object"
+        },
+        "AISuggestion": {
+          "description": "Individual AI suggestion for category mapping.",
+          "properties": {
+            "category": {
+              "title": "Category",
+              "type": "string"
+            },
+            "confidence": {
+              "title": "Confidence",
+              "type": "number"
+            },
+            "reasoning": {
+              "title": "Reasoning",
+              "type": "string"
+            }
+          },
+          "required": [
+            "category",
+            "confidence",
+            "reasoning"
+          ],
+          "title": "AISuggestion",
+          "type": "object"
+        },
+        "BackupScheduleSettings": {
+          "properties": {
+            "enabled": {
+              "title": "Enabled",
+              "type": "boolean"
+            },
+            "frequency": {
+              "title": "Frequency",
+              "type": "string"
+            },
+            "keep_count": {
+              "title": "Keep Count",
+              "type": "integer"
+            },
+            "time": {
+              "title": "Time",
+              "type": "string"
+            }
+          },
+          "required": [
+            "enabled",
+            "frequency",
+            "time",
+            "keep_count"
+          ],
+          "title": "BackupScheduleSettings",
+          "type": "object"
+        },
+        "Body_upload_backup_api_v1_backup_upload_post": {
+          "properties": {
+            "file": {
+              "contentMediaType": "application/octet-stream",
+              "title": "File",
+              "type": "string"
+            }
+          },
+          "required": [
+            "file"
+          ],
+          "title": "Body_upload_backup_api_v1_backup_upload_post",
+          "type": "object"
+        },
+        "CategoryCreateRequest": {
+          "properties": {
+            "color": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "default": "#6c757d",
+              "title": "Color"
+            },
+            "description": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "title": "Description"
+            },
+            "display_name": {
+              "title": "Display Name",
+              "type": "string"
+            },
+            "name": {
+              "title": "Name",
+              "type": "string"
+            }
+          },
+          "required": [
+            "name",
+            "display_name"
+          ],
+          "title": "CategoryCreateRequest",
+          "type": "object"
+        },
+        "CategoryMappingRequest": {
+          "properties": {
+            "ai_category": {
+              "title": "Ai Category",
+              "type": "string"
+            },
+            "confidence_threshold": {
+              "anyOf": [
+                {
+                  "type": "number"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "default": 0.7,
+              "title": "Confidence Threshold"
+            },
+            "description": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "title": "Description"
+            },
+            "fixed_category": {
+              "title": "Fixed Category",
+              "type": "string"
+            }
+          },
+          "required": [
+            "ai_category",
+            "fixed_category"
+          ],
+          "title": "CategoryMappingRequest",
+          "type": "object"
+        },
+        "CategoryMappingResponse": {
+          "properties": {
+            "ai_category": {
+              "title": "Ai Category",
+              "type": "string"
+            },
+            "confidence_threshold": {
+              "anyOf": [
+                {
+                  "type": "number"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "default": 0.7,
+              "title": "Confidence Threshold"
+            },
+            "created_at": {
+              "anyOf": [
+                {
+                  "format": "date-time",
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "title": "Created At"
+            },
+            "created_by": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "default": "system",
+              "title": "Created By"
+            },
+            "description": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "title": "Description"
+            },
+            "fixed_category": {
+              "title": "Fixed Category",
+              "type": "string"
+            },
+            "id": {
+              "title": "Id",
+              "type": "integer"
+            },
+            "is_active": {
+              "anyOf": [
+                {
+                  "type": "boolean"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "default": true,
+              "title": "Is Active"
+            },
+            "last_used": {
+              "anyOf": [
+                {
+                  "format": "date-time",
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "title": "Last Used"
+            },
+            "updated_at": {
+              "anyOf": [
+                {
+                  "format": "date-time",
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "title": "Updated At"
+            },
+            "usage_count": {
+              "anyOf": [
+                {
+                  "type": "integer"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "default": 0,
+              "title": "Usage Count"
+            }
+          },
+          "required": [
+            "id",
+            "ai_category",
+            "fixed_category"
+          ],
+          "title": "CategoryMappingResponse",
+          "type": "object"
+        },
+        "CategoryMappingUpdateResponse": {
+          "properties": {
+            "ai_category": {
+              "title": "Ai Category",
+              "type": "string"
+            },
+            "confidence_threshold": {
+              "title": "Confidence Threshold",
+              "type": "number"
+            },
+            "description": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "title": "Description"
+            },
+            "fixed_category": {
+              "title": "Fixed Category",
+              "type": "string"
+            },
+            "id": {
+              "title": "Id",
+              "type": "integer"
+            },
+            "is_active": {
+              "title": "Is Active",
+              "type": "boolean"
+            },
+            "updated_at": {
+              "format": "date-time",
+              "title": "Updated At",
+              "type": "string"
+            }
+          },
+          "required": [
+            "id",
+            "ai_category",
+            "fixed_category",
+            "confidence_threshold",
+            "description",
+            "is_active",
+            "updated_at"
+          ],
+          "title": "CategoryMappingUpdateResponse",
+          "type": "object"
+        },
+        "CategoryResponse": {
+          "properties": {
+            "color": {
+              "title": "Color",
+              "type": "string"
+            },
+            "created_at": {
+              "format": "date-time",
+              "title": "Created At",
+              "type": "string"
+            },
+            "description": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "title": "Description"
+            },
+            "display_name": {
+              "title": "Display Name",
+              "type": "string"
+            },
+            "id": {
+              "title": "Id",
+              "type": "integer"
+            },
+            "name": {
+              "title": "Name",
+              "type": "string"
+            }
+          },
+          "required": [
+            "id",
+            "name",
+            "display_name",
+            "description",
+            "color",
+            "created_at"
+          ],
+          "title": "CategoryResponse",
+          "type": "object"
+        },
+        "CategoryUpdateRequest": {
+          "properties": {
+            "color": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "title": "Color"
+            },
+            "description": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "title": "Description"
+            },
+            "display_name": {
+              "title": "Display Name",
+              "type": "string"
+            },
+            "is_local": {
+              "anyOf": [
+                {
+                  "type": "boolean"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "title": "Is Local"
+            }
+          },
+          "required": [
+            "display_name"
+          ],
+          "title": "CategoryUpdateRequest",
+          "type": "object"
+        },
+        "CreateSourceRequest": {
+          "properties": {
+            "is_active": {
+              "default": true,
+              "title": "Is Active",
+              "type": "boolean"
+            },
+            "name": {
+              "title": "Name",
+              "type": "string"
+            },
+            "source_type": {
+              "title": "Source Type",
+              "type": "string"
+            },
+            "update_interval": {
+              "default": 60,
+              "title": "Update Interval",
+              "type": "integer"
+            },
+            "url": {
+              "title": "Url",
+              "type": "string"
+            }
+          },
+          "required": [
+            "name",
+            "source_type",
+            "url"
+          ],
+          "title": "CreateSourceRequest",
+          "type": "object"
+        },
+        "HTTPValidationError": {
+          "properties": {
+            "detail": {
+              "items": {
+                "$ref": "#/components/schemas/ValidationError"
+              },
+              "title": "Detail",
+              "type": "array"
+            }
+          },
+          "title": "HTTPValidationError",
+          "type": "object"
+        },
+        "ReprocessRequest": {
+          "properties": {
+            "force": {
+              "default": true,
+              "title": "Force",
+              "type": "boolean"
+            },
+            "reextract_media": {
+              "default": false,
+              "title": "Reextract Media",
+              "type": "boolean"
+            }
+          },
+          "title": "ReprocessRequest",
+          "type": "object"
+        },
+        "ScheduleCreateRequest": {
+          "properties": {
+            "enabled": {
+              "default": true,
+              "title": "Enabled",
+              "type": "boolean"
+            },
+            "hour": {
+              "default": 0,
+              "title": "Hour",
+              "type": "integer"
+            },
+            "minute": {
+              "default": 0,
+              "title": "Minute",
+              "type": "integer"
+            },
+            "schedule_type": {
+              "default": "daily",
+              "title": "Schedule Type",
+              "type": "string"
+            },
+            "task_config": {
+              "anyOf": [
+                {
+                  "additionalProperties": true,
+                  "type": "object"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "title": "Task Config"
+            },
+            "task_name": {
+              "title": "Task Name",
+              "type": "string"
+            },
+            "timezone": {
+              "default": "Europe/Belgrade",
+              "title": "Timezone",
+              "type": "string"
+            },
+            "weekdays": {
+              "default": [
+                1,
+                2,
+                3,
+                4,
+                5,
+                6,
+                7
+              ],
+              "items": {
+                "type": "integer"
+              },
+              "title": "Weekdays",
+              "type": "array"
+            }
+          },
+          "required": [
+            "task_name"
+          ],
+          "title": "ScheduleCreateRequest",
+          "type": "object"
+        },
+        "ScheduleUpdateRequest": {
+          "properties": {
+            "enabled": {
+              "anyOf": [
+                {
+                  "type": "boolean"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "title": "Enabled"
+            },
+            "hour": {
+              "anyOf": [
+                {
+                  "type": "integer"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "title": "Hour"
+            },
+            "minute": {
+              "anyOf": [
+                {
+                  "type": "integer"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "title": "Minute"
+            },
+            "schedule_type": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "title": "Schedule Type"
+            },
+            "task_config": {
+              "anyOf": [
+                {
+                  "additionalProperties": true,
+                  "type": "object"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "title": "Task Config"
+            },
+            "timezone": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "title": "Timezone"
+            },
+            "weekdays": {
+              "anyOf": [
+                {
+                  "items": {
+                    "type": "integer"
+                  },
+                  "type": "array"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "title": "Weekdays"
+            }
+          },
+          "title": "ScheduleUpdateRequest",
+          "type": "object"
+        },
+        "SelectedRetryRequest": {
+          "properties": {
+            "article_ids": {
+              "items": {
+                "type": "integer"
+              },
+              "maxItems": 100,
+              "minItems": 1,
+              "title": "Article Ids",
+              "type": "array"
+            }
+          },
+          "required": [
+            "article_ids"
+          ],
+          "title": "SelectedRetryRequest",
+          "type": "object"
+        },
+        "TelegramSettingsUpdate": {
+          "properties": {
+            "chat_id": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "title": "Chat Id"
+            },
+            "service_chat_id": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "title": "Service Chat Id"
+            }
+          },
+          "title": "TelegramSettingsUpdate",
+          "type": "object"
+        },
+        "TokenResponse": {
+          "properties": {
+            "access_token": {
+              "title": "Access Token",
+              "type": "string"
+            },
+            "expires_in": {
+              "title": "Expires In",
+              "type": "integer"
+            },
+            "level": {
+              "title": "Level",
+              "type": "string"
+            },
+            "token_type": {
+              "title": "Token Type",
+              "type": "string"
+            }
+          },
+          "required": [
+            "access_token",
+            "token_type",
+            "expires_in",
+            "level"
+          ],
+          "title": "TokenResponse",
+          "type": "object"
+        },
+        "UpdateSourceRequest": {
+          "properties": {
+            "is_active": {
+              "anyOf": [
+                {
+                  "type": "boolean"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "title": "Is Active"
+            },
+            "name": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "title": "Name"
+            },
+            "source_type": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "title": "Source Type"
+            },
+            "update_interval": {
+              "anyOf": [
+                {
+                  "type": "integer"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "title": "Update Interval"
+            },
+            "url": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "title": "Url"
+            }
+          },
+          "title": "UpdateSourceRequest",
+          "type": "object"
+        },
+        "UserInfo": {
+          "properties": {
+            "expires_at": {
+              "title": "Expires At",
+              "type": "string"
+            },
+            "level": {
+              "title": "Level",
+              "type": "string"
+            },
+            "username": {
+              "title": "Username",
+              "type": "string"
+            }
+          },
+          "required": [
+            "username",
+            "level",
+            "expires_at"
+          ],
+          "title": "UserInfo",
+          "type": "object"
+        },
+        "ValidationError": {
+          "properties": {
+            "ctx": {
+              "title": "Context",
+              "type": "object"
+            },
+            "input": {
+              "title": "Input"
+            },
+            "loc": {
+              "items": {
+                "anyOf": [
+                  {
+                    "type": "string"
+                  },
+                  {
+                    "type": "integer"
+                  }
+                ]
+              },
+              "title": "Location",
+              "type": "array"
+            },
+            "msg": {
+              "title": "Message",
+              "type": "string"
+            },
+            "type": {
+              "title": "Error Type",
+              "type": "string"
+            }
+          },
+          "required": [
+            "loc",
+            "msg",
+            "type"
+          ],
+          "title": "ValidationError",
+          "type": "object"
+        }
+      },
+      "securitySchemes": {
+        "HTTPBasic": {
+          "scheme": "basic",
+          "type": "http"
+        }
+      }
+    },
+    "info": {
+      "description": "Modern news aggregator with deduplication and web management",
+      "title": "Evening News v2",
+      "version": "2.0.0"
+    },
+    "openapi": "3.1.0",
+    "paths": {
+      "/": {
+        "get": {
+          "description": "Main page - news list (default view).",
+          "operationId": "root__get",
+          "responses": {
+            "200": {
+              "content": {
+                "text/html": {
+                  "schema": {
+                    "type": "string"
+                  }
+                }
+              },
+              "description": "Successful Response"
+            }
+          },
+          "summary": "Root"
+        }
+      },
+      "/admin": {
+        "get": {
+          "operationId": "redirect_to_admin_admin_get",
+          "responses": {
+            "200": {
+              "content": {
+                "application/json": {
+                  "schema": {}
+                }
+              },
+              "description": "Successful Response"
+            }
+          },
+          "summary": "Redirect To Admin"
+        }
+      },
+      "/admin/": {
+        "get": {
+          "description": "Admin dashboard.",
+          "operationId": "admin_dashboard_admin__get",
+          "responses": {
+            "200": {
+              "content": {
+                "text/html": {
+                  "schema": {
+                    "type": "string"
+                  }
+                }
+              },
+              "description": "Successful Response"
+            }
+          },
+          "security": [
+            {
+              "HTTPBasic": []
+            }
+          ],
+          "summary": "Admin Dashboard"
+        }
+      },
+      "/admin/backup": {
+        "get": {
+          "description": "Backup and restore page.",
+          "operationId": "admin_backup_admin_backup_get",
+          "responses": {
+            "200": {
+              "content": {
+                "text/html": {
+                  "schema": {
+                    "type": "string"
+                  }
+                }
+              },
+              "description": "Successful Response"
+            }
+          },
+          "security": [
+            {
+              "HTTPBasic": []
+            }
+          ],
+          "summary": "Admin Backup"
+        }
+      },
+      "/admin/categories": {
+        "get": {
+          "description": "Category management page.",
+          "operationId": "admin_categories_admin_categories_get",
+          "responses": {
+            "200": {
+              "content": {
+                "text/html": {
+                  "schema": {
+                    "type": "string"
+                  }
+                }
+              },
+              "description": "Successful Response"
+            }
+          },
+          "security": [
+            {
+              "HTTPBasic": []
+            }
+          ],
+          "summary": "Admin Categories"
+        }
+      },
+      "/admin/schedule": {
+        "get": {
+          "description": "Schedule page (redirects to settings).",
+          "operationId": "admin_schedule_redirect_admin_schedule_get",
+          "responses": {
+            "200": {
+              "content": {
+                "text/html": {
+                  "schema": {
+                    "type": "string"
+                  }
+                }
+              },
+              "description": "Successful Response"
+            }
+          },
+          "security": [
+            {
+              "HTTPBasic": []
+            }
+          ],
+          "summary": "Admin Schedule Redirect"
+        }
+      },
+      "/admin/settings": {
+        "get": {
+          "description": "Settings page (Telegram + Schedule).",
+          "operationId": "admin_settings_admin_settings_get",
+          "responses": {
+            "200": {
+              "content": {
+                "text/html": {
+                  "schema": {
+                    "type": "string"
+                  }
+                }
+              },
+              "description": "Successful Response"
+            }
+          },
+          "security": [
+            {
+              "HTTPBasic": []
+            }
+          ],
+          "summary": "Admin Settings"
+        }
+      },
+      "/admin/sources": {
+        "get": {
+          "description": "Manage sources.",
+          "operationId": "admin_sources_admin_sources_get",
+          "responses": {
+            "200": {
+              "content": {
+                "text/html": {
+                  "schema": {
+                    "type": "string"
+                  }
+                }
+              },
+              "description": "Successful Response"
+            }
+          },
+          "security": [
+            {
+              "HTTPBasic": []
+            }
+          ],
+          "summary": "Admin Sources"
+        }
+      },
+      "/admin/stats": {
+        "get": {
+          "description": "Statistics page.",
+          "operationId": "admin_stats_admin_stats_get",
+          "responses": {
+            "200": {
+              "content": {
+                "text/html": {
+                  "schema": {
+                    "type": "string"
+                  }
+                }
+              },
+              "description": "Successful Response"
+            }
+          },
+          "security": [
+            {
+              "HTTPBasic": []
+            }
+          ],
+          "summary": "Admin Stats"
+        }
+      },
+      "/admin/summaries": {
+        "get": {
+          "description": "Daily summaries page.",
+          "operationId": "admin_summaries_admin_summaries_get",
+          "responses": {
+            "200": {
+              "content": {
+                "text/html": {
+                  "schema": {
+                    "type": "string"
+                  }
+                }
+              },
+              "description": "Successful Response"
+            }
+          },
+          "security": [
+            {
+              "HTTPBasic": []
+            }
+          ],
+          "summary": "Admin Summaries"
+        }
+      },
+      "/admin/telegram": {
+        "get": {
+          "description": "Telegram settings page (redirects to settings).",
+          "operationId": "admin_telegram_admin_telegram_get",
+          "responses": {
+            "200": {
+              "content": {
+                "text/html": {
+                  "schema": {
+                    "type": "string"
+                  }
+                }
+              },
+              "description": "Successful Response"
+            }
+          },
+          "security": [
+            {
+              "HTTPBasic": []
+            }
+          ],
+          "summary": "Admin Telegram"
+        }
+      },
+      "/api/public/admin-check": {
+        "get": {
+          "description": "Check if current user has admin access (via Authentik or JWT cookie).",
+          "operationId": "admin_check_api_public_admin_check_get",
+          "responses": {
+            "200": {
+              "content": {
+                "application/json": {
+                  "schema": {}
+                }
+              },
+              "description": "Successful Response"
+            }
+          },
+          "summary": "Admin Check"
+        }
+      },
+      "/api/public/article/{article_id}": {
+        "get": {
+          "description": "Get full article content using unified DataService.",
+          "operationId": "get_public_article_api_public_article__article_id__get",
+          "parameters": [
+            {
+              "in": "path",
+              "name": "article_id",
+              "required": true,
+              "schema": {
+                "title": "Article Id",
+                "type": "integer"
+              }
+            }
+          ],
+          "responses": {
+            "200": {
+              "content": {
+                "application/json": {
+                  "schema": {}
+                }
+              },
+              "description": "Successful Response"
+            },
+            "422": {
+              "content": {
+                "application/json": {
+                  "schema": {
+                    "$ref": "#/components/schemas/HTTPValidationError"
+                  }
+                }
+              },
+              "description": "Validation Error"
+            }
+          },
+          "summary": "Get Public Article"
+        }
+      },
+      "/api/public/article/{article_id}/reprocess": {
+        "post": {
+          "description": "Reprocess an article from the public modal using app-level admin auth.\n\nThe public page cannot fetch Traefik/Authentik-protected /api/v1 routes\nwithout cross-origin redirects. This endpoint keeps the request same-origin\nand relies on the admin JWT cookie set after visiting /admin/.",
+          "operationId": "reprocess_public_article_api_public_article__article_id__reprocess_post",
+          "parameters": [
+            {
+              "in": "path",
+              "name": "article_id",
+              "required": true,
+              "schema": {
+                "title": "Article Id",
+                "type": "integer"
+              }
+            }
+          ],
+          "requestBody": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ReprocessRequest"
+                }
+              }
+            },
+            "required": true
+          },
+          "responses": {
+            "200": {
+              "content": {
+                "application/json": {
+                  "schema": {}
+                }
+              },
+              "description": "Successful Response"
+            },
+            "422": {
+              "content": {
+                "application/json": {
+                  "schema": {
+                    "$ref": "#/components/schemas/HTTPValidationError"
+                  }
+                }
+              },
+              "description": "Validation Error"
+            }
+          },
+          "summary": "Reprocess Public Article"
+        }
+      },
+      "/api/public/categories": {
+        "get": {
+          "description": "Get category statistics using unified DataService.",
+          "operationId": "get_public_categories_api_public_categories_get",
+          "parameters": [
+            {
+              "in": "query",
+              "name": "since_hours",
+              "required": false,
+              "schema": {
+                "anyOf": [
+                  {
+                    "maximum": 168,
+                    "minimum": 1,
+                    "type": "integer"
+                  },
+                  {
+                    "type": "null"
+                  }
+                ],
+                "title": "Since Hours"
+              }
+            },
+            {
+              "in": "query",
+              "name": "hide_ads",
+              "required": false,
+              "schema": {
+                "default": true,
+                "title": "Hide Ads",
+                "type": "boolean"
+              }
+            }
+          ],
+          "responses": {
+            "200": {
+              "content": {
+                "application/json": {
+                  "schema": {}
+                }
+              },
+              "description": "Successful Response"
+            },
+            "422": {
+              "content": {
+                "application/json": {
+                  "schema": {
+                    "$ref": "#/components/schemas/HTTPValidationError"
+                  }
+                }
+              },
+              "description": "Validation Error"
+            }
+          },
+          "summary": "Get Public Categories"
+        }
+      },
+      "/api/public/categories/config": {
+        "get": {
+          "description": "Get categories configuration using unified DataService.",
+          "operationId": "get_public_categories_config_api_public_categories_config_get",
+          "responses": {
+            "200": {
+              "content": {
+                "application/json": {
+                  "schema": {}
+                }
+              },
+              "description": "Successful Response"
+            }
+          },
+          "summary": "Get Public Categories Config"
+        }
+      },
+      "/api/public/feed": {
+        "get": {
+          "description": "Public feed endpoint using unified DataService.",
+          "operationId": "get_public_feed_api_public_feed_get",
+          "parameters": [
+            {
+              "in": "query",
+              "name": "limit",
+              "required": false,
+              "schema": {
+                "default": 20,
+                "maximum": 1000,
+                "minimum": 1,
+                "title": "Limit",
+                "type": "integer"
+              }
+            },
+            {
+              "in": "query",
+              "name": "offset",
+              "required": false,
+              "schema": {
+                "default": 0,
+                "minimum": 0,
+                "title": "Offset",
+                "type": "integer"
+              }
+            },
+            {
+              "in": "query",
+              "name": "since_hours",
+              "required": false,
+              "schema": {
+                "anyOf": [
+                  {
+                    "maximum": 168,
+                    "minimum": 1,
+                    "type": "integer"
+                  },
+                  {
+                    "type": "null"
+                  }
+                ],
+                "title": "Since Hours"
+              }
+            },
+            {
+              "in": "query",
+              "name": "category",
+              "required": false,
+              "schema": {
+                "anyOf": [
+                  {
+                    "type": "string"
+                  },
+                  {
+                    "type": "null"
+                  }
+                ],
+                "title": "Category"
+              }
+            },
+            {
+              "description": "Filter by source ID(s), comma-separated",
+              "in": "query",
+              "name": "source",
+              "required": false,
+              "schema": {
+                "anyOf": [
+                  {
+                    "type": "string"
+                  },
+                  {
+                    "type": "null"
+                  }
+                ],
+                "description": "Filter by source ID(s), comma-separated",
+                "title": "Source"
+              }
+            },
+            {
+              "description": "Hide advertisements from feed",
+              "in": "query",
+              "name": "hide_ads",
+              "required": false,
+              "schema": {
+                "default": true,
+                "description": "Hide advertisements from feed",
+                "title": "Hide Ads",
+                "type": "boolean"
+              }
+            }
+          ],
+          "responses": {
+            "200": {
+              "content": {
+                "application/json": {
+                  "schema": {}
+                }
+              },
+              "description": "Successful Response"
+            },
+            "422": {
+              "content": {
+                "application/json": {
+                  "schema": {
+                    "$ref": "#/components/schemas/HTTPValidationError"
+                  }
+                }
+              },
+              "description": "Validation Error"
+            }
+          },
+          "summary": "Get Public Feed"
+        }
+      },
+      "/api/public/search": {
+        "get": {
+          "description": "Search articles by content, title, and summary.\n\nSupports:\n- Full-text search across title, summary, and content\n- Category filtering\n- Time-based filtering\n- Multiple sorting options\n- Pagination\n- Relevance scoring",
+          "operationId": "search_articles_api_public_search_get",
+          "parameters": [
+            {
+              "description": "Search query",
+              "in": "query",
+              "name": "q",
+              "required": true,
+              "schema": {
+                "description": "Search query",
+                "minLength": 2,
+                "title": "Q",
+                "type": "string"
+              }
+            },
+            {
+              "in": "query",
+              "name": "limit",
+              "required": false,
+              "schema": {
+                "default": 20,
+                "maximum": 100,
+                "minimum": 1,
+                "title": "Limit",
+                "type": "integer"
+              }
+            },
+            {
+              "in": "query",
+              "name": "offset",
+              "required": false,
+              "schema": {
+                "default": 0,
+                "minimum": 0,
+                "title": "Offset",
+                "type": "integer"
+              }
+            },
+            {
+              "description": "Filter by category",
+              "in": "query",
+              "name": "category",
+              "required": false,
+              "schema": {
+                "anyOf": [
+                  {
+                    "type": "string"
+                  },
+                  {
+                    "type": "null"
+                  }
+                ],
+                "description": "Filter by category",
+                "title": "Category"
+              }
+            },
+            {
+              "description": "Filter articles from last N hours",
+              "in": "query",
+              "name": "since_hours",
+              "required": false,
+              "schema": {
+                "anyOf": [
+                  {
+                    "maximum": 8760,
+                    "minimum": 1,
+                    "type": "integer"
+                  },
+                  {
+                    "type": "null"
+                  }
+                ],
+                "description": "Filter articles from last N hours",
+                "title": "Since Hours"
+              }
+            },
+            {
+              "description": "Sort by: relevance, date, title",
+              "in": "query",
+              "name": "sort",
+              "required": false,
+              "schema": {
+                "default": "relevance",
+                "description": "Sort by: relevance, date, title",
+                "pattern": "^(relevance|date|title)$",
+                "title": "Sort",
+                "type": "string"
+              }
+            },
+            {
+              "description": "Hide advertisements from results",
+              "in": "query",
+              "name": "hide_ads",
+              "required": false,
+              "schema": {
+                "default": true,
+                "description": "Hide advertisements from results",
+                "title": "Hide Ads",
+                "type": "boolean"
+              }
+            }
+          ],
+          "responses": {
+            "200": {
+              "content": {
+                "application/json": {
+                  "schema": {}
+                }
+              },
+              "description": "Successful Response"
+            },
+            "422": {
+              "content": {
+                "application/json": {
+                  "schema": {
+                    "$ref": "#/components/schemas/HTTPValidationError"
+                  }
+                }
+              },
+              "description": "Validation Error"
+            }
+          },
+          "summary": "Search Articles"
+        }
+      },
+      "/api/public/sources": {
+        "get": {
+          "description": "Get source statistics using unified DataService.",
+          "operationId": "get_public_sources_api_public_sources_get",
+          "parameters": [
+            {
+              "in": "query",
+              "name": "since_hours",
+              "required": false,
+              "schema": {
+                "anyOf": [
+                  {
+                    "maximum": 168,
+                    "minimum": 1,
+                    "type": "integer"
+                  },
+                  {
+                    "type": "null"
+                  }
+                ],
+                "title": "Since Hours"
+              }
+            },
+            {
+              "in": "query",
+              "name": "hide_ads",
+              "required": false,
+              "schema": {
+                "default": true,
+                "title": "Hide Ads",
+                "type": "boolean"
+              }
+            }
+          ],
+          "responses": {
+            "200": {
+              "content": {
+                "application/json": {
+                  "schema": {}
+                }
+              },
+              "description": "Successful Response"
+            },
+            "422": {
+              "content": {
+                "application/json": {
+                  "schema": {
+                    "$ref": "#/components/schemas/HTTPValidationError"
+                  }
+                }
+              },
+              "description": "Validation Error"
+            }
+          },
+          "summary": "Get Public Sources"
+        }
+      },
+      "/api/v1/": {
+        "get": {
+          "description": "API root endpoint with available endpoints.",
+          "operationId": "api_root_api_v1__get",
+          "responses": {
+            "200": {
+              "content": {
+                "application/json": {
+                  "schema": {}
+                }
+              },
+              "description": "Successful Response"
+            }
+          },
+          "summary": "Api Root",
+          "tags": [
+            "feed"
+          ]
+        }
+      },
+      "/api/v1/articles/{article_id}": {
+        "get": {
+          "description": "Get a single article with full details.",
+          "operationId": "get_article_api_v1_articles__article_id__get",
+          "parameters": [
+            {
+              "in": "path",
+              "name": "article_id",
+              "required": true,
+              "schema": {
+                "title": "Article Id",
+                "type": "integer"
+              }
+            }
+          ],
+          "responses": {
+            "200": {
+              "content": {
+                "application/json": {
+                  "schema": {}
+                }
+              },
+              "description": "Successful Response"
+            },
+            "422": {
+              "content": {
+                "application/json": {
+                  "schema": {
+                    "$ref": "#/components/schemas/HTTPValidationError"
+                  }
+                }
+              },
+              "description": "Validation Error"
+            }
+          },
+          "summary": "Get Article",
+          "tags": [
+            "articles"
+          ]
+        }
+      },
+      "/api/v1/articles/{article_id}/reprocess": {
+        "post": {
+          "description": "Queue a single article reprocess under the durable worker fence.",
+          "operationId": "reprocess_article_api_v1_articles__article_id__reprocess_post",
+          "parameters": [
+            {
+              "in": "path",
+              "name": "article_id",
+              "required": true,
+              "schema": {
+                "title": "Article Id",
+                "type": "integer"
+              }
+            }
+          ],
+          "requestBody": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ReprocessRequest"
+                }
+              }
+            },
+            "required": true
+          },
+          "responses": {
+            "200": {
+              "content": {
+                "application/json": {
+                  "schema": {}
+                }
+              },
+              "description": "Successful Response"
+            },
+            "422": {
+              "content": {
+                "application/json": {
+                  "schema": {
+                    "$ref": "#/components/schemas/HTTPValidationError"
+                  }
+                }
+              },
+              "description": "Validation Error"
+            }
+          },
+          "summary": "Reprocess Article",
+          "tags": [
+            "articles"
+          ]
+        }
+      },
+      "/api/v1/backup": {
+        "get": {
+          "description": "List all available backups.",
+          "operationId": "list_backups_api_v1_backup_get",
+          "responses": {
+            "200": {
+              "content": {
+                "application/json": {
+                  "schema": {}
+                }
+              },
+              "description": "Successful Response"
+            }
+          },
+          "summary": "List Backups",
+          "tags": [
+            "backup"
+          ]
+        },
+        "post": {
+          "description": "Create a new backup.",
+          "operationId": "create_backup_api_v1_backup_post",
+          "responses": {
+            "200": {
+              "content": {
+                "application/json": {
+                  "schema": {}
+                }
+              },
+              "description": "Successful Response"
+            }
+          },
+          "summary": "Create Backup",
+          "tags": [
+            "backup"
+          ]
+        }
+      },
+      "/api/v1/backup/cleanup": {
+        "post": {
+          "description": "Clean up old backup files, keeping only the most recent ones.",
+          "operationId": "cleanup_old_backups_api_v1_backup_cleanup_post",
+          "parameters": [
+            {
+              "in": "query",
+              "name": "keep_count",
+              "required": false,
+              "schema": {
+                "default": 5,
+                "title": "Keep Count",
+                "type": "integer"
+              }
+            }
+          ],
+          "responses": {
+            "200": {
+              "content": {
+                "application/json": {
+                  "schema": {}
+                }
+              },
+              "description": "Successful Response"
+            },
+            "422": {
+              "content": {
+                "application/json": {
+                  "schema": {
+                    "$ref": "#/components/schemas/HTTPValidationError"
+                  }
+                }
+              },
+              "description": "Validation Error"
+            }
+          },
+          "summary": "Cleanup Old Backups",
+          "tags": [
+            "backup"
+          ]
+        }
+      },
+      "/api/v1/backup/download/{filename}": {
+        "get": {
+          "description": "Download a backup file.",
+          "operationId": "download_backup_api_v1_backup_download__filename__get",
+          "parameters": [
+            {
+              "in": "path",
+              "name": "filename",
+              "required": true,
+              "schema": {
+                "title": "Filename",
+                "type": "string"
+              }
+            }
+          ],
+          "responses": {
+            "200": {
+              "content": {
+                "application/json": {
+                  "schema": {}
+                }
+              },
+              "description": "Successful Response"
+            },
+            "422": {
+              "content": {
+                "application/json": {
+                  "schema": {
+                    "$ref": "#/components/schemas/HTTPValidationError"
+                  }
+                }
+              },
+              "description": "Validation Error"
+            }
+          },
+          "summary": "Download Backup",
+          "tags": [
+            "backup"
+          ]
+        }
+      },
+      "/api/v1/backup/restore": {
+        "post": {
+          "description": "Restore from a backup file.",
+          "operationId": "restore_backup_api_v1_backup_restore_post",
+          "parameters": [
+            {
+              "in": "query",
+              "name": "filename",
+              "required": true,
+              "schema": {
+                "title": "Filename",
+                "type": "string"
+              }
+            }
+          ],
+          "responses": {
+            "200": {
+              "content": {
+                "application/json": {
+                  "schema": {}
+                }
+              },
+              "description": "Successful Response"
+            },
+            "422": {
+              "content": {
+                "application/json": {
+                  "schema": {
+                    "$ref": "#/components/schemas/HTTPValidationError"
+                  }
+                }
+              },
+              "description": "Validation Error"
+            }
+          },
+          "summary": "Restore Backup",
+          "tags": [
+            "backup"
+          ]
+        }
+      },
+      "/api/v1/backup/schedule": {
+        "get": {
+          "description": "Get backup schedule settings.",
+          "operationId": "get_backup_schedule_api_v1_backup_schedule_get",
+          "responses": {
+            "200": {
+              "content": {
+                "application/json": {
+                  "schema": {}
+                }
+              },
+              "description": "Successful Response"
+            }
+          },
+          "summary": "Get Backup Schedule",
+          "tags": [
+            "backup"
+          ]
+        },
+        "post": {
+          "description": "Update backup schedule settings.",
+          "operationId": "update_backup_schedule_api_v1_backup_schedule_post",
+          "requestBody": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/BackupScheduleSettings"
+                }
+              }
+            },
+            "required": true
+          },
+          "responses": {
+            "200": {
+              "content": {
+                "application/json": {
+                  "schema": {}
+                }
+              },
+              "description": "Successful Response"
+            },
+            "422": {
+              "content": {
+                "application/json": {
+                  "schema": {
+                    "$ref": "#/components/schemas/HTTPValidationError"
+                  }
+                }
+              },
+              "description": "Validation Error"
+            }
+          },
+          "summary": "Update Backup Schedule",
+          "tags": [
+            "backup"
+          ]
+        }
+      },
+      "/api/v1/backup/sync": {
+        "post": {
+          "description": "Create a synchronous backup (for testing).",
+          "operationId": "create_sync_backup_api_v1_backup_sync_post",
+          "responses": {
+            "200": {
+              "content": {
+                "application/json": {
+                  "schema": {}
+                }
+              },
+              "description": "Successful Response"
+            }
+          },
+          "summary": "Create Sync Backup",
+          "tags": [
+            "backup"
+          ]
+        }
+      },
+      "/api/v1/backup/upload": {
+        "post": {
+          "description": "Upload a backup file.",
+          "operationId": "upload_backup_api_v1_backup_upload_post",
+          "requestBody": {
+            "content": {
+              "multipart/form-data": {
+                "schema": {
+                  "$ref": "#/components/schemas/Body_upload_backup_api_v1_backup_upload_post"
+                }
+              }
+            },
+            "required": true
+          },
+          "responses": {
+            "200": {
+              "content": {
+                "application/json": {
+                  "schema": {}
+                }
+              },
+              "description": "Successful Response"
+            },
+            "422": {
+              "content": {
+                "application/json": {
+                  "schema": {
+                    "$ref": "#/components/schemas/HTTPValidationError"
+                  }
+                }
+              },
+              "description": "Validation Error"
+            }
+          },
+          "summary": "Upload Backup",
+          "tags": [
+            "backup"
+          ]
+        }
+      },
+      "/api/v1/backups": {
+        "get": {
+          "operationId": "list_backups_alias_api_v1_backups_get",
+          "responses": {
+            "200": {
+              "content": {
+                "application/json": {
+                  "schema": {}
+                }
+              },
+              "description": "Successful Response"
+            }
+          },
+          "summary": "List Backups Alias",
+          "tags": [
+            "backup"
+          ]
+        }
+      },
+      "/api/v1/categories": {
+        "post": {
+          "description": "Create a main category (admin).",
+          "operationId": "create_category_api_v1_categories_post",
+          "requestBody": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/CategoryCreateRequest"
+                }
+              }
+            },
+            "required": true
+          },
+          "responses": {
+            "200": {
+              "content": {
+                "application/json": {
+                  "schema": {
+                    "$ref": "#/components/schemas/CategoryResponse"
+                  }
+                }
+              },
+              "description": "Successful Response"
+            },
+            "422": {
+              "content": {
+                "application/json": {
+                  "schema": {
+                    "$ref": "#/components/schemas/HTTPValidationError"
+                  }
+                }
+              },
+              "description": "Validation Error"
+            }
+          },
+          "summary": "Create Category",
+          "tags": [
+            "categories"
+          ]
+        }
+      },
+      "/api/v1/categories/": {
+        "get": {
+          "description": "Get all available categories with article counts.",
+          "operationId": "get_categories_api_v1_categories__get",
+          "responses": {
+            "200": {
+              "content": {
+                "application/json": {
+                  "schema": {}
+                }
+              },
+              "description": "Successful Response"
+            }
+          },
+          "summary": "Get Categories",
+          "tags": [
+            "categories"
+          ]
+        },
+        "post": {
+          "description": "Create a main category (admin).",
+          "operationId": "create_category_api_v1_categories__post",
+          "requestBody": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/CategoryCreateRequest"
+                }
+              }
+            },
+            "required": true
+          },
+          "responses": {
+            "200": {
+              "content": {
+                "application/json": {
+                  "schema": {
+                    "$ref": "#/components/schemas/CategoryResponse"
+                  }
+                }
+              },
+              "description": "Successful Response"
+            },
+            "422": {
+              "content": {
+                "application/json": {
+                  "schema": {
+                    "$ref": "#/components/schemas/HTTPValidationError"
+                  }
+                }
+              },
+              "description": "Validation Error"
+            }
+          },
+          "summary": "Create Category",
+          "tags": [
+            "categories"
+          ]
+        }
+      },
+      "/api/v1/categories/ai-category-analysis": {
+        "post": {
+          "description": "Analyze uncategorized articles and suggest category mappings using AI.\nProvides confidence scores and reasoning for each suggestion.",
+          "operationId": "analyze_categories_with_ai_api_v1_categories_ai_category_analysis_post",
+          "requestBody": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/AICategoryAnalysisRequest"
+                }
+              }
+            },
+            "required": true
+          },
+          "responses": {
+            "200": {
+              "content": {
+                "application/json": {
+                  "schema": {
+                    "$ref": "#/components/schemas/AICategoryAnalysisBatchResponse"
+                  }
+                }
+              },
+              "description": "Successful Response"
+            },
+            "422": {
+              "content": {
+                "application/json": {
+                  "schema": {
+                    "$ref": "#/components/schemas/HTTPValidationError"
+                  }
+                }
+              },
+              "description": "Validation Error"
+            }
+          },
+          "summary": "Analyze Categories With Ai",
+          "tags": [
+            "categories"
+          ]
+        }
+      },
+      "/api/v1/categories/ai-category-mapping/approve": {
+        "post": {
+          "description": "Approve and apply an AI category mapping suggestion.\nCreates a category mapping entry and optionally applies it to existing articles.",
+          "operationId": "approve_ai_category_mapping_api_v1_categories_ai_category_mapping_approve_post",
+          "requestBody": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/AICategoryMappingApprovalRequest"
+                }
+              }
+            },
+            "required": true
+          },
+          "responses": {
+            "200": {
+              "content": {
+                "application/json": {
+                  "schema": {}
+                }
+              },
+              "description": "Successful Response"
+            },
+            "422": {
+              "content": {
+                "application/json": {
+                  "schema": {
+                    "$ref": "#/components/schemas/HTTPValidationError"
+                  }
+                }
+              },
+              "description": "Validation Error"
+            }
+          },
+          "summary": "Approve Ai Category Mapping",
+          "tags": [
+            "categories"
+          ]
+        }
+      },
+      "/api/v1/categories/mappings": {
+        "get": {
+          "description": "Get all category mappings with their usage statistics.",
+          "operationId": "get_category_mappings_api_v1_categories_mappings_get",
+          "parameters": [
+            {
+              "in": "query",
+              "name": "active_only",
+              "required": false,
+              "schema": {
+                "default": true,
+                "title": "Active Only",
+                "type": "boolean"
+              }
+            }
+          ],
+          "responses": {
+            "200": {
+              "content": {
+                "application/json": {
+                  "schema": {
+                    "items": {
+                      "$ref": "#/components/schemas/CategoryMappingResponse"
+                    },
+                    "title": "Response Get Category Mappings Api V1 Categories Mappings Get",
+                    "type": "array"
+                  }
+                }
+              },
+              "description": "Successful Response"
+            },
+            "422": {
+              "content": {
+                "application/json": {
+                  "schema": {
+                    "$ref": "#/components/schemas/HTTPValidationError"
+                  }
+                }
+              },
+              "description": "Validation Error"
+            }
+          },
+          "summary": "Get Category Mappings",
+          "tags": [
+            "categories"
+          ]
+        },
+        "post": {
+          "description": "Create a new AI category to fixed category mapping.",
+          "operationId": "create_category_mapping_api_v1_categories_mappings_post",
+          "requestBody": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/CategoryMappingRequest"
+                }
+              }
+            },
+            "required": true
+          },
+          "responses": {
+            "200": {
+              "content": {
+                "application/json": {
+                  "schema": {
+                    "$ref": "#/components/schemas/CategoryMappingResponse"
+                  }
+                }
+              },
+              "description": "Successful Response"
+            },
+            "422": {
+              "content": {
+                "application/json": {
+                  "schema": {
+                    "$ref": "#/components/schemas/HTTPValidationError"
+                  }
+                }
+              },
+              "description": "Validation Error"
+            }
+          },
+          "summary": "Create Category Mapping",
+          "tags": [
+            "categories"
+          ]
+        }
+      },
+      "/api/v1/categories/mappings/fixed-categories": {
+        "get": {
+          "description": "Get all available fixed categories from the main categories table.",
+          "operationId": "get_fixed_categories_api_v1_categories_mappings_fixed_categories_get",
+          "responses": {
+            "200": {
+              "content": {
+                "application/json": {
+                  "schema": {}
+                }
+              },
+              "description": "Successful Response"
+            }
+          },
+          "summary": "Get Fixed Categories",
+          "tags": [
+            "categories"
+          ]
+        }
+      },
+      "/api/v1/categories/mappings/unmapped": {
+        "get": {
+          "description": "Get AI categories that don't have mappings yet.",
+          "operationId": "get_unmapped_ai_categories_api_v1_categories_mappings_unmapped_get",
+          "parameters": [
+            {
+              "in": "query",
+              "name": "limit",
+              "required": false,
+              "schema": {
+                "default": 100,
+                "title": "Limit",
+                "type": "integer"
+              }
+            }
+          ],
+          "responses": {
+            "200": {
+              "content": {
+                "application/json": {
+                  "schema": {}
+                }
+              },
+              "description": "Successful Response"
+            },
+            "422": {
+              "content": {
+                "application/json": {
+                  "schema": {
+                    "$ref": "#/components/schemas/HTTPValidationError"
+                  }
+                }
+              },
+              "description": "Validation Error"
+            }
+          },
+          "summary": "Get Unmapped Ai Categories",
+          "tags": [
+            "categories"
+          ]
+        }
+      },
+      "/api/v1/categories/mappings/{mapping_id}": {
+        "delete": {
+          "description": "Delete a category mapping.",
+          "operationId": "delete_category_mapping_api_v1_categories_mappings__mapping_id__delete",
+          "parameters": [
+            {
+              "in": "path",
+              "name": "mapping_id",
+              "required": true,
+              "schema": {
+                "title": "Mapping Id",
+                "type": "integer"
+              }
+            }
+          ],
+          "responses": {
+            "200": {
+              "content": {
+                "application/json": {
+                  "schema": {}
+                }
+              },
+              "description": "Successful Response"
+            },
+            "422": {
+              "content": {
+                "application/json": {
+                  "schema": {
+                    "$ref": "#/components/schemas/HTTPValidationError"
+                  }
+                }
+              },
+              "description": "Validation Error"
+            }
+          },
+          "summary": "Delete Category Mapping",
+          "tags": [
+            "categories"
+          ]
+        },
+        "put": {
+          "description": "Update an existing category mapping.",
+          "operationId": "update_category_mapping_api_v1_categories_mappings__mapping_id__put",
+          "parameters": [
+            {
+              "in": "path",
+              "name": "mapping_id",
+              "required": true,
+              "schema": {
+                "title": "Mapping Id",
+                "type": "integer"
+              }
+            }
+          ],
+          "requestBody": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/CategoryMappingRequest"
+                }
+              }
+            },
+            "required": true
+          },
+          "responses": {
+            "200": {
+              "content": {
+                "application/json": {
+                  "schema": {
+                    "$ref": "#/components/schemas/CategoryMappingUpdateResponse"
+                  }
+                }
+              },
+              "description": "Successful Response"
+            },
+            "422": {
+              "content": {
+                "application/json": {
+                  "schema": {
+                    "$ref": "#/components/schemas/HTTPValidationError"
+                  }
+                }
+              },
+              "description": "Validation Error"
+            }
+          },
+          "summary": "Update Category Mapping",
+          "tags": [
+            "categories"
+          ]
+        }
+      },
+      "/api/v1/categories/mappings/{mapping_id}/toggle": {
+        "post": {
+          "description": "Toggle active status of a category mapping.",
+          "operationId": "toggle_category_mapping_api_v1_categories_mappings__mapping_id__toggle_post",
+          "parameters": [
+            {
+              "in": "path",
+              "name": "mapping_id",
+              "required": true,
+              "schema": {
+                "title": "Mapping Id",
+                "type": "integer"
+              }
+            }
+          ],
+          "responses": {
+            "200": {
+              "content": {
+                "application/json": {
+                  "schema": {}
+                }
+              },
+              "description": "Successful Response"
+            },
+            "422": {
+              "content": {
+                "application/json": {
+                  "schema": {
+                    "$ref": "#/components/schemas/HTTPValidationError"
+                  }
+                }
+              },
+              "description": "Validation Error"
+            }
+          },
+          "summary": "Toggle Category Mapping",
+          "tags": [
+            "categories"
+          ]
+        }
+      },
+      "/api/v1/categories/{category_id}": {
+        "put": {
+          "description": "Update a category (admin).",
+          "operationId": "update_category_api_v1_categories__category_id__put",
+          "parameters": [
+            {
+              "in": "path",
+              "name": "category_id",
+              "required": true,
+              "schema": {
+                "title": "Category Id",
+                "type": "integer"
+              }
+            }
+          ],
+          "requestBody": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/CategoryUpdateRequest"
+                }
+              }
+            },
+            "required": true
+          },
+          "responses": {
+            "200": {
+              "content": {
+                "application/json": {
+                  "schema": {
+                    "$ref": "#/components/schemas/CategoryResponse"
+                  }
+                }
+              },
+              "description": "Successful Response"
+            },
+            "422": {
+              "content": {
+                "application/json": {
+                  "schema": {
+                    "$ref": "#/components/schemas/HTTPValidationError"
+                  }
+                }
+              },
+              "description": "Validation Error"
+            }
+          },
+          "summary": "Update Category",
+          "tags": [
+            "categories"
+          ]
+        }
+      },
+      "/api/v1/category-mappings": {
+        "get": {
+          "operationId": "get_category_mappings_alias_api_v1_category_mappings_get",
+          "parameters": [
+            {
+              "in": "query",
+              "name": "active_only",
+              "required": false,
+              "schema": {
+                "default": true,
+                "title": "Active Only",
+                "type": "boolean"
+              }
+            }
+          ],
+          "responses": {
+            "200": {
+              "content": {
+                "application/json": {
+                  "schema": {}
+                }
+              },
+              "description": "Successful Response"
+            },
+            "422": {
+              "content": {
+                "application/json": {
+                  "schema": {
+                    "$ref": "#/components/schemas/HTTPValidationError"
+                  }
+                }
+              },
+              "description": "Validation Error"
+            }
+          },
+          "summary": "Get Category Mappings Alias",
+          "tags": [
+            "category-mappings"
+          ]
+        },
+        "post": {
+          "operationId": "create_category_mapping_alias_api_v1_category_mappings_post",
+          "requestBody": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "additionalProperties": true,
+                  "title": "Payload",
+                  "type": "object"
+                }
+              }
+            },
+            "required": true
+          },
+          "responses": {
+            "200": {
+              "content": {
+                "application/json": {
+                  "schema": {}
+                }
+              },
+              "description": "Successful Response"
+            },
+            "422": {
+              "content": {
+                "application/json": {
+                  "schema": {
+                    "$ref": "#/components/schemas/HTTPValidationError"
+                  }
+                }
+              },
+              "description": "Validation Error"
+            }
+          },
+          "summary": "Create Category Mapping Alias",
+          "tags": [
+            "category-mappings"
+          ]
+        }
+      },
+      "/api/v1/category-mappings/fixed-categories": {
+        "get": {
+          "operationId": "get_fixed_categories_alias_api_v1_category_mappings_fixed_categories_get",
+          "responses": {
+            "200": {
+              "content": {
+                "application/json": {
+                  "schema": {}
+                }
+              },
+              "description": "Successful Response"
+            }
+          },
+          "summary": "Get Fixed Categories Alias",
+          "tags": [
+            "category-mappings"
+          ]
+        }
+      },
+      "/api/v1/category-mappings/unmapped": {
+        "get": {
+          "operationId": "get_unmapped_categories_alias_api_v1_category_mappings_unmapped_get",
+          "parameters": [
+            {
+              "in": "query",
+              "name": "limit",
+              "required": false,
+              "schema": {
+                "default": 100,
+                "title": "Limit",
+                "type": "integer"
+              }
+            }
+          ],
+          "responses": {
+            "200": {
+              "content": {
+                "application/json": {
+                  "schema": {}
+                }
+              },
+              "description": "Successful Response"
+            },
+            "422": {
+              "content": {
+                "application/json": {
+                  "schema": {
+                    "$ref": "#/components/schemas/HTTPValidationError"
+                  }
+                }
+              },
+              "description": "Validation Error"
+            }
+          },
+          "summary": "Get Unmapped Categories Alias",
+          "tags": [
+            "category-mappings"
+          ]
+        }
+      },
+      "/api/v1/category-mappings/{mapping_id}": {
+        "delete": {
+          "operationId": "delete_category_mapping_alias_api_v1_category_mappings__mapping_id__delete",
+          "parameters": [
+            {
+              "in": "path",
+              "name": "mapping_id",
+              "required": true,
+              "schema": {
+                "title": "Mapping Id",
+                "type": "integer"
+              }
+            }
+          ],
+          "responses": {
+            "200": {
+              "content": {
+                "application/json": {
+                  "schema": {}
+                }
+              },
+              "description": "Successful Response"
+            },
+            "422": {
+              "content": {
+                "application/json": {
+                  "schema": {
+                    "$ref": "#/components/schemas/HTTPValidationError"
+                  }
+                }
+              },
+              "description": "Validation Error"
+            }
+          },
+          "summary": "Delete Category Mapping Alias",
+          "tags": [
+            "category-mappings"
+          ]
+        },
+        "put": {
+          "operationId": "update_category_mapping_alias_api_v1_category_mappings__mapping_id__put",
+          "parameters": [
+            {
+              "in": "path",
+              "name": "mapping_id",
+              "required": true,
+              "schema": {
+                "title": "Mapping Id",
+                "type": "integer"
+              }
+            }
+          ],
+          "requestBody": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "additionalProperties": true,
+                  "title": "Payload",
+                  "type": "object"
+                }
+              }
+            },
+            "required": true
+          },
+          "responses": {
+            "200": {
+              "content": {
+                "application/json": {
+                  "schema": {}
+                }
+              },
+              "description": "Successful Response"
+            },
+            "422": {
+              "content": {
+                "application/json": {
+                  "schema": {
+                    "$ref": "#/components/schemas/HTTPValidationError"
+                  }
+                }
+              },
+              "description": "Validation Error"
+            }
+          },
+          "summary": "Update Category Mapping Alias",
+          "tags": [
+            "category-mappings"
+          ]
+        }
+      },
+      "/api/v1/category-mappings/{mapping_id}/toggle": {
+        "post": {
+          "operationId": "toggle_category_mapping_alias_api_v1_category_mappings__mapping_id__toggle_post",
+          "parameters": [
+            {
+              "in": "path",
+              "name": "mapping_id",
+              "required": true,
+              "schema": {
+                "title": "Mapping Id",
+                "type": "integer"
+              }
+            }
+          ],
+          "responses": {
+            "200": {
+              "content": {
+                "application/json": {
+                  "schema": {}
+                }
+              },
+              "description": "Successful Response"
+            },
+            "422": {
+              "content": {
+                "application/json": {
+                  "schema": {
+                    "$ref": "#/components/schemas/HTTPValidationError"
+                  }
+                }
+              },
+              "description": "Validation Error"
+            }
+          },
+          "summary": "Toggle Category Mapping Alias",
+          "tags": [
+            "category-mappings"
+          ]
+        }
+      },
+      "/api/v1/feed": {
+        "get": {
+          "description": "Get main news feed in JSON format - optimized for performance.",
+          "operationId": "get_main_feed_api_v1_feed_get",
+          "parameters": [
+            {
+              "in": "query",
+              "name": "limit",
+              "required": false,
+              "schema": {
+                "default": 20,
+                "maximum": 100,
+                "minimum": 1,
+                "title": "Limit",
+                "type": "integer"
+              }
+            },
+            {
+              "in": "query",
+              "name": "offset",
+              "required": false,
+              "schema": {
+                "default": 0,
+                "minimum": 0,
+                "title": "Offset",
+                "type": "integer"
+              }
+            },
+            {
+              "in": "query",
+              "name": "since_hours",
+              "required": false,
+              "schema": {
+                "anyOf": [
+                  {
+                    "maximum": 168,
+                    "minimum": 1,
+                    "type": "integer"
+                  },
+                  {
+                    "type": "null"
+                  }
+                ],
+                "title": "Since Hours"
+              }
+            },
+            {
+              "description": "Filter by category",
+              "in": "query",
+              "name": "category",
+              "required": false,
+              "schema": {
+                "anyOf": [
+                  {
+                    "type": "string"
+                  },
+                  {
+                    "type": "null"
+                  }
+                ],
+                "description": "Filter by category",
+                "title": "Category"
+              }
+            }
+          ],
+          "responses": {
+            "200": {
+              "content": {
+                "application/json": {
+                  "schema": {}
+                }
+              },
+              "description": "Successful Response"
+            },
+            "422": {
+              "content": {
+                "application/json": {
+                  "schema": {
+                    "$ref": "#/components/schemas/HTTPValidationError"
+                  }
+                }
+              },
+              "description": "Validation Error"
+            }
+          },
+          "summary": "Get Main Feed",
+          "tags": [
+            "feed"
+          ]
+        }
+      },
+      "/api/v1/feed.rss": {
+        "get": {
+          "description": "RSS compatibility endpoint.",
+          "operationId": "get_rss_feed_api_v1_feed_rss_get",
+          "parameters": [
+            {
+              "in": "query",
+              "name": "limit",
+              "required": false,
+              "schema": {
+                "default": 50,
+                "maximum": 100,
+                "minimum": 1,
+                "title": "Limit",
+                "type": "integer"
+              }
+            }
+          ],
+          "responses": {
+            "200": {
+              "content": {
+                "application/json": {
+                  "schema": {}
+                }
+              },
+              "description": "Successful Response"
+            },
+            "422": {
+              "content": {
+                "application/json": {
+                  "schema": {
+                    "$ref": "#/components/schemas/HTTPValidationError"
+                  }
+                }
+              },
+              "description": "Validation Error"
+            }
+          },
+          "summary": "Get Rss Feed",
+          "tags": [
+            "feed"
+          ]
+        }
+      },
+      "/api/v1/internal/scheduled-jobs": {
+        "post": {
+          "description": "Authenticate and durably enqueue one versioned scheduler occurrence.",
+          "operationId": "receive_scheduled_job_api_v1_internal_scheduled_jobs_post",
+          "responses": {
+            "200": {
+              "content": {
+                "application/json": {
+                  "schema": {}
+                }
+              },
+              "description": "Successful Response"
+            }
+          },
+          "summary": "Receive Scheduled Job"
+        }
+      },
+      "/api/v1/jobs/{job_id}": {
+        "get": {
+          "operationId": "get_job_api_v1_jobs__job_id__get",
+          "parameters": [
+            {
+              "in": "path",
+              "name": "job_id",
+              "required": true,
+              "schema": {
+                "format": "uuid",
+                "title": "Job Id",
+                "type": "string"
+              }
+            }
+          ],
+          "responses": {
+            "200": {
+              "content": {
+                "application/json": {
+                  "schema": {}
+                }
+              },
+              "description": "Successful Response"
+            },
+            "422": {
+              "content": {
+                "application/json": {
+                  "schema": {
+                    "$ref": "#/components/schemas/HTTPValidationError"
+                  }
+                }
+              },
+              "description": "Validation Error"
+            }
+          },
+          "summary": "Get Job",
+          "tags": [
+            "jobs"
+          ]
+        }
+      },
+      "/api/v1/process/retry": {
+        "post": {
+          "description": "Queue an explicit selection while preserving completed stages.",
+          "operationId": "retry_selected_articles_api_v1_process_retry_post",
+          "requestBody": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/SelectedRetryRequest"
+                }
+              }
+            },
+            "required": true
+          },
+          "responses": {
+            "200": {
+              "content": {
+                "application/json": {
+                  "schema": {}
+                }
+              },
+              "description": "Successful Response"
+            },
+            "422": {
+              "content": {
+                "application/json": {
+                  "schema": {
+                    "$ref": "#/components/schemas/HTTPValidationError"
+                  }
+                }
+              },
+              "description": "Validation Error"
+            }
+          },
+          "summary": "Retry Selected Articles",
+          "tags": [
+            "processing"
+          ]
+        }
+      },
+      "/api/v1/process/run": {
+        "post": {
+          "description": "Queue a durable cycle; Go owns article processing and Python keeps digest work.",
+          "operationId": "trigger_processing_api_v1_process_run_post",
+          "responses": {
+            "200": {
+              "content": {
+                "application/json": {
+                  "schema": {}
+                }
+              },
+              "description": "Successful Response"
+            }
+          },
+          "summary": "Trigger Processing",
+          "tags": [
+            "processing"
+          ]
+        }
+      },
+      "/api/v1/process/status": {
+        "get": {
+          "description": "Get current processing status.",
+          "operationId": "get_processing_status_api_v1_process_status_get",
+          "responses": {
+            "200": {
+              "content": {
+                "application/json": {
+                  "schema": {}
+                }
+              },
+              "description": "Successful Response"
+            }
+          },
+          "summary": "Get Processing Status",
+          "tags": [
+            "processing"
+          ]
+        }
+      },
+      "/api/v1/schedule/settings": {
+        "get": {
+          "description": "Read schedules from the standalone Go scheduler.",
+          "operationId": "get_schedule_settings_api_v1_schedule_settings_get",
+          "responses": {
+            "200": {
+              "content": {
+                "application/json": {
+                  "schema": {}
+                }
+              },
+              "description": "Successful Response"
+            }
+          },
+          "summary": "Get Schedule Settings",
+          "tags": [
+            "scheduler"
+          ]
+        },
+        "post": {
+          "description": "Create a schedule in the standalone Go scheduler.",
+          "operationId": "create_schedule_setting_api_v1_schedule_settings_post",
+          "requestBody": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ScheduleCreateRequest"
+                }
+              }
+            },
+            "required": true
+          },
+          "responses": {
+            "200": {
+              "content": {
+                "application/json": {
+                  "schema": {}
+                }
+              },
+              "description": "Successful Response"
+            },
+            "422": {
+              "content": {
+                "application/json": {
+                  "schema": {
+                    "$ref": "#/components/schemas/HTTPValidationError"
+                  }
+                }
+              },
+              "description": "Validation Error"
+            }
+          },
+          "summary": "Create Schedule Setting",
+          "tags": [
+            "scheduler"
+          ]
+        }
+      },
+      "/api/v1/schedule/settings/{task_name}": {
+        "delete": {
+          "description": "Delete a schedule from the standalone Go scheduler.",
+          "operationId": "delete_schedule_setting_api_v1_schedule_settings__task_name__delete",
+          "parameters": [
+            {
+              "in": "path",
+              "name": "task_name",
+              "required": true,
+              "schema": {
+                "title": "Task Name",
+                "type": "string"
+              }
+            }
+          ],
+          "responses": {
+            "200": {
+              "content": {
+                "application/json": {
+                  "schema": {}
+                }
+              },
+              "description": "Successful Response"
+            },
+            "422": {
+              "content": {
+                "application/json": {
+                  "schema": {
+                    "$ref": "#/components/schemas/HTTPValidationError"
+                  }
+                }
+              },
+              "description": "Validation Error"
+            }
+          },
+          "summary": "Delete Schedule Setting",
+          "tags": [
+            "scheduler"
+          ]
+        },
+        "put": {
+          "description": "Update a schedule in the standalone Go scheduler.",
+          "operationId": "update_schedule_setting_api_v1_schedule_settings__task_name__put",
+          "parameters": [
+            {
+              "in": "path",
+              "name": "task_name",
+              "required": true,
+              "schema": {
+                "title": "Task Name",
+                "type": "string"
+              }
+            }
+          ],
+          "requestBody": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ScheduleUpdateRequest"
+                }
+              }
+            },
+            "required": true
+          },
+          "responses": {
+            "200": {
+              "content": {
+                "application/json": {
+                  "schema": {}
+                }
+              },
+              "description": "Successful Response"
+            },
+            "422": {
+              "content": {
+                "application/json": {
+                  "schema": {
+                    "$ref": "#/components/schemas/HTTPValidationError"
+                  }
+                }
+              },
+              "description": "Validation Error"
+            }
+          },
+          "summary": "Update Schedule Setting",
+          "tags": [
+            "scheduler"
+          ]
+        }
+      },
+      "/api/v1/schedule/status": {
+        "get": {
+          "description": "Read schedule and dispatch status from the standalone Go scheduler.",
+          "operationId": "get_schedule_status_api_v1_schedule_status_get",
+          "responses": {
+            "200": {
+              "content": {
+                "application/json": {
+                  "schema": {}
+                }
+              },
+              "description": "Successful Response"
+            }
+          },
+          "summary": "Get Schedule Status",
+          "tags": [
+            "scheduler"
+          ]
+        }
+      },
+      "/api/v1/sources": {
+        "get": {
+          "description": "Get all news sources.",
+          "operationId": "get_sources_api_api_v1_sources_get",
+          "responses": {
+            "200": {
+              "content": {
+                "application/json": {
+                  "schema": {}
+                }
+              },
+              "description": "Successful Response"
+            }
+          },
+          "summary": "Get Sources Api",
+          "tags": [
+            "sources"
+          ]
+        },
+        "post": {
+          "description": "Create a new news source.",
+          "operationId": "create_source_api_v1_sources_post",
+          "requestBody": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/CreateSourceRequest"
+                }
+              }
+            },
+            "required": true
+          },
+          "responses": {
+            "200": {
+              "content": {
+                "application/json": {
+                  "schema": {}
+                }
+              },
+              "description": "Successful Response"
+            },
+            "422": {
+              "content": {
+                "application/json": {
+                  "schema": {
+                    "$ref": "#/components/schemas/HTTPValidationError"
+                  }
+                }
+              },
+              "description": "Validation Error"
+            }
+          },
+          "summary": "Create Source",
+          "tags": [
+            "sources"
+          ]
+        }
+      },
+      "/api/v1/sources/{source_id}": {
+        "delete": {
+          "description": "Delete a news source.",
+          "operationId": "delete_source_api_v1_sources__source_id__delete",
+          "parameters": [
+            {
+              "in": "path",
+              "name": "source_id",
+              "required": true,
+              "schema": {
+                "title": "Source Id",
+                "type": "integer"
+              }
+            },
+            {
+              "in": "query",
+              "name": "delete_articles",
+              "required": false,
+              "schema": {
+                "default": false,
+                "title": "Delete Articles",
+                "type": "boolean"
+              }
+            }
+          ],
+          "responses": {
+            "200": {
+              "content": {
+                "application/json": {
+                  "schema": {}
+                }
+              },
+              "description": "Successful Response"
+            },
+            "422": {
+              "content": {
+                "application/json": {
+                  "schema": {
+                    "$ref": "#/components/schemas/HTTPValidationError"
+                  }
+                }
+              },
+              "description": "Validation Error"
+            }
+          },
+          "summary": "Delete Source",
+          "tags": [
+            "sources"
+          ]
+        },
+        "put": {
+          "description": "Update a news source.",
+          "operationId": "update_source_api_v1_sources__source_id__put",
+          "parameters": [
+            {
+              "in": "path",
+              "name": "source_id",
+              "required": true,
+              "schema": {
+                "title": "Source Id",
+                "type": "integer"
+              }
+            }
+          ],
+          "requestBody": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/UpdateSourceRequest"
+                }
+              }
+            },
+            "required": true
+          },
+          "responses": {
+            "200": {
+              "content": {
+                "application/json": {
+                  "schema": {}
+                }
+              },
+              "description": "Successful Response"
+            },
+            "422": {
+              "content": {
+                "application/json": {
+                  "schema": {
+                    "$ref": "#/components/schemas/HTTPValidationError"
+                  }
+                }
+              },
+              "description": "Validation Error"
+            }
+          },
+          "summary": "Update Source",
+          "tags": [
+            "sources"
+          ]
+        }
+      },
+      "/api/v1/sources/{source_id}/test": {
+        "post": {
+          "description": "Test a news source connection.",
+          "operationId": "test_source_api_v1_sources__source_id__test_post",
+          "parameters": [
+            {
+              "in": "path",
+              "name": "source_id",
+              "required": true,
+              "schema": {
+                "title": "Source Id",
+                "type": "integer"
+              }
+            }
+          ],
+          "responses": {
+            "200": {
+              "content": {
+                "application/json": {
+                  "schema": {}
+                }
+              },
+              "description": "Successful Response"
+            },
+            "422": {
+              "content": {
+                "application/json": {
+                  "schema": {
+                    "$ref": "#/components/schemas/HTTPValidationError"
+                  }
+                }
+              },
+              "description": "Validation Error"
+            }
+          },
+          "summary": "Test Source",
+          "tags": [
+            "sources"
+          ]
+        }
+      },
+      "/api/v1/sources/{source_id}/toggle": {
+        "patch": {
+          "description": "Toggle source active status.",
+          "operationId": "toggle_source_api_v1_sources__source_id__toggle_patch",
+          "parameters": [
+            {
+              "in": "path",
+              "name": "source_id",
+              "required": true,
+              "schema": {
+                "title": "Source Id",
+                "type": "integer"
+              }
+            }
+          ],
+          "responses": {
+            "200": {
+              "content": {
+                "application/json": {
+                  "schema": {}
+                }
+              },
+              "description": "Successful Response"
+            },
+            "422": {
+              "content": {
+                "application/json": {
+                  "schema": {
+                    "$ref": "#/components/schemas/HTTPValidationError"
+                  }
+                }
+              },
+              "description": "Validation Error"
+            }
+          },
+          "summary": "Toggle Source",
+          "tags": [
+            "sources"
+          ]
+        }
+      },
+      "/api/v1/stats/ai-usage": {
+        "get": {
+          "description": "Get AI API usage statistics.",
+          "operationId": "get_ai_usage_stats_api_v1_stats_ai_usage_get",
+          "parameters": [
+            {
+              "in": "query",
+              "name": "days",
+              "required": false,
+              "schema": {
+                "default": 30,
+                "maximum": 90,
+                "minimum": 1,
+                "title": "Days",
+                "type": "integer"
+              }
+            }
+          ],
+          "responses": {
+            "200": {
+              "content": {
+                "application/json": {
+                  "schema": {}
+                }
+              },
+              "description": "Successful Response"
+            },
+            "422": {
+              "content": {
+                "application/json": {
+                  "schema": {
+                    "$ref": "#/components/schemas/HTTPValidationError"
+                  }
+                }
+              },
+              "description": "Validation Error"
+            }
+          },
+          "summary": "Get Ai Usage Stats",
+          "tags": [
+            "stats"
+          ]
+        }
+      },
+      "/api/v1/stats/dashboard": {
+        "get": {
+          "description": "Get dashboard statistics.",
+          "operationId": "get_dashboard_stats_api_v1_stats_dashboard_get",
+          "parameters": [
+            {
+              "in": "query",
+              "name": "days",
+              "required": false,
+              "schema": {
+                "default": 7,
+                "maximum": 30,
+                "minimum": 1,
+                "title": "Days",
+                "type": "integer"
+              }
+            }
+          ],
+          "responses": {
+            "200": {
+              "content": {
+                "application/json": {
+                  "schema": {}
+                }
+              },
+              "description": "Successful Response"
+            },
+            "422": {
+              "content": {
+                "application/json": {
+                  "schema": {
+                    "$ref": "#/components/schemas/HTTPValidationError"
+                  }
+                }
+              },
+              "description": "Validation Error"
+            }
+          },
+          "summary": "Get Dashboard Stats",
+          "tags": [
+            "stats"
+          ]
+        }
+      },
+      "/api/v1/stats/extractor": {
+        "get": {
+          "description": "Get content extractor performance statistics.",
+          "operationId": "get_extractor_stats_api_v1_stats_extractor_get",
+          "responses": {
+            "200": {
+              "content": {
+                "application/json": {
+                  "schema": {}
+                }
+              },
+              "description": "Successful Response"
+            }
+          },
+          "summary": "Get Extractor Stats",
+          "tags": [
+            "stats"
+          ]
+        }
+      },
+      "/api/v1/stats/processing": {
+        "get": {
+          "description": "Get processing statistics for charts.",
+          "operationId": "get_processing_stats_api_v1_stats_processing_get",
+          "parameters": [
+            {
+              "in": "query",
+              "name": "days",
+              "required": false,
+              "schema": {
+                "default": 30,
+                "maximum": 365,
+                "minimum": 1,
+                "title": "Days",
+                "type": "integer"
+              }
+            }
+          ],
+          "responses": {
+            "200": {
+              "content": {
+                "application/json": {
+                  "schema": {}
+                }
+              },
+              "description": "Successful Response"
+            },
+            "422": {
+              "content": {
+                "application/json": {
+                  "schema": {
+                    "$ref": "#/components/schemas/HTTPValidationError"
+                  }
+                }
+              },
+              "description": "Validation Error"
+            }
+          },
+          "summary": "Get Processing Stats",
+          "tags": [
+            "stats"
+          ]
+        }
+      },
+      "/api/v1/stats/queue": {
+        "get": {
+          "description": "Get database queue statistics.",
+          "operationId": "get_queue_stats_api_v1_stats_queue_get",
+          "responses": {
+            "200": {
+              "content": {
+                "application/json": {
+                  "schema": {}
+                }
+              },
+              "description": "Successful Response"
+            }
+          },
+          "summary": "Get Queue Stats",
+          "tags": [
+            "stats"
+          ]
+        }
+      },
+      "/api/v1/summaries/categories": {
+        "get": {
+          "description": "Get available categories for summaries with counts.",
+          "operationId": "get_summary_categories_api_v1_summaries_categories_get",
+          "responses": {
+            "200": {
+              "content": {
+                "application/json": {
+                  "schema": {}
+                }
+              },
+              "description": "Successful Response"
+            }
+          },
+          "summary": "Get Summary Categories",
+          "tags": [
+            "summaries"
+          ]
+        }
+      },
+      "/api/v1/summaries/daily": {
+        "get": {
+          "description": "Get daily summaries with pagination and filtering.",
+          "operationId": "get_daily_summaries_api_v1_summaries_daily_get",
+          "parameters": [
+            {
+              "in": "query",
+              "name": "limit",
+              "required": false,
+              "schema": {
+                "default": 10,
+                "maximum": 100,
+                "minimum": 1,
+                "title": "Limit",
+                "type": "integer"
+              }
+            },
+            {
+              "in": "query",
+              "name": "offset",
+              "required": false,
+              "schema": {
+                "default": 0,
+                "minimum": 0,
+                "title": "Offset",
+                "type": "integer"
+              }
+            },
+            {
+              "in": "query",
+              "name": "category",
+              "required": false,
+              "schema": {
+                "anyOf": [
+                  {
+                    "type": "string"
+                  },
+                  {
+                    "type": "null"
+                  }
+                ],
+                "title": "Category"
+              }
+            },
+            {
+              "in": "query",
+              "name": "date",
+              "required": false,
+              "schema": {
+                "anyOf": [
+                  {
+                    "type": "string"
+                  },
+                  {
+                    "type": "null"
+                  }
+                ],
+                "title": "Date"
+              }
+            }
+          ],
+          "responses": {
+            "200": {
+              "content": {
+                "application/json": {
+                  "schema": {}
+                }
+              },
+              "description": "Successful Response"
+            },
+            "422": {
+              "content": {
+                "application/json": {
+                  "schema": {
+                    "$ref": "#/components/schemas/HTTPValidationError"
+                  }
+                }
+              },
+              "description": "Validation Error"
+            }
+          },
+          "summary": "Get Daily Summaries",
+          "tags": [
+            "summaries"
+          ]
+        }
+      },
+      "/api/v1/summaries/generate": {
+        "post": {
+          "description": "Generate daily summaries for today.",
+          "operationId": "generate_daily_summaries_api_v1_summaries_generate_post",
+          "responses": {
+            "200": {
+              "content": {
+                "application/json": {
+                  "schema": {}
+                }
+              },
+              "description": "Successful Response"
+            }
+          },
+          "summary": "Generate Daily Summaries",
+          "tags": [
+            "summaries"
+          ]
+        }
+      },
+      "/api/v1/summaries/{summary_id}": {
+        "get": {
+          "description": "Get a specific summary by ID.",
+          "operationId": "get_summary_by_id_api_v1_summaries__summary_id__get",
+          "parameters": [
+            {
+              "in": "path",
+              "name": "summary_id",
+              "required": true,
+              "schema": {
+                "title": "Summary Id",
+                "type": "integer"
+              }
+            }
+          ],
+          "responses": {
+            "200": {
+              "content": {
+                "application/json": {
+                  "schema": {}
+                }
+              },
+              "description": "Successful Response"
+            },
+            "422": {
+              "content": {
+                "application/json": {
+                  "schema": {
+                    "$ref": "#/components/schemas/HTTPValidationError"
+                  }
+                }
+              },
+              "description": "Validation Error"
+            }
+          },
+          "summary": "Get Summary By Id",
+          "tags": [
+            "summaries"
+          ]
+        }
+      },
+      "/api/v1/system/health/db": {
+        "get": {
+          "description": "Database health and pool metrics.",
+          "operationId": "health_db_api_v1_system_health_db_get",
+          "responses": {
+            "200": {
+              "content": {
+                "application/json": {
+                  "schema": {}
+                }
+              },
+              "description": "Successful Response"
+            }
+          },
+          "summary": "Health Db",
+          "tags": [
+            "system"
+          ]
+        }
+      },
+      "/api/v1/system/info": {
+        "get": {
+          "description": "Get system information.",
+          "operationId": "get_system_info_api_v1_system_info_get",
+          "responses": {
+            "200": {
+              "content": {
+                "application/json": {
+                  "schema": {}
+                }
+              },
+              "description": "Successful Response"
+            }
+          },
+          "summary": "Get System Info",
+          "tags": [
+            "system"
+          ]
+        }
+      },
+      "/api/v1/system/migrations/run": {
+        "post": {
+          "description": "Run pending database migrations.",
+          "operationId": "run_migrations_api_v1_system_migrations_run_post",
+          "responses": {
+            "200": {
+              "content": {
+                "application/json": {
+                  "schema": {}
+                }
+              },
+              "description": "Successful Response"
+            }
+          },
+          "summary": "Run Migrations",
+          "tags": [
+            "system"
+          ]
+        }
+      },
+      "/api/v1/system/process-monitor": {
+        "get": {
+          "description": "Get process monitor status and running processes.",
+          "operationId": "get_process_monitor_status_api_v1_system_process_monitor_get",
+          "responses": {
+            "200": {
+              "content": {
+                "application/json": {
+                  "schema": {}
+                }
+              },
+              "description": "Successful Response"
+            }
+          },
+          "summary": "Get Process Monitor Status",
+          "tags": [
+            "system"
+          ]
+        }
+      },
+      "/api/v1/system/process-monitor/cleanup": {
+        "post": {
+          "description": "Browser process cleanup is owned by the Go collector.",
+          "operationId": "cleanup_processes_api_v1_system_process_monitor_cleanup_post",
+          "responses": {
+            "200": {
+              "content": {
+                "application/json": {
+                  "schema": {}
+                }
+              },
+              "description": "Successful Response"
+            }
+          },
+          "summary": "Cleanup Processes",
+          "tags": [
+            "system"
+          ]
+        }
+      },
+      "/api/v1/telegram/send-digest": {
+        "post": {
+          "description": "Generate and send Telegram digest.",
+          "operationId": "send_telegram_digest_api_v1_telegram_send_digest_post",
+          "responses": {
+            "200": {
+              "content": {
+                "application/json": {
+                  "schema": {}
+                }
+              },
+              "description": "Successful Response"
+            }
+          },
+          "summary": "Send Telegram Digest",
+          "tags": [
+            "telegram"
+          ]
+        }
+      },
+      "/api/v1/telegram/settings": {
+        "get": {
+          "description": "Return current effective Telegram settings.",
+          "operationId": "get_telegram_settings_api_v1_telegram_settings_get",
+          "responses": {
+            "200": {
+              "content": {
+                "application/json": {
+                  "schema": {}
+                }
+              },
+              "description": "Successful Response"
+            }
+          },
+          "summary": "Get Telegram Settings",
+          "tags": [
+            "telegram"
+          ]
+        },
+        "post": {
+          "description": "Save Telegram channel ID overrides to DB and reset the service singleton.",
+          "operationId": "update_telegram_settings_api_v1_telegram_settings_post",
+          "requestBody": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/TelegramSettingsUpdate"
+                }
+              }
+            },
+            "required": true
+          },
+          "responses": {
+            "200": {
+              "content": {
+                "application/json": {
+                  "schema": {}
+                }
+              },
+              "description": "Successful Response"
+            },
+            "422": {
+              "content": {
+                "application/json": {
+                  "schema": {
+                    "$ref": "#/components/schemas/HTTPValidationError"
+                  }
+                }
+              },
+              "description": "Validation Error"
+            }
+          },
+          "summary": "Update Telegram Settings",
+          "tags": [
+            "telegram"
+          ]
+        }
+      },
+      "/api/v1/telegram/test": {
+        "post": {
+          "description": "Send a test message to the service channel.",
+          "operationId": "test_telegram_connection_api_v1_telegram_test_post",
+          "responses": {
+            "200": {
+              "content": {
+                "application/json": {
+                  "schema": {}
+                }
+              },
+              "description": "Successful Response"
+            }
+          },
+          "summary": "Test Telegram Connection",
+          "tags": [
+            "telegram"
+          ]
+        }
+      },
+      "/auth-status": {
+        "get": {
+          "description": "Check authentication configuration status.",
+          "operationId": "auth_status_auth_status_get",
+          "responses": {
+            "200": {
+              "content": {
+                "application/json": {
+                  "schema": {}
+                }
+              },
+              "description": "Successful Response"
+            }
+          },
+          "summary": "Auth Status"
+        }
+      },
+      "/auth/login": {
+        "post": {
+          "description": "Login with username/password and get JWT token.",
+          "operationId": "login_auth_login_post",
+          "responses": {
+            "200": {
+              "content": {
+                "application/json": {
+                  "schema": {
+                    "$ref": "#/components/schemas/TokenResponse"
+                  }
+                }
+              },
+              "description": "Successful Response"
+            }
+          },
+          "security": [
+            {
+              "HTTPBasic": []
+            }
+          ],
+          "summary": "Login",
+          "tags": [
+            "authentication"
+          ]
+        }
+      },
+      "/auth/logout": {
+        "post": {
+          "description": "Logout (client should discard token).",
+          "operationId": "logout_auth_logout_post",
+          "responses": {
+            "200": {
+              "content": {
+                "application/json": {
+                  "schema": {}
+                }
+              },
+              "description": "Successful Response"
+            }
+          },
+          "summary": "Logout",
+          "tags": [
+            "authentication"
+          ]
+        }
+      },
+      "/auth/me": {
+        "get": {
+          "description": "Get current user information.",
+          "operationId": "get_current_user_info_auth_me_get",
+          "responses": {
+            "200": {
+              "content": {
+                "application/json": {
+                  "schema": {
+                    "$ref": "#/components/schemas/UserInfo"
+                  }
+                }
+              },
+              "description": "Successful Response"
+            }
+          },
+          "summary": "Get Current User Info",
+          "tags": [
+            "authentication"
+          ]
+        }
+      },
+      "/auth/refresh": {
+        "post": {
+          "description": "Refresh JWT token.",
+          "operationId": "refresh_token_auth_refresh_post",
+          "responses": {
+            "200": {
+              "content": {
+                "application/json": {
+                  "schema": {}
+                }
+              },
+              "description": "Successful Response"
+            }
+          },
+          "summary": "Refresh Token",
+          "tags": [
+            "authentication"
+          ]
+        }
+      },
+      "/auth/security-status": {
+        "get": {
+          "description": "Get security configuration status.",
+          "operationId": "security_status_auth_security_status_get",
+          "responses": {
+            "200": {
+              "content": {
+                "application/json": {
+                  "schema": {}
+                }
+              },
+              "description": "Successful Response"
+            }
+          },
+          "summary": "Security Status",
+          "tags": [
+            "authentication"
+          ]
+        }
+      },
+      "/cards": {
+        "get": {
+          "description": "Redirect legacy /cards to root.",
+          "operationId": "public_cards_redirect_cards_get",
+          "responses": {
+            "307": {
+              "description": "Successful Response"
+            }
+          },
+          "summary": "Public Cards Redirect"
+        }
+      },
+      "/digest/{digest_date}": {
+        "get": {
+          "description": "Daily digest permalink used by Telegram full-version links.",
+          "operationId": "public_digest_view_digest__digest_date__get",
+          "parameters": [
+            {
+              "in": "path",
+              "name": "digest_date",
+              "required": true,
+              "schema": {
+                "title": "Digest Date",
+                "type": "string"
+              }
+            }
+          ],
+          "responses": {
+            "200": {
+              "content": {
+                "text/html": {
+                  "schema": {
+                    "type": "string"
+                  }
+                }
+              },
+              "description": "Successful Response"
+            },
+            "422": {
+              "content": {
+                "application/json": {
+                  "schema": {
+                    "$ref": "#/components/schemas/HTTPValidationError"
+                  }
+                }
+              },
+              "description": "Validation Error"
+            }
+          },
+          "summary": "Public Digest View"
+        }
+      },
+      "/feed": {
+        "get": {
+          "description": "Redirect legacy /feed to root.",
+          "operationId": "public_feed_redirect_feed_get",
+          "responses": {
+            "307": {
+              "description": "Successful Response"
+            }
+          },
+          "summary": "Public Feed Redirect"
+        }
+      },
+      "/health": {
+        "get": {
+          "description": "Health check endpoint.",
+          "operationId": "health_check_health_get",
+          "responses": {
+            "200": {
+              "content": {
+                "application/json": {
+                  "schema": {}
+                }
+              },
+              "description": "Successful Response"
+            }
+          },
+          "summary": "Health Check"
+        }
+      },
+      "/health/app": {
+        "get": {
+          "description": "Application health info with version and start time.",
+          "operationId": "health_app_health_app_get",
+          "responses": {
+            "200": {
+              "content": {
+                "application/json": {
+                  "schema": {}
+                }
+              },
+              "description": "Successful Response"
+            }
+          },
+          "summary": "Health App"
+        }
+      },
+      "/list": {
+        "get": {
+          "description": "List view for news feed (alias for compatibility).",
+          "operationId": "public_list_view_list_get",
+          "responses": {
+            "200": {
+              "content": {
+                "text/html": {
+                  "schema": {
+                    "type": "string"
+                  }
+                }
+              },
+              "description": "Successful Response"
+            }
+          },
+          "summary": "Public List View"
+        }
+      },
+      "/news": {
+        "get": {
+          "description": "Redirect /news to root.",
+          "operationId": "news_redirect_news_get",
+          "responses": {
+            "307": {
+              "description": "Successful Response"
+            }
+          },
+          "summary": "News Redirect"
+        }
+      },
+      "/search": {
+        "get": {
+          "description": "Public search page.",
+          "operationId": "public_search_view_search_get",
+          "responses": {
+            "200": {
+              "content": {
+                "text/html": {
+                  "schema": {
+                    "type": "string"
+                  }
+                }
+              },
+              "description": "Successful Response"
+            }
+          },
+          "summary": "Public Search View"
+        }
+      }
+    },
+    "servers": [
+      {
+        "description": "Production server",
+        "url": "https://news.dzarlax.dev"
+      },
+      {
+        "description": "Local development",
+        "url": "http://localhost:8000"
+      }
+    ]
+  },
+  "registered_routes": [
+    {
+      "methods": [
+        "GET"
+      ],
+      "name": null,
+      "openapi": true,
+      "path": "/",
+      "response_class": null
+    },
+    {
+      "methods": [
+        "GET"
+      ],
+      "name": null,
+      "openapi": true,
+      "path": "/admin",
+      "response_class": null
+    },
+    {
+      "methods": [
+        "GET"
+      ],
+      "name": null,
+      "openapi": true,
+      "path": "/admin/",
+      "response_class": null
+    },
+    {
+      "methods": [
+        "GET"
+      ],
+      "name": null,
+      "openapi": true,
+      "path": "/admin/backup",
+      "response_class": null
+    },
+    {
+      "methods": [
+        "GET"
+      ],
+      "name": null,
+      "openapi": true,
+      "path": "/admin/categories",
+      "response_class": null
+    },
+    {
+      "methods": [
+        "GET"
+      ],
+      "name": null,
+      "openapi": true,
+      "path": "/admin/schedule",
+      "response_class": null
+    },
+    {
+      "methods": [
+        "GET"
+      ],
+      "name": null,
+      "openapi": true,
+      "path": "/admin/settings",
+      "response_class": null
+    },
+    {
+      "methods": [
+        "GET"
+      ],
+      "name": null,
+      "openapi": true,
+      "path": "/admin/sources",
+      "response_class": null
+    },
+    {
+      "methods": [
+        "GET"
+      ],
+      "name": null,
+      "openapi": true,
+      "path": "/admin/stats",
+      "response_class": null
+    },
+    {
+      "methods": [
+        "GET"
+      ],
+      "name": null,
+      "openapi": true,
+      "path": "/admin/summaries",
+      "response_class": null
+    },
+    {
+      "methods": [
+        "GET"
+      ],
+      "name": null,
+      "openapi": true,
+      "path": "/admin/telegram",
+      "response_class": null
+    },
+    {
+      "methods": [
+        "GET"
+      ],
+      "name": null,
+      "openapi": true,
+      "path": "/api/public/admin-check",
+      "response_class": null
+    },
+    {
+      "methods": [
+        "GET"
+      ],
+      "name": null,
+      "openapi": true,
+      "path": "/api/public/article/{article_id}",
+      "response_class": null
+    },
+    {
+      "methods": [
+        "POST"
+      ],
+      "name": null,
+      "openapi": true,
+      "path": "/api/public/article/{article_id}/reprocess",
+      "response_class": null
+    },
+    {
+      "methods": [
+        "GET"
+      ],
+      "name": null,
+      "openapi": true,
+      "path": "/api/public/categories",
+      "response_class": null
+    },
+    {
+      "methods": [
+        "GET"
+      ],
+      "name": null,
+      "openapi": true,
+      "path": "/api/public/categories/config",
+      "response_class": null
+    },
+    {
+      "methods": [
+        "GET"
+      ],
+      "name": null,
+      "openapi": true,
+      "path": "/api/public/feed",
+      "response_class": null
+    },
+    {
+      "methods": [
+        "GET"
+      ],
+      "name": null,
+      "openapi": true,
+      "path": "/api/public/search",
+      "response_class": null
+    },
+    {
+      "methods": [
+        "GET"
+      ],
+      "name": null,
+      "openapi": true,
+      "path": "/api/public/sources",
+      "response_class": null
+    },
+    {
+      "methods": [
+        "GET"
+      ],
+      "name": null,
+      "openapi": true,
+      "path": "/api/v1/",
+      "response_class": null
+    },
+    {
+      "methods": [
+        "GET"
+      ],
+      "name": null,
+      "openapi": true,
+      "path": "/api/v1/articles/{article_id}",
+      "response_class": null
+    },
+    {
+      "methods": [
+        "POST"
+      ],
+      "name": null,
+      "openapi": true,
+      "path": "/api/v1/articles/{article_id}/reprocess",
+      "response_class": null
+    },
+    {
+      "methods": [
+        "GET",
+        "POST"
+      ],
+      "name": null,
+      "openapi": true,
+      "path": "/api/v1/backup",
+      "response_class": null
+    },
+    {
+      "methods": [
+        "POST"
+      ],
+      "name": null,
+      "openapi": true,
+      "path": "/api/v1/backup/cleanup",
+      "response_class": null
+    },
+    {
+      "methods": [
+        "GET"
+      ],
+      "name": null,
+      "openapi": true,
+      "path": "/api/v1/backup/download/{filename}",
+      "response_class": null
+    },
+    {
+      "methods": [
+        "POST"
+      ],
+      "name": null,
+      "openapi": true,
+      "path": "/api/v1/backup/restore",
+      "response_class": null
+    },
+    {
+      "methods": [
+        "GET",
+        "POST"
+      ],
+      "name": null,
+      "openapi": true,
+      "path": "/api/v1/backup/schedule",
+      "response_class": null
+    },
+    {
+      "methods": [
+        "POST"
+      ],
+      "name": null,
+      "openapi": true,
+      "path": "/api/v1/backup/sync",
+      "response_class": null
+    },
+    {
+      "methods": [
+        "POST"
+      ],
+      "name": null,
+      "openapi": true,
+      "path": "/api/v1/backup/upload",
+      "response_class": null
+    },
+    {
+      "methods": [
+        "GET"
+      ],
+      "name": null,
+      "openapi": true,
+      "path": "/api/v1/backups",
+      "response_class": null
+    },
+    {
+      "methods": [
+        "POST"
+      ],
+      "name": null,
+      "openapi": true,
+      "path": "/api/v1/categories",
+      "response_class": null
+    },
+    {
+      "methods": [
+        "GET",
+        "POST"
+      ],
+      "name": null,
+      "openapi": true,
+      "path": "/api/v1/categories/",
+      "response_class": null
+    },
+    {
+      "methods": [
+        "POST"
+      ],
+      "name": null,
+      "openapi": true,
+      "path": "/api/v1/categories/ai-category-analysis",
+      "response_class": null
+    },
+    {
+      "methods": [
+        "POST"
+      ],
+      "name": null,
+      "openapi": true,
+      "path": "/api/v1/categories/ai-category-mapping/approve",
+      "response_class": null
+    },
+    {
+      "methods": [
+        "GET",
+        "POST"
+      ],
+      "name": null,
+      "openapi": true,
+      "path": "/api/v1/categories/mappings",
+      "response_class": null
+    },
+    {
+      "methods": [
+        "GET"
+      ],
+      "name": null,
+      "openapi": true,
+      "path": "/api/v1/categories/mappings/fixed-categories",
+      "response_class": null
+    },
+    {
+      "methods": [
+        "GET"
+      ],
+      "name": null,
+      "openapi": true,
+      "path": "/api/v1/categories/mappings/unmapped",
+      "response_class": null
+    },
+    {
+      "methods": [
+        "DELETE",
+        "PUT"
+      ],
+      "name": null,
+      "openapi": true,
+      "path": "/api/v1/categories/mappings/{mapping_id}",
+      "response_class": null
+    },
+    {
+      "methods": [
+        "POST"
+      ],
+      "name": null,
+      "openapi": true,
+      "path": "/api/v1/categories/mappings/{mapping_id}/toggle",
+      "response_class": null
+    },
+    {
+      "methods": [
+        "PUT"
+      ],
+      "name": null,
+      "openapi": true,
+      "path": "/api/v1/categories/{category_id}",
+      "response_class": null
+    },
+    {
+      "methods": [
+        "GET",
+        "POST"
+      ],
+      "name": null,
+      "openapi": true,
+      "path": "/api/v1/category-mappings",
+      "response_class": null
+    },
+    {
+      "methods": [
+        "GET"
+      ],
+      "name": null,
+      "openapi": true,
+      "path": "/api/v1/category-mappings/fixed-categories",
+      "response_class": null
+    },
+    {
+      "methods": [
+        "GET"
+      ],
+      "name": null,
+      "openapi": true,
+      "path": "/api/v1/category-mappings/unmapped",
+      "response_class": null
+    },
+    {
+      "methods": [
+        "DELETE",
+        "PUT"
+      ],
+      "name": null,
+      "openapi": true,
+      "path": "/api/v1/category-mappings/{mapping_id}",
+      "response_class": null
+    },
+    {
+      "methods": [
+        "POST"
+      ],
+      "name": null,
+      "openapi": true,
+      "path": "/api/v1/category-mappings/{mapping_id}/toggle",
+      "response_class": null
+    },
+    {
+      "methods": [
+        "GET"
+      ],
+      "name": null,
+      "openapi": true,
+      "path": "/api/v1/feed",
+      "response_class": null
+    },
+    {
+      "methods": [
+        "GET"
+      ],
+      "name": null,
+      "openapi": true,
+      "path": "/api/v1/feed.rss",
+      "response_class": null
+    },
+    {
+      "methods": [
+        "POST"
+      ],
+      "name": null,
+      "openapi": true,
+      "path": "/api/v1/internal/scheduled-jobs",
+      "response_class": null
+    },
+    {
+      "methods": [
+        "GET"
+      ],
+      "name": null,
+      "openapi": true,
+      "path": "/api/v1/jobs/{job_id}",
+      "response_class": null
+    },
+    {
+      "methods": [
+        "POST"
+      ],
+      "name": null,
+      "openapi": true,
+      "path": "/api/v1/process/retry",
+      "response_class": null
+    },
+    {
+      "methods": [
+        "POST"
+      ],
+      "name": null,
+      "openapi": true,
+      "path": "/api/v1/process/run",
+      "response_class": null
+    },
+    {
+      "methods": [
+        "GET"
+      ],
+      "name": null,
+      "openapi": true,
+      "path": "/api/v1/process/status",
+      "response_class": null
+    },
+    {
+      "methods": [
+        "GET",
+        "POST"
+      ],
+      "name": null,
+      "openapi": true,
+      "path": "/api/v1/schedule/settings",
+      "response_class": null
+    },
+    {
+      "methods": [
+        "DELETE",
+        "PUT"
+      ],
+      "name": null,
+      "openapi": true,
+      "path": "/api/v1/schedule/settings/{task_name}",
+      "response_class": null
+    },
+    {
+      "methods": [
+        "GET"
+      ],
+      "name": null,
+      "openapi": true,
+      "path": "/api/v1/schedule/status",
+      "response_class": null
+    },
+    {
+      "methods": [
+        "GET",
+        "POST"
+      ],
+      "name": null,
+      "openapi": true,
+      "path": "/api/v1/sources",
+      "response_class": null
+    },
+    {
+      "methods": [
+        "DELETE",
+        "PUT"
+      ],
+      "name": null,
+      "openapi": true,
+      "path": "/api/v1/sources/{source_id}",
+      "response_class": null
+    },
+    {
+      "methods": [
+        "POST"
+      ],
+      "name": null,
+      "openapi": true,
+      "path": "/api/v1/sources/{source_id}/test",
+      "response_class": null
+    },
+    {
+      "methods": [
+        "PATCH"
+      ],
+      "name": null,
+      "openapi": true,
+      "path": "/api/v1/sources/{source_id}/toggle",
+      "response_class": null
+    },
+    {
+      "methods": [
+        "GET"
+      ],
+      "name": null,
+      "openapi": true,
+      "path": "/api/v1/stats/ai-usage",
+      "response_class": null
+    },
+    {
+      "methods": [
+        "GET"
+      ],
+      "name": null,
+      "openapi": true,
+      "path": "/api/v1/stats/dashboard",
+      "response_class": null
+    },
+    {
+      "methods": [
+        "GET"
+      ],
+      "name": null,
+      "openapi": true,
+      "path": "/api/v1/stats/extractor",
+      "response_class": null
+    },
+    {
+      "methods": [
+        "GET"
+      ],
+      "name": null,
+      "openapi": true,
+      "path": "/api/v1/stats/processing",
+      "response_class": null
+    },
+    {
+      "methods": [
+        "GET"
+      ],
+      "name": null,
+      "openapi": true,
+      "path": "/api/v1/stats/queue",
+      "response_class": null
+    },
+    {
+      "methods": [
+        "GET"
+      ],
+      "name": null,
+      "openapi": true,
+      "path": "/api/v1/summaries/categories",
+      "response_class": null
+    },
+    {
+      "methods": [
+        "GET"
+      ],
+      "name": null,
+      "openapi": true,
+      "path": "/api/v1/summaries/daily",
+      "response_class": null
+    },
+    {
+      "methods": [
+        "POST"
+      ],
+      "name": null,
+      "openapi": true,
+      "path": "/api/v1/summaries/generate",
+      "response_class": null
+    },
+    {
+      "methods": [
+        "GET"
+      ],
+      "name": null,
+      "openapi": true,
+      "path": "/api/v1/summaries/{summary_id}",
+      "response_class": null
+    },
+    {
+      "methods": [
+        "GET"
+      ],
+      "name": null,
+      "openapi": true,
+      "path": "/api/v1/system/health/db",
+      "response_class": null
+    },
+    {
+      "methods": [
+        "GET"
+      ],
+      "name": null,
+      "openapi": true,
+      "path": "/api/v1/system/info",
+      "response_class": null
+    },
+    {
+      "methods": [
+        "POST"
+      ],
+      "name": null,
+      "openapi": true,
+      "path": "/api/v1/system/migrations/run",
+      "response_class": null
+    },
+    {
+      "methods": [
+        "GET"
+      ],
+      "name": null,
+      "openapi": true,
+      "path": "/api/v1/system/process-monitor",
+      "response_class": null
+    },
+    {
+      "methods": [
+        "POST"
+      ],
+      "name": null,
+      "openapi": true,
+      "path": "/api/v1/system/process-monitor/cleanup",
+      "response_class": null
+    },
+    {
+      "methods": [
+        "POST"
+      ],
+      "name": null,
+      "openapi": true,
+      "path": "/api/v1/telegram/send-digest",
+      "response_class": null
+    },
+    {
+      "methods": [
+        "GET",
+        "POST"
+      ],
+      "name": null,
+      "openapi": true,
+      "path": "/api/v1/telegram/settings",
+      "response_class": null
+    },
+    {
+      "methods": [
+        "POST"
+      ],
+      "name": null,
+      "openapi": true,
+      "path": "/api/v1/telegram/test",
+      "response_class": null
+    },
+    {
+      "methods": [
+        "GET"
+      ],
+      "name": null,
+      "openapi": true,
+      "path": "/auth-status",
+      "response_class": null
+    },
+    {
+      "methods": [
+        "POST"
+      ],
+      "name": null,
+      "openapi": true,
+      "path": "/auth/login",
+      "response_class": null
+    },
+    {
+      "methods": [
+        "POST"
+      ],
+      "name": null,
+      "openapi": true,
+      "path": "/auth/logout",
+      "response_class": null
+    },
+    {
+      "methods": [
+        "GET"
+      ],
+      "name": null,
+      "openapi": true,
+      "path": "/auth/me",
+      "response_class": null
+    },
+    {
+      "methods": [
+        "POST"
+      ],
+      "name": null,
+      "openapi": true,
+      "path": "/auth/refresh",
+      "response_class": null
+    },
+    {
+      "methods": [
+        "GET"
+      ],
+      "name": null,
+      "openapi": true,
+      "path": "/auth/security-status",
+      "response_class": null
+    },
+    {
+      "methods": [
+        "GET"
+      ],
+      "name": null,
+      "openapi": true,
+      "path": "/cards",
+      "response_class": null
+    },
+    {
+      "methods": [
+        "GET"
+      ],
+      "name": null,
+      "openapi": true,
+      "path": "/digest/{digest_date}",
+      "response_class": null
+    },
+    {
+      "methods": [
+        "GET",
+        "HEAD"
+      ],
+      "name": "swagger_ui_html",
+      "openapi": false,
+      "path": "/docs",
+      "response_class": null
+    },
+    {
+      "methods": [
+        "GET",
+        "HEAD"
+      ],
+      "name": "swagger_ui_redirect",
+      "openapi": false,
+      "path": "/docs/oauth2-redirect",
+      "response_class": null
+    },
+    {
+      "methods": [
+        "GET"
+      ],
+      "name": null,
+      "openapi": true,
+      "path": "/feed",
+      "response_class": null
+    },
+    {
+      "methods": [
+        "GET"
+      ],
+      "name": null,
+      "openapi": true,
+      "path": "/health",
+      "response_class": null
+    },
+    {
+      "methods": [
+        "GET"
+      ],
+      "name": null,
+      "openapi": true,
+      "path": "/health/app",
+      "response_class": null
+    },
+    {
+      "methods": [
+        "GET"
+      ],
+      "name": null,
+      "openapi": true,
+      "path": "/list",
+      "response_class": null
+    },
+    {
+      "methods": [
+        "GET"
+      ],
+      "name": null,
+      "openapi": true,
+      "path": "/news",
+      "response_class": null
+    },
+    {
+      "methods": [
+        "GET",
+        "HEAD"
+      ],
+      "name": "openapi",
+      "openapi": false,
+      "path": "/openapi.json",
+      "response_class": null
+    },
+    {
+      "methods": [
+        "GET",
+        "HEAD"
+      ],
+      "name": "redoc_html",
+      "openapi": false,
+      "path": "/redoc",
+      "response_class": null
+    },
+    {
+      "methods": [
+        "GET"
+      ],
+      "name": null,
+      "openapi": true,
+      "path": "/search",
+      "response_class": null
+    },
+    {
+      "methods": [],
+      "name": "static",
+      "openapi": false,
+      "path": "/static",
+      "response_class": null
+    }
+  ]
+}

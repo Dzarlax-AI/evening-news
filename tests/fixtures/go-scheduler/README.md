@@ -1,14 +1,15 @@
 # Go scheduler Docker fixture
 
-The fixture gate runs supplied local News app, Go job worker, Go article processor, and standalone Go scheduler images on a newly created internal-only Docker network. A private Python executor runs from the same app image and receives the processor's AI callback. It uses a disposable PostgreSQL 16 database with separate `news` and `scheduler` schema owners, synthetic source/AI/Telegram receivers, and a second generic consumer. It never publishes a port or mounts the repository, `.env`, credentials, or application data. The app and executor containers mount only this fixture directory read-only; Go services have no host filesystem mount.
+The fixture gate runs supplied local Go web, Python app/executor, Go job worker, Go article processor, and standalone Go scheduler images on a newly created internal-only Docker network. A one-shot Python migration runs before the Go web starts; a short-lived Python probe container checks the live Go web and reads fixture database state. It uses a disposable PostgreSQL 16 database with separate `news` and `scheduler` schema owners, synthetic source/AI/Telegram receivers, and a second generic consumer. It never publishes a port or mounts the repository, `.env`, credentials, or application data. The probe, fake-service, and executor containers mount only this fixture directory read-only; Go services and the Go web have no host filesystem mount.
 
-Build the app, Go worker, Go processor, and scheduler images from the current checkout first. Build Go images with the repository root as context (`docker build -f go-worker/Dockerfile ... .` and `docker build -f go-processing/Dockerfile ... .`). For the scheduler image, set `SCHEDULER_BUILD_ID` to the gate's deterministic SHA-256 over sorted relative file paths and contents from `go.mod`, optional `go.sum`, recursive `*.go`, and `migrations/**`. File framing is `relative/path`, NUL, bytes, NUL. The gate compares that value to the running scheduler's `/version` response and compares the running app's Python/web source files against the checkout.
+Build the Go web and Python app images, Go worker, Go processor, and scheduler images from the current checkout first. Build Go images with the repository root as context (`docker build -f go-web/Dockerfile ... .`, `docker build -f go-worker/Dockerfile ... .`, and `docker build -f go-processing/Dockerfile ... .`). For the scheduler image, set `SCHEDULER_BUILD_ID` to the gate's deterministic SHA-256 over sorted relative file paths and contents from `go.mod`, optional `go.sum`, recursive `*.go`, and `migrations/**`. File framing is `relative/path`, NUL, bytes, NUL. The gate compares that value to the running scheduler's `/version` response and compares the running Python app/executor source files against the checkout.
 
 Run the gate with explicit local image references and a report directory:
 
 ```sh
 python3 scripts/run_go_scheduler_fixture_gate.py \
   --app-image evening-news:go-scheduler-fixture \
+  --web-image evening-news-web:components-20261026 \
   --scheduler-image rss-go-scheduler:fixture \
   --worker-image evening-news-job-worker:fixture \
   --processing-image evening-news-article-processing:fixture \

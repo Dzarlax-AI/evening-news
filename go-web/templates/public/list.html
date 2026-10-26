@@ -1,0 +1,7 @@
+{{define "content"}}<div class="news-page"><div class="container"><div class="news-layout">
+{{.FeedFragments.Sidebar}}
+<section class="news-main">{{.FeedFragments.Filters}}<div class="news-list" id="news-list"><div class="loading-state"><div class="loading-spinner"></div><p>Загрузка новостей...</p></div></div><div id="feed-sentinel" style="height:1px"></div><div class="load-more-container" id="load-more-container" style="display:none"><button class="btn btn-outline load-more-btn" onclick="loadMoreNews()">Загрузить ещё</button></div></section>
+</div></div></div>{{.FeedFragments.Modal}}{{end}}
+{{define "page-scripts"}}{{.FeedFragments.Core}}{{end}}
+{{define "extra-head"}}{{.FeedFragments.ListStyles}}{{end}}
+{{template "base" .}}

@@ -2,13 +2,14 @@
 
 import asyncio
 import json
+import os
 import sys
 from urllib.error import HTTPError, URLError
 from http.cookiejar import CookieJar
 from urllib.request import HTTPCookieProcessor, Request, build_opener, urlopen
 
 
-BASE = "http://127.0.0.1:8000"
+BASE = os.environ.get("GATE_WEB_URL", "http://127.0.0.1:8000")
 AUTH = ("Basic " + __import__("base64").b64encode(
     ("fixture-admin:fixture-admin-password").encode()).decode())
 COOKIE_JAR = CookieJar()
@@ -197,7 +198,7 @@ def main():
         status, _ = request("GET", "/admin/")
         value = {"admin_cookie_received": has_admin_cookie()}
     elif action == "auth-login-check":
-        status, response = request("POST", "/auth/login", payload={})
+        status, response = request("POST", "/auth/login", payload=None)
         value = {
             "http_status": status,
             "response_fields": sorted(response) if isinstance(response, dict) else [],

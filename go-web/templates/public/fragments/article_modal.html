@@ -1,0 +1,962 @@
+<!-- Article Modal -->
+<div id="articleModal" class="modal-overlay" style="display: none;">
+    <div class="modal-content">
+        <div class="modal-header">
+            <div class="modal-header-info">
+                <div id="modalCategory" class="modal-category category-tech">Загрузка...</div>
+                <div id="modalAdBadge" class="modal-ad-badge" style="display: none;">🚨 РЕКЛАМА</div>
+                <!-- Ad Reasoning Section -->
+                <div id="modalAdReasoning" class="modal-ad-reasoning" style="display: none;">
+                    <div class="ad-reasoning-content">
+                        <h4>Почему определено как реклама:</h4>
+                        <p id="modalAdReasoningText"></p>
+                        <div id="modalAdMarkers" class="ad-markers" style="display: none;">
+                            <strong>Найденные маркеры:</strong>
+                            <ul id="modalAdMarkersList"></ul>
+                        </div>
+                    </div>
+                </div>
+                <div id="modalFinalCategories" class="modal-final-categories" style="display: none;"></div>
+            </div>
+            <button class="modal-close" onclick="closeArticleModal()">&times;</button>
+        </div>
+
+        <!-- Media Gallery -->
+        <div id="modalGallery" class="modal-gallery" style="display: none;">
+            <div class="gallery-container">
+                <div class="gallery-images" id="galleryImages"></div>
+                <div class="gallery-thumbnails" id="galleryThumbnails"></div>
+                <button class="gallery-fullscreen" onclick="toggleFullscreen()" title="Полноэкранный режим">⛶</button>
+            </div>
+        </div>
+
+        <!-- Single Image -->
+        <div id="modalImage" class="modal-image" style="display: none;">
+            <img id="modalImageSrc" src="" alt="">
+        </div>
+
+        <div class="modal-body">
+            <h1 id="modalTitle" class="modal-title">Загрузка...</h1>
+
+            <div class="modal-meta">
+                <span id="modalSource" class="modal-source">Загрузка...</span>
+                <span id="modalDate" class="modal-date">Загрузка...</span>
+            </div>
+
+            <div id="modalSummary" class="modal-summary">
+                <div class="loading-spinner"></div>
+                <p>Загрузка содержимого...</p>
+            </div>
+
+            <!-- Full Content Spoiler -->
+            <div id="modalContentSpoiler" class="modal-content-spoiler" style="display: none;">
+                <button class="spoiler-toggle" onclick="toggleContentSpoiler()">
+                    <span class="spoiler-icon">▶</span>
+                    <span class="spoiler-text">Показать полный текст статьи</span>
+                </button>
+                <div id="modalContent" class="modal-content-text spoiler-content" style="display: none;"></div>
+            </div>
+
+            <!-- Original AI Categories (before mapping) -->
+            <div id="modalOriginalCategories" class="modal-original-categories" style="display: none;">
+                <h4 class="categories-title">🤖 Оригинальные AI категории</h4>
+                <p class="categories-description">Первичная классификация ИИ до маппинга в систему:</p>
+                <div id="originalCategoriesList" class="categories-list"></div>
+            </div>
+
+            <div class="modal-actions">
+                <button id="modalRefreshBtn" class="btn btn--warning" onclick="refreshArticle()" style="display: none;" title="Обновить статью (только для админов)">
+                    🔄 Обновить статью
+                </button>
+                <button id="modalOriginalBtn" class="btn btn--primary" onclick="window.open('', '_blank')" style="display: none;">
+                    🔗 Читать оригинал
+                </button>
+                <button class="btn btn--secondary" onclick="closeArticleModal()">
+                    Закрыть
+                </button>
+                <button id="adminAccessBtn" class="btn-admin-access" onclick="toggleAdminAccess()" title="Вход в админ-режим">
+                    🔐
+                </button>
+            </div>
+        </div>
+    </div>
+</div>
+
+<style>
+/* ---- Modal (Book design system) ---- */
+.modal-overlay {
+    position: fixed; inset: 0; background: rgba(0,0,0,0.6);
+    backdrop-filter: blur(4px); -webkit-backdrop-filter: blur(4px);
+    z-index: 1000; display: flex; align-items: center; justify-content: center;
+    padding: 20px;
+}
+.modal-content {
+    background: var(--surface); border-radius: var(--radius);
+    max-width: 800px; max-height: 90vh; width: 100%;
+    overflow-y: auto; box-shadow: var(--shadow-lg); position: relative;
+}
+.modal-header {
+    display: flex; justify-content: space-between; align-items: flex-start;
+    padding: 20px 24px 16px; border-bottom: 1px solid var(--border);
+}
+.modal-header-info { display: flex; flex-direction: column; gap: 8px; flex: 1; align-items: flex-start; }
+.modal-category {
+    display: inline-block; padding: 2px 10px; border-radius: 9999px;
+    font-size: 0.7rem; font-weight: 600; text-transform: uppercase; letter-spacing: 0.5px;
+}
+.modal-ad-badge {
+    background: rgba(220,38,38,0.1); color: var(--danger);
+    padding: 2px 10px; border-radius: 9999px; font-size: 0.7rem;
+    font-weight: 700; text-transform: uppercase; display: inline-block;
+}
+.modal-ad-reasoning {
+    background: var(--surface-2); border: 1px solid var(--border);
+    border-radius: var(--radius-sm); padding: 12px; margin-top: 8px;
+}
+.ad-reasoning-content h4 { color: var(--danger); font-size: 0.85rem; margin-bottom: 8px; font-weight: 600; }
+.ad-reasoning-content p { color: var(--text-secondary); font-size: 0.82rem; margin-bottom: 8px; line-height: 1.5; }
+.ad-markers { margin-top: 8px; }
+.ad-markers strong { color: var(--danger); font-size: 0.82rem; display: block; margin-bottom: 6px; }
+.ad-markers ul { margin: 0; padding-left: 20px; }
+.ad-markers li { color: var(--text-tertiary); font-size: 0.78rem; line-height: 1.4; margin-bottom: 2px; }
+
+.modal-final-categories { display: flex; flex-wrap: wrap; gap: 6px; margin-top: 10px; }
+.modal-final-category {
+    border: 1px solid; padding: 4px 10px; border-radius: 9999px;
+    font-size: 0.75rem; display: flex; align-items: center; gap: 6px; font-weight: 500;
+}
+.modal-final-category .confidence {
+    font-weight: 700; padding: 1px 6px; background: rgba(0,0,0,0.1);
+    border-radius: 9999px; font-size: 0.65rem;
+}
+
+/* Original AI categories */
+.modal-original-categories { margin-top: 24px; padding-top: 20px; border-top: 1px solid var(--border); }
+.categories-title { font-size: 0.9rem; font-weight: 600; margin: 0 0 6px; color: var(--text); }
+.categories-description { font-size: 0.82rem; color: var(--text-tertiary); margin: 0 0 12px; font-style: italic; }
+.categories-list { display: flex; flex-wrap: wrap; gap: 6px; }
+.category-item {
+    background: var(--surface-2); border: 1px solid var(--border);
+    border-radius: 9999px; padding: 4px 12px; font-size: 0.78rem;
+    display: flex; align-items: center; gap: 6px;
+}
+.category-item .category-name { font-weight: 600; color: var(--text-secondary); }
+.category-item .confidence-score {
+    padding: 1px 6px; border-radius: 9999px; font-size: 0.65rem; font-weight: 700;
+}
+.category-item.high-confidence .confidence-score { background: rgba(22,163,74,0.15); color: var(--good); }
+.category-item.medium-confidence .confidence-score { background: rgba(217,119,6,0.15); color: var(--warn); }
+.category-item.low-confidence .confidence-score { background: var(--surface-2); color: var(--text-tertiary); }
+
+.modal-close {
+    background: none; border: none; font-size: 1.3rem; cursor: pointer;
+    color: var(--text-tertiary); width: 32px; height: 32px;
+    display: flex; align-items: center; justify-content: center;
+    border-radius: 50%; transition: all var(--transition);
+}
+.modal-close:hover { background: var(--surface-2); color: var(--text); }
+
+/* Gallery */
+.modal-gallery { position: relative; margin-bottom: 20px; }
+.gallery-container { position: relative; background: transparent; border-radius: var(--radius-sm); overflow: hidden; }
+.gallery-images { position: relative; height: 400px; overflow: hidden; background: var(--surface-2); }
+.gallery-image {
+    position: absolute; inset: 0; width: 100%; height: 100%;
+    object-fit: contain; transition: opacity 0.3s; cursor: pointer;
+}
+.gallery-image.active { opacity: 1; }
+.gallery-image:not(.active) { opacity: 0; }
+.gallery-thumbnails { display: flex; gap: 8px; padding: 12px; overflow-x: auto; background: var(--surface); }
+.gallery-thumbnail {
+    width: 56px; height: 56px; object-fit: cover; border-radius: var(--radius-sm);
+    cursor: pointer; border: 2px solid transparent; transition: all var(--transition); flex-shrink: 0;
+}
+.gallery-thumbnail.active { border-color: var(--accent); }
+.gallery-thumbnail:hover { border-color: var(--text-tertiary); }
+.gallery-fullscreen {
+    position: absolute; top: 12px; right: 12px;
+    background: rgba(0,0,0,0.6); color: #fff; border: none;
+    width: 32px; height: 32px; border-radius: var(--radius-sm);
+    cursor: pointer; font-size: 0.85rem; transition: all var(--transition);
+}
+.gallery-fullscreen:hover { background: rgba(0,0,0,0.8); }
+
+/* Single image */
+.modal-image { text-align: center; margin-bottom: 20px; }
+.modal-image img { max-width: 100%; max-height: 300px; border-radius: var(--radius-sm); }
+
+/* Body */
+.modal-body { padding: 0 24px 24px; }
+.modal-title {
+    font-family: var(--font-serif); font-size: 1.5rem; font-weight: 700;
+    margin: 0 0 12px; line-height: 1.3; color: var(--text); letter-spacing: -0.3px;
+}
+.modal-meta {
+    display: flex; justify-content: space-between; align-items: center;
+    margin-bottom: 20px; padding-bottom: 12px; border-bottom: 1px solid var(--border);
+    font-size: 0.85rem; color: var(--text-tertiary);
+}
+.modal-source { font-weight: 500; color: var(--text-secondary); }
+.modal-summary {
+    background: var(--surface-2); padding: 16px; border-radius: var(--radius);
+    margin-bottom: 20px; border-left: 3px solid var(--accent);
+    color: var(--text); font-size: 0.95rem; line-height: 1.6;
+}
+
+/* Spoiler */
+.modal-content-spoiler { margin-bottom: 20px; }
+.spoiler-toggle {
+    background: var(--accent); color: var(--bg); border: none;
+    border-radius: var(--radius-sm); padding: 10px 16px; cursor: pointer;
+    font-weight: 500; font-family: var(--font); font-size: 0.9rem;
+    display: flex; align-items: center; gap: 8px; width: 100%;
+    transition: all var(--transition); margin-bottom: 10px;
+}
+.spoiler-toggle:hover { background: var(--accent-hover); }
+.spoiler-icon { font-size: 0.75rem; transition: transform 0.2s ease; }
+.spoiler-toggle.expanded .spoiler-icon { transform: rotate(90deg); }
+.spoiler-content { overflow: hidden; max-height: 0; opacity: 0; transition: all 0.3s ease; }
+.spoiler-content.expanded { max-height: none; opacity: 1; }
+.modal-content-text { line-height: 1.7; color: var(--text); }
+.modal-content-text h1, .modal-content-text h2, .modal-content-text h3 {
+    margin-top: 24px; margin-bottom: 12px; color: var(--text);
+    font-family: var(--font-serif);
+}
+.modal-content-text p { margin-bottom: 12px; }
+.modal-content-text img { max-width: 100%; height: auto; border-radius: var(--radius-sm); margin: 12px 0; }
+.modal-content-text blockquote {
+    border-left: 3px solid var(--accent); padding-left: 16px;
+    margin: 16px 0; font-style: italic; color: var(--text-secondary);
+}
+
+/* Actions */
+.modal-actions {
+    display: flex; gap: 10px; justify-content: flex-end;
+    margin-top: 24px; padding-top: 16px; border-top: 1px solid var(--border);
+}
+.btn {
+    padding: 10px 20px; border: none; border-radius: var(--radius-sm);
+    cursor: pointer; font-weight: 500; font-family: var(--font); font-size: 0.9rem;
+    text-decoration: none; display: inline-flex; align-items: center; gap: 8px;
+    transition: all var(--transition);
+}
+.btn--primary { background: var(--accent); color: var(--bg); }
+.btn--primary:hover { background: var(--accent-hover); }
+.btn--secondary { background: var(--surface-2); color: var(--text); }
+.btn--secondary:hover { background: var(--border); }
+.btn--warning { background: rgba(217,119,6,0.1); color: var(--warn); border: 1px solid var(--warn); }
+.btn--warning:hover { background: rgba(217,119,6,0.2); }
+.btn--warning:disabled { background: var(--surface-2); color: var(--text-tertiary); border-color: var(--border); cursor: not-allowed; }
+.btn-admin-access {
+    background: none; border: none; font-size: 1rem; padding: 10px 12px;
+    cursor: pointer; border-radius: var(--radius-sm); transition: all var(--transition);
+    opacity: 0.5; margin-left: 8px;
+}
+.btn-admin-access:hover { background: var(--surface-2); opacity: 1; }
+.btn-admin-access.admin-verified { opacity: 1; background: rgba(22,163,74,0.1); color: var(--good); }
+
+/* Responsive */
+@media (max-width: 768px) {
+    .modal-overlay { padding: 10px; }
+    .modal-content { max-height: 95vh; }
+    .modal-header { padding: 16px 16px 12px; }
+    .modal-body { padding: 0 16px 16px; }
+    .modal-title { font-size: 1.25rem; }
+    .gallery-images { height: 250px; }
+    .modal-actions { flex-direction: column; }
+    .btn { width: 100%; justify-content: center; }
+}
+.modal-overlay.fullscreen { padding: 0; }
+.modal-overlay.fullscreen .modal-content { max-width: 100%; max-height: 100%; border-radius: 0; height: 100vh; width: 100vw; }
+.modal-overlay.fullscreen .gallery-images { height: calc(100vh - 120px); }
+</style>
+
+<script>
+// Gallery state
+let currentGalleryIndex = 0;
+let galleryImages = [];
+let isFullscreen = false;
+
+// Current article ID for admin operations
+let currentArticleId = null;
+
+// Article modal functions
+window.openArticleModal = async function(articleId) {
+    const modal = document.getElementById('articleModal');
+    if (!modal) return;
+
+    console.log('Opening modal for article ID:', articleId);
+
+    // Store current article ID for admin operations
+    currentArticleId = articleId;
+
+    // Show modal with loading state
+    modal.style.display = 'flex';
+    document.body.style.overflow = 'hidden';
+
+    // Reset content
+    document.getElementById('modalTitle').textContent = 'Загрузка...';
+    document.getElementById('modalSource').textContent = 'Загрузка...';
+    document.getElementById('modalDate').textContent = 'Загрузка...';
+    document.getElementById('modalSummary').innerHTML = '<div class="loading-spinner"></div><p>Загрузка содержимого...</p>';
+    document.getElementById('modalContentSpoiler').style.display = 'none';
+    document.getElementById('modalContent').style.display = 'none';
+    document.getElementById('modalImage').style.display = 'none';
+    document.getElementById('modalGallery').style.display = 'none';
+    document.getElementById('modalAdBadge').style.display = 'none';
+    document.getElementById('modalAdReasoning').style.display = 'none';
+    document.getElementById('modalAdMarkers').style.display = 'none';
+    document.getElementById('modalFinalCategories').style.display = 'none';
+    document.getElementById('modalOriginalCategories').style.display = 'none';
+    document.getElementById('modalOriginalBtn').style.display = 'none';
+    document.getElementById('modalRefreshBtn').style.display = 'none';
+
+    // Reset spoiler state
+    const spoilerToggle = document.querySelector('.spoiler-toggle');
+    const spoilerContent = document.getElementById('modalContent');
+    if (spoilerToggle) {
+        spoilerToggle.classList.remove('expanded');
+        spoilerToggle.querySelector('.spoiler-text').textContent = 'Показать полный текст статьи';
+    }
+    if (spoilerContent) {
+        spoilerContent.classList.remove('expanded');
+    }
+
+    try {
+        console.log('Fetching article data...');
+        const response = await fetch(`/api/public/article/${articleId}?v=${Date.now()}`);
+
+        if (!response.ok) {
+            const errorText = await response.text();
+            console.error('API Error:', response.status, errorText);
+            throw new Error(`Server returned ${response.status}: ${errorText}`);
+        }
+
+        const article = await window.readApiResponse(response);
+        console.log('Article data received:', article);
+
+        // Update modal content
+        document.getElementById('modalTitle').textContent = article.title || 'Без заголовка';
+        document.getElementById('modalSource').textContent = article.source_name || 'Неизвестный источник';
+        document.getElementById('modalDate').textContent = formatModalDate(article.published_at);
+
+        // Set category with dynamic color
+        const categoryEl = document.getElementById('modalCategory');
+        categoryEl.className = 'modal-category';
+
+        // Use data from categories instead of legacy category field
+        if (article.categories && article.categories.length > 0) {
+            const primaryCategory = article.categories[0];
+            categoryEl.textContent = primaryCategory.display_name || primaryCategory.name;
+            const color = primaryCategory.color || '#6c757d';
+            // Calculate text color based on background brightness
+            const textColor = isLightColor(color) ? '#000000' : '#ffffff';
+            categoryEl.style.background = color;
+            categoryEl.style.color = textColor;
+        } else {
+            // Fallback
+            categoryEl.textContent = 'Другое';
+            categoryEl.style.background = '#6c757d';
+            categoryEl.style.color = '#ffffff';
+        }
+
+        // Show ad badge if needed
+        if (article.is_advertisement) {
+            document.getElementById('modalAdBadge').style.display = 'block';
+
+            // Show ad reasoning if available
+            if (article.ad_reasoning) {
+                document.getElementById('modalAdReasoningText').textContent = article.ad_reasoning;
+                document.getElementById('modalAdReasoning').style.display = 'block';
+
+                // Show ad markers if available
+                if (article.ad_markers && article.ad_markers.length > 0) {
+                    const markersList = document.getElementById('modalAdMarkersList');
+                    markersList.innerHTML = '';
+                    article.ad_markers.forEach(marker => {
+                        const li = document.createElement('li');
+                        li.textContent = marker;
+                        markersList.appendChild(li);
+                    });
+                    document.getElementById('modalAdMarkers').style.display = 'block';
+                }
+            }
+        }
+
+        // Show final categories (after mapping) at the top
+        if (article.categories && article.categories.length > 0) {
+            showFinalCategories(article.categories);
+        } else {
+            // Hide final categories section if not available
+            document.getElementById('modalFinalCategories').style.display = 'none';
+        }
+
+        // Show original AI categories (before mapping) at the bottom
+        if (article.ai_categories && article.ai_categories.length > 0) {
+            showOriginalAiCategories(article.ai_categories);
+        } else {
+            // Hide AI categories section if not available
+            document.getElementById('modalOriginalCategories').style.display = 'none';
+        }
+
+        // Handle media files
+        if (article.media_files && article.media_files.length > 0) {
+            showGallery(article.media_files);
+        } else if (article.image_url || article.primary_image) {
+            showSingleImage(article.image_url || article.primary_image);
+        }
+
+        // Show summary and content
+        if (article.summary) {
+            document.getElementById('modalSummary').innerHTML = `<p>${escapeHtml(article.summary)}</p>`;
+        } else {
+            document.getElementById('modalSummary').style.display = 'none';
+        }
+
+        if (article.content) {
+            const contentEl = document.getElementById('modalContent');
+            const spoilerEl = document.getElementById('modalContentSpoiler');
+
+            console.log('DEBUG: Content length:', article.content.length);
+            console.log('DEBUG: Content preview:', article.content.substring(0, 100));
+
+            // Check if content contains HTML tags
+            const hasHtmlTags = /<[^>]+>/.test(article.content);
+            console.log('DEBUG: Has HTML tags:', hasHtmlTags);
+
+            if (hasHtmlTags) {
+                // Content is HTML - use innerHTML
+                console.log('DEBUG: Using innerHTML for HTML content');
+                contentEl.innerHTML = article.content;
+            } else {
+                // Content is plain text - convert to HTML with paragraphs
+                console.log('DEBUG: Formatting plain text content');
+                const formattedContent = article.content
+                    .split('\n\n')  // Split by double newlines (paragraphs)
+                    .filter(p => p.trim())  // Remove empty paragraphs
+                    .map(p => `<p>${escapeHtml(p.trim())}</p>`)  // Wrap in <p> tags
+                    .join('');
+                console.log('DEBUG: Formatted content length:', formattedContent.length);
+                contentEl.innerHTML = formattedContent || `<p>${escapeHtml(article.content)}</p>`;
+            }
+
+            spoilerEl.style.display = 'block';
+        }
+
+        // Setup original link button
+        if (article.url) {
+            const originalBtn = document.getElementById('modalOriginalBtn');
+            originalBtn.onclick = () => window.open(article.url, '_blank');
+            originalBtn.style.display = 'inline-flex';
+        }
+
+        // Initialize admin access indicator
+        updateAdminAccessIndicator();
+
+    } catch (error) {
+        console.error('Произошла ошибка при загрузке статьи:', error);
+        document.getElementById('modalSummary').innerHTML = `
+            <div style="color: #d32f2f; text-align: center;">
+                <p><strong>❌ Ошибка загрузки статьи:</strong></p>
+                <p style="font-size: 0.9rem; margin-top: 10px;">${escapeHtml(error.message)}</p>
+            </div>
+        `;
+    }
+};
+
+window.closeArticleModal = function() {
+    const modal = document.getElementById('articleModal');
+    if (modal) {
+        modal.style.display = 'none';
+        document.body.style.overflow = '';
+
+        // Reset fullscreen if active
+        if (isFullscreen) {
+            toggleFullscreen();
+        }
+
+        // Reset gallery state
+        currentGalleryIndex = 0;
+        galleryImages = [];
+
+        // Reset admin state
+        currentArticleId = null;
+    }
+};
+
+// Content spoiler toggle function
+window.toggleContentSpoiler = function() {
+    const spoilerToggle = document.querySelector('.spoiler-toggle');
+    const spoilerContent = document.getElementById('modalContent');
+    const spoilerText = spoilerToggle.querySelector('.spoiler-text');
+
+    if (!spoilerContent || !spoilerToggle) return;
+
+    const isExpanded = spoilerToggle.classList.contains('expanded');
+
+    if (isExpanded) {
+        // Collapse
+        spoilerToggle.classList.remove('expanded');
+        spoilerContent.classList.remove('expanded');
+        spoilerText.textContent = 'Показать полный текст статьи';
+        spoilerContent.style.display = 'none';
+    } else {
+        // Expand
+        spoilerToggle.classList.add('expanded');
+        spoilerContent.classList.add('expanded');
+        spoilerText.textContent = 'Скрыть полный текст';
+        spoilerContent.style.display = 'block';
+    }
+};
+
+// Gallery functions
+function showGallery(mediaFiles) {
+    galleryImages = mediaFiles;
+    currentGalleryIndex = 0;
+
+    const galleryEl = document.getElementById('modalGallery');
+    const imagesEl = document.getElementById('galleryImages');
+    const thumbnailsEl = document.getElementById('galleryThumbnails');
+
+    // Create gallery images
+    imagesEl.innerHTML = '';
+    mediaFiles.forEach((media, index) => {
+        const img = document.createElement('img');
+        img.src = media.url;
+        img.alt = media.filename || `Image ${index + 1}`;
+        img.className = `gallery-image ${index === 0 ? 'active' : ''}`;
+        img.onclick = () => toggleFullscreen();
+        imagesEl.appendChild(img);
+    });
+
+    // Create thumbnails
+    thumbnailsEl.innerHTML = '';
+    mediaFiles.forEach((media, index) => {
+        const thumb = document.createElement('img');
+        thumb.src = media.thumbnail_url || media.url;
+        thumb.alt = `Thumbnail ${index + 1}`;
+        thumb.className = `gallery-thumbnail ${index === 0 ? 'active' : ''}`;
+        thumb.onclick = () => navigateToImage(index);
+        thumbnailsEl.appendChild(thumb);
+    });
+
+    galleryEl.style.display = 'block';
+    updateGalleryNavigation();
+}
+
+function showSingleImage(imageUrl) {
+    if (!imageUrl) return;
+
+    const imageEl = document.getElementById('modalImage');
+    const imgEl = document.getElementById('modalImageSrc');
+
+    imgEl.src = imageUrl;
+    imgEl.alt = 'Article image';
+    imageEl.style.display = 'block';
+}
+
+function showFinalCategories(categories) {
+    const containerEl = document.getElementById('modalFinalCategories');
+
+    if (!categories || categories.length === 0) {
+        containerEl.style.display = 'none';
+        return;
+    }
+
+    containerEl.innerHTML = categories.map(cat => {
+        const color = cat.color || '#6c757d';
+        const textColor = isLightColor(color) ? '#000000' : '#ffffff';
+        return `
+            <div class="modal-final-category" style="background: ${color}; color: ${textColor}; border-color: ${color};">
+                ${escapeHtml(cat.display_name || cat.name)}
+                <span class="confidence">${Math.round((cat.confidence || 0) * 100)}%</span>
+            </div>
+        `;
+    }).join('');
+
+    containerEl.style.display = 'flex';
+}
+
+function showOriginalAiCategories(aiCategories) {
+    const containerEl = document.getElementById('modalOriginalCategories');
+    const listEl = document.getElementById('originalCategoriesList');
+
+    if (!aiCategories || aiCategories.length === 0) {
+        containerEl.style.display = 'none';
+        return;
+    }
+
+    listEl.innerHTML = aiCategories.map(cat => {
+        const confidencePercent = Math.round((cat.confidence || 0) * 100);
+        let confidenceClass = 'low-confidence';
+
+        if (confidencePercent >= 80) {
+            confidenceClass = 'high-confidence';
+        } else if (confidencePercent >= 60) {
+            confidenceClass = 'medium-confidence';
+        }
+
+        return `
+            <div class="category-item ${confidenceClass}">
+                <span class="category-name">
+                    🤖 ${escapeHtml(cat.ai_category || cat.category)}
+                    ${cat.mapped_to ? ` → ${escapeHtml(cat.mapped_to)}` : ''}
+                </span>
+                <span class="confidence-score">${confidencePercent}%</span>
+            </div>
+        `;
+    }).join('');
+
+    containerEl.style.display = 'block';
+}
+
+window.navigateGallery = function(direction) {
+    if (galleryImages.length === 0) return;
+
+    currentGalleryIndex += direction;
+
+    if (currentGalleryIndex < 0) {
+        currentGalleryIndex = galleryImages.length - 1;
+    } else if (currentGalleryIndex >= galleryImages.length) {
+        currentGalleryIndex = 0;
+    }
+
+    navigateToImage(currentGalleryIndex);
+};
+
+function navigateToImage(index) {
+    currentGalleryIndex = index;
+
+    // Update active image
+    const images = document.querySelectorAll('.gallery-image');
+    images.forEach((img, i) => {
+        img.classList.toggle('active', i === index);
+    });
+
+    // Update active thumbnail
+    const thumbnails = document.querySelectorAll('.gallery-thumbnail');
+    thumbnails.forEach((thumb, i) => {
+        thumb.classList.toggle('active', i === index);
+    });
+
+    updateGalleryNavigation();
+}
+
+function updateGalleryNavigation() {
+    const prevBtn = document.querySelector('.gallery-prev');
+    const nextBtn = document.querySelector('.gallery-next');
+
+    if (prevBtn && nextBtn) {
+        prevBtn.style.display = galleryImages.length > 1 ? 'flex' : 'none';
+        nextBtn.style.display = galleryImages.length > 1 ? 'flex' : 'none';
+    }
+}
+
+window.toggleFullscreen = function() {
+    const modal = document.getElementById('articleModal');
+    if (!modal) return;
+
+    isFullscreen = !isFullscreen;
+    modal.classList.toggle('fullscreen', isFullscreen);
+
+    const fullscreenBtn = document.querySelector('.gallery-fullscreen');
+    if (fullscreenBtn) {
+        fullscreenBtn.innerHTML = isFullscreen ? '⊡' : '⛶';
+        fullscreenBtn.title = isFullscreen ? 'Выйти из полноэкранного режима' : 'Полноэкранный режим';
+    }
+};
+
+// Helper functions
+function formatModalDate(dateString) {
+    if (!dateString) return 'Дата неизвестна';
+
+    try {
+        const date = new Date(dateString);
+        return date.toLocaleDateString('ru-RU', {
+            year: 'numeric',
+            month: 'long',
+            day: 'numeric',
+            hour: '2-digit',
+            minute: '2-digit'
+        });
+    } catch (e) {
+        return 'Дата неизвестна';
+    }
+}
+
+function getCategoryName(category) {
+    const categoryNames = {
+        'tech': '⚙️ Технологии',
+        'politics': '🏛️ Политика',
+        'economics': '💼 Экономика',
+        'science': '🔬 Наука',
+        'sports': '⚽ Спорт',
+        'culture': '🎭 Культура',
+        'health': '🏥 Здоровье',
+        'society': '👥 Общество',
+        'world': '🌍 Мир',
+        'other': '📰 Другое'
+    };
+
+    return categoryNames[category] || '📰 Другое';
+}
+
+function escapeHtml(text) {
+    if (!text) return '';
+    const div = document.createElement('div');
+    div.textContent = text;
+    return div.innerHTML;
+}
+
+function isLightColor(hexColor) {
+    // Convert hex to RGB
+    const hex = hexColor.replace('#', '');
+    const r = parseInt(hex.substr(0, 2), 16);
+    const g = parseInt(hex.substr(2, 2), 16);
+    const b = parseInt(hex.substr(4, 2), 16);
+
+    // Calculate relative luminance using WCAG formula
+    const luminance = (0.299 * r + 0.587 * g + 0.114 * b) / 255;
+
+    // Return true if light (luminance > 0.5)
+    return luminance > 0.5;
+}
+
+// Keyboard navigation
+document.addEventListener('keydown', function(e) {
+    const modal = document.getElementById('articleModal');
+    if (!modal || modal.style.display === 'none') return;
+
+    switch(e.key) {
+        case 'Escape':
+            closeArticleModal();
+            break;
+        case 'ArrowLeft':
+            if (galleryImages.length > 1) {
+                navigateGallery(-1);
+                e.preventDefault();
+            }
+            break;
+        case 'ArrowRight':
+            if (galleryImages.length > 1) {
+                navigateGallery(1);
+                e.preventDefault();
+            }
+            break;
+        case 'f':
+        case 'F':
+            if (galleryImages.length > 0) {
+                toggleFullscreen();
+                e.preventDefault();
+            }
+            break;
+    }
+});
+
+// Close modal on overlay click
+document.addEventListener('click', function(e) {
+    const modal = document.getElementById('articleModal');
+    if (e.target === modal) {
+        closeArticleModal();
+    }
+});
+
+// Admin functionality
+function showAdminButton() {
+    const refreshBtn = document.getElementById('modalRefreshBtn');
+    if (refreshBtn) {
+        refreshBtn.style.display = 'inline-flex';
+    }
+}
+
+function updateAdminAccessIndicator() {
+    const adminBtn = document.getElementById('adminAccessBtn');
+    if (!adminBtn) return;
+
+    if (window.adminAccessVerified === true) {
+        adminBtn.classList.add('admin-verified');
+        adminBtn.innerHTML = '🔓';
+        adminBtn.title = 'Админ-режим активен';
+        showAdminButton();
+    } else {
+        adminBtn.classList.remove('admin-verified');
+        adminBtn.innerHTML = '🔐';
+        adminBtn.title = 'Вход в админ-режим';
+        const refreshBtn = document.getElementById('modalRefreshBtn');
+        if (refreshBtn) {
+            refreshBtn.style.display = 'none';
+        }
+    }
+}
+
+window.toggleAdminAccess = async function() {
+    if (window.adminAccessVerified === true) {
+        window.location.href = '/admin/';
+        return;
+    }
+    // Not logged in — redirect to admin (Authentik will handle login)
+    window.location.href = '/admin/';
+};
+
+async function checkAdminAccess() {
+    if (window.adminAccessVerified === true) {
+        showAdminButton();
+        return;
+    }
+
+    try {
+        const response = await fetch('/api/public/admin-check', {
+            credentials: 'include',
+            cache: 'no-cache'
+        });
+
+        if (response.ok) {
+            const data = await window.readApiResponse(response);
+            if (data.admin) {
+                window.adminAccessVerified = true;
+                showAdminButton();
+                updateAdminAccessIndicator();
+            }
+        }
+    } catch (error) {
+        console.log('Admin check failed:', error.message);
+    }
+}
+
+// Auto-check admin access on page load
+checkAdminAccess();
+
+window.refreshArticle = async function() {
+    if (!currentArticleId) {
+        alert('Ошибка: ID статьи не найден');
+        return;
+    }
+
+    if (window.adminAccessVerified === false) {
+        updateAdminAccessIndicator();
+        alert('Обновление статьи доступно только после входа в админ-режим');
+        window.location.href = '/admin/';
+        return;
+    }
+
+    try {
+        const adminResponse = await fetch('/api/public/admin-check', {
+            credentials: 'include',
+            cache: 'no-cache'
+        });
+        const adminData = adminResponse.ok ? await adminResponse.json() : { admin: false };
+        if (!adminData.admin) {
+            window.adminAccessVerified = false;
+            updateAdminAccessIndicator();
+            alert('Админ-сессия не активна. Сначала войдите в админ-режим.');
+            window.location.href = '/admin/';
+            return;
+        }
+    } catch (error) {
+        window.adminAccessVerified = false;
+        updateAdminAccessIndicator();
+        alert('Не удалось проверить админ-доступ. Сначала войдите в админ-режим.');
+        window.location.href = '/admin/';
+        return;
+    }
+
+    const refreshBtn = document.getElementById('modalRefreshBtn');
+    if (!refreshBtn) {
+        return;
+    }
+    const originalText = refreshBtn.innerHTML;
+
+    try {
+        // Disable button and show loading
+        refreshBtn.disabled = true;
+        refreshBtn.innerHTML = '⏳ Обновляем...';
+
+        console.log('Refreshing article:', currentArticleId);
+
+        // Call reprocess API with content refetch
+        const response = await fetch(`/api/public/article/${currentArticleId}/reprocess`, {
+            method: 'POST',
+            headers: {
+                'Content-Type': 'application/json'
+            },
+            credentials: 'include',  // Include cookies for auth
+            body: JSON.stringify({
+                force: true,
+                refetch_content: true
+            })
+        });
+
+        const data = await window.readApiResponse(response);
+        if (!response.ok) throw new Error(data.detail || `Ошибка ${response.status}`);
+        const result = await window.resolveBackgroundResponse(response, data, job => {
+            refreshBtn.innerHTML = job.status === 'queued'
+                ? (job.worker_available === false ? '⏳ В очереди, обработчик недоступен' : '⏳ В очереди...')
+                : job.status === 'interrupted' ? '⏸️ Ожидает восстановления...' : '⏳ Обрабатываем...';
+        });
+        console.log('Refresh result:', result);
+
+        let shouldRefreshArticle = false;
+        if (result.status === 'delivery_unknown') {
+            refreshBtn.innerHTML = '⚠️ Результат неизвестен';
+            alert('Результат операции неизвестен. Повторная обработка не запускалась автоматически.');
+        } else if (result.status === 'interrupted') {
+            refreshBtn.innerHTML = '⏸️ Прервано';
+            alert('Задание прервано и сохранено для восстановления.');
+        } else {
+            const details = result.result || result.stats || result;
+            const outcome = (details.article_outcomes || [])[0];
+            const articleState = outcome?.state || details.status || result.status;
+            const articleReason = outcome?.reason || details.reason || result.reason;
+            if (articleState === 'rejected') {
+                refreshBtn.innerHTML = articleReason === 'advertisement' ? '🚫 Реклама' : '⛔ Обработка остановлена';
+                alert(articleReason === 'resource_limit'
+                    ? 'Страница превышает допустимый размер.'
+                    : 'Статья исключена из обработки.');
+                shouldRefreshArticle = true;
+            } else if (articleState === 'exhausted') {
+                refreshBtn.innerHTML = '⛔ Лимит попыток';
+                alert('Лимит попыток обработки исчерпан.');
+                shouldRefreshArticle = true;
+            } else if (['pending', 'retry_wait', 'processing'].includes(articleState)) {
+                refreshBtn.innerHTML = '⏳ Повтор запланирован';
+                alert('Обработка временно не завершена. Повторная попытка запланирована.');
+                shouldRefreshArticle = true;
+            } else if (result.success === true || details.success === true
+                || ['success', 'completed', 'settled'].includes(details.status)
+                || articleState === 'completed') {
+                refreshBtn.innerHTML = '✅ Обновлено!';
+                shouldRefreshArticle = true;
+            } else {
+                refreshBtn.innerHTML = '⚠️ Не завершено';
+                throw new Error(result.message || 'Обработка статьи не завершена.');
+            }
+        }
+
+        if (shouldRefreshArticle) {
+            // Auto-reload the article in modal after a short delay
+            setTimeout(async () => {
+                refreshBtn.innerHTML = originalText;
+                refreshBtn.disabled = false;
+
+                // Reload article data in modal
+                await window.openArticleModal(currentArticleId);
+            }, 2000);
+        }
+
+    } catch (error) {
+        console.error('Article refresh failed:', error);
+
+        // Show error state
+        refreshBtn.innerHTML = '❌ Ошибка';
+
+        // Show user-friendly error message
+        alert(`Не удалось обновить статью: ${error.message}`);
+
+        // Restore button after delay
+        setTimeout(() => {
+            refreshBtn.innerHTML = originalText;
+            refreshBtn.disabled = false;
+        }, 3000);
+    }
+};
+</script>

@@ -1,0 +1,508 @@
+{{define "page-title"}}Настройки - Evening News v2{{end}}
+
+
+
+{{define "content"}}
+<h1>Настройки</h1>
+
+<div class="settings-tabs">
+    <button class="settings-tab active" onclick="switchSettingsTab('telegram')">Telegram</button>
+    <button class="settings-tab" onclick="switchSettingsTab('schedule')">Расписание</button>
+</div>
+
+<!-- ==================== TELEGRAM TAB ==================== -->
+<div id="settings-tab-telegram" class="settings-panel">
+
+    <div style="display:flex;justify-content:space-between;align-items:center;margin-bottom:16px;">
+        <h2 style="margin:0;">Telegram</h2>
+        <div id="tg-connection-status" class="tg-status-badge tg-status-unknown"></div>
+    </div>
+
+    <div class="settings-card">
+        <div class="settings-card-header">Текущая конфигурация</div>
+        <div class="settings-card-body" id="tg-status-body">
+            <span style="color:var(--text-muted);">Загрузка...</span>
+        </div>
+    </div>
+
+    <div class="settings-card">
+        <div class="settings-card-header">Настройки каналов</div>
+        <div class="settings-card-body">
+            <p class="settings-hint">
+                Оставьте поле пустым, чтобы использовать значение из <code>.env</code>.
+                Заполненное значение сохраняется в БД и перекрывает переменную окружения.
+            </p>
+            <div class="settings-form-group">
+                <label>Основной канал <span class="settings-badge-blue">TELEGRAM_CHAT_ID</span></label>
+                <input type="text" id="tg-chat-id" placeholder="Из .env (не трогать если не нужно менять)" class="settings-input">
+                <small>Сюда отправляются дайджесты с новостями</small>
+            </div>
+            <div class="settings-form-group">
+                <label>Сервисный канал <span class="settings-badge-gray">TELEGRAM_SERVICE_CHAT_ID</span></label>
+                <input type="text" id="tg-service-chat-id" placeholder="Из .env (если пусто — используется основной)" class="settings-input">
+                <small>Сюда отправляются ошибки и системные алерты</small>
+            </div>
+            <div style="display:flex;gap:10px;margin-top:16px;">
+                <button class="btn btn--primary" onclick="tgSaveSettings()">Сохранить</button>
+                <button class="btn btn--secondary" onclick="tgResetToEnv()">Сбросить (использовать .env)</button>
+            </div>
+            <div id="tg-save-result" class="settings-result" style="display:none;"></div>
+        </div>
+    </div>
+
+    <div class="settings-card">
+        <div class="settings-card-header">Действия</div>
+        <div class="settings-card-body">
+            <div class="settings-actions-row">
+                <div class="settings-action-item">
+                    <strong>Тест подключения</strong>
+                    <p>Отправит тестовое сообщение в сервисный канал</p>
+                    <button class="btn btn--secondary" onclick="tgTestConnection()">Отправить тест</button>
+                </div>
+                <div class="settings-action-item">
+                    <strong>Отправить дайджест</strong>
+                    <p>Сгенерирует и отправит дайджест прямо сейчас</p>
+                    <button class="btn btn--primary" onclick="tgSendDigest()">Отправить дайджест</button>
+                </div>
+            </div>
+            <div id="tg-action-result" class="settings-result" style="display:none;"></div>
+        </div>
+    </div>
+</div>
+
+<!-- ==================== SCHEDULE TAB ==================== -->
+<div id="settings-tab-schedule" class="settings-panel" style="display:none;">
+
+    <div style="display:flex;justify-content:space-between;align-items:center;margin-bottom:16px;">
+        <h2 style="margin:0;">Расписание задач</h2>
+        <div style="display:flex;gap:12px;align-items:center;">
+            <button class="btn btn--primary" onclick="schShowCreateModal()">+ Создать</button>
+            <div id="sch-status" style="font-size:.875rem;color:var(--text-muted);"></div>
+        </div>
+    </div>
+
+    <div id="sch-container">
+        <span style="color:var(--text-muted);">Загрузка...</span>
+    </div>
+
+    <!-- Create modal -->
+    <div id="sch-create-modal" class="settings-modal" style="display:none;">
+        <div class="settings-modal-content">
+            <div class="settings-modal-header">
+                <h3 style="margin:0;">Создать расписание</h3>
+                <button class="btn btn--ghost" onclick="schCloseCreateModal()" style="padding:.5rem;">&#10005;</button>
+            </div>
+            <div style="padding:1rem;">
+                <div class="settings-form-group">
+                    <label>Тип задачи</label>
+                    <select id="sch-new-type" class="settings-input" onchange="schUpdateType()">
+                        <option value="">-- Выберите --</option>
+                        <option value="news_digest">Новостной дайджест (полный цикл)</option>
+                        <option value="news_processing">Синхронизация новостей</option>
+                        <option value="custom">Своя задача</option>
+                    </select>
+                </div>
+                <div id="sch-new-custom-group" class="settings-form-group" style="display:none;">
+                    <label>Название задачи</label>
+                    <input type="text" id="sch-new-name" class="settings-input" placeholder="my_task">
+                </div>
+                <div class="settings-form-group">
+                    <label>Тип расписания</label>
+                    <select id="sch-new-schedule-type" class="settings-input" onchange="schUpdateCreateForm()">
+                        <option value="daily">Ежедневно</option>
+                        <option value="hourly">Каждый час</option>
+                        <option value="interval">Каждые N минут</option>
+                    </select>
+                </div>
+                <div class="settings-form-row">
+                    <div class="settings-form-group" id="sch-new-hour-group">
+                        <label>Час (0-23)</label>
+                        <input type="number" id="sch-new-hour" class="settings-input" min="0" max="23" value="0">
+                    </div>
+                    <div class="settings-form-group" id="sch-new-minute-group">
+                        <label>Минута (0-59)</label>
+                        <input type="number" id="sch-new-minute" class="settings-input" min="0" max="59" value="0">
+                    </div>
+                    <div class="settings-form-group" id="sch-new-interval-group" style="display:none;">
+                        <label>Интервал (мин)</label>
+                        <input type="number" id="sch-new-interval" class="settings-input" min="1" max="1440" value="30">
+                    </div>
+                </div>
+                <div class="settings-form-group">
+                    <label><input type="checkbox" id="sch-new-enabled" checked> Включено</label>
+                </div>
+                <div style="display:flex;gap:8px;justify-content:flex-end;margin-top:1rem;">
+                    <button class="btn btn--secondary" onclick="schCloseCreateModal()">Отмена</button>
+                    <button class="btn btn--primary" onclick="schCreateSchedule()">Создать</button>
+                </div>
+            </div>
+        </div>
+    </div>
+</div>
+
+<style>
+/* Settings tabs */
+.settings-tabs { display:flex; gap:.5rem; margin-bottom:1.5rem; border-bottom:2px solid var(--border,#e0e0e0); padding-bottom:.5rem; }
+.settings-tab { background:none; border:none; padding:.5rem 1rem; cursor:pointer; color:var(--text-muted); font-size:1rem; border-radius:6px 6px 0 0; border-bottom:2px solid transparent; margin-bottom:-2px; }
+.settings-tab.active { color:var(--primary-color); border-bottom-color:var(--primary-color); font-weight:600; }
+
+/* Cards */
+.settings-card { background:var(--surface,#fff); border:1px solid var(--border,#e1e5e9); border-radius:8px; margin-bottom:16px; }
+.settings-card-header { padding:12px 16px; font-weight:600; font-size:.9rem; border-bottom:1px solid var(--border,#e1e5e9); color:var(--text-color); }
+.settings-card-body { padding:16px; }
+
+/* Forms */
+.settings-form-group { margin-bottom:14px; }
+.settings-form-group label { display:block; font-weight:500; font-size:.875rem; margin-bottom:4px; color:var(--text-color); }
+.settings-form-group small { display:block; margin-top:3px; color:var(--text-muted); font-size:.75rem; }
+.settings-form-row { display:grid; grid-template-columns:1fr 1fr 1fr; gap:12px; }
+.settings-input { width:100%; max-width:400px; padding:8px 12px; border:1px solid var(--border,#ddd); border-radius:5px; font-size:.875rem; background:var(--surface,#fff); color:var(--text-color); box-sizing:border-box; }
+.settings-input:focus { outline:none; border-color:var(--primary-color); }
+select.settings-input { max-width:400px; }
+
+.settings-hint { font-size:.8rem; color:var(--text-muted); margin-bottom:14px; padding:8px 12px; background:var(--surface-hover,#f8f9fa); border-radius:5px; border-left:3px solid var(--primary-color); }
+.settings-hint code { background:var(--border,#e9ecef); padding:1px 4px; border-radius:3px; font-size:.75rem; }
+
+/* Badges */
+.settings-badge-blue { font-size:.7rem; padding:2px 6px; border-radius:10px; background:#e7f0ff; color:#0056b3; margin-left:4px; }
+.settings-badge-gray { font-size:.7rem; padding:2px 6px; border-radius:10px; background:var(--surface-hover,#f0f0f0); color:var(--text-muted); margin-left:4px; }
+
+/* Status */
+.tg-status-badge { padding:5px 12px; border-radius:16px; font-size:.8rem; font-weight:500; }
+.tg-status-ok { background:#d4edda; color:#155724; }
+.tg-status-error { background:#f8d7da; color:#721c24; }
+.tg-status-unknown { background:var(--surface-hover,#f0f0f0); color:var(--text-muted); }
+
+/* Config grid */
+.tg-config-grid { display:grid; grid-template-columns:1fr 1fr; gap:12px; }
+.tg-config-row { display:flex; flex-direction:column; gap:2px; }
+.tg-config-label { font-size:.7rem; color:var(--text-muted); text-transform:uppercase; letter-spacing:.5px; }
+.tg-config-value { font-family:monospace; font-size:.875rem; color:var(--text-color); }
+.tg-config-value .empty { color:var(--text-muted); font-style:italic; }
+.tg-source-tag { font-size:.65rem; padding:1px 5px; border-radius:8px; margin-left:4px; }
+.tg-source-db { background:#fff3cd; color:#856404; }
+.tg-source-env { background:#d4edda; color:#155724; }
+
+/* Actions */
+.settings-actions-row { display:grid; grid-template-columns:1fr 1fr; gap:16px; }
+.settings-action-item { border:1px solid var(--border,#e1e5e9); border-radius:6px; padding:14px; }
+.settings-action-item p { font-size:.8rem; color:var(--text-muted); margin:4px 0 10px; }
+
+/* Result message */
+.settings-result { margin-top:12px; padding:8px 12px; border-radius:5px; font-size:.8rem; }
+.settings-result.ok { background:#d4edda; color:#155724; }
+.settings-result.err { background:#f8d7da; color:#721c24; }
+
+/* Modal */
+.settings-modal { position:fixed; top:0; left:0; width:100%; height:100%; background:rgba(0,0,0,.5); display:flex; align-items:center; justify-content:center; z-index:1000; }
+.settings-modal-content { background:var(--surface,#fff); border-radius:8px; width:90%; max-width:500px; max-height:90vh; overflow-y:auto; box-shadow:0 4px 20px rgba(0,0,0,.15); }
+.settings-modal-header { display:flex; justify-content:space-between; align-items:center; padding:1rem; border-bottom:1px solid var(--border,#e0e0e0); }
+
+/* Schedule cards */
+.sch-card { background:var(--surface,#fff); border:1px solid var(--border,#e1e5e9); border-radius:8px; margin-bottom:12px; padding:16px; }
+.sch-card-header { display:flex; justify-content:space-between; align-items:center; margin-bottom:12px; }
+.sch-card-title { font-weight:600; font-size:.95rem; }
+.sch-card-toggle { position:relative; width:40px; height:22px; }
+.sch-card-toggle input { opacity:0; width:0; height:0; }
+.sch-card-toggle .slider { position:absolute; cursor:pointer; top:0; left:0; right:0; bottom:0; background:var(--text-muted); border-radius:22px; transition:.3s; }
+.sch-card-toggle .slider:before { content:''; position:absolute; height:16px; width:16px; left:3px; bottom:3px; background:#fff; border-radius:50%; transition:.3s; }
+.sch-card-toggle input:checked + .slider { background:var(--success-color,#28a745); }
+.sch-card-toggle input:checked + .slider:before { transform:translateX(18px); }
+.sch-card-fields { display:grid; grid-template-columns:repeat(auto-fill, minmax(140px, 1fr)); gap:10px; margin-bottom:12px; }
+.sch-card-info { font-size:.75rem; color:var(--text-muted); margin-bottom:10px; }
+.sch-card-actions { display:flex; gap:8px; }
+</style>
+
+<script>
+// ============================================================
+// Tab switching
+// ============================================================
+function switchSettingsTab(tab) {
+    document.querySelectorAll('.settings-panel').forEach(p => p.style.display = 'none');
+    document.querySelectorAll('.settings-tab').forEach(t => t.classList.remove('active'));
+    document.getElementById('settings-tab-' + tab).style.display = 'block';
+    event.target.classList.add('active');
+    localStorage.setItem('settings_tab', tab);
+}
+
+document.addEventListener('DOMContentLoaded', () => {
+    const saved = localStorage.getItem('settings_tab') || 'telegram';
+    const tabs = document.querySelectorAll('.settings-tab');
+    tabs.forEach(t => {
+        t.classList.remove('active');
+        if (t.textContent.trim().toLowerCase() === (saved === 'telegram' ? 'telegram' : 'расписание')) {
+            t.classList.add('active');
+        }
+    });
+    document.querySelectorAll('.settings-panel').forEach(p => p.style.display = 'none');
+    document.getElementById('settings-tab-' + saved).style.display = 'block';
+
+    tgLoadSettings();
+    schLoadAll();
+});
+
+// ============================================================
+// TELEGRAM
+// ============================================================
+async function tgLoadSettings() {
+    try {
+        const r = await fetch('/api/v1/telegram/settings');
+        if (!r.ok) throw new Error(await r.text());
+        const d = await window.readApiResponse(r);
+        tgRenderStatus(d);
+        tgPrefillForm(d);
+    } catch (e) {
+        document.getElementById('tg-status-body').innerHTML =
+            `<div class="settings-result err">Ошибка: ${e.message}</div>`;
+        const badge = document.getElementById('tg-connection-status');
+        badge.textContent = 'Ошибка';
+        badge.className = 'tg-status-badge tg-status-error';
+    }
+}
+
+function tgRenderStatus(d) {
+    const badge = document.getElementById('tg-connection-status');
+    badge.textContent = d.token_configured ? 'Токен настроен' : 'Токен не задан';
+    badge.className = 'tg-status-badge ' + (d.token_configured ? 'tg-status-ok' : 'tg-status-error');
+
+    const srcLabel = s => s === 'db' ? '<span class="tg-source-tag tg-source-db">БД</span>'
+        : s === 'env' ? '<span class="tg-source-tag tg-source-env">env</span>' : '';
+
+    document.getElementById('tg-status-body').innerHTML = `
+        <div class="tg-config-grid">
+            <div class="tg-config-row"><div class="tg-config-label">Токен бота</div><div class="tg-config-value">${d.token_configured ? '••••••••••' : '<span class="empty">не задан</span>'}</div></div>
+            <div class="tg-config-row"><div class="tg-config-label">Источник</div><div class="tg-config-value">.env</div></div>
+            <div class="tg-config-row"><div class="tg-config-label">Основной канал</div><div class="tg-config-value">${d.chat_id || '<span class="empty">не задан</span>'}${srcLabel(d.chat_id_source)}</div></div>
+            <div class="tg-config-row"><div class="tg-config-label">Сервисный канал</div><div class="tg-config-value">${d.service_chat_id || '<span class="empty">не задан</span>'}${srcLabel(d.service_chat_id_source)}</div></div>
+        </div>`;
+}
+
+function tgPrefillForm(d) {
+    if (d.chat_id_source === 'db') document.getElementById('tg-chat-id').value = d.chat_id || '';
+    if (d.service_chat_id_source === 'db') document.getElementById('tg-service-chat-id').value = d.service_chat_id || '';
+}
+
+async function tgSaveSettings() {
+    try {
+        const r = await fetch('/api/v1/telegram/settings', {
+            method: 'POST', headers: {'Content-Type':'application/json'},
+            body: JSON.stringify({
+                chat_id: document.getElementById('tg-chat-id').value.trim(),
+                service_chat_id: document.getElementById('tg-service-chat-id').value.trim()
+            })
+        });
+        const d = await window.readApiResponse(r);
+        if (!r.ok) throw new Error(d.detail || 'Ошибка');
+        tgShowResult('tg-save-result', true, d.message || 'Сохранено');
+        await tgLoadSettings();
+    } catch (e) { tgShowResult('tg-save-result', false, e.message); }
+}
+
+async function tgResetToEnv() {
+    if (!confirm('Удалить переопределения из БД и вернуться к .env?')) return;
+    document.getElementById('tg-chat-id').value = '';
+    document.getElementById('tg-service-chat-id').value = '';
+    await tgSaveSettings();
+}
+
+async function tgTestConnection() {
+    try {
+        const r = await fetch('/api/v1/telegram/test', {method:'POST'});
+        const d = await window.readApiResponse(r);
+        tgShowResult('tg-action-result', d.success, d.message || (d.success ? 'Дайджест отправлен.' : `Задание завершилось: ${d.status || 'ошибка'}`));
+    } catch (e) { tgShowResult('tg-action-result', false, e.message); }
+}
+
+async function tgSendDigest() {
+    try {
+        const r = await fetch('/api/v1/telegram/send-digest', {method:'POST'});
+        const data = await window.readApiResponse(r);
+        if (!r.ok) throw new Error(data.detail || `HTTP ${r.status}`);
+        const d = await window.resolveBackgroundResponse(r, data, job => {
+            tgShowResult('tg-action-result', true, job.status === 'queued' ? 'Дайджест принят в очередь.' : job.status === 'interrupted' ? 'Дайджест ожидает восстановления обработчиком...' : 'Дайджест отправляется...');
+        });
+        tgShowResult('tg-action-result', d.success, d.message);
+    } catch (e) { tgShowResult('tg-action-result', false, e.message); }
+}
+
+function tgShowResult(id, ok, msg) {
+    const el = document.getElementById(id);
+    el.textContent = msg;
+    el.className = 'settings-result ' + (ok ? 'ok' : 'err');
+    el.style.display = 'block';
+    setTimeout(() => el.style.display = 'none', 6000);
+}
+
+// ============================================================
+// SCHEDULE
+// ============================================================
+let schSettings = [];
+
+const schTaskLabels = {
+    'news_digest': 'Новостной дайджест',
+    'news_processing': 'Синхронизация новостей',
+    'backup': 'Автоматический бэкап',
+};
+function schTaskLabel(name) { return schTaskLabels[name] || name; }
+
+async function schLoadAll() {
+    try {
+        const [settingsR, statusR] = await Promise.all([
+            fetch('/api/v1/schedule/settings'),
+            fetch('/api/v1/schedule/status')
+        ]);
+        schSettings = await window.readApiResponse(settingsR);
+        const status = await window.readApiResponse(statusR);
+        schRenderStatus(status);
+        schRender();
+    } catch (e) {
+        document.getElementById('sch-container').innerHTML =
+            `<div class="settings-result err">Ошибка загрузки: ${e.message}</div>`;
+    }
+}
+
+function schRenderStatus(status) {
+    const el = document.getElementById('sch-status');
+    const enabled = status.enabled_tasks || 0;
+    const items = (schSettings.settings || schSettings || []);
+    const count = items.length || enabled;
+    el.innerHTML = count > 0
+        ? `<span style="color:var(--success-color);">&#9679;</span> ${count} задач активно`
+        : `<span style="color:var(--text-muted);">&#9679;</span> Нет активных задач`;
+}
+
+function schRender() {
+    const container = document.getElementById('sch-container');
+    const items = schSettings.settings || schSettings || [];
+    if (!items.length) { container.innerHTML = '<p style="color:var(--text-muted);">Нет настроенных задач</p>'; return; }
+
+    container.innerHTML = items.map(s => {
+        const typeLabel = {daily:'Ежедневно', hourly:'Каждый час', interval:'Каждые N минут'}[s.schedule_type] || s.schedule_type;
+        const timeInfo = s.schedule_type === 'daily' ? `в ${String(s.hour||0).padStart(2,'0')}:${String(s.minute||0).padStart(2,'0')}`
+            : s.schedule_type === 'hourly' ? `в :${String(s.minute||0).padStart(2,'0')} каждого часа`
+            : `каждые ${s.interval_minutes||30} мин`;
+
+        return `
+        <div class="sch-card" id="sch-${s.task_name}">
+            <div class="sch-card-header">
+                <span class="sch-card-title">${schTaskLabel(s.task_name)}</span>
+                <label class="sch-card-toggle">
+                    <input type="checkbox" ${s.enabled?'checked':''} onchange="schToggle('${s.task_name}', this.checked)">
+                    <span class="slider"></span>
+                </label>
+            </div>
+            <div class="sch-card-fields">
+                <div class="settings-form-group">
+                    <label style="font-size:.75rem;">Тип</label>
+                    <select class="settings-input" id="sch-type-${s.task_name}" style="max-width:none;" onchange="schTypeChanged('${s.task_name}')">
+                        <option value="daily" ${s.schedule_type==='daily'?'selected':''}>Ежедневно</option>
+                        <option value="hourly" ${s.schedule_type==='hourly'?'selected':''}>Каждый час</option>
+                        <option value="interval" ${s.schedule_type==='interval'?'selected':''}>Каждые N минут</option>
+                    </select>
+                </div>
+                <div class="settings-form-group" id="sch-hour-grp-${s.task_name}" ${s.schedule_type!=='daily'?'style="display:none;"':''}>
+                    <label style="font-size:.75rem;">Час</label>
+                    <input type="number" class="settings-input" id="sch-hour-${s.task_name}" min="0" max="23" value="${s.hour||0}" style="max-width:none;">
+                </div>
+                <div class="settings-form-group" id="sch-min-grp-${s.task_name}" ${s.schedule_type==='interval'?'style="display:none;"':''}>
+                    <label style="font-size:.75rem;">Минута</label>
+                    <input type="number" class="settings-input" id="sch-min-${s.task_name}" min="0" max="59" value="${s.minute||0}" style="max-width:none;">
+                </div>
+                <div class="settings-form-group" id="sch-int-grp-${s.task_name}" ${s.schedule_type!=='interval'?'style="display:none;"':''}>
+                    <label style="font-size:.75rem;">Интервал (мин)</label>
+                    <input type="number" class="settings-input" id="sch-int-${s.task_name}" min="1" max="1440" value="${s.interval_minutes||30}" style="max-width:none;">
+                </div>
+            </div>
+            <div class="sch-card-info">
+                ${typeLabel}: ${timeInfo}
+                ${s.next_run ? ' &middot; Следующий: ' + new Date(s.next_run).toLocaleString('ru-RU') : ''}
+                ${s.last_run ? ' &middot; Последний: ' + new Date(s.last_run).toLocaleString('ru-RU') : ''}
+            </div>
+            <div class="sch-card-actions">
+                <button class="btn btn-sm btn--primary" onclick="schSave('${s.task_name}')">Сохранить</button>
+                <button class="btn btn-sm btn--danger" onclick="schDelete('${s.task_name}')">Удалить</button>
+            </div>
+        </div>`;
+    }).join('');
+}
+
+function schTypeChanged(name) {
+    const type = document.getElementById('sch-type-' + name).value;
+    document.getElementById('sch-hour-grp-' + name).style.display = type === 'daily' ? '' : 'none';
+    document.getElementById('sch-min-grp-' + name).style.display = type !== 'interval' ? '' : 'none';
+    document.getElementById('sch-int-grp-' + name).style.display = type === 'interval' ? '' : 'none';
+}
+
+async function schSave(name) {
+    const type = document.getElementById('sch-type-' + name).value;
+    const body = { schedule_type: type, timezone: 'Europe/Belgrade' };
+    if (type === 'daily') { body.hour = +document.getElementById('sch-hour-' + name).value; body.minute = +document.getElementById('sch-min-' + name).value; }
+    else if (type === 'hourly') { body.minute = +document.getElementById('sch-min-' + name).value; }
+    else { body.interval_minutes = +document.getElementById('sch-int-' + name).value; }
+
+    try {
+        const r = await fetch('/api/v1/schedule/settings/' + name, {
+            method:'PUT', headers:{'Content-Type':'application/json'}, body:JSON.stringify(body)
+        });
+        if (!r.ok) throw new Error((await window.readApiResponse(r)).detail || 'Ошибка');
+        await schLoadAll();
+    } catch (e) { alert('Ошибка: ' + e.message); }
+}
+
+async function schToggle(name, enabled) {
+    try {
+        const r = await fetch('/api/v1/schedule/settings/' + name, {
+            method:'PUT', headers:{'Content-Type':'application/json'}, body:JSON.stringify({enabled})
+        });
+        if (!r.ok) throw new Error((await window.readApiResponse(r)).detail || 'Ошибка');
+    } catch (e) { alert('Ошибка: ' + e.message); await schLoadAll(); }
+}
+
+async function schDelete(name) {
+    if (!confirm(`Удалить расписание "${name}"?`)) return;
+    try {
+        const r = await fetch('/api/v1/schedule/settings/' + name, {method:'DELETE'});
+        if (!r.ok) throw new Error((await window.readApiResponse(r)).detail || 'Ошибка');
+        await schLoadAll();
+    } catch (e) { alert('Ошибка: ' + e.message); }
+}
+
+function schShowCreateModal() { document.getElementById('sch-create-modal').style.display = 'flex'; }
+function schCloseCreateModal() { document.getElementById('sch-create-modal').style.display = 'none'; }
+
+function schUpdateType() {
+    const v = document.getElementById('sch-new-type').value;
+    document.getElementById('sch-new-custom-group').style.display = v === 'custom' ? '' : 'none';
+}
+
+function schUpdateCreateForm() {
+    const type = document.getElementById('sch-new-schedule-type').value;
+    document.getElementById('sch-new-hour-group').style.display = type === 'daily' ? '' : 'none';
+    document.getElementById('sch-new-minute-group').style.display = type !== 'interval' ? '' : 'none';
+    document.getElementById('sch-new-interval-group').style.display = type === 'interval' ? '' : 'none';
+}
+
+async function schCreateSchedule() {
+    const taskType = document.getElementById('sch-new-type').value;
+    const taskName = taskType === 'custom' ? document.getElementById('sch-new-name').value.trim() : taskType;
+    if (!taskName) { alert('Выберите тип задачи'); return; }
+
+    const schedType = document.getElementById('sch-new-schedule-type').value;
+    const body = { task_name: taskName, schedule_type: schedType, enabled: document.getElementById('sch-new-enabled').checked, timezone: 'Europe/Belgrade' };
+    if (schedType === 'daily') { body.hour = +document.getElementById('sch-new-hour').value; body.minute = +document.getElementById('sch-new-minute').value; }
+    else if (schedType === 'hourly') { body.minute = +document.getElementById('sch-new-minute').value; }
+    else { body.interval_minutes = +document.getElementById('sch-new-interval').value; }
+
+    try {
+        const r = await fetch('/api/v1/schedule/settings', {
+            method:'POST', headers:{'Content-Type':'application/json'}, body:JSON.stringify(body)
+        });
+        if (!r.ok) throw new Error((await window.readApiResponse(r)).detail || 'Ошибка');
+        schCloseCreateModal();
+        await schLoadAll();
+    } catch (e) { alert('Ошибка: ' + e.message); }
+}
+</script>
+{{end}}
+
+{{template "admin-base" .}}
