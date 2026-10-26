@@ -47,11 +47,14 @@ func (p *Processor) Run(ctx context.Context, f store.Fence) (map[string]any, err
 	if err = json.Unmarshal(raw, &payload); err != nil {
 		return nil, errors.New("invalid canonical processing payload")
 	}
-	if err := p.DB.RecoverClaims(ctx, f); err != nil {
-		return nil, withPhase("recover_claims", err)
-	}
-	if err := p.DB.RecoverExhausted(ctx, f, p.maxAttempts(), time.Now().UTC()); err != nil {
-		return nil, withPhase("recover_exhausted", err)
+	dryRun := kind == "reprocess_failed" && payload.DryRun
+	if !dryRun {
+		if err := p.DB.RecoverClaims(ctx, f); err != nil {
+			return nil, withPhase("recover_claims", err)
+		}
+		if err := p.DB.RecoverExhausted(ctx, f, p.maxAttempts(), time.Now().UTC()); err != nil {
+			return nil, withPhase("recover_exhausted", err)
+		}
 	}
 	force := payload.Force != nil && *payload.Force
 	if kind == "article_reprocess" && payload.Force == nil {
@@ -62,8 +65,14 @@ func (p *Processor) Run(ctx context.Context, f store.Fence) (map[string]any, err
 		batchSize = 25
 	}
 	cycleLimit := p.CycleMax
-	if kind == "reprocess_failed" && payload.Limit > 0 {
-		cycleLimit = payload.Limit
+	if kind == "reprocess_failed" {
+		limit := payload.Limit
+		if limit < 1 {
+			limit = 20
+		}
+		if cycleLimit == 0 || limit < cycleLimit {
+			cycleLimit = limit
+		}
 	}
 	if payload.MaxArticles > 0 && (cycleLimit == 0 || payload.MaxArticles < cycleLimit) {
 		cycleLimit = payload.MaxArticles
@@ -71,13 +80,10 @@ func (p *Processor) Run(ctx context.Context, f store.Fence) (map[string]any, err
 	if len(payload.ArticleIDs) > 0 && (cycleLimit == 0 || len(payload.ArticleIDs) < cycleLimit) {
 		cycleLimit = len(payload.ArticleIDs)
 	}
-	if kind == "reprocess_failed" && payload.DryRun {
+	if dryRun {
 		limit := payload.Limit
 		if limit < 1 {
 			limit = 20
-		}
-		if cycleLimit > 0 && cycleLimit < limit {
-			limit = cycleLimit
 		}
 		candidates, err := p.DB.SelectDue(ctx, f, limit, 0, nil, p.DateFrom, p.DateTo, p.maxAttempts())
 		if err != nil {
@@ -149,7 +155,8 @@ func (p *Processor) Run(ctx context.Context, f store.Fence) (map[string]any, err
 					return
 				}
 				defer func() { <-sem }()
-				out, _, e := p.processOne(batchCtx, f, a, force, payload.PreserveStages)
+				preserveStages := payload.PreserveStages || kind == "article_reprocess"
+				out, _, e := p.processOne(batchCtx, f, a, force, preserveStages)
 				mu.Lock()
 				if e != nil {
 					if firstErr == nil {
@@ -285,9 +292,6 @@ func (p *Processor) processOne(ctx context.Context, f store.Fence, a store.Artic
 	a.ClaimToken = token
 	workCtx, cancel := context.WithTimeout(ctx, p.timeout())
 	defer cancel()
-	if !force && a.AdProcessed && a.IsAdvertisement != nil && *a.IsAdvertisement {
-		return p.finish(workCtx, f, a, attempt, fp, Outcome{State: StateRejected, Fields: map[string]any{}, Error: "advertisement"})
-	}
 	summaryDone := !force && a.SummaryProcessed && strings.TrimSpace(a.Summary) != ""
 	categoryDone := !force && a.CategoryProcessed
 	adDone := !force && a.AdProcessed
@@ -296,8 +300,11 @@ func (p *Processor) processOne(ctx context.Context, f store.Fence, a store.Artic
 		categoryDone = a.CategoryProcessed
 		adDone = a.AdProcessed
 	}
+	if adDone && a.IsAdvertisement != nil && *a.IsAdvertisement {
+		return p.finish(ctx, f, a, attempt, fp, Outcome{State: StateRejected, Fields: map[string]any{}, Error: "advertisement"})
+	}
 	if summaryDone && categoryDone && adDone {
-		return p.finish(workCtx, f, a, attempt, fp, Outcome{State: StateCompleted, Fields: map[string]any{}})
+		return p.finish(ctx, f, a, attempt, fp, Outcome{State: StateCompleted, Fields: map[string]any{}})
 	}
 	mediaContent := a.Content
 	content := a.Content
@@ -307,25 +314,33 @@ func (p *Processor) processOne(ctx context.Context, f store.Fence, a store.Artic
 	fields := map[string]any{}
 	forceMode := force && (!preserve || (!summaryDone && !categoryDone && !adDone))
 	forceExtract := forceMode && ExtractableURL(a.URL)
-	ordinaryFreshAccepted := false
 	if !forceExtract {
 		if err = EnforceTextLimit(content, p.textLimit()); err != nil {
-			return p.finish(workCtx, f, a, attempt, fp, Outcome{State: StateRejected, Fields: fields, Error: "resource_limit"})
+			return p.finish(ctx, f, a, attempt, fp, Outcome{State: StateRejected, Fields: fields, Error: "resource_limit"})
 		}
 	}
+	if forceExtract && EnforceTextLimit(mediaContent, p.textLimit()) != nil {
+		mediaContent = ""
+	}
+	if !summaryDone && !hasMediaFiles(a.MediaFiles) && strings.TrimSpace(mediaContent) != "" {
+		if extractedMedia := extractMediaFiles(mediaContent, a.URL); len(extractedMedia) > 0 {
+			fields["media_files"] = extractedMedia
+		}
+	}
+	ordinaryFreshAccepted := false
 	extractNeeded := forceExtract
 	if !forceMode && !summaryDone {
 		if a.ProcessingAttempts == 0 {
 			hash, duplicate, cacheHit := p.Duplicates.Lookup(content, a.ID, time.Now())
 			if cacheHit && duplicate {
-				return p.finish(workCtx, f, a, attempt, fp, Outcome{State: StateRejected, Fields: fields, Error: "smart_filter_rejected"})
+				return p.finish(ctx, f, a, attempt, fp, Outcome{State: StateRejected, Fields: fields, Error: "smart_filter_rejected"})
 			}
 			if !cacheHit && hash != "" {
 				exists, lookupErr := p.DB.HasDuplicateHash(workCtx, hash, a.ID)
 				if lookupErr == nil {
 					if exists {
 						p.Duplicates.Remember(hash, nil, time.Now())
-						return p.finish(workCtx, f, a, attempt, fp, Outcome{State: StateRejected, Fields: fields, Error: "smart_filter_rejected"})
+						return p.finish(ctx, f, a, attempt, fp, Outcome{State: StateRejected, Fields: fields, Error: "smart_filter_rejected"})
 					}
 					owner := a.ID
 					p.Duplicates.Remember(hash, &owner, time.Now())
@@ -336,7 +351,7 @@ func (p *Processor) processOne(ctx context.Context, f store.Fence, a store.Artic
 		if !ok {
 			extractNeeded = reasonNeedsExtraction(reason)
 			if !extractNeeded {
-				return p.finish(workCtx, f, a, attempt, fp, Outcome{State: StateRejected, Fields: fields, Error: "smart_filter_rejected"})
+				return p.finish(ctx, f, a, attempt, fp, Outcome{State: StateRejected, Fields: fields, Error: "smart_filter_rejected"})
 			}
 		}
 	}
@@ -346,15 +361,12 @@ func (p *Processor) processOne(ctx context.Context, f store.Fence, a store.Artic
 	if extractNeeded {
 		if !ExtractableURL(a.URL) {
 			if forceExtract {
-				return p.finish(workCtx, f, a, attempt, fp, Outcome{State: StateRetryWait, Fields: fields, Error: "content_refresh_unavailable"})
+				return p.finish(ctx, f, a, attempt, fp, Outcome{State: StateRetryWait, Fields: fields, Error: "content_refresh_unavailable"})
 			}
 		}
 		contextContent := content
 		if forceExtract {
 			contextContent = ""
-		}
-		if forceExtract && EnforceTextLimit(mediaContent, p.textLimit()) != nil {
-			mediaContent = ""
 		}
 		contextInput := map[string]any{"title": a.Title, "content": contextContent, "url": a.URL}
 		if a.SourceType == "telegram" && len([]rune(strings.TrimSpace(mediaContent))) >= 30 && !forceExtract {
@@ -362,45 +374,51 @@ func (p *Processor) processOne(ctx context.Context, f store.Fence, a store.Artic
 		}
 		contextFP := InputFingerprint(contextInput)
 		if err = p.DB.UpdateItemFingerprint(workCtx, f, a.ID, attempt, a.ClaimToken, contextFP); err != nil {
+			if attemptTimedOut(workCtx, ctx) {
+				return p.finish(ctx, f, a, attempt, fp, Outcome{State: StateRetryWait, Fields: fields, Error: "timeout"})
+			}
 			return Outcome{}, attempt, err
 		}
-		fresh, extractErr := p.extract(workCtx, f, a, attempt, contextFP, contextContent)
 		fp = contextFP
+		fresh, extractErr := p.extract(workCtx, f, a, attempt, contextFP, contextContent)
 		if extractErr != nil {
 			if isFatal(extractErr) {
 				return Outcome{}, attempt, extractErr
 			}
-			if errors.Is(extractErr, ErrResourceLimit) {
-				return p.finish(workCtx, f, a, attempt, fp, Outcome{State: StateRejected, Fields: fields, Error: "resource_limit"})
+			if attemptTimedOut(workCtx, ctx) {
+				return p.finish(ctx, f, a, attempt, fp, Outcome{State: StateRetryWait, Fields: fields, Error: "timeout"})
 			}
-			return p.finish(workCtx, f, a, attempt, fp, Outcome{State: StateRetryWait, Fields: fields, Error: "extraction_unavailable"})
+			if errors.Is(extractErr, ErrResourceLimit) {
+				return p.finish(ctx, f, a, attempt, fp, Outcome{State: StateRejected, Fields: fields, Error: "resource_limit"})
+			}
+			return p.finish(ctx, f, a, attempt, fp, Outcome{State: StateRetryWait, Fields: fields, Error: "extraction_unavailable"})
 		}
 		if fresh.Error != "" {
 			if fresh.Terminal {
-				return p.finish(workCtx, f, a, attempt, fp, Outcome{State: StateRejected, Fields: fields, Error: fresh.Error})
+				return p.finish(ctx, f, a, attempt, fp, Outcome{State: StateRejected, Fields: fields, Error: fresh.Error})
 			}
 			if forceExtract || (fresh.Error != "no_content" && fresh.Error != "needs_selector_study" && fresh.Error != "invalid_content") {
-				return p.finish(workCtx, f, a, attempt, fp, Outcome{State: StateRetryWait, Fields: fields, Error: fresh.Error, RetryAfterSeconds: fresh.RetryAfterSeconds})
+				return p.finish(ctx, f, a, attempt, fp, Outcome{State: StateRetryWait, Fields: fields, Error: fresh.Error, RetryAfterSeconds: fresh.RetryAfterSeconds})
 			}
 			if len(strings.TrimSpace(a.Content)) < 30 {
 				if scientificTitleFallback(a.Title, a.URL) {
 					content = a.Title
 				} else {
-					return p.finish(workCtx, f, a, attempt, fp, Outcome{State: StateRejected, Fields: fields, Error: "smart_filter_rejected"})
+					return p.finish(ctx, f, a, attempt, fp, Outcome{State: StateRejected, Fields: fields, Error: "smart_filter_rejected"})
 				}
 			}
 		}
 		if strings.TrimSpace(fresh.Content) == "" {
 			if forceExtract {
-				return p.finish(workCtx, f, a, attempt, fp, Outcome{State: StateRetryWait, Fields: fields, Error: "content_refresh_unavailable"})
+				return p.finish(ctx, f, a, attempt, fp, Outcome{State: StateRetryWait, Fields: fields, Error: "content_refresh_unavailable"})
 			}
 		}
 		if fresh.Content != "" {
 			if IsChallengeText(fresh.Content) {
-				return p.finish(workCtx, f, a, attempt, fp, Outcome{State: StateRetryWait, Fields: fields, Error: "extraction_challenge"})
+				return p.finish(ctx, f, a, attempt, fp, Outcome{State: StateRetryWait, Fields: fields, Error: "extraction_challenge"})
 			}
 			if EnforceTextLimit(fresh.Content, p.textLimit()) != nil {
-				return p.finish(workCtx, f, a, attempt, fp, Outcome{State: StateRejected, Fields: fields, Error: "resource_limit"})
+				return p.finish(ctx, f, a, attempt, fp, Outcome{State: StateRejected, Fields: fields, Error: "resource_limit"})
 			}
 			candidate := fresh.Content
 			candidateAccepted := true
@@ -433,25 +451,25 @@ func (p *Processor) processOne(ctx context.Context, f store.Fence, a store.Artic
 					}
 				}
 			} else if forceExtract {
-				return p.finish(workCtx, f, a, attempt, fp, Outcome{State: StateRetryWait, Fields: fields, Error: "content_refresh_unavailable"})
+				return p.finish(ctx, f, a, attempt, fp, Outcome{State: StateRetryWait, Fields: fields, Error: "content_refresh_unavailable"})
 			} else {
 				if len(strings.TrimSpace(a.Content)) >= 30 {
 					content = a.Content
 				} else if scientificTitleFallback(a.Title, a.URL) {
 					content = a.Title
 				} else {
-					return p.finish(workCtx, f, a, attempt, fp, Outcome{State: StateRejected, Fields: fields, Error: "smart_filter_rejected"})
+					return p.finish(ctx, f, a, attempt, fp, Outcome{State: StateRejected, Fields: fields, Error: "smart_filter_rejected"})
 				}
 			}
 		}
 	}
 	if IsChallengeText(content) {
-		return p.finish(workCtx, f, a, attempt, fp, Outcome{State: StateRetryWait, Fields: fields, Error: "extraction_challenge"})
+		return p.finish(ctx, f, a, attempt, fp, Outcome{State: StateRetryWait, Fields: fields, Error: "extraction_challenge"})
 	}
 	if extractNeeded && !forceExtract && !summaryDone {
 		ok, _ := shouldProcess(a.Title, content, a.URL, a.SourceType, false)
 		if !ok {
-			return p.finish(workCtx, f, a, attempt, fp, Outcome{State: StateRejected, Fields: fields, Error: "smart_filter_rejected"})
+			return p.finish(ctx, f, a, attempt, fp, Outcome{State: StateRejected, Fields: fields, Error: "smart_filter_rejected"})
 		}
 	}
 	input := map[string]any{"title": a.Title, "content": content, "url": a.URL}
@@ -463,35 +481,49 @@ func (p *Processor) processOne(ctx context.Context, f store.Fence, a store.Artic
 	if summaryDone {
 		input["content"] = a.Summary
 	}
-	fp = InputFingerprint(input)
-	if err = p.DB.UpdateItemFingerprint(workCtx, f, a.ID, attempt, a.ClaimToken, fp); err != nil {
+	inputFP := InputFingerprint(input)
+	if err = p.DB.UpdateItemFingerprint(workCtx, f, a.ID, attempt, a.ClaimToken, inputFP); err != nil {
+		if attemptTimedOut(workCtx, ctx) {
+			return p.finish(ctx, f, a, attempt, fp, Outcome{State: StateRetryWait, Fields: fields, Error: "timeout"})
+		}
 		return Outcome{}, attempt, err
 	}
+	fp = inputFP
 	analysis, err := p.AI.Call(workCtx, f, a, attempt, fp, "analyze", input)
 	if err != nil {
 		if isFatal(err) {
 			return Outcome{}, attempt, err
 		}
 		if errors.Is(err, ErrResourceLimit) {
-			return p.finish(workCtx, f, a, attempt, fp, Outcome{State: StateRejected, Fields: fields, Error: "resource_limit"})
+			return p.finish(ctx, f, a, attempt, fp, Outcome{State: StateRejected, Fields: fields, Error: "resource_limit"})
 		}
-		return p.finish(workCtx, f, a, attempt, fp, Outcome{State: StateRetryWait, Fields: fields, Error: errorCode(err)})
+		if attemptTimedOut(workCtx, ctx) {
+			return p.finish(ctx, f, a, attempt, fp, Outcome{State: StateRetryWait, Fields: fields, Error: "timeout"})
+		}
+		return p.finish(ctx, f, a, attempt, fp, Outcome{State: StateRetryWait, Fields: fields, Error: errorCode(err)})
 	}
 	if ordinaryFreshAccepted && shouldFallbackSummary(analysis) {
 		fallbackInput := map[string]any{"title": a.Title, "content": content, "url": a.URL}
-		fp = InputFingerprint(fallbackInput)
-		if err = p.DB.UpdateItemFingerprint(workCtx, f, a.ID, attempt, a.ClaimToken, fp); err != nil {
+		fallbackFP := InputFingerprint(fallbackInput)
+		if err = p.DB.UpdateItemFingerprint(workCtx, f, a.ID, attempt, a.ClaimToken, fallbackFP); err != nil {
+			if attemptTimedOut(workCtx, ctx) {
+				return p.finish(ctx, f, a, attempt, fp, Outcome{State: StateRetryWait, Fields: fields, Error: "timeout"})
+			}
 			return Outcome{}, attempt, err
 		}
+		fp = fallbackFP
 		fallback, fallbackErr := p.AI.Call(workCtx, f, a, attempt, fp, "analyze", fallbackInput)
 		if fallbackErr != nil {
 			if isFatal(fallbackErr) {
 				return Outcome{}, attempt, fallbackErr
 			}
 			if errors.Is(fallbackErr, ErrResourceLimit) {
-				return p.finish(workCtx, f, a, attempt, fp, Outcome{State: StateRejected, Fields: fields, Error: "resource_limit"})
+				return p.finish(ctx, f, a, attempt, fp, Outcome{State: StateRejected, Fields: fields, Error: "resource_limit"})
 			}
-			return p.finish(workCtx, f, a, attempt, fp, Outcome{State: StateRetryWait, Fields: fields, Error: errorCode(fallbackErr)})
+			if attemptTimedOut(workCtx, ctx) {
+				return p.finish(ctx, f, a, attempt, fp, Outcome{State: StateRetryWait, Fields: fields, Error: "timeout"})
+			}
+			return p.finish(ctx, f, a, attempt, fp, Outcome{State: StateRetryWait, Fields: fields, Error: errorCode(fallbackErr)})
 		}
 		if fallback != nil {
 			merged := make(map[string]any, len(analysis)+len(fallback))
@@ -511,7 +543,7 @@ func (p *Processor) processOne(ctx context.Context, f store.Fence, a store.Artic
 	for k, v := range fields {
 		out.Fields[k] = v
 	}
-	return p.finish(workCtx, f, a, attempt, fp, out)
+	return p.finish(ctx, f, a, attempt, fp, out)
 }
 func (p *Processor) extract(ctx context.Context, f store.Fence, a store.Article, attempt int, fp, content string) (Extracted, error) {
 	if p.Extractor == nil {
@@ -566,18 +598,20 @@ func (p *Processor) extract(ctx context.Context, f store.Fence, a store.Article,
 	return out, nil
 }
 func (p *Processor) finish(ctx context.Context, f store.Fence, a store.Article, attempt int, fp string, o Outcome) (Outcome, int, error) {
+	cleanupCtx, cleanupCancel := context.WithTimeout(ctx, 5*time.Second)
+	defer cleanupCancel()
 	persisted := o.Persist(attempt, time.Now().UTC(), Limits{MaxAttempts: p.maxAttempts(), Initial: p.RetryInitial, Later: p.RetryLater})
 	if cats, ok := persisted.Fields["categories"].([]Category); ok {
 		converted := make([]store.Category, 0, len(cats))
 		for _, c := range cats {
-			converted = append(converted, store.Category{Name: c.Name, Confidence: c.Confidence, AICategory: c.AICategory, DisplayCategory: MapCategory(c.AICategory)})
+			converted = append(converted, store.Category{Name: c.Name, Confidence: c.Confidence, AICategory: c.AICategory, DisplayCategory: MapCategory(c.Name)})
 		}
 		persisted.Fields["categories"] = converted
 	}
 	dbOutcome := store.Persisted{State: persisted.State, Fields: persisted.Fields, Attempts: persisted.Attempts, NextAttemptAt: persisted.NextAttemptAt, Error: persisted.Error, Processed: persisted.Processed}
-	if err := p.DB.SaveOutcome(ctx, f, a, attempt, a.ClaimToken, fp, dbOutcome); err != nil {
+	if err := p.DB.SaveOutcome(cleanupCtx, f, a, attempt, a.ClaimToken, fp, dbOutcome); err != nil {
 		if errors.Is(err, store.ErrCategoryMapping) {
-			if recordErr := p.DB.RecordCategoryMappingFailure(ctx, f, a, attempt, a.ClaimToken, fp); recordErr != nil {
+			if recordErr := p.DB.RecordCategoryMappingFailure(cleanupCtx, f, a, attempt, a.ClaimToken, fp); recordErr != nil {
 				return o, attempt, recordErr
 			}
 			return Outcome{State: StateRetryWait, Fields: map[string]any{}, Error: "category_mapping_failed"}, attempt, nil
@@ -587,6 +621,11 @@ func (p *Processor) finish(ctx context.Context, f store.Fence, a store.Article, 
 	o.State = persisted.State
 	return o, attempt, nil
 }
+
+func attemptTimedOut(workCtx, parentCtx context.Context) bool {
+	return errors.Is(workCtx.Err(), context.DeadlineExceeded) && parentCtx.Err() == nil
+}
+
 func (p *Processor) timeout() time.Duration {
 	if p.AttemptTimeout > 0 {
 		return p.AttemptTimeout

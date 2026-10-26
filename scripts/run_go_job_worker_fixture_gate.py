@@ -13,7 +13,9 @@ try:
     from scripts.article_processing_source_inventory import article_processing_inventory_matches
 except ModuleNotFoundError:
     from article_processing_source_inventory import article_processing_inventory_matches
-from run_background_worker_fixture_gate import DockerGate, GateFailure, OWNER_LABEL, ROOT
+from run_background_worker_fixture_gate import (
+    ARTICLE_AI_TOKEN, ARTICLE_PROCESSING_TOKEN, DockerGate, GateFailure, OWNER_LABEL, ROOT,
+)
 
 
 class GoJobWorkerGate(DockerGate):
@@ -231,7 +233,7 @@ class GoJobWorkerGate(DockerGate):
             "EXTRACTION_SERVICE_NATIVE_BROWSER": "false",
         }
         self.run_container(f"{self.prefix}-processing", command=[], image=self.processing_image,
-                           alias="processing", env=processing_env, mounts=False, memory="256m")
+                           alias="processing", env=processing_env, mounts=False, memory="128m")
         deadline = time.monotonic() + 90
         result = {}
         while time.monotonic() < deadline:

@@ -549,14 +549,14 @@ class DockerGate:
             "EXTRACTION_SERVICE_NATIVE_BROWSER": "false",
         }
         self.create_container(self.container_names["processing"], self.pinned_images["processing"],
-                              [], role="processing", alias="processing", memory="256m",
+                              [], role="processing", alias="processing", memory="128m",
                               env=processing_env, no_healthcheck=True)
         self.wait_status("processing", "/healthz")
         self.report["checks"]["processing_service_ready"] = True
         self.wait_status("scheduler", "/readyz")
         self.report["resource_limits"] = {
             "web_memory": "256m", "worker_memory": "512m", "executor_memory": "512m",
-            "scheduler_memory": "128m", "processing_memory": "256m",
+            "scheduler_memory": "128m", "processing_memory": "128m",
             "postgres_memory": "256m", "fake_services_memory": "128m",
             "cpus_per_container": 1, "pids_per_container": 128,
         }

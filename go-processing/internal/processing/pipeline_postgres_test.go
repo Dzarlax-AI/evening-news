@@ -499,8 +499,8 @@ func TestProcessorRunPostgresKnownFixedCategoryKeepsOriginalLabelAndFirstDuplica
 			return
 		}
 		result := map[string]any{"summary": "Synthetic category mapping summary.", "categories": []any{
-			map[string]any{"name": "Tech", "ai_category": "Climate policy", "confidence": 0.2},
-			map[string]any{"name": "Tech", "ai_category": "science", "confidence": 0.9},
+			map[string]any{"name": "software engineering", "ai_category": "Developer tools", "confidence": 0.2},
+			map[string]any{"name": "software engineering", "ai_category": "science", "confidence": 0.9},
 		}, "is_advertisement": false}
 		w.Header().Set("Content-Type", "application/json")
 		_ = json.NewEncoder(w).Encode(analysisResponse(request, result))
@@ -515,8 +515,146 @@ func TestProcessorRunPostgresKnownFixedCategoryKeepsOriginalLabelAndFirstDuplica
 	if err := pg.admin.QueryRow(context.Background(), `SELECT c.name,ac.ai_category,ac.confidence,cm.usage_count FROM `+pg.schema+`.article_categories ac JOIN `+pg.schema+`.categories c ON c.id=ac.category_id CROSS JOIN `+pg.schema+`.category_mapping cm WHERE ac.article_id=$1`, articleID).Scan(&name, &original, &confidence, &usage); err != nil {
 		t.Fatal(err)
 	}
-	if name != "Tech" || original != "Climate policy" || confidence != 0.2 || usage != 0 {
+	if name != "Tech" || original != "Developer tools" || confidence != 0.2 || usage != 0 {
 		t.Fatalf("known fixed category did not bypass mapping / preserve first row: category=%s original=%s confidence=%v mapping_usage=%d", name, original, confidence, usage)
+	}
+}
+
+func TestProcessorRunPostgresArticleReprocessPreservesCompletedStages(t *testing.T) {
+	pg := newPipelinePG(t, false)
+	const articleID = int64(854)
+	pg.seedArticle(t, articleID)
+	const existingSummary = "Previously completed summary stage."
+	if _, err := pg.admin.Exec(context.Background(), `UPDATE `+pg.schema+`.articles
+		SET summary=$2,summary_processed=true,category_processed=false,ad_processed=false,
+		processing_attempts=1,processing_state='retry_wait',next_attempt_at=now()-interval '1 second'
+		WHERE id=$1`, articleID, existingSummary); err != nil {
+		t.Fatal(err)
+	}
+	extractor, extractionCalls := newFixtureExtractor(t)
+	ai := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		var request aiEnvelope
+		if err := json.NewDecoder(r.Body).Decode(&request); err != nil {
+			http.Error(w, "bad fixture request", http.StatusBadRequest)
+			return
+		}
+		if answerFixtureAuxAI(t, w, request) {
+			return
+		}
+		if request.Input["content"] != existingSummary {
+			http.Error(w, "reclaimed article did not preserve completed summary stage", http.StatusUnprocessableEntity)
+			return
+		}
+		result := map[string]any{"categories": []any{"technology"}, "is_advertisement": false}
+		w.Header().Set("Content-Type", "application/json")
+		_ = json.NewEncoder(w).Encode(analysisResponse(request, result))
+	}))
+	defer ai.Close()
+	if _, err := newIntegrationProcessor(pg, ai.URL, extractor.URL).Run(context.Background(), pg.newRunWithPayload(t, articleID, "article_reprocess", map[string]any{"article_ids": []int64{articleID}})); err != nil {
+		t.Fatalf("article reprocess reclaim: %v", err)
+	}
+	if extractionCalls.Load() != 0 {
+		t.Fatalf("reclaimed article re-extracted its completed summary stage: %d", extractionCalls.Load())
+	}
+	var summary string
+	var summaryDone, categoryDone, adDone bool
+	if err := pg.admin.QueryRow(context.Background(), `SELECT summary,summary_processed,category_processed,ad_processed FROM `+pg.schema+`.articles WHERE id=$1`, articleID).Scan(&summary, &summaryDone, &categoryDone, &adDone); err != nil {
+		t.Fatal(err)
+	}
+	if summary != existingSummary || !summaryDone || !categoryDone || !adDone {
+		t.Fatalf("reprocess did not preserve and complete independent stages: summary=%q flags=%v/%v/%v", summary, summaryDone, categoryDone, adDone)
+	}
+}
+
+func TestProcessorRunPostgresReclaimedForcePreservesAdvertisementDecision(t *testing.T) {
+	pg := newPipelinePG(t, false)
+	const articleID = int64(856)
+	pg.seedArticle(t, articleID)
+	if _, err := pg.admin.Exec(context.Background(), `UPDATE `+pg.schema+`.articles
+		SET summary='Previously completed summary.',summary_processed=true,category_processed=false,
+		ad_processed=true,is_advertisement=true,processing_attempts=1,
+		processing_state='retry_wait',next_attempt_at=now()-interval '1 second'
+		WHERE id=$1`, articleID); err != nil {
+		t.Fatal(err)
+	}
+	extractor, extractionCalls := newFixtureExtractor(t)
+	var aiCalls atomic.Int32
+	ai := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
+		aiCalls.Add(1)
+		http.Error(w, "AI should not rerun a preserved advertisement decision", http.StatusInternalServerError)
+	}))
+	defer ai.Close()
+	processor := newIntegrationProcessor(pg, ai.URL, extractor.URL)
+	if _, err := processor.Run(context.Background(), pg.newRunWithPayload(t, articleID, "article_reprocess", map[string]any{"article_ids": []int64{articleID}})); err != nil {
+		t.Fatalf("reclaimed article reprocess: %v", err)
+	}
+	if extractionCalls.Load() != 0 || aiCalls.Load() != 0 {
+		t.Fatalf("preserved ad decision invoked providers: extractor=%d ai=%d", extractionCalls.Load(), aiCalls.Load())
+	}
+	var state, lastError string
+	var attempts int
+	var processed bool
+	if err := pg.admin.QueryRow(context.Background(), `SELECT processing_state,last_processing_error,processing_attempts,processed FROM `+pg.schema+`.articles WHERE id=$1`, articleID).Scan(&state, &lastError, &attempts, &processed); err != nil {
+		t.Fatal(err)
+	}
+	if state != "rejected" || lastError != "advertisement" || attempts != 2 || !processed {
+		t.Fatalf("preserved ad decision did not spend the ordinary claimed attempt: state=%s error=%s attempts=%d processed=%v", state, lastError, attempts, processed)
+	}
+}
+
+func TestProcessorRunPostgresAttemptTimeoutPersistsMetadataAndDoesNotCancelSibling(t *testing.T) {
+	pg := newPipelinePG(t, false)
+	const slowID int64 = 860
+	const siblingID int64 = 861
+	pg.seedArticle(t, slowID)
+	pg.seedArticle(t, siblingID)
+	if _, err := pg.admin.Exec(context.Background(), `UPDATE `+pg.schema+`.articles SET content=content||' distinct sibling article body.' WHERE id=$1`, siblingID); err != nil {
+		t.Fatal(err)
+	}
+	extractor, _ := newFixtureExtractor(t)
+	ai := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		var request aiEnvelope
+		if err := json.NewDecoder(r.Body).Decode(&request); err != nil {
+			http.Error(w, "bad fixture request", http.StatusBadRequest)
+			return
+		}
+		if answerFixtureAuxAI(t, w, request) {
+			return
+		}
+		if request.ArticleID == slowID {
+			<-r.Context().Done()
+			return
+		}
+		result := map[string]any{"summary": "Sibling completed despite timeout.", "categories": []any{"technology"}, "is_advertisement": false}
+		w.Header().Set("Content-Type", "application/json")
+		_ = json.NewEncoder(w).Encode(analysisResponse(request, result))
+	}))
+	defer ai.Close()
+	processor := newIntegrationProcessor(pg, ai.URL, extractor.URL)
+	processor.MaxWorkers = 2
+	processor.AttemptTimeout = 150 * time.Millisecond
+	f := pg.newRunWithPayload(t, slowID, "news_processing", map[string]any{"article_ids": []int64{slowID, siblingID}})
+	if _, err := processor.Run(context.Background(), f); err != nil {
+		t.Fatalf("attempt timeout cancelled its batch: %v", err)
+	}
+	var slowState string
+	var slowError *string
+	var slowAttempts int
+	var slowPublished *time.Time
+	var slowMedia []map[string]any
+	if err := pg.admin.QueryRow(context.Background(), `SELECT processing_state,last_processing_error,processing_attempts,published_at,media_files FROM `+pg.schema+`.articles WHERE id=$1`, slowID).
+		Scan(&slowState, &slowError, &slowAttempts, &slowPublished, &slowMedia); err != nil {
+		t.Fatal(err)
+	}
+	if slowState != "retry_wait" || slowError == nil || *slowError != "timeout" || slowAttempts != 1 || slowPublished == nil || len(slowMedia) == 0 {
+		t.Fatalf("timed out article did not persist retry and extraction metadata: state=%s error=%v attempts=%d published=%v media=%#v", slowState, slowError, slowAttempts, slowPublished, slowMedia)
+	}
+	var siblingState, siblingSummary string
+	if err := pg.admin.QueryRow(context.Background(), `SELECT processing_state,summary FROM `+pg.schema+`.articles WHERE id=$1`, siblingID).Scan(&siblingState, &siblingSummary); err != nil {
+		t.Fatal(err)
+	}
+	if siblingState != "completed" || siblingSummary != "Sibling completed despite timeout." {
+		t.Fatalf("ordinary attempt timeout cancelled the sibling: state=%s summary=%q", siblingState, siblingSummary)
 	}
 }
 
@@ -985,6 +1123,115 @@ func TestProcessorRunPostgresNormalReceiptIsBoundedForLargeCycle(t *testing.T) {
 	}
 }
 
+func TestProcessorRunPostgresReprocessFailedDryRunDoesNotRecoverClaimsOrExhaustedArticles(t *testing.T) {
+	pg := newPipelinePG(t, false)
+	const firstID int64 = 1500
+	const articleCount = 21
+	for i := int64(0); i < articleCount; i++ {
+		pg.seedArticle(t, firstID+i)
+	}
+	overbudgetID := firstID + articleCount - 1
+	if _, err := pg.admin.Exec(context.Background(), `UPDATE `+pg.schema+`.articles
+		SET processing_attempts=3,processing_state='pending',next_attempt_at=now()-interval '1 second',processed=false
+		WHERE id=$1`, overbudgetID); err != nil {
+		t.Fatal(err)
+	}
+	oldRun := pg.newRun(t, firstID)
+	if _, err := pg.admin.Exec(context.Background(), `UPDATE `+pg.schema+`.article_processing_runs SET state='failed',deadline_at=now()-interval '1 minute' WHERE id=$1::uuid`, oldRun.RunID); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := pg.admin.Exec(context.Background(), `UPDATE `+pg.schema+`.background_jobs SET state='failed' WHERE id=$1::uuid`, oldRun.Envelope.JobID); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := pg.admin.Exec(context.Background(), `INSERT INTO `+pg.schema+`.article_processing_items
+		(run_id,article_id,article_attempt,input_fingerprint,claim_token,state,result)
+		VALUES($1::uuid,$2,1,'synthetic-fingerprint','50000000-0000-4000-8000-000000000001','running','{}'::jsonb)`, oldRun.RunID, firstID); err != nil {
+		t.Fatal(err)
+	}
+	extractor, extractionCalls := newFixtureExtractor(t)
+	var aiCalls atomic.Int32
+	ai := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
+		aiCalls.Add(1)
+		http.Error(w, "dry run must not call AI", http.StatusInternalServerError)
+	}))
+	defer ai.Close()
+	payload := map[string]any{"dry_run": true}
+	f := pg.newRunWithPayload(t, firstID, "reprocess_failed", payload)
+	receipt, err := newIntegrationProcessor(pg, ai.URL, extractor.URL).Run(context.Background(), f)
+	if err != nil {
+		t.Fatalf("reprocess_failed dry run: %v", err)
+	}
+	if receipt["status"] != "dry_run" || receipt["total_candidates"] != 20 || extractionCalls.Load() != 0 || aiCalls.Load() != 0 {
+		t.Fatalf("unexpected dry-run result or provider calls: receipt=%#v extractor=%d ai=%d", receipt, extractionCalls.Load(), aiCalls.Load())
+	}
+	var attempts int
+	var state string
+	var processed bool
+	if err := pg.admin.QueryRow(context.Background(), `SELECT processing_attempts,processing_state,processed FROM `+pg.schema+`.articles WHERE id=$1`, overbudgetID).Scan(&attempts, &state, &processed); err != nil {
+		t.Fatal(err)
+	}
+	if attempts != 3 || state != "pending" || processed {
+		t.Fatalf("dry run mutated exhausted candidate: attempts=%d state=%s processed=%v", attempts, state, processed)
+	}
+	var itemState string
+	if err := pg.admin.QueryRow(context.Background(), `SELECT state FROM `+pg.schema+`.article_processing_items WHERE run_id=$1::uuid AND article_id=$2`, oldRun.RunID, firstID).Scan(&itemState); err != nil {
+		t.Fatal(err)
+	}
+	if itemState != "running" {
+		t.Fatalf("dry run recovered an old claim: state=%s", itemState)
+	}
+}
+
+func TestProcessorRunPostgresReprocessFailedDefaultsToTwentyArticles(t *testing.T) {
+	pg := newPipelinePG(t, false)
+	const firstID int64 = 1600
+	const articleCount = 25
+	for i := int64(0); i < articleCount; i++ {
+		id := firstID + i
+		pg.seedArticle(t, id)
+		if _, err := pg.admin.Exec(context.Background(), `UPDATE `+pg.schema+`.articles SET content=content||$2 WHERE id=$1`, id, fmt.Sprintf(" unique fixture body %d", id)); err != nil {
+			t.Fatal(err)
+		}
+	}
+	extractor, _ := newFixtureExtractor(t)
+	ai := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		var request aiEnvelope
+		if err := json.NewDecoder(r.Body).Decode(&request); err != nil {
+			http.Error(w, "bad fixture request", http.StatusBadRequest)
+			return
+		}
+		if answerFixtureAuxAI(t, w, request) {
+			return
+		}
+		result := map[string]any{"summary": "Default limited summary.", "categories": []any{"technology"}, "is_advertisement": false}
+		w.Header().Set("Content-Type", "application/json")
+		_ = json.NewEncoder(w).Encode(analysisResponse(request, result))
+	}))
+	defer ai.Close()
+	processor := newIntegrationProcessor(pg, ai.URL, extractor.URL)
+	processor.MaxWorkers = 4
+	if _, err := processor.Run(context.Background(), pg.newRunWithPayload(t, firstID, "reprocess_failed", map[string]any{})); err != nil {
+		t.Fatalf("default-limited reprocess_failed: %v", err)
+	}
+	var processed, pending int
+	if err := pg.admin.QueryRow(context.Background(), `SELECT count(*) FILTER (WHERE processing_attempts=1),count(*) FILTER (WHERE processing_attempts=0) FROM `+pg.schema+`.articles WHERE id >= $1 AND id < $2`, firstID, firstID+articleCount).Scan(&processed, &pending); err != nil {
+		t.Fatal(err)
+	}
+	if processed != 20 || pending != 5 {
+		t.Fatalf("reprocess_failed default limit was not 20: processed=%d pending=%d", processed, pending)
+	}
+	processor.CycleMax = 2
+	if _, err := processor.Run(context.Background(), pg.newRunWithPayload(t, firstID, "reprocess_failed", map[string]any{"limit": 20})); err != nil {
+		t.Fatalf("reprocess_failed cycle cap: %v", err)
+	}
+	if err := pg.admin.QueryRow(context.Background(), `SELECT count(*) FILTER (WHERE processing_attempts=1),count(*) FILTER (WHERE processing_attempts=0) FROM `+pg.schema+`.articles WHERE id >= $1 AND id < $2`, firstID, firstID+articleCount).Scan(&processed, &pending); err != nil {
+		t.Fatal(err)
+	}
+	if processed != 22 || pending != 3 {
+		t.Fatalf("canonical limit overrode the global cycle cap: processed=%d pending=%d", processed, pending)
+	}
+}
+
 func TestProcessorRunPostgresSelectedReceiptIncludesNotDueRowsButNoMissingFabrication(t *testing.T) {
 	pg := newPipelinePG(t, false)
 	const dueID int64 = 840
@@ -1022,6 +1269,202 @@ func TestProcessorRunPostgresSelectedReceiptIncludesNotDueRowsButNoMissingFabric
 	}
 	if outcomes[0].ArticleID != dueID || outcomes[0].State != "completed" || outcomes[1].ArticleID != futureID || outcomes[1].State != "retry_wait" {
 		t.Fatalf("selected outcomes do not include due and not-due rows: %#v", outcomes)
+	}
+}
+
+func TestProcessorRunPostgresRejectedHTMLPersistsParsedMedia(t *testing.T) {
+	pg := newPipelinePG(t, false)
+	const articleID = int64(850)
+	pg.seedArticle(t, articleID)
+	if _, err := pg.admin.Exec(context.Background(), `UPDATE `+pg.schema+`.articles SET content=$2 WHERE id=$1`, articleID, `<img src="/archive.png" alt="Synthetic image">`); err != nil {
+		t.Fatal(err)
+	}
+	extractor := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		var request map[string]any
+		if err := json.NewDecoder(r.Body).Decode(&request); err != nil {
+			http.Error(w, "invalid extractor request", http.StatusBadRequest)
+			return
+		}
+		requestID, _ := request["request_id"].(string)
+		rawURL, _ := request["url"].(string)
+		w.Header().Set("Content-Type", "application/json")
+		_ = json.NewEncoder(w).Encode(map[string]any{
+			"contract_version": "1", "request_id": requestID, "original_url": rawURL,
+			"final_url": rawURL, "outcome": "rejected",
+			"error":  map[string]any{"code": "no_content", "retryable": false},
+			"result": map[string]any{"content": "", "media": []any{}},
+		})
+	}))
+	defer extractor.Close()
+	ai := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
+		http.Error(w, "AI should not run after rejected source content", http.StatusInternalServerError)
+	}))
+	defer ai.Close()
+	if _, err := newIntegrationProcessor(pg, ai.URL, extractor.URL).Run(context.Background(), pg.newRun(t, articleID)); err != nil {
+		t.Fatalf("rejected HTML processing: %v", err)
+	}
+	var media []map[string]any
+	if err := pg.admin.QueryRow(context.Background(), `SELECT media_files FROM `+pg.schema+`.articles WHERE id=$1`, articleID).Scan(&media); err != nil {
+		t.Fatal(err)
+	}
+	if len(media) != 1 || media[0]["url"] != "https://example.test/archive.png" || media[0]["alt_text"] != "Synthetic image" {
+		t.Fatalf("parsed media was not saved on rejected article: %#v", media)
+	}
+}
+
+func TestProcessorRunPostgresOversizedOrdinaryHTMLRejectsBeforeMediaParsing(t *testing.T) {
+	pg := newPipelinePG(t, false)
+	const articleID = int64(855)
+	pg.seedArticle(t, articleID)
+	oversized := `<img src="/too-large.png" alt="Do not retain">` + strings.Repeat("x", 11000)
+	if _, err := pg.admin.Exec(context.Background(), `UPDATE `+pg.schema+`.articles SET content=$2 WHERE id=$1`, articleID, oversized); err != nil {
+		t.Fatal(err)
+	}
+	extractor, extractionCalls := newFixtureExtractor(t)
+	var aiCalls atomic.Int32
+	ai := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
+		aiCalls.Add(1)
+		http.Error(w, "AI should not run for oversized input", http.StatusInternalServerError)
+	}))
+	defer ai.Close()
+	processor := newIntegrationProcessor(pg, ai.URL, extractor.URL)
+	if _, err := processor.Run(context.Background(), pg.newRun(t, articleID)); err != nil {
+		t.Fatalf("oversized ordinary input: %v", err)
+	}
+	if extractionCalls.Load() != 0 || aiCalls.Load() != 0 {
+		t.Fatalf("oversized input reached external services: extractor=%d ai=%d", extractionCalls.Load(), aiCalls.Load())
+	}
+	var media []map[string]any
+	var state, lastError string
+	if err := pg.admin.QueryRow(context.Background(), `SELECT media_files,processing_state,last_processing_error FROM `+pg.schema+`.articles WHERE id=$1`, articleID).Scan(&media, &state, &lastError); err != nil {
+		t.Fatal(err)
+	}
+	if len(media) != 0 || state != "rejected" || lastError != "resource_limit" {
+		t.Fatalf("oversized article media was parsed or not resource-rejected: media=%#v state=%s error=%s", media, state, lastError)
+	}
+}
+
+func TestProcessorRunPostgresExistingMediaIsPreserved(t *testing.T) {
+	pg := newPipelinePG(t, false)
+	const articleID = int64(851)
+	pg.seedArticle(t, articleID)
+	existing := `[ {"type":"image","url":"https://example.test/existing.jpg"} ]`
+	if _, err := pg.admin.Exec(context.Background(), `UPDATE `+pg.schema+`.articles SET media_files=$2::jsonb WHERE id=$1`, articleID, existing); err != nil {
+		t.Fatal(err)
+	}
+	extractor, _ := newFixtureExtractor(t)
+	ai := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		var request aiEnvelope
+		if err := json.NewDecoder(r.Body).Decode(&request); err != nil {
+			http.Error(w, "bad fixture request", http.StatusBadRequest)
+			return
+		}
+		if answerFixtureAuxAI(t, w, request) {
+			return
+		}
+		result := map[string]any{"summary": "Synthetic preserved media summary.", "categories": []any{"technology"}, "is_advertisement": false}
+		w.Header().Set("Content-Type", "application/json")
+		_ = json.NewEncoder(w).Encode(analysisResponse(request, result))
+	}))
+	defer ai.Close()
+	if _, err := newIntegrationProcessor(pg, ai.URL, extractor.URL).Run(context.Background(), pg.newRun(t, articleID)); err != nil {
+		t.Fatalf("existing media processing: %v", err)
+	}
+	var media []map[string]any
+	if err := pg.admin.QueryRow(context.Background(), `SELECT media_files FROM `+pg.schema+`.articles WHERE id=$1`, articleID).Scan(&media); err != nil {
+		t.Fatal(err)
+	}
+	if len(media) != 1 || media[0]["url"] != "https://example.test/existing.jpg" {
+		t.Fatalf("existing media was replaced: %#v", media)
+	}
+}
+
+func TestProcessorRunPostgresSummaryClassificationSkipsMediaParsing(t *testing.T) {
+	pg := newPipelinePG(t, false)
+	const articleID = int64(852)
+	pg.seedArticle(t, articleID)
+	if _, err := pg.admin.Exec(context.Background(), `UPDATE `+pg.schema+`.articles SET content=$2,summary='Existing bounded summary.',summary_processed=true WHERE id=$1`, articleID, `<img src="/unused.png" alt="Unused">`+strings.Repeat("x", 12000)); err != nil {
+		t.Fatal(err)
+	}
+	extractor, extractionCalls := newFixtureExtractor(t)
+	ai := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		var request aiEnvelope
+		if err := json.NewDecoder(r.Body).Decode(&request); err != nil {
+			http.Error(w, "bad fixture request", http.StatusBadRequest)
+			return
+		}
+		if request.Operation != "analyze" {
+			if answerFixtureAuxAI(t, w, request) {
+				return
+			}
+		}
+		result := map[string]any{"categories": []any{"technology"}, "is_advertisement": false}
+		w.Header().Set("Content-Type", "application/json")
+		_ = json.NewEncoder(w).Encode(analysisResponse(request, result))
+	}))
+	defer ai.Close()
+	if _, err := newIntegrationProcessor(pg, ai.URL, extractor.URL).Run(context.Background(), pg.newRun(t, articleID)); err != nil {
+		t.Fatalf("summary-only processing: %v", err)
+	}
+	if extractionCalls.Load() != 0 {
+		t.Fatalf("summary-only article unexpectedly extracted: %d", extractionCalls.Load())
+	}
+	var media []map[string]any
+	if err := pg.admin.QueryRow(context.Background(), `SELECT media_files FROM `+pg.schema+`.articles WHERE id=$1`, articleID).Scan(&media); err != nil {
+		t.Fatal(err)
+	}
+	if len(media) != 0 {
+		t.Fatalf("summary-only article parsed media from unused source body: %#v", media)
+	}
+}
+
+func TestProcessorRunPostgresOversizedForceArchiveSkipsMediaParsing(t *testing.T) {
+	pg := newPipelinePG(t, false)
+	const articleID = int64(853)
+	pg.seedArticle(t, articleID)
+	archive := `<img src="/archive.png" alt="Do not retain">` + strings.Repeat("x", 11000)
+	if _, err := pg.admin.Exec(context.Background(), `UPDATE `+pg.schema+`.articles SET content=$2 WHERE id=$1`, articleID, archive); err != nil {
+		t.Fatal(err)
+	}
+	extractor := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		var request map[string]any
+		if err := json.NewDecoder(r.Body).Decode(&request); err != nil {
+			http.Error(w, "invalid extractor request", http.StatusBadRequest)
+			return
+		}
+		requestID, _ := request["request_id"].(string)
+		rawURL, _ := request["url"].(string)
+		w.Header().Set("Content-Type", "application/json")
+		_ = json.NewEncoder(w).Encode(map[string]any{
+			"contract_version": "1", "request_id": requestID, "original_url": rawURL,
+			"final_url": rawURL, "outcome": "success",
+			"result": map[string]any{"content": syntheticExtractedArticle, "media": []any{}, "method": "source_content"},
+		})
+	}))
+	defer extractor.Close()
+	ai := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		var request aiEnvelope
+		if err := json.NewDecoder(r.Body).Decode(&request); err != nil {
+			http.Error(w, "bad fixture request", http.StatusBadRequest)
+			return
+		}
+		if answerFixtureAuxAI(t, w, request) {
+			return
+		}
+		result := map[string]any{"summary": "Fresh forced summary.", "categories": []any{"technology"}, "is_advertisement": false}
+		w.Header().Set("Content-Type", "application/json")
+		_ = json.NewEncoder(w).Encode(analysisResponse(request, result))
+	}))
+	defer ai.Close()
+	if _, err := newIntegrationProcessor(pg, ai.URL, extractor.URL).Run(context.Background(), pg.newRunWithPayload(t, articleID, "article_reprocess", map[string]any{"article_ids": []int64{articleID}, "force": true})); err != nil {
+		t.Fatalf("forced refresh with oversized archive: %v", err)
+	}
+	var media []map[string]any
+	if err := pg.admin.QueryRow(context.Background(), `SELECT media_files FROM `+pg.schema+`.articles WHERE id=$1`, articleID).Scan(&media); err != nil {
+		t.Fatal(err)
+	}
+	if len(media) != 0 {
+		t.Fatalf("oversized archive media was parsed during force refresh: %#v", media)
 	}
 }
 
