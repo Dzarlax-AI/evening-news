@@ -51,6 +51,13 @@ func Healthcheck(ctx context.Context, cfg Config) error {
 	return db.CheckWorkerHealth(ctx)
 }
 func Run(ctx context.Context, cfg Config, onReady func()) error {
+	return RunWithHealth(ctx, cfg, onReady, nil)
+}
+
+// RunWithHealth reports lease health from the worker's existing store pool.
+// The callback runs after recovery completes and after each successful fenced
+// heartbeat; it never creates a second database pool.
+func RunWithHealth(ctx context.Context, cfg Config, onReady func(), onLeaseHealth func(time.Time)) error {
 	if ctx == nil {
 		return errors.New("worker context is required")
 	}
@@ -71,7 +78,22 @@ func Run(ctx context.Context, cfg Config, onReady func()) error {
 	}
 	defer db.Close()
 	logger := slog.New(slog.NewJSONHandler(os.Stdout, nil))
-	instance, e := worker.NewWithReady(cfg.Config, db, newsadapter.Adapter{}, logger, onReady)
+	var queue worker.QueueStore = db
+	if onLeaseHealth != nil {
+		queue = heartbeatObserver{QueueStore: db, onHealth: onLeaseHealth}
+	}
+	var ready func()
+	if onReady != nil || onLeaseHealth != nil {
+		ready = func() {
+			if onLeaseHealth != nil {
+				onLeaseHealth(time.Now().UTC())
+			}
+			if onReady != nil {
+				onReady()
+			}
+		}
+	}
+	instance, e := worker.NewWithReady(cfg.Config, queue, newsadapter.Adapter{}, logger, ready)
 	if e != nil {
 		return e
 	}
@@ -80,4 +102,17 @@ func Run(ctx context.Context, cfg Config, onReady func()) error {
 		return nil
 	}
 	return e
+}
+
+type heartbeatObserver struct {
+	worker.QueueStore
+	onHealth func(time.Time)
+}
+
+func (s heartbeatObserver) Heartbeat(ctx context.Context) error {
+	err := s.QueueStore.Heartbeat(ctx)
+	if err == nil && s.onHealth != nil {
+		s.onHealth(time.Now().UTC())
+	}
+	return err
 }

@@ -79,6 +79,12 @@ func Healthcheck(ctx context.Context, c Config) error {
 	return db.Pool.Ping(ctx)
 }
 func Run(ctx context.Context, c Config, onReady func()) error {
+	return RunWithHealth(ctx, c, onReady, nil)
+}
+
+// RunWithHealth reports database availability from the listener's existing
+// pool. Health checks are bounded and do not allocate a second pool.
+func RunWithHealth(ctx context.Context, c Config, onReady func(), onDatabaseHealth func(time.Time)) error {
 	if ctx == nil {
 		return errors.New("ingestion context is required")
 	}
@@ -125,6 +131,18 @@ func Run(ctx context.Context, c Config, onReady func()) error {
 	if onReady != nil {
 		onReady()
 	}
+	var healthDone chan struct{}
+	var cancelHealth context.CancelFunc
+	if onDatabaseHealth != nil {
+		onDatabaseHealth(time.Now().UTC()) // store.Open performed a pool Ping before serving.
+		healthCtx, cancel := context.WithCancel(ctx)
+		cancelHealth = cancel
+		healthDone = make(chan struct{})
+		go func() {
+			defer close(healthDone)
+			watchPoolHealth(healthCtx, 5*time.Second, 2*time.Second, db.Pool.Ping, onDatabaseHealth)
+		}()
+	}
 
 	var serveErr error
 	var shutdownErr error
@@ -152,14 +170,44 @@ func Run(ctx context.Context, c Config, onReady func()) error {
 	drainErr := h.Close(drainCtx)
 	drainCancel()
 	if drainErr != nil {
+		stopHealth(cancelHealth, healthDone)
 		return fmt.Errorf("article ingestion shutdown drain exceeded: %w", drainErr)
 	}
 	if shutdownErr != nil {
+		stopHealth(cancelHealth, healthDone)
 		return fmt.Errorf("article ingestion HTTP shutdown failed: %w", shutdownErr)
 	}
 	if serveErr != nil && !errors.Is(serveErr, http.ErrServerClosed) {
+		stopHealth(cancelHealth, healthDone)
 		return errors.New("article ingestion listener failed")
 	}
+	stopHealth(cancelHealth, healthDone)
 	db.Close()
 	return nil
+}
+
+func stopHealth(cancel context.CancelFunc, done <-chan struct{}) {
+	if cancel == nil {
+		return
+	}
+	cancel()
+	<-done
+}
+
+func watchPoolHealth(ctx context.Context, interval, timeout time.Duration, ping func(context.Context) error, onHealth func(time.Time)) {
+	ticker := time.NewTicker(interval)
+	defer ticker.Stop()
+	for {
+		select {
+		case <-ctx.Done():
+			return
+		case <-ticker.C:
+			checkCtx, cancel := context.WithTimeout(ctx, timeout)
+			err := ping(checkCtx)
+			cancel()
+			if err == nil {
+				onHealth(time.Now().UTC())
+			}
+		}
+	}
 }

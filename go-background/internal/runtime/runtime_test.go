@@ -1,0 +1,559 @@
+package runtime
+
+import (
+	"context"
+	"encoding/json"
+	"errors"
+	"net"
+	"net/http"
+	"net/http/httptest"
+	"strings"
+	"sync/atomic"
+	"testing"
+	"time"
+
+	"github.com/Dzarlax-AI/evening-news/go-background/internal/config"
+	ingestion "github.com/Dzarlax-AI/evening-news/go-ingestion/runner"
+	processing "github.com/Dzarlax-AI/evening-news/go-processing/runner"
+	scheduler "github.com/Dzarlax-AI/evening-news/go-scheduler/runner"
+	worker "github.com/Dzarlax-AI/evening-news/go-worker/runner"
+)
+
+func testConfig() config.Config {
+	return config.Config{BuildID: "test-build", HealthAddr: "127.0.0.1:0", ShutdownTimeout: time.Second, BackoffMin: 5 * time.Millisecond, BackoffMax: 20 * time.Millisecond, ProbeInterval: 15 * time.Millisecond, ProbeTimeout: 30 * time.Millisecond}
+}
+func baseDeps() dependencies {
+	wait := func(ctx context.Context, ready func()) error { ready(); <-ctx.Done(); return nil }
+	waitWithHealth := func(ctx context.Context, ready func(), health func(time.Time)) error {
+		ready()
+		health(time.Now())
+		<-ctx.Done()
+		return nil
+	}
+	return dependencies{
+		runners: runnerSet{scheduler: func(c context.Context, _ scheduler.Config, r func()) error { return wait(c, r) }, ingestion: func(c context.Context, _ ingestion.Config, r func(), h func(time.Time)) error {
+			return waitWithHealth(c, r, h)
+		}, processing: func(c context.Context, _ processing.Config, r func()) error { return wait(c, r) }, worker: func(c context.Context, _ worker.Config, r func(), h func(time.Time)) error {
+			return waitWithHealth(c, r, h)
+		}},
+		probes: probes{executor: func(context.Context, worker.Config) error { return nil }, scheduler: func(context.Context, string) error { return nil }, ingestion: func(context.Context, ingestion.Config) error { return nil }, processing: func(context.Context, processing.Config) error { return nil }},
+		listen: net.Listen,
+	}
+}
+
+func TestRuntimeStartsOnceAndWaitsForExecutorThenStops(t *testing.T) {
+	cfg := testConfig()
+	ctx, cancel := context.WithCancel(context.Background())
+	defer cancel()
+	deps := baseDeps()
+	var sched, ingest, process, workers atomic.Int32
+	deps.runners.scheduler = func(c context.Context, _ scheduler.Config, r func()) error {
+		sched.Add(1)
+		return baseDeps().runners.scheduler(c, scheduler.Config{}, r)
+	}
+	deps.runners.ingestion = func(c context.Context, _ ingestion.Config, r func(), h func(time.Time)) error {
+		ingest.Add(1)
+		return baseDeps().runners.ingestion(c, ingestion.Config{}, r, h)
+	}
+	deps.runners.processing = func(c context.Context, _ processing.Config, r func()) error {
+		process.Add(1)
+		return baseDeps().runners.processing(c, processing.Config{}, r)
+	}
+	deps.runners.worker = func(c context.Context, _ worker.Config, r func(), h func(time.Time)) error {
+		workers.Add(1)
+		h(time.Now())
+		r()
+		<-c.Done()
+		return nil
+	}
+	var calls atomic.Int32
+	deps.probes.executor = func(context.Context, worker.Config) error {
+		if sched.Load() != 1 || ingest.Load() != 1 || process.Load() != 1 {
+			t.Error("executor probe preceded component startup")
+		}
+		if calls.Add(1) == 1 {
+			return errors.New("temporarily unavailable")
+		}
+		return nil
+	}
+	done := make(chan error, 1)
+	go func() { done <- run(ctx, cfg, deps) }()
+	waitFor(t, func() bool { return workers.Load() == 1 })
+	cancel()
+	select {
+	case err := <-done:
+		if err != nil {
+			t.Fatal("runtime shutdown failed")
+		}
+	case <-time.After(2 * time.Second):
+		t.Fatal("runtime did not stop")
+	}
+	if calls.Load() < 2 || sched.Load() != 1 || ingest.Load() != 1 || process.Load() != 1 || workers.Load() != 1 {
+		t.Fatalf("unexpected run counts scheduler=%d ingestion=%d processing=%d worker=%d executor=%d", sched.Load(), ingest.Load(), process.Load(), workers.Load(), calls.Load())
+	}
+}
+
+func TestWorkerLeaseLossRestartsOnlyWorkerAndReadinessRecovers(t *testing.T) {
+	cfg := testConfig()
+	ctx, cancel := context.WithCancel(context.Background())
+	defer cancel()
+	deps := baseDeps()
+	var sched, ingest, process, workers atomic.Int32
+	deps.runners.scheduler = func(c context.Context, _ scheduler.Config, r func()) error {
+		sched.Add(1)
+		return baseDeps().runners.scheduler(c, scheduler.Config{}, r)
+	}
+	deps.runners.ingestion = func(c context.Context, _ ingestion.Config, r func(), h func(time.Time)) error {
+		ingest.Add(1)
+		return baseDeps().runners.ingestion(c, ingestion.Config{}, r, h)
+	}
+	deps.runners.processing = func(c context.Context, _ processing.Config, r func()) error {
+		process.Add(1)
+		return baseDeps().runners.processing(c, processing.Config{}, r)
+	}
+	secondReady := make(chan struct{})
+	loseSecond := make(chan struct{})
+	thirdStarted := make(chan struct{})
+	startThird := make(chan struct{})
+	deps.runners.worker = func(c context.Context, _ worker.Config, r func(), h func(time.Time)) error {
+		n := workers.Add(1)
+		if n == 1 {
+			h(time.Now())
+			r()
+			return worker.ErrLeaseLost
+		}
+		if n == 2 {
+			h(time.Now())
+			r()
+			close(secondReady)
+			<-loseSecond
+			return worker.ErrLeaseLost
+		}
+		close(thirdStarted)
+		<-startThird
+		h(time.Now())
+		r()
+		<-c.Done()
+		return nil
+	}
+	var healthListener atomic.Value
+	deps.listen = func(network, address string) (net.Listener, error) {
+		ln, err := net.Listen(network, address)
+		if err == nil {
+			healthListener.Store(ln.Addr().String())
+		}
+		return ln, err
+	}
+	done := make(chan error, 1)
+	go func() { done <- run(ctx, cfg, deps) }()
+	select {
+	case <-secondReady:
+	case <-time.After(2 * time.Second):
+		t.Fatal("worker did not recover from lease loss")
+	}
+	waitFor(t, func() bool { return readinessCode(healthListener.Load().(string)) == http.StatusOK })
+	// Trigger another lease transition and confirm the health endpoint drops
+	// readiness while the other three runners stay alive in this same runtime.
+	close(loseSecond)
+	select {
+	case <-thirdStarted:
+	case <-time.After(time.Second):
+		t.Fatal("worker did not retry after second lease loss")
+	}
+	waitFor(t, func() bool { return readinessCode(healthListener.Load().(string)) == http.StatusServiceUnavailable })
+	close(startThird)
+	waitFor(t, func() bool { return readinessCode(healthListener.Load().(string)) == http.StatusOK })
+	cancel()
+	select {
+	case err := <-done:
+		if err != nil {
+			t.Fatal(err)
+		}
+	case <-time.After(2 * time.Second):
+		t.Fatal("shutdown timed out")
+	}
+	if sched.Load() != 1 || ingest.Load() != 1 || process.Load() != 1 || workers.Load() != 3 {
+		t.Fatalf("component restart counts changed: %d/%d/%d/%d", sched.Load(), ingest.Load(), process.Load(), workers.Load())
+	}
+}
+
+func TestExecutorAuthFailureIsFatalBeforeWorkerStarts(t *testing.T) {
+	cfg := testConfig()
+	deps := baseDeps()
+	var workers atomic.Int32
+	deps.runners.worker = func(context.Context, worker.Config, func(), func(time.Time)) error { workers.Add(1); return nil }
+	deps.probes.executor = func(context.Context, worker.Config) error { return ErrExecutorAuth }
+	err := run(context.Background(), cfg, deps)
+	if !errors.Is(err, ErrExecutorAuth) {
+		t.Fatalf("runtime error = %v", err)
+	}
+	if workers.Load() != 0 {
+		t.Fatal("worker started despite executor auth failure")
+	}
+}
+
+func TestComponentFailureInterruptsExecutorStartupBackoff(t *testing.T) {
+	cfg := testConfig()
+	cfg.BackoffMin = 100 * time.Millisecond
+	cfg.BackoffMax = 100 * time.Millisecond
+	deps := baseDeps()
+	fail := make(chan struct{})
+	firstProbe := make(chan struct{})
+	var probes atomic.Int32
+	deps.runners.ingestion = func(_ context.Context, _ ingestion.Config, ready func(), health func(time.Time)) error {
+		ready()
+		health(time.Now())
+		<-fail
+		return errors.New("listener failed")
+	}
+	deps.probes.executor = func(context.Context, worker.Config) error {
+		if probes.Add(1) == 1 {
+			close(firstProbe)
+		}
+		return errors.New("executor unavailable")
+	}
+	done := make(chan error, 1)
+	go func() { done <- run(context.Background(), cfg, deps) }()
+	select {
+	case <-firstProbe:
+	case <-time.After(time.Second):
+		t.Fatal("executor startup probe did not run")
+	}
+	close(fail)
+	select {
+	case err := <-done:
+		if err == nil {
+			t.Fatal("component failure was ignored")
+		}
+	case <-time.After(time.Second):
+		t.Fatal("executor backoff ignored component failure")
+	}
+	if probes.Load() > 1 {
+		t.Fatalf("executor was retried %d times after component failure", probes.Load())
+	}
+}
+
+func TestWorkerRecoveryBackoffCancelsWithoutRestart(t *testing.T) {
+	cfg := testConfig()
+	cfg.BackoffMin = time.Second
+	cfg.BackoffMax = time.Second
+	ctx, cancel := context.WithCancel(context.Background())
+	s := newState("test")
+	s.phase("running")
+	var attempts atomic.Int32
+	done := make(chan error, 1)
+	go func() {
+		done <- workerLoop(ctx, cfg, func(_ context.Context, _ worker.Config, ready func(), health func(time.Time)) error {
+			attempts.Add(1)
+			health(time.Now())
+			ready()
+			return worker.ErrLeaseLost
+		}, s, make(chan struct{}, 1), cfg.BackoffMin, cfg.BackoffMax)
+	}()
+	waitFor(t, func() bool { return s.get().Components["worker"].State == "recovering" })
+	cancel()
+	select {
+	case err := <-done:
+		if err != nil {
+			t.Fatal(err)
+		}
+	case <-time.After(time.Second):
+		t.Fatal("worker backoff did not stop")
+	}
+	if attempts.Load() != 1 {
+		t.Fatalf("restarted %d times after cancellation", attempts.Load())
+	}
+}
+
+func TestExecutorStatusRequiresReadyInstanceAndTreatsAuthAsFatal(t *testing.T) {
+	for _, tc := range []struct {
+		name      string
+		status    int
+		body      string
+		wantAuth  bool
+		wantReady bool
+	}{
+		{"ready", http.StatusOK, `{"executor_instance_id":"fixture","ready":true}`, false, true},
+		{"not ready", http.StatusOK, `{"executor_instance_id":"fixture","ready":false}`, false, false},
+		{"unauthorized", http.StatusUnauthorized, `{}`, true, false},
+		{"forbidden", http.StatusForbidden, `{}`, true, false},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+				if r.URL.Path != "/internal/v1/status" || r.Header.Get("Authorization") != "Bearer test-token-123456" {
+					t.Errorf("unexpected status request")
+				}
+				w.WriteHeader(tc.status)
+				_, _ = w.Write([]byte(tc.body))
+			}))
+			defer srv.Close()
+			cfg := worker.Config{}
+			cfg.ExecutorURL = srv.URL
+			cfg.ExecutorToken = "test-token-123456"
+			err := executorReady(context.Background(), cfg)
+			if tc.wantReady && err != nil {
+				t.Fatalf("ready status error = %v", err)
+			}
+			if !tc.wantReady && err == nil {
+				t.Fatal("unready executor was accepted")
+			}
+			if errors.Is(err, ErrExecutorAuth) != tc.wantAuth {
+				t.Fatalf("auth classification = %v", err)
+			}
+		})
+	}
+}
+
+func TestShutdownDrainsWorkerBeforeStoppingPrivateListeners(t *testing.T) {
+	cfg := testConfig()
+	ctx, cancel := context.WithCancel(context.Background())
+	deps := baseDeps()
+	workerStarted := make(chan struct{})
+	workerDrained := make(chan struct{})
+	releaseWorker := make(chan struct{})
+	listenersStopped := make(chan struct{}, 2)
+	deps.runners.worker = func(c context.Context, _ worker.Config, ready func(), health func(time.Time)) error {
+		close(workerStarted)
+		health(time.Now())
+		ready()
+		<-c.Done()
+		<-releaseWorker
+		close(workerDrained)
+		return nil
+	}
+	listener := func(c context.Context, ready func(), health func(time.Time)) error {
+		ready()
+		health(time.Now())
+		<-c.Done()
+		select {
+		case <-workerDrained:
+			listenersStopped <- struct{}{}
+		default:
+			return errors.New("private listener stopped before worker drain")
+		}
+		return nil
+	}
+	deps.runners.ingestion = func(c context.Context, _ ingestion.Config, ready func(), health func(time.Time)) error {
+		return listener(c, ready, health)
+	}
+	deps.runners.processing = func(c context.Context, _ processing.Config, ready func()) error {
+		return listener(c, ready, func(time.Time) {})
+	}
+	var addr atomic.Value
+	deps.listen = func(network, address string) (net.Listener, error) {
+		ln, err := net.Listen(network, address)
+		if err == nil {
+			addr.Store(ln.Addr().String())
+		}
+		return ln, err
+	}
+	done := make(chan error, 1)
+	go func() { done <- run(ctx, cfg, deps) }()
+	select {
+	case <-workerStarted:
+	case <-time.After(time.Second):
+		t.Fatal("worker did not start")
+	}
+	cancel()
+	waitFor(t, func() bool { return readinessCode(addr.Load().(string)) == http.StatusServiceUnavailable })
+	if code := endpointCode(addr.Load().(string), "/healthz"); code != http.StatusOK {
+		t.Fatalf("liveness during drain = %d", code)
+	}
+	close(releaseWorker)
+	select {
+	case err := <-done:
+		if err != nil {
+			t.Fatal(err)
+		}
+	case <-time.After(2 * time.Second):
+		t.Fatal("shutdown timed out")
+	}
+	if len(listenersStopped) != 2 {
+		t.Fatalf("stopped listeners after worker drain = %d", len(listenersStopped))
+	}
+}
+
+func TestShutdownBoundWhenWorkerIgnoresCancellation(t *testing.T) {
+	cfg := testConfig()
+	cfg.ShutdownTimeout = 80 * time.Millisecond
+	ctx, cancel := context.WithCancel(context.Background())
+	deps := baseDeps()
+	started := make(chan struct{})
+	release := make(chan struct{})
+	runnerDone := make(chan struct{})
+	deps.runners.worker = func(_ context.Context, _ worker.Config, ready func(), health func(time.Time)) error {
+		close(started)
+		health(time.Now())
+		ready()
+		<-release
+		close(runnerDone)
+		return nil
+	}
+	done := make(chan error, 1)
+	go func() { done <- run(ctx, cfg, deps) }()
+	select {
+	case <-started:
+	case <-time.After(time.Second):
+		t.Fatal("worker did not start")
+	}
+	start := time.Now()
+	cancel()
+	select {
+	case err := <-done:
+		if err == nil || !strings.Contains(err.Error(), "phase=draining") {
+			t.Fatalf("shutdown result = %v", err)
+		}
+	case <-time.After(500 * time.Millisecond):
+		t.Fatal("shutdown exceeded its overall timeout")
+	}
+	if elapsed := time.Since(start); elapsed > 300*time.Millisecond {
+		t.Fatalf("shutdown took %s", elapsed)
+	}
+	close(release)
+	select {
+	case <-runnerDone:
+	case <-time.After(time.Second):
+		t.Fatal("worker goroutine did not finish after release")
+	}
+}
+
+func TestHealthServerFailureIsFatalWhileRuntimeStarts(t *testing.T) {
+	cfg := testConfig()
+	deps := baseDeps()
+	listener := make(chan net.Listener, 1)
+	healthAddr := make(chan string, 1)
+	probeStarted := make(chan struct{})
+	releaseProbe := make(chan struct{})
+	var workers atomic.Int32
+	deps.listen = func(network, address string) (net.Listener, error) {
+		ln, err := net.Listen(network, address)
+		if err == nil {
+			listener <- ln
+			healthAddr <- ln.Addr().String()
+		}
+		return ln, err
+	}
+	deps.runners.worker = func(context.Context, worker.Config, func(), func(time.Time)) error { workers.Add(1); return nil }
+	deps.probes.executor = func(context.Context, worker.Config) error { close(probeStarted); <-releaseProbe; return nil }
+	done := make(chan error, 1)
+	go func() { done <- run(context.Background(), cfg, deps) }()
+	var ln net.Listener
+	select {
+	case ln = <-listener:
+	case <-time.After(time.Second):
+		t.Fatal("health listener did not open")
+	}
+	addr := <-healthAddr
+	select {
+	case <-probeStarted:
+	case <-time.After(time.Second):
+		t.Fatal("runtime did not reach executor readiness")
+	}
+	_ = ln.Close()
+	waitFor(t, func() bool { return endpointCode(addr, "/healthz") == 0 })
+	close(releaseProbe)
+	select {
+	case err := <-done:
+		if err == nil || !strings.Contains(err.Error(), "component=health") {
+			t.Fatalf("health failure = %v", err)
+		}
+	case <-time.After(time.Second):
+		t.Fatal("health failure was not monitored")
+	}
+	if workers.Load() != 0 {
+		t.Fatal("worker started after health listener failure")
+	}
+}
+
+func TestHealthHandlerSeparatesLivenessAndReadiness(t *testing.T) {
+	s := newState("build-1")
+	h := healthHandler(s)
+	request := func(path string) (int, snapshot) {
+		r := httptest.NewRecorder()
+		h.ServeHTTP(r, httptest.NewRequest(http.MethodGet, path, nil))
+		var out snapshot
+		_ = json.Unmarshal(r.Body.Bytes(), &out)
+		return r.Code, out
+	}
+	code, out := request("/healthz")
+	if code != http.StatusOK || out.BuildID != "build-1" {
+		t.Fatalf("healthz = %d %+v", code, out)
+	}
+	code, _ = request("/readyz")
+	if code != http.StatusServiceUnavailable {
+		t.Fatalf("starting readiness = %d", code)
+	}
+	s.phase("running")
+	for _, name := range []string{"scheduler", "ingestion", "processing", "worker"} {
+		s.set(name, "ready", true)
+	}
+	s.workerHealthAt = time.Now()
+	s.ingestionHealthAt = time.Now()
+	s.ingestionAPIHealthy = true
+	code, _ = request("/readyz")
+	if code != http.StatusOK {
+		t.Fatalf("ready readiness = %d", code)
+	}
+	s.phase("draining")
+	code, _ = request("/readyz")
+	if code != http.StatusServiceUnavailable {
+		t.Fatalf("draining readiness = %d", code)
+	}
+	if r := httptest.NewRecorder(); func() int { h.ServeHTTP(r, httptest.NewRequest(http.MethodPost, "/readyz", nil)); return r.Code }() != http.StatusMethodNotAllowed {
+		t.Fatal("unsupported health method accepted")
+	}
+}
+
+func TestIngestionProbeRecoversAfterTransientHTTPFailure(t *testing.T) {
+	cfg := testConfig()
+	cfg.ProbeInterval = 10 * time.Millisecond
+	cfg.ProbeTimeout = 20 * time.Millisecond
+	s := newState("test")
+	s.phase("running")
+	s.set("ingestion", "ready", false)
+	s.ingestionHealth(time.Now())
+	var checks atomic.Int32
+	p := probes{ingestion: func(context.Context, ingestion.Config) error {
+		if checks.Add(1) == 1 {
+			return errors.New("temporary")
+		}
+		return nil
+	}}
+	ctx, cancel := context.WithCancel(context.Background())
+	done := make(chan struct{})
+	go func() { defer close(done); probeLoop(ctx, cfg, p, s, make(chan struct{})) }()
+	waitFor(t, func() bool { return checks.Load() >= 1 && s.get().Components["ingestion"].State == "unhealthy" })
+	waitFor(t, func() bool { return checks.Load() >= 2 && s.get().Components["ingestion"].Healthy })
+	cancel()
+	select {
+	case <-done:
+	case <-time.After(time.Second):
+		t.Fatal("probe loop did not stop")
+	}
+}
+
+func waitFor(t *testing.T, condition func() bool) {
+	t.Helper()
+	deadline := time.Now().Add(2 * time.Second)
+	for time.Now().Before(deadline) {
+		if condition() {
+			return
+		}
+		time.Sleep(5 * time.Millisecond)
+	}
+	t.Fatal("condition did not become true")
+}
+func readinessCode(addr string) int {
+	return endpointCode(addr, "/readyz")
+}
+func endpointCode(addr, path string) int {
+	ctx, cancel := context.WithTimeout(context.Background(), 50*time.Millisecond)
+	defer cancel()
+	req, _ := http.NewRequestWithContext(ctx, http.MethodGet, "http://"+addr+path, nil)
+	resp, err := http.DefaultClient.Do(req)
+	if err != nil {
+		return 0
+	}
+	defer resp.Body.Close()
+	return resp.StatusCode
+}
