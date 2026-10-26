@@ -212,9 +212,13 @@ class PrepareRuntimeEnvTests(unittest.TestCase):
         values = {
             "DOLLAR": "single $ and source $$ and ${LITERAL}",
             "QUOTES": "single ' and double \" quotes",
+            "DATABASE_URL": "postgres://newsuser:synthetic@db/newsdb?search_path=public",
             "JSON_VALUE": '{"key":"value with spaces","count":2}',
             "EMPTY_VALUE": "",
             "ORDINARY_MODE": "source-mode",
+            "BACKSLASH": r"ordinary \ backslash",
+            "EVEN_BACKSLASHES_BEFORE_APOSTROPHE": "before " + chr(92) * 2 + "' after",
+            "EVEN_TRAILING_BACKSLASHES": "ends " + chr(92) * 2,
             "CR": "before\rafter",
             "CRLF": "before\r\nafter",
             "MULTILINE": "line one\nline two",
@@ -243,6 +247,7 @@ class PrepareRuntimeEnvTests(unittest.TestCase):
                 "    image: ${IMAGE_REPOSITORY:?required}/${IMAGE_NAME}:${IMAGE_TAG:?required}\n"
                 "    env_file: [\"${ENV_FILE_DIR:?required}/source.env\"]\n"
                 "    environment:\n"
+                "      DATABASE_URL: ${WEB_DATABASE_URL:?required}\n"
                 "      ORDINARY_MODE: ${ORDINARY_MODE:-default-mode}\n"
                 "    command: [\"sh\", \"-c\", \"printf '$$HOME $${COMMAND}'\"]\n"
                 "    healthcheck:\n"
@@ -257,6 +262,7 @@ class PrepareRuntimeEnvTests(unittest.TestCase):
                 "IMAGE_NAME=news\n"
                 "IMAGE_TAG=source-tag\n"
                 f"ENV_FILE_DIR={root}\n"
+                "WEB_DATABASE_URL=postgres://newsuser:synthetic@db/newsdb?search_path=public\n"
                 "ORDINARY_MODE=source-mode\n",
                 encoding="utf-8",
             )
@@ -264,6 +270,9 @@ class PrepareRuntimeEnvTests(unittest.TestCase):
             source_env.write_text(
                 "DOLLAR='single $ and source $$ and ${LITERAL}'\n"
                 "QUOTES='single \\' and double \" quotes'\n"
+                "BACKSLASH='ordinary \\ backslash'\n"
+                "EVEN_BACKSLASHES_BEFORE_APOSTROPHE='before " + chr(92) * 3 + "' after'\n"
+                "EVEN_TRAILING_BACKSLASHES='ends " + chr(92) * 2 + "'\n"
                 "JSON_VALUE='{" + '"key":"value with spaces","count":2' + "}'\n"
                 "EMPTY_VALUE=''\n"
                 "CR='before\rafter'\n"
@@ -280,6 +289,8 @@ class PrepareRuntimeEnvTests(unittest.TestCase):
                 "IMAGE_TAG": "ambient-tag",
                 "ENV_FILE_DIR": "/ambient/missing",
                 "ORDINARY_MODE": "ambient-mode",
+                "WEB_DATABASE_URL": "postgres://ambient.invalid/wrong",
+                "UNRELATED_AMBIENT_VARIABLE": "must-not-enter-compose",
             }):
                 original = prepare_runtime_env.render_compose(source_path.resolve(), "news")
             self.assertEqual(original, baseline)

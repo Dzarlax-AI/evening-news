@@ -75,6 +75,59 @@ contains placeholders only and documents separate web, executor, scheduler,
 worker, ingestion, and processing DSNs. Production DSNs and credentials stay
 on the server.
 
+## Fresh local Compose database setup
+
+The local PostgreSQL image starts with database `newsdb`, owner/login
+`newsuser`, and schema `public`. The migration command creates the application
+tables in that schema. The ingestion and processing runtime users do not exist
+in a fresh database; create them after migration and before starting the
+background service. Their role templates default to schema `news`, so pass
+`news_schema=public` for this local profile.
+
+Start only the two local databases and run the one-shot migration:
+
+```sh
+cp .env.example .env
+# Replace the development placeholders in .env first.
+docker compose --env-file .env -f docker-compose.example.yml up -d postgres scheduler-postgres
+docker compose --env-file .env -f docker-compose.example.yml run --rm migrate
+```
+
+Copy and run the reviewed, least-privilege local role templates. `\password`
+prompts for each runtime password without placing it in SQL or shell history.
+For the processing callback, `newsuser` is the existing local application
+database role and receives only the template's fence-function `EXECUTE` grant.
+
+```sh
+docker compose --env-file .env -f docker-compose.example.yml cp \
+  deploy/news-ingestion/provision-runtime-role.sql postgres:/tmp/news-ingestion-role.sql
+docker compose --env-file .env -f docker-compose.example.yml exec -it postgres \
+  psql -U newsuser -d newsdb -v news_schema=public -f /tmp/news-ingestion-role.sql
+
+docker compose --env-file .env -f docker-compose.example.yml cp \
+  deploy/news-processing/provision-runtime-role.sql postgres:/tmp/news-processing-role.sql
+docker compose --env-file .env -f docker-compose.example.yml exec -it postgres \
+  psql -U newsuser -d newsdb -v news_schema=public \
+  -v news_callback_role=newsuser -f /tmp/news-processing-role.sql
+```
+
+Set the passwords entered at the prompts in `INGESTION_DATABASE_URL` and
+`PROCESSING_DATABASE_URL` in `.env`. Use the exact template role names
+`news_ingestion_runtime` and `news_processing_runtime`, and keep
+`search_path=public` in both URLs. `WORKER_DATABASE_URL` uses the already
+created `newsuser` role for local development; this is an owner connection for
+the disposable example and must not be copied to production. The separate
+scheduler database already initializes its `scheduler` login. Then start the
+remaining services:
+
+```sh
+docker compose --env-file .env -f docker-compose.example.yml up --build -d
+```
+
+This sequence keeps the background service stopped until migration and role
+provisioning finish. It uses the checked-in grant templates without widening
+their production grants or changing production databases.
+
 ## Applying without unrelated restarts
 
 Changing environment-file references can change Compose service configuration

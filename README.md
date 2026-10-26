@@ -81,7 +81,7 @@ Public data endpoints live under `/api/public/`; the authenticated management AP
 
 The example Compose stack starts the Go web service, one background runtime, the private Python executor, the extractor, and separate PostgreSQL instances for News and scheduler data. A one-shot migration command uses the executor image before schema-dependent services start. It does not include the production egress policy service or shared browser. The production layout is documented separately; the minimal local profile uses HTTP-only extraction and does not include browser rendering.
 
-Copy `.env.example` to `.env` and replace its development placeholders. It lists every required Compose key, including distinct web, executor, scheduler, worker, ingestion, and processing database URLs. Database DSNs must match the local database passwords and roles; the worker, ingestion, and processing roles must be provisioned separately.
+Copy `.env.example` to `.env` and replace its development placeholders. It lists every required Compose key, including distinct web, executor, scheduler, worker, ingestion, and processing database URLs. Follow the local database setup sequence in [the News deployment guide](deploy/news/README.md) to migrate first, then provision the ingestion and processing roles before starting the background service. The local worker DSN uses `newsuser`; that owner role is only for the disposable local profile.
 
 ```sh
 cp .env.example .env
@@ -89,7 +89,7 @@ cp .env.example .env
 
 Provider keys are passed to the Python executor because it owns provider operations. The local Compose file maps `WEB_DATABASE_URL` to the web service's `DATABASE_URL` and `EXECUTOR_DATABASE_URL` to the executor and migration service's `DATABASE_URL`. The background components keep their separate database variables. The Go web service receives its database URL, admin/JWT settings, `WEB_BACKEND_URL` and `WEB_BACKEND_TOKEN`, scheduler client settings, and HTTP trust configuration; it does not receive AI or Telegram provider keys.
 
-Start the stack:
+Complete the migration and runtime-role provisioning sequence in [the News deployment guide](deploy/news/README.md#fresh-local-compose-database-setup) before starting the full stack. Then start the remaining services:
 
 ```sh
 docker compose -f docker-compose.example.yml up --build -d
