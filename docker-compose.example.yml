@@ -9,7 +9,7 @@ services:
     ports:
       - "8000:8000"
     environment:
-      DATABASE_URL: postgres://newsuser:${DB_PASSWORD:?Set DB_PASSWORD}@postgres:5432/newsdb
+      DATABASE_URL: ${WEB_DATABASE_URL:?Set WEB_DATABASE_URL}
       WEB_LISTEN_ADDRESS: ":8000"
       ADMIN_USERNAME: ${ADMIN_USERNAME:-admin}
       ADMIN_PASSWORD: ${ADMIN_PASSWORD:?Set ADMIN_PASSWORD}
@@ -53,7 +53,7 @@ services:
         REVISION: ${REVISION:-local}
     command: ["python", "-m", "news_aggregator.migrate"]
     environment:
-      DATABASE_URL: postgresql+asyncpg://newsuser:${DB_PASSWORD:?Set DB_PASSWORD}@postgres:5432/newsdb
+      DATABASE_URL: ${EXECUTOR_DATABASE_URL:?Set EXECUTOR_DATABASE_URL}
       ALLOW_CREATE_ALL: "true"
       DEVELOPMENT: ${DEVELOPMENT:-false}
     depends_on:
@@ -70,7 +70,7 @@ services:
       args:
         REVISION: ${REVISION:-local}
     environment:
-      DATABASE_URL: postgresql+asyncpg://newsuser:${DB_PASSWORD:?Set DB_PASSWORD}@postgres:5432/newsdb
+      DATABASE_URL: ${EXECUTOR_DATABASE_URL:?Set EXECUTOR_DATABASE_URL}
       GEMINI_API_KEY: ${GEMINI_API_KEY:?Set GEMINI_API_KEY}
       GEMINI_API_ENDPOINT: https://generativelanguage.googleapis.com/v1/models
       SUMMARIZATION_MODEL: ${SUMMARIZATION_MODEL:-gemini-2.0-flash}
@@ -150,7 +150,7 @@ services:
       WORKER_MAX_JOB_ATTEMPTS: ${WORKER_MAX_JOB_ATTEMPTS:-3}
       WORKER_JOB_RETENTION_DAYS: ${WORKER_JOB_RETENTION_DAYS:-7}
       SCHEDULER_LISTEN_ADDR: ":8080"
-      SCHEDULER_DATABASE_URL: postgres://scheduler:${SCHEDULER_DB_PASSWORD:?Set SCHEDULER_DB_PASSWORD}@scheduler-postgres:5432/schedulerdb
+      SCHEDULER_DATABASE_URL: ${SCHEDULER_DATABASE_URL:?Set SCHEDULER_DATABASE_URL}
       SCHEDULER_DB_SCHEMA: scheduler_service
       SCHEDULER_API_TOKEN: ${SCHEDULER_API_TOKEN:?Set SCHEDULER_API_TOKEN}
       SCHEDULER_TARGET_ALIASES: news-worker

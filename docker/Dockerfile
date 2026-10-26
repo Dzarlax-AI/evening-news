@@ -82,7 +82,7 @@ ENV PYTHONDONTWRITEBYTECODE=1 \
     PYTHONUNBUFFERED=1 \
     PATH=/usr/local/bin:$PATH
 RUN apt-get update \
-    && apt-get install -y --no-install-recommends ca-certificates libmagic1 postgresql-client tzdata \
+    && apt-get install -y --no-install-recommends ca-certificates postgresql-client tzdata \
     && rm -rf /var/lib/apt/lists/* \
     && groupadd --system --gid 10001 app \
     && useradd --system --uid 10001 --gid app --home-dir /app --create-home app \
