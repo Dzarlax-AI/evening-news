@@ -16,6 +16,7 @@ TAG = "ghcr.io/dzarlax-ai/rss-scheduler:sha-0123456789abcdef0123456789abcdef0123
 WORKER_TAG = "ghcr.io/dzarlax-ai/rss-job-worker:sha-0123456789abcdef0123456789abcdef01234567"
 INGESTION_TAG = "ghcr.io/dzarlax-ai/rss-article-ingestion:sha-0123456789abcdef0123456789abcdef01234567"
 PROCESSING_TAG = "ghcr.io/dzarlax-ai/rss-article-processing:sha-0123456789abcdef0123456789abcdef01234567"
+WEB_TAG = "ghcr.io/dzarlax-ai/rss-web:sha-0123456789abcdef0123456789abcdef01234567"
 CHALLENGE = (
     'Bearer realm="https://ghcr.io/token",service="ghcr.io",'
     'scope="repository:dzarlax-ai/rss-scheduler:pull"'
@@ -31,6 +32,10 @@ INGESTION_CHALLENGE = (
 PROCESSING_CHALLENGE = (
     'Bearer realm="https://ghcr.io/token",service="ghcr.io",'
     'scope="repository:dzarlax-ai/rss-article-processing:pull"'
+)
+WEB_CHALLENGE = (
+    'Bearer realm="https://ghcr.io/token",service="ghcr.io",'
+    'scope="repository:dzarlax-ai/rss-web:pull"'
 )
 
 
@@ -282,6 +287,28 @@ class RegistryTagGuardTests(unittest.TestCase):
         self.assertFalse(tag_exists(
             PROCESSING_TAG, "fixture-user", "fixture-token", opener=opener,
             repository="dzarlax-ai/rss-article-processing",
+        ))
+
+    def test_go_web_sha_tag_uses_its_own_repository_and_scope(self):
+        calls = 0
+
+        def opener(request, timeout):
+            nonlocal calls
+            calls += 1
+            if calls == 1:
+                headers = Message()
+                headers["WWW-Authenticate"] = WEB_CHALLENGE
+                raise HTTPError(request.full_url, 401, "unauthorized", headers, io.BytesIO(b"{}"))
+            if calls == 2:
+                self.assertIn("repository%3Adzarlax-ai%2Frss-web%3Apull", request.full_url)
+                return Response(200, b'{"token":"web-test-token"}')
+            self.assertIn("/v2/dzarlax-ai/rss-web/manifests/sha-", request.full_url)
+            self.assertEqual(request.get_header("Authorization"), "Bearer web-test-token")
+            return Response(404, b'{"errors":[{"code":"MANIFEST_UNKNOWN"}]}')
+
+        self.assertFalse(tag_exists(
+            WEB_TAG, "fixture-user", "fixture-token", opener=opener,
+            repository="dzarlax-ai/rss-web",
         ))
 
     def test_registry_guard_rejects_unapproved_repository(self):

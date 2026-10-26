@@ -10,8 +10,10 @@ on:
       - 'tests/test_web_backend_api.py'
       - 'tests/test_migration_bootstrap.py'
       - 'tests/test_go_web_fixture_gate.py'
+      - 'tests/test_ghcr_tag_guard.py'
       - 'tests/fixtures/go-web/**'
       - 'scripts/run_go_web_fixture_gate.py'
+      - 'scripts/check_ghcr_tag_absent.py'
       - 'tests/fixtures/go-ingestion/**'
       - 'tests/fixtures/go-source-manager/**'
       - 'tests/fixtures/go-scheduler/**'
@@ -27,13 +29,21 @@ on:
       - 'tests/test_web_backend_api.py'
       - 'tests/test_migration_bootstrap.py'
       - 'tests/test_go_web_fixture_gate.py'
+      - 'tests/test_ghcr_tag_guard.py'
       - 'tests/fixtures/go-web/**'
       - 'scripts/run_go_web_fixture_gate.py'
+      - 'scripts/check_ghcr_tag_absent.py'
       - 'tests/fixtures/go-ingestion/**'
       - 'tests/fixtures/go-source-manager/**'
       - 'tests/fixtures/go-scheduler/**'
       - 'requirements.txt'
       - '.github/workflows/web-api.yml'
+  workflow_dispatch:
+    inputs:
+      publish:
+        description: Publish the Go web image from reviewed main
+        type: boolean
+        default: false
 
 permissions:
   contents: read
@@ -80,7 +90,7 @@ jobs:
       - name: Verify private backend and migration contracts
         env:
           TEST_DATABASE_URL: postgresql+asyncpg://fixture_admin:fixture-only@127.0.0.1:5432/webtests
-        run: python -m pytest tests/test_web_backend_api.py tests/test_migration_bootstrap.py tests/test_go_web_fixture_gate.py -q
+        run: python -m pytest tests/test_web_backend_api.py tests/test_migration_bootstrap.py tests/test_go_web_fixture_gate.py tests/test_ghcr_tag_guard.py -q
       - name: Go component checks
         working-directory: go-web
         run: |
@@ -126,3 +136,58 @@ jobs:
           name: go-web-full-pipeline-report
           path: artifacts/go-web-full-pipeline/report.json
           if-no-files-found: ignore
+
+  publish:
+    needs: [contracts, full-pipeline]
+    if: ${{ github.event_name == 'workflow_dispatch' && inputs.publish && github.ref == 'refs/heads/main' }}
+    concurrency:
+      group: go-web-publish-${{ github.sha }}
+      cancel-in-progress: false
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    permissions:
+      contents: read
+      packages: write
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          persist-credentials: false
+      - uses: docker/setup-buildx-action@v3
+      - uses: docker/login-action@v3
+        with:
+          registry: ghcr.io
+          username: ${{ github.actor }}
+          password: ${{ secrets.GITHUB_TOKEN }}
+      - name: Refuse to overwrite an existing SHA tag
+        env:
+          IMAGE_TAG: ghcr.io/dzarlax-ai/rss-web:sha-${{ github.sha }}
+          GHCR_REPOSITORY: dzarlax-ai/rss-web
+          GHCR_USERNAME: ${{ github.actor }}
+          GHCR_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: python3 scripts/check_ghcr_tag_absent.py
+      - name: Publish verified Go web image
+        id: image
+        uses: docker/build-push-action@v5
+        with:
+          context: .
+          file: ./go-web/Dockerfile
+          platforms: linux/amd64
+          push: true
+          tags: ghcr.io/dzarlax-ai/rss-web:sha-${{ github.sha }}
+          labels: |
+            org.opencontainers.image.source=${{ github.server_url }}/${{ github.repository }}
+            org.opencontainers.image.revision=${{ github.sha }}
+            org.opencontainers.image.title=Evening News Go web
+          cache-from: type=gha,scope=go-web
+          cache-to: type=gha,mode=max,scope=go-web
+      - name: Record exact published image digest
+        env:
+          IMAGE_DIGEST: ${{ steps.image.outputs.digest }}
+        run: |
+          test -n "$IMAGE_DIGEST"
+          printf 'ghcr.io/dzarlax-ai/rss-web@%s\n' "$IMAGE_DIGEST" > web-image.txt
+      - uses: actions/upload-artifact@v4
+        with:
+          name: go-web-image
+          path: web-image.txt
+          retention-days: 14
