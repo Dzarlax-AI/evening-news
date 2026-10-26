@@ -55,8 +55,9 @@ func Run(ctx context.Context, cfg Config, onReady func()) error {
 }
 
 // RunWithHealth reports lease health from the worker's existing store pool.
-// The callback runs after recovery completes and after each successful fenced
-// heartbeat; it never creates a second database pool.
+// The callback runs after recovery completes, after each successful fenced
+// heartbeat, and with a zero timestamp when a heartbeat fails. It never
+// creates a second database pool.
 func RunWithHealth(ctx context.Context, cfg Config, onReady func(), onLeaseHealth func(time.Time)) error {
 	if ctx == nil {
 		return errors.New("worker context is required")
@@ -111,7 +112,11 @@ type heartbeatObserver struct {
 
 func (s heartbeatObserver) Heartbeat(ctx context.Context) error {
 	err := s.QueueStore.Heartbeat(ctx)
-	if err == nil && s.onHealth != nil {
+	if s.onHealth != nil {
+		if err != nil {
+			s.onHealth(time.Time{})
+			return err
+		}
 		s.onHealth(time.Now().UTC())
 	}
 	return err

@@ -16,23 +16,22 @@ type heartbeatTestStore struct {
 
 func (s heartbeatTestStore) Heartbeat(context.Context) error { return s.err }
 
-func TestHeartbeatObserverReportsOnlySuccessfulExistingPoolHeartbeat(t *testing.T) {
-	var observed time.Time
-	observer := heartbeatObserver{QueueStore: heartbeatTestStore{}, onHealth: func(at time.Time) { observed = at }}
+func TestHeartbeatObserverReportsSuccessAndImmediateFailureFromExistingPool(t *testing.T) {
+	var observed []time.Time
+	observer := heartbeatObserver{QueueStore: heartbeatTestStore{}, onHealth: func(at time.Time) { observed = append(observed, at) }}
 	if err := observer.Heartbeat(context.Background()); err != nil {
 		t.Fatal(err)
 	}
-	if observed.IsZero() {
+	if len(observed) != 1 || observed[0].IsZero() {
 		t.Fatal("successful heartbeat did not refresh lease health")
 	}
 
 	want := errors.New("heartbeat failed")
-	observed = time.Time{}
 	observer.QueueStore = heartbeatTestStore{err: want}
 	if err := observer.Heartbeat(context.Background()); !errors.Is(err, want) {
 		t.Fatalf("heartbeat error = %v", err)
 	}
-	if !observed.IsZero() {
-		t.Fatal("failed heartbeat refreshed lease health")
+	if len(observed) != 2 || !observed[1].IsZero() {
+		t.Fatalf("failed heartbeat did not invalidate health immediately: %v", observed)
 	}
 }

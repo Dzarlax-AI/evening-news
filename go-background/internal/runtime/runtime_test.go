@@ -342,6 +342,86 @@ func TestWorkerLateHealthCallbackCannotRefreshReplacementAttempt(t *testing.T) {
 	}
 }
 
+func TestFailedHeartbeatDropsReadinessBeforeRunExitsThenRecovers(t *testing.T) {
+	cfg := testConfig()
+	cfg.BackoffMin = time.Millisecond
+	cfg.BackoffMax = time.Millisecond
+	s := newState("test")
+	s.phase("running")
+	s.set("scheduler", "ready", true)
+	s.set("ingestion", "ready", true)
+	s.set("processing", "ready", true)
+	s.mu.Lock()
+	s.ingestionHealthAt = time.Now()
+	s.ingestionAPIHealthy = true
+	s.mu.Unlock()
+
+	firstHealth := make(chan func(time.Time), 1)
+	secondReady := make(chan struct{})
+	releaseFirst := make(chan struct{})
+	releaseSecond := make(chan struct{})
+	var attempts atomic.Int32
+	ctx, cancel := context.WithCancel(context.Background())
+	done := make(chan error, 1)
+	go func() {
+		done <- workerLoop(ctx, cfg, func(_ context.Context, _ worker.Config, ready func(), health func(time.Time)) error {
+			if attempts.Add(1) == 1 {
+				ready()
+				health(time.Now())
+				firstHealth <- health
+				<-releaseFirst
+				return worker.ErrLeaseLost
+			}
+			ready()
+			health(time.Now())
+			close(secondReady)
+			<-releaseSecond
+			return context.Canceled
+		}, s, make(chan struct{}, 1), cfg.BackoffMin, cfg.BackoffMax)
+	}()
+
+	var reportHealth func(time.Time)
+	select {
+	case reportHealth = <-firstHealth:
+	case <-time.After(time.Second):
+		t.Fatal("first worker attempt did not report health")
+	}
+	if !s.ready() {
+		t.Fatal("runtime should be ready after initial lease health")
+	}
+
+	// A failed fenced heartbeat must invalidate readiness while Run is still
+	// blocked draining its current work and before it returns ErrLeaseLost.
+	reportHealth(time.Time{})
+	if s.ready() || s.get().Components["worker"].State != "unhealthy" {
+		t.Fatal("failed heartbeat did not immediately make runtime unready")
+	}
+	if attempts.Load() != 1 {
+		t.Fatalf("worker restarted before the previous Run exited: attempts=%d", attempts.Load())
+	}
+
+	close(releaseFirst)
+	select {
+	case <-secondReady:
+	case <-time.After(time.Second):
+		t.Fatal("worker did not recover after the previous Run exited")
+	}
+	if !s.ready() {
+		t.Fatal("runtime did not regain readiness after replacement lease health")
+	}
+
+	cancel()
+	close(releaseSecond)
+	select {
+	case err := <-done:
+		if err != nil {
+			t.Fatal(err)
+		}
+	case <-time.After(time.Second):
+		t.Fatal("worker loop did not stop")
+	}
+}
+
 func TestExecutorStatusRequiresReadyInstanceAndTreatsAuthAsFatal(t *testing.T) {
 	for _, tc := range []struct {
 		name      string
