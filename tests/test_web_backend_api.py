@@ -1,5 +1,6 @@
 import asyncio
 import io
+import json
 from pathlib import Path
 from types import SimpleNamespace
 
@@ -355,6 +356,40 @@ def test_private_file_response_reads_full_body_and_observes_real_disconnect(monk
     assert sent[0]["status"] == 200
     assert b"".join(chunks) == contents
     assert reads >= 2  # body replay then the real post-body disconnect check
+
+
+def test_private_backup_schedule_static_route_precedes_filename_download(monkeypatch, tmp_path):
+    from pydantic import SecretStr
+    from news_aggregator import executor
+
+    monkeypatch.setattr(executor.settings, "web_backend_token", SecretStr("expected"))
+    monkeypatch.setattr(executor, "_backup_root", lambda: tmp_path)
+    async def ready(_request):
+        return None
+    monkeypatch.setattr(executor, "_web_backend_ready", ready)
+
+    # Exercise the complete ASGI app and boundary middleware: this must match
+    # the static schedule route, not the earlier dynamic {filename} handler.
+    sent, _ = _asgi_request(executor, "/internal/web/v1/backups/schedule", "GET",
+                            [(b"authorization", b"Bearer expected")])
+    assert sent[0]["status"] == 200
+    assert json.loads(sent[1]["body"]) == {
+        "enabled": False, "frequency": "daily", "time": "02:00", "keep_count": 5,
+        "last_backup": None, "next_backup": None, "status": "disabled",
+    }
+
+    contents = b"real backup archive"
+    (tmp_path / "fixture.tar.gz").write_bytes(contents)
+    sent, _ = _asgi_request(executor, "/internal/web/v1/backups/fixture.tar.gz", "GET",
+                            [(b"authorization", b"Bearer expected")])
+    assert sent[0]["status"] == 200
+    body = b"".join(event.get("body", b"") for event in sent if event["type"] == "http.response.body")
+    assert body == contents
+
+    # The same real routes remain protected by the separate service token.
+    unauthenticated, reads = _asgi_request(executor, "/internal/web/v1/backups/schedule", "GET")
+    assert unauthenticated[0]["status"] == 401
+    assert reads == 0
 
 
 def test_empty_json_object_body_is_replayed_as_complete_request(monkeypatch):

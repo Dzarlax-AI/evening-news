@@ -697,6 +697,21 @@ async def web_backup_list(request: Request):
     return list_backups(_backup_root())
 
 
+@app.get("/internal/web/v1/backups/schedule")
+async def web_backup_schedule_get(request: Request):
+    await _web_backend_ready(request)
+    return {"enabled": False, "frequency": "daily", "time": "02:00", "keep_count": 5,
+            "last_backup": None, "next_backup": None, "status": "disabled"}
+
+
+@app.put("/internal/web/v1/backups/schedule")
+async def web_backup_schedule_update(payload: BackupScheduleRequest, request: Request):
+    await _web_backend_ready(request)
+    from datetime import datetime
+    return {"message": "Backup schedule updated successfully", "settings": payload.model_dump(),
+            "timestamp": datetime.utcnow().isoformat()}
+
+
 @app.get("/internal/web/v1/backups/{filename}")
 async def web_backup_download(filename: str, request: Request):
     await _web_backend_ready(request)
@@ -766,21 +781,6 @@ async def web_backup_cleanup(payload: BackupCleanupRequest, request: Request):
     await _web_backend_ready(request)
     _require_embedded_backup_mode("cleanup")
     return cleanup_backups(_backup_root(), payload.keep_count)
-
-
-@app.get("/internal/web/v1/backups/schedule")
-async def web_backup_schedule_get(request: Request):
-    await _web_backend_ready(request)
-    return {"enabled": False, "frequency": "daily", "time": "02:00", "keep_count": 5,
-            "last_backup": None, "next_backup": None, "status": "disabled"}
-
-
-@app.put("/internal/web/v1/backups/schedule")
-async def web_backup_schedule_update(payload: BackupScheduleRequest, request: Request):
-    await _web_backend_ready(request)
-    from datetime import datetime
-    return {"message": "Backup schedule updated successfully", "settings": payload.model_dump(),
-            "timestamp": datetime.utcnow().isoformat()}
 
 
 @app.get("/internal/web/v1/system/process-monitor")
