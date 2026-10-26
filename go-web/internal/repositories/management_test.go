@@ -2,6 +2,7 @@ package repositories
 
 import (
 	"context"
+	"encoding/json"
 	"errors"
 	"fmt"
 	"net"
@@ -183,6 +184,33 @@ func TestPostgresManagementSourceCategoryArticleAndSummaryContracts(t *testing.T
 	if _, err = r.DeleteMapping(ctx, mappingID); err != nil {
 		t.Fatal(err)
 	}
+	if _, err = pool.Exec(ctx, `INSERT INTO category_mapping(ai_category,fixed_category,usage_count,is_active,created_at,updated_at) VALUES('Legacy null usage','Tech',NULL,true,timezone('UTC',now()),timezone('UTC',now()))`); err != nil {
+		t.Fatal(err)
+	}
+	if _, err = pool.Exec(ctx, `INSERT INTO category_mapping(ai_category,fixed_category,usage_count,is_active,created_at,updated_at) VALUES('Legacy counted usage','Tech',7,true,timezone('UTC',now()),timezone('UTC',now()))`); err != nil {
+		t.Fatal(err)
+	}
+	legacyMappings, err := r.Mappings(ctx, true)
+	if err != nil || len(legacyMappings) != 2 {
+		t.Fatalf("mapping list with legacy usage counts: %#v %v", legacyMappings, err)
+	}
+	var nullUsage JSONMap
+	if err = jsonRoundTrip(legacyMappings[0], &nullUsage); err != nil || nullUsage["usage_count"] != nil {
+		t.Fatalf("mapping list should serialize legacy NULL usage_count as JSON null: %#v %v", nullUsage, err)
+	}
+	var countedUsage JSONMap
+	if err = jsonRoundTrip(legacyMappings[1], &countedUsage); err != nil || countedUsage["usage_count"] != float64(7) {
+		t.Fatalf("mapping list should preserve non-NULL usage_count: %#v %v", countedUsage, err)
+	}
+	legacyThreshold := .75
+	legacyMapping, err := r.UpsertMapping(ctx, management.MappingRequest{AICategory: "Legacy null usage", FixedCategory: "Business", ConfidenceThreshold: &legacyThreshold})
+	var legacyUpdated JSONMap
+	if err == nil {
+		err = jsonRoundTrip(legacyMapping, &legacyUpdated)
+	}
+	if err != nil || legacyUpdated["usage_count"] != nil {
+		t.Fatalf("mapping update should serialize legacy NULL usage_count as JSON null: %#v %v", legacyUpdated, err)
+	}
 	if _, err = r.ApproveAIMapping(ctx, management.MappingRequest{AICategory: "Approved AI", FixedCategory: "Tech"}); err != nil {
 		t.Fatal(err)
 	}
@@ -270,5 +298,15 @@ func TestPostgresManagementSourceCategoryArticleAndSummaryContracts(t *testing.T
 	if err != nil || deleted["deleted_articles"] != int64(2) {
 		t.Fatalf("purged source: %#v %v", deleted, err)
 	}
+}
+
+type JSONMap = map[string]any
+
+func jsonRoundTrip(value any, target any) error {
+	encoded, err := json.Marshal(value)
+	if err != nil {
+		return err
+	}
+	return json.Unmarshal(encoded, target)
 }
 func ptrString(v string) *string { return &v }

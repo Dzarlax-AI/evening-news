@@ -258,7 +258,7 @@ func (r *ManagementRepository) UpdateCategory(ctx context.Context, id int64, in 
 	}
 	return map[string]any{"id": sid, "name": name, "display_name": display, "description": description, "color": storedColor, "is_local": local, "created_at": isoNaive(created)}, nil
 }
-func mappingMap(id int64, ai, fixed string, threshold *float64, description, createdBy *string, usage int64, last, created, updated *time.Time, active bool) map[string]any {
+func mappingMap(id int64, ai, fixed string, threshold *float64, description, createdBy *string, usage *int64, last, created, updated *time.Time, active bool) map[string]any {
 	if threshold == nil {
 		v := 0.7
 		threshold = &v
@@ -282,7 +282,7 @@ func (r *ManagementRepository) Mappings(ctx context.Context, activeOnly bool) ([
 		var ai, fixed string
 		var threshold *float64
 		var description, by *string
-		var usage int64
+		var usage *int64
 		var last, created, updated *time.Time
 		var active bool
 		if err = rows.Scan(&id, &ai, &fixed, &threshold, &description, &by, &usage, &last, &active, &created, &updated); err != nil {
@@ -326,7 +326,7 @@ func selectMapping(ctx context.Context, q interface {
 	var ai, fixed string
 	var threshold *float64
 	var description, by *string
-	var usage int64
+	var usage *int64
 	var last, created, updated *time.Time
 	var active bool
 	err := q.QueryRow(ctx, `SELECT id,ai_category,fixed_category,confidence_threshold,description,created_by,usage_count,last_used,is_active,created_at,updated_at FROM category_mapping WHERE id=$1`, id).Scan(&id, &ai, &fixed, &threshold, &description, &by, &usage, &last, &active, &created, &updated)
