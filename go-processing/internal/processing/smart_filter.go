@@ -22,8 +22,6 @@ const (
 )
 
 var (
-	pythonLower = cases.Lower(language.Und)
-
 	metadataMinuteRead  = regexp.MustCompile(`\p{Nd}+[\p{Z}\t\n\r\f\v]+min[\p{Z}\t\n\r\f\v]+read`)
 	metadataMonthDay    = regexp.MustCompile(`(?:jan|feb|mar|apr|may|jun|jul|aug|sep|oct|nov|dec)[\p{Z}\t\n\r\f\v]+\p{Nd}{2}`)
 	metadataDateRead    = regexp.MustCompile(`^[\p{Z}\t\n\r\f\v]*[\p{L}\p{N}_]{3}[\p{Z}\t\n\r\f\v]+\p{Nd}{2}[\p{Z}\t\n\r\f\v]+.*\p{Nd}+[\p{Z}\t\n\r\f\v]+min[\p{Z}\t\n\r\f\v]+read[\p{Z}\t\n\r\f\v]*$`)
@@ -303,7 +301,8 @@ func isPythonWordRune(r rune) bool { return r == '_' || unicode.IsLetter(r) || u
 func firstRune(s string) rune      { r, _ := utf8.DecodeRuneInString(s); return r }
 func lastRune(s string) rune       { r, _ := utf8.DecodeLastRuneInString(s); return r }
 
-func lower(s string) string { return pythonLower.String(s) }
+// Lower casers may carry transformer state, so each call owns its instance.
+func lower(s string) string { return cases.Lower(language.Und).String(s) }
 
 func formatTwoDecimals(value float64) string {
 	return fmt.Sprintf("%.2f", value)

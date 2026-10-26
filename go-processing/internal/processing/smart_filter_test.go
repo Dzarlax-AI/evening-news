@@ -5,6 +5,7 @@ import (
 	"os"
 	"path/filepath"
 	"strings"
+	"sync"
 	"testing"
 	"time"
 )
@@ -103,5 +104,44 @@ func TestSmartFilterUnicodeLengthAndExtractionReasons(t *testing.T) {
 	}
 	if reasonNeedsExtraction("Spam patterns detected") {
 		t.Fatal("spam rejection must not trigger extraction")
+	}
+}
+
+func TestSmartFilterUnicodeLoweringIsSafeAcrossWorkers(t *testing.T) {
+	inputs := []string{
+		"ΟΣ ΣΟ ΜΆΙΟΣ ẞ İSTANBUL",
+		"МАШИНА ЁЖИК ИЗ СИНТЕТИЧЕСКОГО ТЕКСТА",
+		"Straße Œuvre İ I\u0307 Σς",
+		"ქართული ტექსტი და ქართული ასოები",
+		"Հայերեն տեքստ և Unicode լեզուներ",
+		"ＫＥＬＶＩＮ KELVIN ÅNGSTRÖM",
+		"Synthetic ARTICLE with Ё, İ, Σ, and K characters",
+	}
+	want := make([]string, len(inputs))
+	for i, input := range inputs {
+		want[i] = lower(input)
+	}
+
+	const workers = 32 // Exceeds the processor's default worker count.
+	const repeats = 200
+	var wg sync.WaitGroup
+	errors := make(chan string, workers)
+	for worker := 0; worker < workers; worker++ {
+		wg.Add(1)
+		go func(worker int) {
+			defer wg.Done()
+			for n := 0; n < repeats; n++ {
+				i := (worker + n) % len(inputs)
+				if got := lower(inputs[i]); got != want[i] {
+					errors <- "Unicode lowercase output changed under concurrency"
+					return
+				}
+			}
+		}(worker)
+	}
+	wg.Wait()
+	close(errors)
+	for err := range errors {
+		t.Error(err)
 	}
 }
