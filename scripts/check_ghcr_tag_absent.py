@@ -16,6 +16,7 @@ ALLOWED_REPOSITORIES = {
     DEFAULT_REPOSITORY,
     "dzarlax-ai/rss-job-worker",
     "dzarlax-ai/rss-article-ingestion",
+    "dzarlax-ai/rss-article-processing",
 }
 MANIFEST_ACCEPT = ", ".join((
     "application/vnd.oci.image.index.v1+json",
