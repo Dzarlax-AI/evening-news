@@ -265,6 +265,83 @@ func TestWorkerRecoveryBackoffCancelsWithoutRestart(t *testing.T) {
 	}
 }
 
+func TestWorkerLateHealthCallbackCannotRefreshReplacementAttempt(t *testing.T) {
+	cfg := testConfig()
+	cfg.BackoffMin = time.Millisecond
+	cfg.BackoffMax = time.Millisecond
+	s := newState("test")
+	s.phase("running")
+	s.set("scheduler", "ready", true)
+	s.set("ingestion", "ready", true)
+	s.set("processing", "ready", true)
+	s.mu.Lock()
+	s.ingestionHealthAt = time.Now()
+	s.ingestionAPIHealthy = true
+	s.mu.Unlock()
+
+	type callbacks struct {
+		ready  func()
+		health func(time.Time)
+	}
+	firstCallbacks := make(chan callbacks, 1)
+	secondReady := make(chan time.Time, 1)
+	releaseSecond := make(chan struct{})
+	var attempts atomic.Int32
+	ctx, cancel := context.WithCancel(context.Background())
+	done := make(chan error, 1)
+	go func() {
+		done <- workerLoop(ctx, cfg, func(_ context.Context, _ worker.Config, ready func(), health func(time.Time)) error {
+			if attempts.Add(1) == 1 {
+				firstCallbacks <- callbacks{ready: ready, health: health}
+				return worker.ErrLeaseLost
+			}
+			ready()
+			at := time.Now()
+			health(at)
+			secondReady <- at
+			<-releaseSecond
+			return nil
+		}, s, make(chan struct{}, 1), cfg.BackoffMin, cfg.BackoffMax)
+	}()
+
+	old := <-firstCallbacks
+	var secondAt time.Time
+	select {
+	case secondAt = <-secondReady:
+	case <-time.After(time.Second):
+		t.Fatal("replacement worker attempt did not become healthy")
+	}
+	if !s.ready() {
+		t.Fatal("runtime was not ready after replacement attempt health")
+	}
+
+	// These callbacks simulate an observer goroutine descheduled inside the old
+	// runner until after its replacement has completed the ready handshake.
+	old.ready()
+	old.health(secondAt.Add(time.Second))
+	s.mu.RLock()
+	gotAt := s.workerHealthAt
+	gotStatus := s.snapshot.Components["worker"]
+	s.mu.RUnlock()
+	if !gotAt.Equal(secondAt) {
+		t.Fatalf("stale callback replaced worker health timestamp: got %s want %s", gotAt, secondAt)
+	}
+	if gotStatus.State != "ready" || !gotStatus.Healthy || !s.ready() {
+		t.Fatalf("stale callback changed replacement readiness: status=%+v", gotStatus)
+	}
+
+	cancel()
+	close(releaseSecond)
+	select {
+	case err := <-done:
+		if err != nil {
+			t.Fatal(err)
+		}
+	case <-time.After(time.Second):
+		t.Fatal("worker loop did not stop")
+	}
+}
+
 func TestExecutorStatusRequiresReadyInstanceAndTreatsAuthAsFatal(t *testing.T) {
 	for _, tc := range []struct {
 		name      string

@@ -71,6 +71,7 @@ type state struct {
 	mu                  sync.RWMutex
 	snapshot            snapshot
 	workerHealthAt      time.Time
+	workerAttempt       uint64
 	ingestionHealthAt   time.Time
 	ingestionAPIHealthy bool
 }
@@ -135,9 +136,31 @@ func (s *state) ingestionHealth(at time.Time) {
 		s.snapshot.Components["ingestion"] = old
 	}
 }
-func (s *state) workerHealth(at time.Time) {
+
+// beginWorkerAttempt invalidates callbacks retained by any previous runner
+// invocation and starts this attempt with no inherited lease health.
+func (s *state) beginWorkerAttempt() uint64 {
 	s.mu.Lock()
 	defer s.mu.Unlock()
+	s.workerAttempt++
+	s.workerHealthAt = time.Time{}
+	s.snapshot.Components["worker"] = status{State: "starting"}
+	return s.workerAttempt
+}
+func (s *state) workerReady(attempt uint64) {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	if attempt != s.workerAttempt {
+		return
+	}
+	s.snapshot.Components["worker"] = status{State: "ready"}
+}
+func (s *state) workerHealth(attempt uint64, at time.Time) {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	if attempt != s.workerAttempt {
+		return
+	}
 	s.workerHealthAt = at.UTC()
 	old := s.snapshot.Components["worker"]
 	if old.State == "ready" || old.State == "unhealthy" {
@@ -498,11 +521,23 @@ func waitComponentHealth(ctx context.Context, s *state, fatal <-chan error, inte
 		}
 	}
 }
+func (s *state) invalidateWorkerAttempt(attempt uint64, nextState string) {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	if attempt != s.workerAttempt {
+		return
+	}
+	// Advancing the epoch makes delayed callbacks from this runner stale even
+	// before the next attempt has begun.
+	s.workerAttempt++
+	s.workerHealthAt = time.Time{}
+	s.snapshot.Components["worker"] = status{State: nextState}
+}
 
 func workerLoop(ctx context.Context, cfg config.Config, run func(context.Context, worker.Config, func(), func(time.Time)) error, state *state, kick chan<- struct{}, min, max time.Duration) error {
 	delay := min
 	for ctx.Err() == nil {
-		state.set("worker", "starting", false)
+		attempt := state.beginWorkerAttempt()
 		readyCh := make(chan struct{}, 1)
 		var readySignal <-chan struct{} = readyCh
 		done := make(chan error, 1)
@@ -511,7 +546,7 @@ func workerLoop(ctx context.Context, cfg config.Config, run func(context.Context
 			done <- run(ctx, cfg.Worker,
 				func() {
 					once.Do(func() {
-						state.set("worker", "ready", false)
+						state.workerReady(attempt)
 						readyCh <- struct{}{}
 						select {
 						case kick <- struct{}{}:
@@ -521,7 +556,7 @@ func workerLoop(ctx context.Context, cfg config.Config, run func(context.Context
 				},
 				func(at time.Time) {
 					if ctx.Err() == nil {
-						state.workerHealth(at)
+						state.workerHealth(attempt, at)
 					}
 					select {
 					case kick <- struct{}{}:
@@ -535,6 +570,7 @@ func workerLoop(ctx context.Context, cfg config.Config, run func(context.Context
 			case <-ctx.Done():
 				select {
 				case err := <-done:
+					state.invalidateWorkerAttempt(attempt, "stopped")
 					if err != nil && !errors.Is(err, context.Canceled) {
 						return workerFailure(err)
 					}
@@ -545,12 +581,14 @@ func workerLoop(ctx context.Context, cfg config.Config, run func(context.Context
 				readySignal = nil
 			case err := <-done:
 				if ctx.Err() != nil {
+					state.invalidateWorkerAttempt(attempt, "stopped")
 					return nil
 				}
 				if !recoverableLease(err) {
+					state.invalidateWorkerAttempt(attempt, "stopped")
 					return workerFailure(err)
 				}
-				state.set("worker", "recovering", false)
+				state.invalidateWorkerAttempt(attempt, "recovering")
 				if err := pause(ctx, delay); err != nil {
 					return nil
 				}
