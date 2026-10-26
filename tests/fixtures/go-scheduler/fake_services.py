@@ -13,10 +13,13 @@ from uuid import uuid5, NAMESPACE_URL
 
 LOCK = threading.RLock()
 COUNTERS = {"source_probe": 0, "ingestion_stub_runs": 0, "extraction": 0, "gemini": 0, "telegram": 0}
+TELEGRAM_ENDPOINTS = {"sendMessage": 0, "sendRichMessage": 0, "other": 0}
 INGESTION_RUNS = {}
 CONSUMER = {"mode": "normal", "requests": 0, "by_occurrence": {}, "operations": {}}
 GEMINI_RELEASE = threading.Event()
 GEMINI_RELEASE.set()
+TELEGRAM_RELEASE = threading.Event()
+TELEGRAM_RELEASE.set()
 HOLD = threading.Event()
 HOLD.set()
 TEXT = " ".join([
@@ -59,7 +62,7 @@ class Handler(BaseHTTPRequestHandler):
                     "requests": CONSUMER["requests"],
                     "occurrences": len(CONSUMER["by_occurrence"]),
                     "operations": dict(CONSUMER["operations"]),
-                }}
+                }, "telegram_endpoints": dict(TELEGRAM_ENDPOINTS)}
             self._json(200, result)
         elif self.path.startswith("/internal/v1/ingestion/runs/"):
             if self.headers.get("Authorization") != "Bearer fixture-only-article-ingestion-token":
@@ -92,6 +95,9 @@ class Handler(BaseHTTPRequestHandler):
             gemini_mode = payload.get("gemini_mode")
             if gemini_mode in {"block", "release"}:
                 (GEMINI_RELEASE.clear if gemini_mode == "block" else GEMINI_RELEASE.set)()
+            telegram_mode = payload.get("telegram_mode")
+            if telegram_mode in {"normal", "accept_then_hold", "release"}:
+                (TELEGRAM_RELEASE.clear if telegram_mode == "accept_then_hold" else TELEGRAM_RELEASE.set)()
             self._json(200, {"status": "updated"})
             return
 
@@ -216,7 +222,18 @@ class Handler(BaseHTTPRequestHandler):
             with LOCK:
                 COUNTERS["telegram"] += 1
                 message_id = COUNTERS["telegram"]
+                method = "sendRichMessage" if path.endswith("/sendRichMessage") else "sendMessage"
+                TELEGRAM_ENDPOINTS[method] += 1
+            # The fixture records provider acceptance before holding the HTTP
+            # response, modeling the ambiguous window without sending anything.
+            TELEGRAM_RELEASE.wait(timeout=180)
             self._json(200, {"ok": True, "result": {"message_id": message_id, "date": 1}})
+            return
+
+        if path.startswith("/telegram/"):
+            with LOCK:
+                TELEGRAM_ENDPOINTS["other"] += 1
+            self._json(404, {"error": "unsupported_fixture_telegram_method"})
             return
 
         self._json(404, {"error": "not_found"})

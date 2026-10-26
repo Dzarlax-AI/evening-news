@@ -4,6 +4,7 @@ import (
 	"bytes"
 	"context"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"io"
 	"net/http"
@@ -18,6 +19,53 @@ import (
 
 	"github.com/Dzarlax-AI/evening-news/go-ingestion/internal/store"
 )
+
+func TestHandlerCloseCancelsActiveRunAndRejectsAdmission(t *testing.T) {
+	parent, cancelParent := context.WithCancel(context.Background())
+	defer cancelParent()
+	h := NewHandlerWithContext(parent, nil, Config{})
+	runCtx, cancelRun := context.WithCancel(h.parent)
+	h.mu.Lock()
+	h.runs["active-run"] = cancelRun
+	h.mu.Unlock()
+
+	if err := h.Close(context.Background()); err != nil {
+		t.Fatalf("Close() = %v", err)
+	}
+	select {
+	case <-runCtx.Done():
+	default:
+		t.Fatal("Close did not cancel the active run context")
+	}
+	if h.reserveRun("new-run") {
+		t.Fatal("handler admitted a reservation after Close")
+	}
+	if h.launch(store.Fence{RunID: "new-run", DeadlineAt: time.Now().Add(time.Minute)}) {
+		t.Fatal("handler launched a run after Close")
+	}
+}
+
+func TestHandlerCloseHonorsDrainDeadline(t *testing.T) {
+	h := NewHandlerWithContext(context.Background(), nil, Config{})
+	release := make(chan struct{})
+	h.wg.Add(1)
+	go func() {
+		<-release
+		h.wg.Done()
+	}()
+
+	ctx, cancel := context.WithTimeout(context.Background(), 20*time.Millisecond)
+	defer cancel()
+	if err := h.Close(ctx); !errors.Is(err, context.DeadlineExceeded) {
+		t.Fatalf("Close() = %v, want deadline exceeded", err)
+	}
+	close(release)
+	finishCtx, finishCancel := context.WithTimeout(context.Background(), time.Second)
+	defer finishCancel()
+	if err := h.Close(finishCtx); err != nil {
+		t.Fatalf("Close after run cleanup = %v", err)
+	}
+}
 
 func TestPageMonitorSameSnapshotReparseRequiresActualCollectorContract(t *testing.T) {
 	fixture, err := os.ReadFile("testdata/page_monitor_actual_response.json")

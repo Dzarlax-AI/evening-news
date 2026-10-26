@@ -30,14 +30,16 @@ type Config struct {
 	BuildID     string
 }
 
-func Load() (Config, error) {
+func Load() (Config, error) { return LoadFrom(os.Getenv) }
+
+func LoadFrom(getenv func(string) string) (Config, error) {
 	var c Config
-	c.DatabaseURL = strings.TrimSpace(os.Getenv("SCHEDULER_DATABASE_URL"))
-	c.Schema = strings.TrimSpace(os.Getenv("SCHEDULER_DB_SCHEMA"))
-	c.APIToken = os.Getenv("SCHEDULER_API_TOKEN")
-	c.ListenAddr = envOr("LISTEN_ADDR", ":8080")
+	c.DatabaseURL = strings.TrimSpace(getenv("SCHEDULER_DATABASE_URL"))
+	c.Schema = strings.TrimSpace(getenv("SCHEDULER_DB_SCHEMA"))
+	c.APIToken = getenv("SCHEDULER_API_TOKEN")
+	c.ListenAddr = envOr(getenv, "LISTEN_ADDR", ":8080")
 	c.BuildID = "development"
-	c.StartPaused = strings.EqualFold(os.Getenv("SCHEDULER_START_PAUSED"), "true")
+	c.StartPaused = strings.EqualFold(getenv("SCHEDULER_START_PAUSED"), "true")
 	if c.DatabaseURL == "" || c.Schema == "" || c.APIToken == "" {
 		return c, errors.New("SCHEDULER_DATABASE_URL, SCHEDULER_DB_SCHEMA and SCHEDULER_API_TOKEN are required")
 	}
@@ -51,28 +53,28 @@ func Load() (Config, error) {
 	if len(c.APIToken) < 16 || strings.ContainsAny(c.APIToken, "\r\n") {
 		return c, errors.New("SCHEDULER_API_TOKEN must be at least 16 bytes and contain no line breaks")
 	}
-	maxConns, err := intEnv("SCHEDULER_DB_MAX_CONNS", 8, 1, 64)
+	maxConns, err := intEnv(getenv, "SCHEDULER_DB_MAX_CONNS", 8, 1, 64)
 	if err != nil {
 		return c, err
 	}
 	c.DBMaxConns = int32(maxConns)
-	c.MaxInflight, err = intEnv("SCHEDULER_MAX_INFLIGHT", 4, 1, 32)
+	c.MaxInflight, err = intEnv(getenv, "SCHEDULER_MAX_INFLIGHT", 4, 1, 32)
 	if err != nil {
 		return c, err
 	}
-	c.MaxOutbox, err = intEnv("SCHEDULER_MAX_OUTBOX", 10000, 100, 100000)
+	c.MaxOutbox, err = intEnv(getenv, "SCHEDULER_MAX_OUTBOX", 10000, 100, 100000)
 	if err != nil {
 		return c, err
 	}
-	c.PollEvery, err = durationEnv("SCHEDULER_POLL_INTERVAL", time.Second, 100*time.Millisecond, 5*time.Minute)
+	c.PollEvery, err = durationEnv(getenv, "SCHEDULER_POLL_INTERVAL", time.Second, 100*time.Millisecond, 5*time.Minute)
 	if err != nil {
 		return c, err
 	}
-	c.HTTPTimeout, err = durationEnv("SCHEDULER_HTTP_TIMEOUT", 10*time.Second, 100*time.Millisecond, 2*time.Minute)
+	c.HTTPTimeout, err = durationEnv(getenv, "SCHEDULER_HTTP_TIMEOUT", 10*time.Second, 100*time.Millisecond, 2*time.Minute)
 	if err != nil {
 		return c, err
 	}
-	c.Targets, err = loadTargets()
+	c.Targets, err = loadTargets(getenv)
 	if err != nil {
 		return c, err
 	}
@@ -85,13 +87,13 @@ func Load() (Config, error) {
 	return c, nil
 }
 
-func loadTargets() (map[string]model.Target, error) {
-	aliases := strings.Split(os.Getenv("SCHEDULER_TARGET_ALIASES"), ",")
+func loadTargets(getenv func(string) string) (map[string]model.Target, error) {
+	aliases := strings.Split(getenv("SCHEDULER_TARGET_ALIASES"), ",")
 	if len(aliases) == 1 && strings.TrimSpace(aliases[0]) == "" {
 		return nil, errors.New("SCHEDULER_TARGET_ALIASES is required")
 	}
 	targets := make(map[string]model.Target, len(aliases))
-	allowHTTP := strings.EqualFold(os.Getenv("SCHEDULER_ALLOW_HTTP_TARGETS"), "true")
+	allowHTTP := strings.EqualFold(getenv("SCHEDULER_ALLOW_HTTP_TARGETS"), "true")
 	for _, rawAlias := range aliases {
 		alias := strings.TrimSpace(rawAlias)
 		if alias == "" || strings.ContainsAny(alias, " \t\r\n") || !regexp.MustCompile(`^[a-z0-9][a-z0-9-]{0,62}$`).MatchString(alias) {
@@ -101,8 +103,8 @@ func loadTargets() (map[string]model.Target, error) {
 			return nil, errors.New("duplicate target alias configuration")
 		}
 		key := strings.ToUpper(strings.ReplaceAll(alias, "-", "_"))
-		endpoint := strings.TrimSpace(os.Getenv("SCHEDULER_TARGET_" + key + "_URL"))
-		token := os.Getenv("SCHEDULER_TARGET_" + key + "_TOKEN")
+		endpoint := strings.TrimSpace(getenv("SCHEDULER_TARGET_" + key + "_URL"))
+		token := getenv("SCHEDULER_TARGET_" + key + "_TOKEN")
 		parsed, err := url.Parse(endpoint)
 		if endpoint == "" || err != nil || parsed.Host == "" || parsed.User != nil || parsed.Fragment != "" || parsed.RawQuery != "" {
 			return nil, fmt.Errorf("target %q must have an absolute URL without userinfo, query, or fragment", alias)
@@ -118,15 +120,15 @@ func loadTargets() (map[string]model.Target, error) {
 	return targets, nil
 }
 
-func envOr(key, fallback string) string {
-	if v := strings.TrimSpace(os.Getenv(key)); v != "" {
+func envOr(getenv func(string) string, key, fallback string) string {
+	if v := strings.TrimSpace(getenv(key)); v != "" {
 		return v
 	}
 	return fallback
 }
 
-func intEnv(key string, fallback, min, max int) (int, error) {
-	value := strings.TrimSpace(os.Getenv(key))
+func intEnv(getenv func(string) string, key string, fallback, min, max int) (int, error) {
+	value := strings.TrimSpace(getenv(key))
 	if value == "" {
 		return fallback, nil
 	}
@@ -137,8 +139,8 @@ func intEnv(key string, fallback, min, max int) (int, error) {
 	return n, nil
 }
 
-func durationEnv(key string, fallback, min, max time.Duration) (time.Duration, error) {
-	value := strings.TrimSpace(os.Getenv(key))
+func durationEnv(getenv func(string) string, key string, fallback, min, max time.Duration) (time.Duration, error) {
+	value := strings.TrimSpace(getenv(key))
 	if value == "" {
 		return fallback, nil
 	}

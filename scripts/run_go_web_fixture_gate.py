@@ -90,6 +90,7 @@ class GoWebGate(IngestionGate):
         self.web_relay = None
         self.access_method = None
         self.report["checks"] = {}
+        self.image_refs = dict(IMAGES)
 
 
     def docker(self, *args, **kwargs):
@@ -100,7 +101,7 @@ class GoWebGate(IngestionGate):
             if additions:
                 mutable = list(args)
                 image_index = next((i for i, part in enumerate(mutable)
-                                    if part in {*IMAGES.values(), "postgres:17-alpine", "python:3.12-alpine"}), None)
+                                    if part in {*self.image_refs.values(), "postgres:17-alpine", "python:3.12-alpine"}), None)
                 if image_index is None:
                     raise GateFailure("fixture_container_image_not_found")
                 mutable[image_index:image_index] = additions
@@ -330,7 +331,7 @@ class GoWebGate(IngestionGate):
 
     def run(self):
         self.output_dir.mkdir(parents=True, exist_ok=True)
-        for name, image in IMAGES.items():
+        for name, image in self.image_refs.items():
             self.report.setdefault("image_ids", {})[name] = self.docker(
                 "image", "inspect", image, "--format", "{{.Id}}").stdout.strip()
         if not shutil.which("openssl"):
@@ -354,7 +355,8 @@ class GoWebGate(IngestionGate):
         self.run_container(self.prefix + "-postgres", command=["postgres"], alias="postgres",
                            env={"POSTGRES_DB": "gate_db", "POSTGRES_USER": "gate_user",
                                 "POSTGRES_PASSWORD": DB_PASSWORD}, image="postgres:17-alpine",
-                           mounts=False, memory="384m")
+                           mounts=False, memory="384m",
+                           health_cmd="pg_isready -U gate_user -d gate_db")
         self.run_container(self.prefix + "-origin", command=["python3", "/gate/gate_origin.py",
                            "--cert", "/fixtures/fixture-ca.crt", "--key", "/fixtures/fixture-ca.key"],
                            image="python:3.12-alpine", memory="128m")
@@ -362,6 +364,13 @@ class GoWebGate(IngestionGate):
                            alias="fixture-services", memory="128m", disable_healthcheck=True)
         self.docker("exec", self.prefix + "-postgres", "sh", "-c",
                     "until pg_isready -U gate_user -d gate_db >/dev/null 2>&1; do sleep 1; done", timeout=90)
+        postgres_probe = self.docker(
+            "exec", self.prefix + "-postgres", "pg_isready", "-U", "gate_user", "-d", "gate_db",
+            check=False,
+        )
+        self.report["postgres_ready_before_migration"] = postgres_probe.returncode == 0
+        if postgres_probe.returncode:
+            raise GateFailure("synthetic_postgres_not_ready_before_migration")
 
         # Explicit bootstrap is a one-shot app-image process; the Go web never migrates.
         self.run_container(self.prefix + "-migrate", command=["python", "-m", "news_aggregator.migrate"],
@@ -374,56 +383,7 @@ class GoWebGate(IngestionGate):
         seed_state = self.docker("wait", self.prefix + "-seed", timeout=60)
         self.check("eight_synthetic_sources_seeded", seed_state.stdout.strip() == "0")
 
-        self.run_container(self.prefix + "-collector", command=[], alias="collector",
-                           image=self.collector_image,
-                           env={"LISTEN_ADDR": ":8080", "EXTRACTOR_HTTP_ONLY": "true",
-                                "EXTRACTOR_MAX_CONCURRENT": "1", "EXTRACTOR_SERVICE_TOKEN": COLLECTOR_TOKEN,
-                                "SSL_CERT_FILE": "/fixtures/fixture-ca.crt"},
-                           mounts=False, memory="192m")
-        self.run_container(self.prefix + "-executor", command=[],
-                           alias="executor", env=self.app_environment("executor"), memory="512m",
-                           disable_healthcheck=True)
-        self.wait_http(self.prefix + "-executor", "http://127.0.0.1:8100/internal/v1/status",
-                       auth=EXECUTOR_TOKEN)
-        retired = self.docker("exec", self.prefix + "-executor", "python", "-c",
-            "from pathlib import Path; paths=[Path('news_aggregator/main.py'),Path('news_aggregator/public.py')]; "
-            "paths+=list(Path('news_aggregator/api').rglob('*.py'))+list(Path('web/templates').rglob('*.html')); "
-            "print(any(p.is_file() for p in paths))")
-        self.check("python_public_web_absent_from_executor_image", retired.stdout.strip() == "False")
-        self.run_container(self.prefix + "-ingestion", command=[], alias="ingestion",
-                           image=self.ingestion_image,
-                           env={"ARTICLE_INGESTION_LISTEN": ":8093",
-                                "DATABASE_URL": f"postgres://news_ingestion_runtime:{DB_PASSWORD}@postgres:5432/gate_db?search_path=public",
-                                "ARTICLE_INGESTION_TOKEN": INGESTION_TOKEN,
-                                "EXTRACTION_SERVICE_URL": "http://collector:8080",
-                                "EXTRACTION_SERVICE_TOKEN": COLLECTOR_TOKEN,
-                                "EXTRACTION_SERVICE_NATIVE_BROWSER": "false",
-                                "JOB_EXECUTOR_URL": "http://executor:8100",
-                                "JOB_EXECUTOR_TOKEN": EXECUTOR_TOKEN,
-                                "SSL_CERT_FILE": "/fixtures/fixture-ca.crt"},
-                           mounts=False, memory="256m",
-                           health_cmd="wget -q -O /dev/null http://127.0.0.1:8093/healthz")
-        self.run_container(self.prefix + "-processing", command=[], alias="processing",
-                           image=self.processing_image,
-                           env={"ARTICLE_PROCESSING_LISTEN": ":8094",
-                                "DATABASE_URL": f"postgres://news_processing_runtime:{DB_PASSWORD}@postgres:5432/gate_db?search_path=public",
-                                "ARTICLE_PROCESSING_TOKEN": "fixture-only-processing-token",
-                                "ARTICLE_AI_URL": "http://executor:8100",
-                                "ARTICLE_AI_TOKEN": "fixture-only-ai-token",
-                                "EXTRACTION_SERVICE_URL": "http://collector:8080",
-                                "EXTRACTION_SERVICE_TOKEN": COLLECTOR_TOKEN,
-                                "EXTRACTION_SERVICE_NATIVE_BROWSER": "false",
-                                "SSL_CERT_FILE": "/fixtures/fixture-ca.crt",
-                                "MAX_WORKERS": "1", "PROCESSING_BATCH_SIZE": "2"},
-                           mounts=False, memory="128m",
-                           health_cmd="wget -q -O /dev/null http://127.0.0.1:8094/healthz")
-        self.wait_ready(self.prefix + "-collector")
-        self.wait_ready(self.prefix + "-processing")
-        self.wait_ready(self.prefix + "-ingestion")
-        self.run_container(self.prefix + "-worker", command=[], image=self.worker_image,
-                           env={**self.app_environment("worker"), "JOB_EXECUTOR_URL": "http://executor:8100"},
-                           mounts=False, memory="128m")
-        self.wait_worker_healthy(self.prefix + "-worker")
+        self.start_background_components()
 
         self.run_container(self.prefix + "-web", command=[], image=self.web_image,
                            env={**self.app_environment("web"),
@@ -572,6 +532,60 @@ class GoWebGate(IngestionGate):
         self.capture_resource_snapshot()
         self.report["report"] = "Go web full pipeline fixture"
         self.report["actual_pipeline_tested"] = job.get("status") == "succeeded"
+
+    def start_background_components(self):
+        """Start the legacy standalone component containers for this gate."""
+        self.run_container(self.prefix + "-collector", command=[], alias="collector",
+                           image=self.collector_image,
+                           env={"LISTEN_ADDR": ":8080", "EXTRACTOR_HTTP_ONLY": "true",
+                                "EXTRACTOR_MAX_CONCURRENT": "1", "EXTRACTOR_SERVICE_TOKEN": COLLECTOR_TOKEN,
+                                "SSL_CERT_FILE": "/fixtures/fixture-ca.crt"},
+                           mounts=False, memory="192m")
+        self.run_container(self.prefix + "-executor", command=[],
+                           alias="executor", env=self.app_environment("executor"), memory="512m",
+                           disable_healthcheck=True)
+        self.wait_http(self.prefix + "-executor", "http://127.0.0.1:8100/internal/v1/status",
+                       auth=EXECUTOR_TOKEN)
+        retired = self.docker("exec", self.prefix + "-executor", "python", "-c",
+            "from pathlib import Path; paths=[Path('news_aggregator/main.py'),Path('news_aggregator/public.py')]; "
+            "paths+=list(Path('news_aggregator/api').rglob('*.py'))+list(Path('web/templates').rglob('*.html')); "
+            "print(any(p.is_file() for p in paths))")
+        self.check("python_public_web_absent_from_executor_image", retired.stdout.strip() == "False")
+        self.run_container(self.prefix + "-ingestion", command=[], alias="ingestion",
+                           image=self.ingestion_image,
+                           env={"ARTICLE_INGESTION_LISTEN": ":8093",
+                                "DATABASE_URL": f"postgres://news_ingestion_runtime:{DB_PASSWORD}@postgres:5432/gate_db?search_path=public",
+                                "ARTICLE_INGESTION_TOKEN": INGESTION_TOKEN,
+                                "EXTRACTION_SERVICE_URL": "http://collector:8080",
+                                "EXTRACTION_SERVICE_TOKEN": COLLECTOR_TOKEN,
+                                "EXTRACTION_SERVICE_NATIVE_BROWSER": "false",
+                                "JOB_EXECUTOR_URL": "http://executor:8100",
+                                "JOB_EXECUTOR_TOKEN": EXECUTOR_TOKEN,
+                                "SSL_CERT_FILE": "/fixtures/fixture-ca.crt"},
+                           mounts=False, memory="256m",
+                           health_cmd="wget -q -O /dev/null http://127.0.0.1:8093/healthz")
+        self.run_container(self.prefix + "-processing", command=[], alias="processing",
+                           image=self.processing_image,
+                           env={"ARTICLE_PROCESSING_LISTEN": ":8094",
+                                "DATABASE_URL": f"postgres://news_processing_runtime:{DB_PASSWORD}@postgres:5432/gate_db?search_path=public",
+                                "ARTICLE_PROCESSING_TOKEN": "fixture-only-processing-token",
+                                "ARTICLE_AI_URL": "http://executor:8100",
+                                "ARTICLE_AI_TOKEN": "fixture-only-ai-token",
+                                "EXTRACTION_SERVICE_URL": "http://collector:8080",
+                                "EXTRACTION_SERVICE_TOKEN": COLLECTOR_TOKEN,
+                                "EXTRACTION_SERVICE_NATIVE_BROWSER": "false",
+                                "SSL_CERT_FILE": "/fixtures/fixture-ca.crt",
+                                "MAX_WORKERS": "1", "PROCESSING_BATCH_SIZE": "2"},
+                           mounts=False, memory="128m",
+                           health_cmd="wget -q -O /dev/null http://127.0.0.1:8094/healthz")
+        self.wait_ready(self.prefix + "-collector")
+        self.wait_ready(self.prefix + "-processing")
+        self.wait_ready(self.prefix + "-ingestion")
+        self.run_container(self.prefix + "-worker", command=[], image=self.worker_image,
+                           env={**self.app_environment("worker"), "JOB_EXECUTOR_URL": "http://executor:8100"},
+                           mounts=False, memory="128m")
+        self.wait_worker_healthy(self.prefix + "-worker")
+
 
     def source_receipt_check(self, job_id):
         if not re.fullmatch(r"[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}", job_id):

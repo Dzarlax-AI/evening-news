@@ -18,12 +18,33 @@ def _dependencies(name):
     return set(re.findall(r"^      ([\w-]+):", match.group(1), re.M)) if match else set()
 
 
-def test_web_can_install_schema_before_processor_health_is_required():
-    # Processor readiness requires the migration installed by web startup.
-    assert "article-processing" not in _dependencies("web")
-    assert {"executor", "article-processing"} <= _dependencies("worker")
-    assert "worker" not in _dependencies("article-processing")
-    assert "web" not in _dependencies("article-processing")
+def test_migration_precedes_background_and_compose_dependencies_are_acyclic():
+    # The one-shot migrate command must finish before the background listeners
+    # become healthy, while executor startup must not wait on background.
+    assert {"postgres"} <= _dependencies("migrate")
+    assert {"migrate", "extractor"} <= _dependencies("executor")
+    assert not ({"background", "web"} & _dependencies("executor"))
+    assert {"migrate", "executor", "extractor", "postgres", "scheduler-postgres"} <= _dependencies("background")
+    assert {"migrate", "executor", "background"} <= _dependencies("web")
+
+    services = ("web", "migrate", "executor", "background", "extractor", "postgres", "scheduler-postgres")
+    graph = {service: _dependencies(service) for service in services}
+    visiting = set()
+    visited = set()
+
+    def visit(service):
+        assert service not in visiting, f"Compose dependency cycle through {service}"
+        if service in visited:
+            return
+        visiting.add(service)
+        for dependency in graph[service]:
+            if dependency in graph:
+                visit(dependency)
+        visiting.remove(service)
+        visited.add(service)
+
+    for service in services:
+        visit(service)
 
 
 def test_processor_image_uses_real_root_context_inputs_and_available_health_tool():

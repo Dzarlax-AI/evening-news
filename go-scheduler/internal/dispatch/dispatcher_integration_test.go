@@ -54,12 +54,14 @@ func TestDispatcherMeasuresRetryAndLeaseFromResponseCompletion(t *testing.T) {
 
 	const retryID = "00000000-0000-4000-8000-000000000011"
 	const staleID = "00000000-0000-4000-8000-000000000012"
+	retryResponseCompleted := make(chan time.Time, 1)
 	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		switch r.Header.Get("Idempotency-Key") {
 		case retryID:
 			time.Sleep(150 * time.Millisecond)
 			w.Header().Set("Retry-After", "3")
 			w.WriteHeader(http.StatusServiceUnavailable)
+			retryResponseCompleted <- time.Now().UTC()
 		case staleID:
 			time.Sleep(150 * time.Millisecond)
 			w.WriteHeader(http.StatusUnauthorized)
@@ -77,16 +79,26 @@ func TestDispatcherMeasuresRetryAndLeaseFromResponseCompletion(t *testing.T) {
 	if err != nil || len(claimed) != 1 || claimed[0].Envelope.OccurrenceID != retryID {
 		t.Fatal("could not claim the retry timing occurrence")
 	}
-	start := time.Now()
+	start := time.Now().UTC()
 	dispatcher.send(ctx, claimed[0])
-	completed := time.Now()
-	var available time.Time
-	if err := db.Pool.QueryRow(ctx, `SELECT available_at FROM `+pgx.Identifier{schema, "occurrences"}.Sanitize()+` WHERE occurrence_id=$1::uuid`, retryID).Scan(&available); err != nil {
-		t.Fatal("could not inspect retry availability")
+	var responseCompleted time.Time
+	select {
+	case responseCompleted = <-retryResponseCompleted:
+	case <-ctx.Done():
+		t.Fatal("delayed HTTP response was not observed within the fixture deadline")
 	}
-	remaining := available.Sub(completed.UTC())
-	if remaining < 2800*time.Millisecond || remaining > 3*time.Second || completed.Sub(start) < 140*time.Millisecond {
-		t.Fatalf("Retry-After was measured from request start, not completion (remaining delay %s)", remaining)
+	var available, updated time.Time
+	if err := db.Pool.QueryRow(ctx, `SELECT available_at,updated_at FROM `+pgx.Identifier{schema, "occurrences"}.Sanitize()+` WHERE occurrence_id=$1::uuid`, retryID).Scan(&available, &updated); err != nil {
+		t.Fatal("could not inspect persisted retry timing")
+	}
+	if responseCompleted.Sub(start) < 140*time.Millisecond {
+		t.Fatalf("retry response completed before the expected delay: %s", responseCompleted.Sub(start))
+	}
+	if updated.Before(responseCompleted.Add(-time.Millisecond)) {
+		t.Fatalf("retry persistence timestamp %s predates delayed HTTP response completion %s", updated, responseCompleted)
+	}
+	if got := available.Sub(updated); got != 3*time.Second {
+		t.Fatalf("persisted Retry-After interval = %s, want exactly 3s from response completion", got)
 	}
 
 	claimed, err = db.Claim(ctx, time.Now().UTC().Truncate(time.Microsecond), 50*time.Millisecond, 1)

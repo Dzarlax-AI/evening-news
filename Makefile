@@ -47,17 +47,12 @@ db-shell: ## Open MariaDB shell (external database)
 
 build: ## Build Docker image
 	@echo "🏗️ Building Docker image..."
-	docker build -f docker/Dockerfile -t ghcr.io/dzarlax/rss-summarizer:latest \
-		--build-arg BUILDTIME="$(shell date -u +'%Y-%m-%dT%H:%M:%SZ')" \
-		--build-arg VERSION="$(shell git describe --tags --always 2>/dev/null || echo 'dev')" \
-		--build-arg REVISION="$(shell git rev-parse --short HEAD 2>/dev/null || echo 'unknown')" \
-		.
-	@echo "✅ Docker image built successfully!"
+	REVISION="$$(git rev-parse HEAD)" docker buildx bake -f docker-bake.hcl --load
+	@echo "✅ Core web, background, and executor images built locally."
 
-push: build ## Build and push Docker image to registry
-	@echo "🚀 Pushing Docker image to registry..."
-	docker push ghcr.io/dzarlax/rss-summarizer:latest
-	@echo "✅ Docker image pushed successfully!"
+push: ## Show the gated core image publication workflow
+	@echo "Core images publish only through the reviewed-main GitHub Actions workflow."
+	@echo "Run Core images and full-stack acceptance with publish=true after all gates pass."
 
 prod: ## Start production environment
 	docker-compose up -d
