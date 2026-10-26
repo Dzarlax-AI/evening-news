@@ -330,6 +330,79 @@ func fakeWorker(client *executor.Client, db *fakeQueueStore, requestTimeout time
 	}
 }
 
+func TestRunReadinessWaitsForExecutorRecoveryHandshake(t *testing.T) {
+	db := &fakeQueueStore{
+		info: store.LeaseInfo{OwnerID: "a39321b0-7724-443c-aaed-fd5b57e301db", Generation: 6},
+	}
+	handshakeStarted := make(chan struct{})
+	releaseHandshake := make(chan struct{})
+	var releaseOnce sync.Once
+	release := func() { releaseOnce.Do(func() { close(releaseHandshake) }) }
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if r.Method != http.MethodPost || r.URL.Path != "/internal/v1/worker-events" {
+			http.NotFound(w, r)
+			return
+		}
+		close(handshakeStarted)
+		<-releaseHandshake
+		w.WriteHeader(http.StatusNoContent)
+	}))
+	defer server.Close()
+	defer release()
+	ready := make(chan struct{})
+	workerConfig := config.Config{
+		PollInterval:      5 * time.Millisecond,
+		RequestTimeout:    time.Second,
+		ShutdownDrain:     500 * time.Millisecond,
+		MaxJobAttempts:    3,
+		HeartbeatInterval: time.Second,
+		ExecutorURL:       server.URL,
+		ExecutorToken:     "fixture-executor-token-123",
+	}
+	worker, err := NewWithReady(
+		workerConfig,
+		db,
+		allowAllPolicy{},
+		slog.New(slog.NewTextHandler(io.Discard, nil)),
+		func() { close(ready) },
+	)
+	if err != nil {
+		t.Fatal(err)
+	}
+	ctx, cancel := context.WithCancel(context.Background())
+	defer cancel()
+	done := make(chan error, 1)
+	go func() {
+		done <- worker.Run(ctx)
+	}()
+
+	select {
+	case <-handshakeStarted:
+	case <-time.After(time.Second):
+		t.Fatal("worker did not start the executor recovery handshake")
+	}
+	select {
+	case <-ready:
+		t.Fatal("worker reported ready before the executor recovery handshake completed")
+	case <-time.After(40 * time.Millisecond):
+	}
+	release()
+	select {
+	case <-ready:
+	case <-time.After(time.Second):
+		t.Fatal("worker did not report ready after the executor recovery handshake")
+	}
+	cancel()
+	select {
+	case runErr := <-done:
+		if runErr != nil {
+			t.Fatalf("Run after cancellation = %v", runErr)
+		}
+	case <-time.After(time.Second):
+		t.Fatal("worker did not stop after cancellation")
+	}
+}
+
 func TestRunWaitsForHeldLeaseBeforeRecoveryOrClaims(t *testing.T) {
 	db := &fakeQueueStore{
 		info:        store.LeaseInfo{OwnerID: "a39321b0-7724-443c-aaed-fd5b57e301db", Generation: 6},

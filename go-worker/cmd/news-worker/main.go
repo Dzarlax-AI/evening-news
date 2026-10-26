@@ -5,60 +5,37 @@ import (
 	"errors"
 	"flag"
 	"fmt"
+	"github.com/Dzarlax-AI/evening-news/go-worker/runner"
 	"log/slog"
 	"os"
 	"os/signal"
 	"syscall"
 	"time"
-
-	"github.com/Dzarlax-AI/evening-news/go-worker/internal/config"
-	"github.com/Dzarlax-AI/evening-news/go-worker/internal/newsadapter"
-	"github.com/Dzarlax-AI/evening-news/go-worker/internal/store"
-	"github.com/Dzarlax-AI/evening-news/go-worker/internal/worker"
 )
 
 func main() {
-	healthcheck := flag.Bool("healthcheck", false, "check worker database and lease health")
+	health := flag.Bool("healthcheck", false, "check worker database and lease health")
 	flag.Parse()
+	cfg, err := runner.ConfigFromEnv()
 	logger := slog.New(slog.NewJSONHandler(os.Stdout, nil))
-	cfg, err := config.Load()
 	if err != nil {
 		logger.Error("worker configuration is invalid", "error", err)
 		os.Exit(1)
 	}
-	ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
-	db, err := store.Open(ctx, cfg.DatabaseURL, 4)
-	cancel()
-	if err != nil {
-		logger.Error("worker database is unavailable", "error", err)
-		os.Exit(1)
-	}
-	defer db.Close()
-
-	ctx, cancel = context.WithTimeout(context.Background(), 5*time.Second)
-	defer cancel()
-	if err := db.CheckSchema(ctx); err != nil {
-		logger.Error("worker schema is unavailable", "error", err)
-		os.Exit(1)
-	}
-	if *healthcheck {
-		if err := db.CheckWorkerHealth(ctx); err != nil {
+	if *health {
+		ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
+		defer cancel()
+		if err := runner.Healthcheck(ctx, cfg); err != nil {
 			logger.Error("worker is unhealthy", "error", err)
 			os.Exit(1)
 		}
 		return
 	}
-
-	workerCtx, stop := signal.NotifyContext(context.Background(), syscall.SIGINT, syscall.SIGTERM)
+	ctx, stop := signal.NotifyContext(context.Background(), syscall.SIGINT, syscall.SIGTERM)
 	defer stop()
-	instance, err := worker.New(cfg, db, newsadapter.Adapter{}, logger)
-	if err != nil {
-		logger.Error("worker startup failed", "error", err)
-		os.Exit(1)
-	}
-	if err := instance.Run(workerCtx); err != nil && !errors.Is(err, context.Canceled) {
+	if err := runner.Run(ctx, cfg, nil); err != nil && !errors.Is(err, context.Canceled) {
 		logger.Error("worker stopped", "error", err)
-		if errors.Is(err, store.ErrLeaseHeld) {
+		if errors.Is(err, runner.ErrLeaseHeld) {
 			os.Exit(2)
 		}
 		os.Exit(1)

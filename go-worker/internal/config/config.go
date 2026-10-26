@@ -22,9 +22,11 @@ type Config struct {
 	HeartbeatInterval time.Duration
 }
 
-func Load() (Config, error) {
+func Load() (Config, error) { return LoadFrom(os.Getenv) }
+
+func LoadFrom(getenv func(string) string) (Config, error) {
 	var c Config
-	dsn := strings.TrimSpace(os.Getenv("DATABASE_URL"))
+	dsn := strings.TrimSpace(getenv("DATABASE_URL"))
 	if strings.HasPrefix(dsn, "postgresql+asyncpg://") {
 		dsn = "postgresql://" + strings.TrimPrefix(dsn, "postgresql+asyncpg://")
 	}
@@ -34,35 +36,35 @@ func Load() (Config, error) {
 	}
 	c.DatabaseURL = dsn
 
-	c.ExecutorURL = strings.TrimRight(strings.TrimSpace(os.Getenv("JOB_EXECUTOR_URL")), "/")
+	c.ExecutorURL = strings.TrimRight(strings.TrimSpace(getenv("JOB_EXECUTOR_URL")), "/")
 	parsedExecutor, err := url.Parse(c.ExecutorURL)
 	if err != nil || parsedExecutor.Host == "" || parsedExecutor.User != nil || parsedExecutor.RawQuery != "" || parsedExecutor.Fragment != "" ||
 		(parsedExecutor.Scheme != "http" && parsedExecutor.Scheme != "https") || (parsedExecutor.Path != "" && parsedExecutor.Path != "/") {
 		return c, errors.New("JOB_EXECUTOR_URL must be an absolute private HTTP(S) base URL")
 	}
-	c.ExecutorToken = os.Getenv("JOB_EXECUTOR_TOKEN")
+	c.ExecutorToken = getenv("JOB_EXECUTOR_TOKEN")
 	if len(c.ExecutorToken) < 16 || len(c.ExecutorToken) > 4096 || !printableToken(c.ExecutorToken) {
 		return c, errors.New("JOB_EXECUTOR_TOKEN must be 16 through 4096 printable ASCII bytes without spaces")
 	}
 
-	c.PollInterval, err = durationIntegerSeconds("WORKER_POLL_INTERVAL_SECONDS", time.Second, time.Second, 10*time.Second)
+	c.PollInterval, err = durationIntegerSeconds(getenv, "WORKER_POLL_INTERVAL_SECONDS", time.Second, time.Second, 10*time.Second)
 	if err != nil {
 		return c, err
 	}
-	c.ShutdownDrain, err = durationSeconds("WORKER_SHUTDOWN_DRAIN_SECONDS", 20*time.Second, 0, 120*time.Second)
+	c.ShutdownDrain, err = durationSeconds(getenv, "WORKER_SHUTDOWN_DRAIN_SECONDS", 20*time.Second, 0, 120*time.Second)
 	if err != nil {
 		return c, err
 	}
-	retentionDays, err := integer("WORKER_JOB_RETENTION_DAYS", 7, 1, 90)
+	retentionDays, err := integer(getenv, "WORKER_JOB_RETENTION_DAYS", 7, 1, 90)
 	if err != nil {
 		return c, err
 	}
 	c.JobRetention = time.Duration(retentionDays) * 24 * time.Hour
-	c.MaxJobAttempts, err = integer("WORKER_MAX_JOB_ATTEMPTS", 3, 1, 10)
+	c.MaxJobAttempts, err = integer(getenv, "WORKER_MAX_JOB_ATTEMPTS", 3, 1, 10)
 	if err != nil {
 		return c, err
 	}
-	c.RequestTimeout, err = durationSeconds("JOB_EXECUTOR_REQUEST_TIMEOUT_SECONDS", 5*time.Second, 250*time.Millisecond, 30*time.Second)
+	c.RequestTimeout, err = durationSeconds(getenv, "JOB_EXECUTOR_REQUEST_TIMEOUT_SECONDS", 5*time.Second, 250*time.Millisecond, 30*time.Second)
 	if err != nil {
 		return c, err
 	}
@@ -79,8 +81,8 @@ func printableToken(value string) bool {
 	return true
 }
 
-func durationIntegerSeconds(name string, fallback, min, max time.Duration) (time.Duration, error) {
-	value := strings.TrimSpace(os.Getenv(name))
+func durationIntegerSeconds(getenv func(string) string, name string, fallback, min, max time.Duration) (time.Duration, error) {
+	value := strings.TrimSpace(getenv(name))
 	if value == "" {
 		return fallback, nil
 	}
@@ -95,8 +97,8 @@ func durationIntegerSeconds(name string, fallback, min, max time.Duration) (time
 	return duration, nil
 }
 
-func durationSeconds(name string, fallback, min, max time.Duration) (time.Duration, error) {
-	value := strings.TrimSpace(os.Getenv(name))
+func durationSeconds(getenv func(string) string, name string, fallback, min, max time.Duration) (time.Duration, error) {
+	value := strings.TrimSpace(getenv(name))
 	if value == "" {
 		return fallback, nil
 	}
@@ -111,8 +113,8 @@ func durationSeconds(name string, fallback, min, max time.Duration) (time.Durati
 	return duration, nil
 }
 
-func integer(name string, fallback, min, max int) (int, error) {
-	value := strings.TrimSpace(os.Getenv(name))
+func integer(getenv func(string) string, name string, fallback, min, max int) (int, error) {
+	value := strings.TrimSpace(getenv(name))
 	if value == "" {
 		return fallback, nil
 	}

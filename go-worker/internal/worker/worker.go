@@ -29,6 +29,7 @@ type Worker struct {
 	executor *executor.Client
 	policy   QueuePolicy
 	logger   *slog.Logger
+	onReady  func()
 }
 
 type QueuePolicy interface {
@@ -53,6 +54,10 @@ type QueueStore interface {
 }
 
 func New(c config.Config, db QueueStore, policy QueuePolicy, logger *slog.Logger) (*Worker, error) {
+	return NewWithReady(c, db, policy, logger, nil)
+}
+
+func NewWithReady(c config.Config, db QueueStore, policy QueuePolicy, logger *slog.Logger, onReady func()) (*Worker, error) {
 	client, err := executor.New(c.ExecutorURL, c.ExecutorToken, c.RequestTimeout)
 	if err != nil {
 		return nil, err
@@ -60,7 +65,7 @@ func New(c config.Config, db QueueStore, policy QueuePolicy, logger *slog.Logger
 	if policy == nil {
 		return nil, errors.New("queue policy is required")
 	}
-	return &Worker{config: c, store: db, executor: client, policy: policy, logger: logger}, nil
+	return &Worker{config: c, store: db, executor: client, policy: policy, logger: logger, onReady: onReady}, nil
 }
 
 func (w *Worker) Run(ctx context.Context) error {
@@ -93,6 +98,9 @@ func (w *Worker) Run(ctx context.Context) error {
 	}
 	if err := w.executor.Recovered(claimCtx, info.OwnerID, info.Generation); err != nil {
 		return fmt.Errorf("Python recovery adapter unavailable: %w", err)
+	}
+	if w.onReady != nil {
+		w.onReady()
 	}
 
 	pruneTimer := time.NewTicker(time.Hour)

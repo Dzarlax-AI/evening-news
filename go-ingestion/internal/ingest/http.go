@@ -31,6 +31,7 @@ const maxEnvelopeBytes = 8192
 const maxExtractorBytes = 8 * 1024 * 1024
 const maxSelectorHTMLBytes = 5 * 1024 * 1024
 const maxSelectorCallbackBytes = maxSelectorHTMLBytes + maxEnvelopeBytes
+const terminalUpdateTimeout = 5 * time.Second
 
 type Config struct {
 	Token                  string
@@ -45,9 +46,12 @@ type Handler struct {
 	store    *store.Store
 	cfg      Config
 	http     *http.Client
+	parent   context.Context
 	mu       sync.Mutex
 	runs     map[string]context.CancelFunc
 	reserved map[string]bool
+	wg       sync.WaitGroup
+	closed   bool
 }
 
 type Envelope struct {
@@ -166,7 +170,44 @@ type selectorResponse struct {
 }
 
 func NewHandler(db *store.Store, cfg Config) *Handler {
-	return &Handler{store: db, cfg: cfg, http: &http.Client{Timeout: 125 * time.Second, CheckRedirect: func(*http.Request, []*http.Request) error { return http.ErrUseLastResponse }}, runs: map[string]context.CancelFunc{}, reserved: map[string]bool{}}
+	return NewHandlerWithContext(context.Background(), db, cfg)
+}
+
+func NewHandlerWithContext(parent context.Context, db *store.Store, cfg Config) *Handler {
+	if parent == nil {
+		parent = context.Background()
+	}
+	return &Handler{
+		store:    db,
+		cfg:      cfg,
+		http:     &http.Client{Timeout: 125 * time.Second, CheckRedirect: func(*http.Request, []*http.Request) error { return http.ErrUseLastResponse }},
+		parent:   parent,
+		runs:     map[string]context.CancelFunc{},
+		reserved: map[string]bool{},
+	}
+}
+
+// Close prevents new ingestion work, cancels active runs, and waits for their
+// bounded cleanup. Stop HTTP serving before calling Close.
+func (h *Handler) Close(ctx context.Context) error {
+	h.mu.Lock()
+	h.closed = true
+	for _, cancel := range h.runs {
+		cancel()
+	}
+	h.mu.Unlock()
+
+	done := make(chan struct{})
+	go func() {
+		h.wg.Wait()
+		close(done)
+	}()
+	select {
+	case <-done:
+		return nil
+	case <-ctx.Done():
+		return ctx.Err()
+	}
 }
 
 func (h *Handler) Routes() http.Handler {
@@ -414,6 +455,9 @@ func canonicalUUID(v string) bool {
 func (h *Handler) reserveRun(runID string) bool {
 	h.mu.Lock()
 	defer h.mu.Unlock()
+	if h.closed {
+		return false
+	}
 	if h.runs[runID] != nil || h.reserved[runID] {
 		return true
 	}
@@ -432,6 +476,10 @@ func (h *Handler) releaseRunReservation(runID string) {
 
 func (h *Handler) launch(f store.Fence) bool {
 	h.mu.Lock()
+	if h.closed {
+		h.mu.Unlock()
+		return false
+	}
 	if h.runs[f.RunID] != nil {
 		h.mu.Unlock()
 		return true
@@ -442,10 +490,12 @@ func (h *Handler) launch(f store.Fence) bool {
 		h.mu.Unlock()
 		return false
 	}
-	ctx, cancel := context.WithDeadline(context.Background(), f.DeadlineAt)
+	ctx, cancel := context.WithDeadline(h.parent, f.DeadlineAt)
 	h.runs[f.RunID] = cancel
+	h.wg.Add(1)
 	h.mu.Unlock()
 	go func() {
+		defer h.wg.Done()
 		defer func() { cancel(); h.mu.Lock(); delete(h.runs, f.RunID); h.mu.Unlock() }()
 		release, acquired, err := h.store.AcquireRunLock(ctx, f.RunID)
 		if err != nil || !acquired {
@@ -457,7 +507,9 @@ func (h *Handler) launch(f store.Fence) bool {
 		if code != "" {
 			state = "failed"
 		}
-		if err := h.store.UpdateRun(context.Background(), f, state, result, code); err != nil {
+		updateCtx, updateCancel := context.WithTimeout(context.Background(), terminalUpdateTimeout)
+		defer updateCancel()
+		if err := h.store.UpdateRun(updateCtx, f, state, result, code); err != nil {
 			log.Printf("ingestion terminal run update failed run_id=%s", f.RunID)
 		}
 	}()
