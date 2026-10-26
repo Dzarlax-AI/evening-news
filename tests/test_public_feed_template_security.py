@@ -9,7 +9,7 @@ import pytest
 from bs4 import BeautifulSoup
 
 
-TEMPLATE = Path(__file__).parents[1] / "web/templates/public/_feed_core.html"
+TEMPLATE = Path(__file__).parents[1] / "go-web/templates/public/fragments/feed_core.html"
 
 
 @pytest.mark.skipif(shutil.which("node") is None, reason="Node.js is needed to execute feed rendering")

@@ -15,7 +15,7 @@ pytestmark = pytest.mark.skipif(NODE is None, reason="Node is required for JavaS
 
 def run_ui(scenario):
     source = (ROOT / "web/static/js/main.js").read_text()
-    modal = (ROOT / "web/templates/public/_article_modal.html").read_text()
+    modal = (ROOT / "go-web/templates/public/fragments/article_modal.html").read_text()
     modal = modal.split("window.refreshArticle = async function()", 1)[1].split("</script>", 1)[0]
     script = r"""
 const vm = require('node:vm');

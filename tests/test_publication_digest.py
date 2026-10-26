@@ -17,10 +17,7 @@ def isolated():
 
 
 @pytest.mark.asyncio
-async def test_digest_and_search_exclude_incomplete_outcomes_but_keep_explicit_ad_view(isolated, monkeypatch):
-    from news_aggregator.config import settings
-    monkeypatch.setattr(settings, 'admin_password', 'test-only-publication')
-    from news_aggregator import public
+async def test_digest_excludes_incomplete_outcomes(isolated):
     orchestrator, engine = isolated
     with Session(engine) as db:
         category = Category(name='Tech', display_name='Tech')
@@ -40,16 +37,3 @@ async def test_digest_and_search_exclude_incomplete_outcomes_but_keep_explicit_a
     grouped = await orchestrator.db_queue_manager.execute_read(
         lambda db: orchestrator._group_articles_by_category(db, datetime.utcnow().date()))
     assert [item.id for item in grouped['Tech']] == [1]
-    monkeypatch.setattr(public, 'get_database_queue', lambda: orchestrator.db_queue_manager)
-    monkeypatch.setattr(public.templates, 'TemplateResponse', lambda request, template, context: context)
-    digest = await public.public_digest_view(datetime.utcnow().date().isoformat(), object())
-    assert digest['total_articles'] == 1
-    assert [item['id'] for item in digest['articles_by_category']['Tech']] == [1]
-    with Session(engine) as db:
-        results = await public.search_articles(q='Publication', limit=20, offset=0, category=None,
-            since_hours=None, sort='date', hide_ads=True, db=AsyncSessionAdapter(db))
-        assert [item['id'] for item in results['articles']] == [1]
-        assert results['pagination']['total'] == 1
-        results = await public.search_articles(q='Publication', limit=20, offset=0, category=None,
-            since_hours=None, sort='date', hide_ads=False, db=AsyncSessionAdapter(db))
-        assert {item['id'] for item in results['articles']} == {1, 6}

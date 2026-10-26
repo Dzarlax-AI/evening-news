@@ -229,6 +229,60 @@ func TestLegacyWorkerModeCommandsReturnReceiptsAndPersistPythonPayloads(t *testi
 	assertJob(processing, "news_processing", map[string]any{})
 }
 
+func TestLegacySelectedArticleOutcomeIsReturnedByPersistedJobStatus(t *testing.T) {
+	db := newLegacyContractDB(t)
+	ctx := context.Background()
+	if _, err := db.pool.Exec(ctx, `INSERT INTO sources(id,name,source_type,url,enabled) VALUES(7,'Fixture source','rss','https://fixture.test/rss',true)`); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := db.pool.Exec(ctx, `INSERT INTO articles(id,source_id,title,url,processing_state) VALUES(51,7,'Fixture 51','https://fixture.test/51','pending')`); err != nil {
+		t.Fatal(err)
+	}
+	mux, adminToken := legacyAdminHTTP(t, db)
+	accepted := legacyRequest(mux, http.MethodPost, "/api/v1/articles/51/reprocess", `{"force":true}`, adminToken, "selected-result-roundtrip", nil)
+	if accepted.Code != http.StatusAccepted {
+		t.Fatalf("reprocess status=%d body=%s", accepted.Code, accepted.Body.String())
+	}
+	var receipt struct {
+		JobID string `json:"job_id"`
+	}
+	if err := json.Unmarshal(accepted.Body.Bytes(), &receipt); err != nil || receipt.JobID == "" {
+		t.Fatalf("invalid accepted receipt: %#v err=%v body=%s", receipt, err, accepted.Body.String())
+	}
+	wantResult := `{"status":"retry_wait","success":false,"settled":false,"retryable":true,"processed":0,"improved":0,"article_outcomes":[{"article_id":51,"state":"retry_wait","reason":"missing_summary"}]}`
+	if _, err := db.pool.Exec(ctx, `UPDATE background_jobs SET state='succeeded',finished_at=timezone('UTC',now()),result=$2::jsonb WHERE id=$1`, receipt.JobID, wantResult); err != nil {
+		t.Fatal(err)
+	}
+	response := legacyRequest(mux, http.MethodGet, "/api/v1/jobs/"+receipt.JobID, "", adminToken, "", nil)
+	if response.Code != http.StatusOK {
+		t.Fatalf("job status=%d body=%s", response.Code, response.Body.String())
+	}
+	var got struct {
+		JobID  string `json:"job_id"`
+		Status string `json:"status"`
+		Result struct {
+			Status          string `json:"status"`
+			Settled         bool   `json:"settled"`
+			Retryable       bool   `json:"retryable"`
+			ArticleOutcomes []struct {
+				ArticleID int    `json:"article_id"`
+				State     string `json:"state"`
+				Reason    string `json:"reason"`
+			} `json:"article_outcomes"`
+		} `json:"result"`
+	}
+	if err := json.Unmarshal(response.Body.Bytes(), &got); err != nil {
+		t.Fatal(err)
+	}
+	if got.JobID != receipt.JobID || got.Status != "succeeded" || got.Result.Status != "retry_wait" || got.Result.Settled || !got.Result.Retryable || len(got.Result.ArticleOutcomes) != 1 {
+		t.Fatalf("job receipt lost outcome state: %#v", got)
+	}
+	outcome := got.Result.ArticleOutcomes[0]
+	if outcome.ArticleID != 51 || outcome.State != "retry_wait" || outcome.Reason != "missing_summary" {
+		t.Fatalf("job receipt article outcome mismatch: %#v", outcome)
+	}
+}
+
 func TestLegacySourceTestQueueFullReturns503WithoutCreatingReceipt(t *testing.T) {
 	db := newLegacyContractDB(t)
 	ctx := context.Background()
