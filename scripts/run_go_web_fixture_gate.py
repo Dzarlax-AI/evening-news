@@ -355,7 +355,8 @@ class GoWebGate(IngestionGate):
         self.run_container(self.prefix + "-postgres", command=["postgres"], alias="postgres",
                            env={"POSTGRES_DB": "gate_db", "POSTGRES_USER": "gate_user",
                                 "POSTGRES_PASSWORD": DB_PASSWORD}, image="postgres:17-alpine",
-                           mounts=False, memory="384m")
+                           mounts=False, memory="384m",
+                           health_cmd="pg_isready -U gate_user -d gate_db")
         self.run_container(self.prefix + "-origin", command=["python3", "/gate/gate_origin.py",
                            "--cert", "/fixtures/fixture-ca.crt", "--key", "/fixtures/fixture-ca.key"],
                            image="python:3.12-alpine", memory="128m")
@@ -363,6 +364,13 @@ class GoWebGate(IngestionGate):
                            alias="fixture-services", memory="128m", disable_healthcheck=True)
         self.docker("exec", self.prefix + "-postgres", "sh", "-c",
                     "until pg_isready -U gate_user -d gate_db >/dev/null 2>&1; do sleep 1; done", timeout=90)
+        postgres_probe = self.docker(
+            "exec", self.prefix + "-postgres", "pg_isready", "-U", "gate_user", "-d", "gate_db",
+            check=False,
+        )
+        self.report["postgres_ready_before_migration"] = postgres_probe.returncode == 0
+        if postgres_probe.returncode:
+            raise GateFailure("synthetic_postgres_not_ready_before_migration")
 
         # Explicit bootstrap is a one-shot app-image process; the Go web never migrates.
         self.run_container(self.prefix + "-migrate", command=["python", "-m", "news_aggregator.migrate"],

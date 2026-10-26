@@ -140,3 +140,73 @@ def test_worker_fault_diagnostics_only_keep_sanitized_json_fields(monkeypatch, t
     }]
     assert "secret" not in repr(phases)
     assert SCRIPT.read_text().count('/consolidated-fixtures/lock_worker_status.py", "22"') == 2
+
+
+def test_migration_failure_diagnostics_are_precleanup_and_sanitized(monkeypatch, tmp_path):
+    module = load_gate_module()
+    gate = module.ConsolidatedBackgroundGate(dict(module.DEFAULT_IMAGES), tmp_path)
+
+    class Result:
+        def __init__(self, stdout="", returncode=0):
+            self.stdout = stdout
+            self.returncode = returncode
+            self.stderr = ""
+
+    def fake_docker(*args, **kwargs):
+        if args[:2] == ("inspect", "--format"):
+            return Result('{"Status":"exited","ExitCode":4,"OOMKilled":false,"Error":""}')
+        if args[0] == "logs":
+            return Result("migration failed for postgresql://gate_user:fixture-only-password@postgres/gate_db\n")
+        if args[0] == "exec" and args[2] == "pg_isready":
+            return Result(returncode=0)
+        raise AssertionError(args)
+
+    monkeypatch.setattr(gate, "docker", fake_docker)
+    gate.capture_migration_bootstrap_diagnostics()
+    diagnostic = gate.report["migration_bootstrap_diagnostics"]
+    assert diagnostic["container_state"]["exit_code"] == 4
+    assert diagnostic["database_scope"] == "disposable synthetic gate_db only"
+    assert diagnostic["postgres_ready_at_failure_capture"] is True
+    assert "fixture-only-password" not in repr(diagnostic)
+    assert "postgresql://[redacted]" in diagnostic["log_excerpt"][0]
+
+
+def test_active_sigterm_article_is_fresh_synthetic_and_requires_ai(monkeypatch, tmp_path):
+    module = load_gate_module()
+    gate = module.ConsolidatedBackgroundGate(dict(module.DEFAULT_IMAGES), tmp_path)
+    statements = []
+
+    def fake_pg_value(sql):
+        statements.append(sql)
+        if sql.startswith("SELECT id FROM sources"):
+            return "7"
+        if sql.startswith("INSERT INTO articles"):
+            return "42"
+        return "pending|false|false|false|false"
+
+    monkeypatch.setattr(gate, "pg_value", fake_pg_value)
+    article_id = gate.create_fresh_sigterm_article()
+    insert = next(sql for sql in statements if sql.startswith("INSERT INTO articles"))
+    assert article_id == 42
+    assert "Synthetic active SIGTERM fixture" in insert
+    assert "rss.fixture.test/active-sigterm/" in insert
+    assert "'pending',0," in insert
+    assert gate.report["checks"]["active_sigterm_fixture_article_requires_ai"] is True
+    assert gate.report["active_sigterm_fixture_article"]["stage_state"] == "pending|false|false|false|false"
+    assert "force=False" in SCRIPT.read_text()
+    assert '"article_last_processing_error": article_error_code' in SCRIPT.read_text()
+
+
+def test_active_sigterm_origin_serves_only_valid_synthetic_markers():
+    origin_path = ROOT / "tests/fixtures/go-source-manager/fixture_origin.py"
+    spec = importlib.util.spec_from_file_location("fixture_origin", origin_path)
+    origin = importlib.util.module_from_spec(spec)
+    assert spec.loader is not None
+    spec.loader.exec_module(origin)
+    marker = "abcdef123456"
+    document = origin.active_sigterm_document(marker)
+    assert document is not None
+    assert document.count(marker.encode()) >= 2
+    assert b"Synthetic active SIGTERM fixture" in document
+    assert len(document) > 1000
+    assert origin.active_sigterm_document("INVALID") is None

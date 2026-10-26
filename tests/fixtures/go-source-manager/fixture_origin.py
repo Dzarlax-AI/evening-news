@@ -4,6 +4,7 @@
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 from urllib.parse import parse_qs, urlsplit
 import argparse
+import re
 import ssl
 
 
@@ -47,6 +48,25 @@ TELEGRAM_HTML = b"""<!doctype html><html><body>
 </body></html>"""
 
 
+def active_sigterm_document(marker: str) -> bytes | None:
+    """Return one fresh, self-contained article document for the shutdown fixture."""
+    if not re.fullmatch(r"[0-9a-f]{12}", marker):
+        return None
+    title = f"Synthetic active SIGTERM fixture {marker}"
+    paragraphs = "".join(
+        "<p>This is synthetic fixture text served only inside the disposable acceptance network. "
+        "It describes a fictional systems research result with no real people or organizations. "
+        f"The unique fixture marker is {marker}.</p>"
+        for _ in range(8)
+    )
+    return (
+        "<!doctype html><html><head><title>" + title + "</title>"
+        "<meta property=\"og:title\" content=\"" + title + "\"></head>"
+        "<body><main><article><h1>" + title + "</h1>" + paragraphs
+        + "</article></main></body></html>"
+    ).encode("utf-8")
+
+
 class Handler(BaseHTTPRequestHandler):
     protocol_version = "HTTP/1.1"
 
@@ -67,6 +87,12 @@ class Handler(BaseHTTPRequestHandler):
         elif parsed.path == "/s/fixture_channel":
             self._reply(200, TELEGRAM_HTML, "text/html; charset=utf-8")
         else:
+            marker_match = re.fullmatch(r"/active-sigterm/([0-9a-f]{12})", parsed.path)
+            if marker_match:
+                document = active_sigterm_document(marker_match.group(1))
+                if document is not None:
+                    self._reply(200, document, "text/html; charset=utf-8")
+                    return
             self._reply(404, b"not found", "text/plain; charset=utf-8")
 
     def _reply(self, status, body, content_type):

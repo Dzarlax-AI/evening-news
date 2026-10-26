@@ -4,6 +4,7 @@
 from __future__ import annotations
 
 import argparse
+import hashlib
 import json
 import re
 import shutil
@@ -15,13 +16,17 @@ from pathlib import Path
 
 try:
     from scripts.run_go_web_fixture_gate import GoWebGate, WEB_BACKEND_TOKEN, SCHEDULED_TOKEN
-    from scripts.run_go_ingestion_fixture_gate import DB_PASSWORD, TOKEN as INGESTION_TOKEN
+    from scripts.run_go_ingestion_fixture_gate import (
+        DB_PASSWORD, TOKEN as INGESTION_TOKEN, sanitize_fixture_log,
+    )
     from scripts.run_go_job_worker_fixture_gate import ARTICLE_AI_TOKEN, ARTICLE_PROCESSING_TOKEN
     from scripts.run_go_scheduler_fixture_gate import SCHEDULER_TOKEN
     from scripts.run_background_worker_fixture_gate import GateFailure
 except ModuleNotFoundError:
     from run_go_web_fixture_gate import GoWebGate, WEB_BACKEND_TOKEN, SCHEDULED_TOKEN
-    from run_go_ingestion_fixture_gate import DB_PASSWORD, TOKEN as INGESTION_TOKEN
+    from run_go_ingestion_fixture_gate import (
+        DB_PASSWORD, TOKEN as INGESTION_TOKEN, sanitize_fixture_log,
+    )
     from run_go_job_worker_fixture_gate import ARTICLE_AI_TOKEN, ARTICLE_PROCESSING_TOKEN
     from run_go_scheduler_fixture_gate import SCHEDULER_TOKEN
     from run_background_worker_fixture_gate import GateFailure
@@ -107,6 +112,50 @@ class ConsolidatedBackgroundGate(GoWebGate):
             env["TRUSTED_HOSTS"] = ",".join(trusted_hosts)
             kwargs["env"] = env
         return super().run_container(name, **kwargs)
+
+    def check(self, name, condition):
+        if name == "explicit_python_migration_bootstrap" and not condition:
+            self.capture_migration_bootstrap_diagnostics()
+        return super().check(name, condition)
+
+    def capture_migration_bootstrap_diagnostics(self):
+        name = self.prefix + "-migrate"
+        state_result = self.docker("inspect", "--format", "{{json .State}}", name, check=False)
+        try:
+            state = json.loads(state_result.stdout)
+        except ValueError:
+            state = {}
+        logs = self.docker("logs", "--tail", "40", name, check=False)
+        output_lines = sanitize_fixture_log((logs.stdout or "") + "\n" + (logs.stderr or ""))
+        url_pattern = re.compile(r"(?i)(postgres(?:ql)?(?:\+\w+)?://)[^\s\"'<>]+")
+        fixture_secrets = (
+            DB_PASSWORD, INGESTION_TOKEN, self.collector_token, self.executor_token,
+            ARTICLE_AI_TOKEN, ARTICLE_PROCESSING_TOKEN, SCHEDULER_TOKEN,
+            WEB_BACKEND_TOKEN, SCHEDULED_TOKEN,
+        )
+        safe_lines = []
+        for line in output_lines[-24:]:
+            line = url_pattern.sub(r"\1[redacted]", line)
+            for secret in fixture_secrets:
+                line = line.replace(secret, "[redacted]")
+            safe_lines.append(line[:400])
+        pg_ready = self.docker(
+            "exec", self.prefix + "-postgres", "pg_isready", "-U", "gate_user", "-d", "gate_db",
+            check=False,
+        )
+        self.report["migration_bootstrap_diagnostics"] = {
+            "database_scope": "disposable synthetic gate_db only",
+            "postgres_ready_at_failure_capture": pg_ready.returncode == 0,
+            "postgres_readiness_probe_status": pg_ready.returncode,
+            "container_state": {
+                "status": state.get("Status"),
+                "exit_code": state.get("ExitCode"),
+                "oom_killed": state.get("OOMKilled"),
+                "error_present": bool(state.get("Error")),
+            },
+            "logs_sanitized": True,
+            "log_excerpt": safe_lines,
+        }
 
     def docker(self, *args, **kwargs):
         # The executor fixture needs one additional read-only probe mount. Keep
@@ -483,23 +532,64 @@ class ConsolidatedBackgroundGate(GoWebGate):
 
     def pg_value(self, sql):
         result = self.docker("exec", self.prefix + "-postgres", "psql", "-U", "gate_user", "-d", "gate_db",
-                             "-Atc", sql, check=False)
+                             "-qAtc", sql, check=False)
         if result.returncode:
             raise GateFailure("fixture_database_probe_failed")
         return result.stdout.strip()
 
-    def enqueue_forced_reprocess(self, article_id, idempotency_key):
+    def enqueue_article_reprocess(self, article_id, idempotency_key, *, force=True):
         if not str(article_id).isdigit() or not re.fullmatch(r"[a-zA-Z0-9-]{8,128}", idempotency_key):
             raise GateFailure("fixture_reprocess_parameters_invalid")
         status, body = self.request("POST", f"/api/v1/articles/{article_id}/reprocess",
-                                    token=self.access_token, body={"force": True},
+                                    token=self.access_token, body={"force": force},
                                     headers={"Idempotency-Key": idempotency_key})
         job_id = body.get("job_id") if isinstance(body, dict) else None
         if status != 202 or not isinstance(job_id, str):
             raise GateFailure("fixture_reprocess_job_not_accepted")
         return job_id
 
-    def wait_gemini_call(self, previous_count, timeout=90):
+    def create_fresh_sigterm_article(self):
+        if not re.fullmatch(r"[0-9a-f]{12}", self.run_id):
+            raise GateFailure("fixture_run_id_invalid_for_article_seed")
+        source_id = self.pg_value("SELECT id FROM sources WHERE name='Go Web Gate RSS 1'")
+        if not source_id.isdigit():
+            raise GateFailure("fresh_sigterm_fixture_source_missing")
+        marker = self.run_id
+        title = f"Synthetic active SIGTERM fixture {marker}"
+        url = f"https://rss.fixture.test/active-sigterm/{marker}"
+        content = ("This is a synthetic fixture article created only for the disposable active shutdown test. "
+                   "Its unique body ensures the article has not passed through prior processing. " * 10 + marker)
+        content_hash = hashlib.sha256(content.encode("utf-8")).hexdigest()
+
+        def literal(value):
+            return "'" + value.replace("'", "''") + "'"
+
+        sql = (
+            "INSERT INTO articles (source_id,title,url,content,fetched_at,processed,summary_processed,"
+            "category_processed,ad_processed,processing_state,processing_attempts,hash_content,"
+            "is_advertisement,ad_confidence,media_files) VALUES ("
+            + source_id + "," + literal(title) + "," + literal(url) + "," + literal(content)
+            + ",clock_timestamp() AT TIME ZONE 'UTC',false,false,false,false,'pending',0,"
+            + literal(content_hash) + ",false,0,'[]'::jsonb) RETURNING id"
+        )
+        article_id = self.pg_value(sql)
+        if not article_id.isdigit():
+            raise GateFailure("fresh_sigterm_fixture_article_not_created")
+        stage_state = self.pg_value(
+            "SELECT processing_state || '|' || processed::text || '|' || summary_processed::text || '|' || "
+            "category_processed::text || '|' || ad_processed::text FROM articles WHERE id=" + article_id
+        )
+        expected = "pending|false|false|false|false"
+        self.check("active_sigterm_fixture_article_requires_ai", stage_state == expected)
+        self.report["active_sigterm_fixture_article"] = {
+            "article_id": int(article_id),
+            "source_id": int(source_id),
+            "synthetic_unique_content_hash": content_hash,
+            "stage_state": stage_state,
+        }
+        return int(article_id)
+
+    def wait_gemini_call(self, previous_count, timeout=90, job_id=None, phase="unspecified", article_id=None):
         deadline = time.monotonic() + timeout
         while time.monotonic() < deadline:
             counters = self.fake_counters_http().get("providers", {})
@@ -507,6 +597,44 @@ class ConsolidatedBackgroundGate(GoWebGate):
             if isinstance(count, int) and count > previous_count:
                 return count
             time.sleep(0.25)
+        current = self.fake_counters_http()
+        job_status = None
+        error_code = None
+        error_type = None
+        http_status = None
+        if isinstance(job_id, str):
+            http_status, job = self.request("GET", "/api/v1/jobs/" + job_id,
+                                            token=self.access_token)
+            if http_status == 200 and isinstance(job, dict):
+                job_status = job.get("status")
+                error_code = job.get("error_code") if isinstance(job.get("error_code"), str) else None
+                error_type = job.get("error_type") if isinstance(job.get("error_type"), str) else None
+        article_state = None
+        article_error_code = None
+        if isinstance(article_id, int) and article_id > 0:
+            value = self.pg_value(
+                "SELECT processing_state || '|' || processed::text || '|' || summary_processed::text || '|' || "
+                "category_processed::text || '|' || ad_processed::text FROM articles WHERE id="
+                + str(article_id)
+            )
+            if re.fullmatch(r"[a-z_]{1,32}\|(?:true|false)\|(?:true|false)\|(?:true|false)\|(?:true|false)", value):
+                article_state = value
+            raw_error_code = self.pg_value(
+                "SELECT COALESCE(last_processing_error,'') FROM articles WHERE id=" + str(article_id)
+            )
+            if re.fullmatch(r"[a-z0-9_]{1,64}", raw_error_code):
+                article_error_code = raw_error_code
+        self.report.setdefault("blocked_ai_wait_diagnostics", {})[phase] = {
+            "job_http_status": http_status,
+            "job_status": job_status,
+            "job_error_code": error_code,
+            "job_error_type": error_type,
+            "gemini_count_before": previous_count,
+            "gemini_count_current": current.get("providers", {}).get("gemini"),
+            "article_id": article_id,
+            "article_stage_state": article_state,
+            "article_last_processing_error": article_error_code,
+        }
         raise GateFailure("fixture_job_did_not_reach_blocked_fake_ai")
 
     def wait_worker_generation(self, previous, timeout=90):
@@ -611,8 +739,8 @@ class ConsolidatedBackgroundGate(GoWebGate):
         baseline = self.fake_counters_http().get("providers", {}).get("gemini", 0)
         self.control_fake_services(gemini_mode="block")
         article_id = self.pg_value("SELECT id FROM articles WHERE processed=true ORDER BY id LIMIT 1")
-        job_id = self.enqueue_forced_reprocess(article_id, "lease-recovery-fixture-" + self.run_id)
-        self.wait_gemini_call(baseline)
+        job_id = self.enqueue_article_reprocess(article_id, "lease-recovery-fixture-" + self.run_id)
+        self.wait_gemini_call(baseline, job_id=job_id, phase="worker_reprocess", article_id=article_id)
         before_lease = self.pg_value("SELECT generation::text || '|' || lock_backend_pid::text "
                                      "FROM background_worker_status WHERE id=1")
         try:
@@ -799,9 +927,10 @@ class ConsolidatedBackgroundGate(GoWebGate):
 
         baseline = self.fake_counters_http().get("providers", {}).get("gemini", 0)
         self.control_fake_services(gemini_mode="block")
-        article_id = self.pg_value("SELECT id FROM articles WHERE processed=true ORDER BY id LIMIT 1")
-        job_id = self.enqueue_forced_reprocess(article_id, "active-term-fixture-" + self.run_id)
-        self.wait_gemini_call(baseline)
+        article_id = self.create_fresh_sigterm_article()
+        job_id = self.enqueue_article_reprocess(article_id, "active-term-fixture-" + self.run_id,
+                                                force=False)
+        self.wait_gemini_call(baseline, job_id=job_id, phase="active_sigterm", article_id=article_id)
         started = time.monotonic()
         self.docker("stop", "--time", "30", name, timeout=40)
         elapsed = time.monotonic() - started
