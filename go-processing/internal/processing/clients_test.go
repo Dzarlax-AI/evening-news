@@ -48,7 +48,7 @@ func TestExtractUsesPythonCallbackInputAllowlists(t *testing.T) {
 		_ = json.NewEncoder(w).Encode(map[string]any{
 			"contract_version": "1", "request_id": req["request_id"], "original_url": articleURL,
 			"outcome": "success", "observations": []any{map[string]any{"selector": "article", "method": "http", "success": true}},
-			"result": map[string]any{"content": "A sufficiently useful extracted article body.", "method_used": "readability", "selector_used": "article"},
+			"result": map[string]any{"content": syntheticExtractedArticle, "method_used": "readability", "selector_used": "article"},
 		})
 	}))
 	defer extractorServer.Close()
@@ -99,7 +99,7 @@ func TestExtractorClientSendsBoundedContractAndPreservesObservations(t *testing.
 		_ = json.NewEncoder(w).Encode(map[string]any{
 			"contract_version": "1", "request_id": body["request_id"], "original_url": url,
 			"final_url": url, "outcome": "success",
-			"result":       map[string]any{"content": "synthetic article content", "title": "fixture", "media": []any{map[string]any{"type": "image", "url": "https://fixture.invalid/image.jpg"}}, "method": "http", "method_used": "http", "selector_used": "article"},
+			"result":       map[string]any{"content": syntheticExtractedArticle, "title": "fixture", "media": []any{map[string]any{"type": "image", "url": "https://fixture.invalid/image.jpg"}}, "method": "http", "method_used": "http", "selector_used": "article"},
 			"observations": []any{map[string]any{"selector": "article", "method": "http", "success": true}},
 		})
 	}))
@@ -110,7 +110,7 @@ func TestExtractorClientSendsBoundedContractAndPreservesObservations(t *testing.
 	if err != nil {
 		t.Fatal(err)
 	}
-	if out.Content != "synthetic article content" || len(out.MediaFiles) != 1 || out.MethodUsed != "http" || len(out.Observations) != 1 || !out.Observations[0].Success {
+	if out.Content != syntheticExtractedArticle || len(out.MediaFiles) != 1 || out.MethodUsed != "http" || len(out.Observations) != 1 || !out.Observations[0].Success {
 		t.Fatalf("extraction result lost fields: %#v", out)
 	}
 }
@@ -151,14 +151,14 @@ func TestExtractorClientRetries429OnlyWithinTotalBudget(t *testing.T) {
 		}
 		var body map[string]any
 		_ = json.NewDecoder(r.Body).Decode(&body)
-		_ = json.NewEncoder(w).Encode(map[string]any{"contract_version": "1", "request_id": body["request_id"], "original_url": "https://fixture.invalid/a", "outcome": "success", "result": map[string]any{"content": "fixture content"}})
+		_ = json.NewEncoder(w).Encode(map[string]any{"contract_version": "1", "request_id": body["request_id"], "original_url": "https://fixture.invalid/a", "outcome": "success", "result": map[string]any{"content": syntheticExtractedArticle}})
 	}))
 	defer server.Close()
 	c := NewExtractorClient(server.URL, "fixture-token")
 	c.TotalBudget = time.Second
 	c.AttemptTimeout = time.Second
 	out, err := c.Extract(context.Background(), "https://fixture.invalid/a", "title", "rss", "", "", 1000)
-	if err != nil || out.Content != "fixture content" || calls != 2 {
+	if err != nil || out.Content != syntheticExtractedArticle || calls != 2 {
 		t.Fatalf("busy retry failed within budget: out=%#v calls=%d err=%v", out, calls, err)
 	}
 }
@@ -170,7 +170,7 @@ func TestExtractorClientUsesNativeBrowserOnlyAfterEligibleHTTPFailure(t *testing
 		_ = json.NewDecoder(r.Body).Decode(&body)
 		if body["use_browser"] == true {
 			browserCalls++
-			_ = json.NewEncoder(w).Encode(map[string]any{"contract_version": "1", "request_id": body["request_id"], "original_url": body["url"], "outcome": "success", "result": map[string]any{"content": "browser extracted content"}})
+			_ = json.NewEncoder(w).Encode(map[string]any{"contract_version": "1", "request_id": body["request_id"], "original_url": body["url"], "outcome": "success", "result": map[string]any{"content": syntheticExtractedArticle}})
 			return
 		}
 		_ = json.NewEncoder(w).Encode(map[string]any{"contract_version": "1", "request_id": body["request_id"], "original_url": body["url"], "outcome": "failed", "error": map[string]any{"code": "challenge", "retryable": false}, "result": map[string]any{}})
@@ -179,8 +179,112 @@ func TestExtractorClientUsesNativeBrowserOnlyAfterEligibleHTTPFailure(t *testing
 	c := NewExtractorClient(server.URL, "fixture-token")
 	c.UseBrowser = true
 	out, err := c.Extract(context.Background(), "https://fixture.invalid/a", "title", "rss", "article", "learned_pattern_browser_rendering", 1000)
-	if err != nil || out.Content != "browser extracted content" || browserCalls != 1 {
+	if err != nil || out.Content != syntheticExtractedArticle || browserCalls != 1 {
 		t.Fatalf("eligible browser retry failed: out=%#v browser_calls=%d err=%v", out, browserCalls, err)
+	}
+}
+
+func TestExtractorClientRetriesInvalidSuccessfulContentOnlyWithNativeBrowser(t *testing.T) {
+	const url = "https://fixture.invalid/a"
+	t.Run("native enabled retries once", func(t *testing.T) {
+		var usesBrowser []bool
+		server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+			var body map[string]any
+			_ = json.NewDecoder(r.Body).Decode(&body)
+			useBrowser, _ := body["use_browser"].(bool)
+			usesBrowser = append(usesBrowser, useBrowser)
+			content := "Enable JavaScript and cookies"
+			if useBrowser {
+				content = syntheticExtractedArticle
+			}
+			_ = json.NewEncoder(w).Encode(map[string]any{"contract_version": "1", "request_id": body["request_id"], "original_url": url, "outcome": "success", "observations": []any{map[string]any{"selector": "article", "method": "readability", "success": true}}, "result": map[string]any{"content": content}})
+		}))
+		defer server.Close()
+		client := NewExtractorClient(server.URL, "fixture-token")
+		client.UseBrowser = true
+		result, err := client.Extract(context.Background(), url, "title", "rss", "", "", 1000)
+		if err != nil || result.Error != "" || result.Content != syntheticExtractedArticle || len(usesBrowser) != 2 || usesBrowser[0] || !usesBrowser[1] || len(result.Observations) != 2 || result.Observations[0].Success || !result.Observations[1].Success {
+			t.Fatalf("invalid successful HTTP content did not receive one native retry: result=%#v uses_browser=%v err=%v", result, usesBrowser, err)
+		}
+	})
+	t.Run("native disabled reports invalid content", func(t *testing.T) {
+		var calls int
+		server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+			calls++
+			var body map[string]any
+			_ = json.NewDecoder(r.Body).Decode(&body)
+			_ = json.NewEncoder(w).Encode(map[string]any{"contract_version": "1", "request_id": body["request_id"], "original_url": url, "outcome": "success", "result": map[string]any{"content": "Enable JavaScript and cookies"}})
+		}))
+		defer server.Close()
+		result, err := NewExtractorClient(server.URL, "fixture-token").Extract(context.Background(), url, "title", "rss", "", "", 1000)
+		if err != nil || result.Error != "invalid_content" || result.Outcome != "rejected" || calls != 1 {
+			t.Fatalf("invalid HTTP content was not classified without native retry: result=%#v calls=%d err=%v", result, calls, err)
+		}
+	})
+	t.Run("invalid native result is a single clean rejection", func(t *testing.T) {
+		var usesBrowser []bool
+		server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+			var body map[string]any
+			_ = json.NewDecoder(r.Body).Decode(&body)
+			useBrowser, _ := body["use_browser"].(bool)
+			usesBrowser = append(usesBrowser, useBrowser)
+			_ = json.NewEncoder(w).Encode(map[string]any{
+				"contract_version": "1", "request_id": body["request_id"], "original_url": url,
+				"outcome": "success", "observations": []any{map[string]any{"selector": "article", "method": "readability", "success": true}},
+				"result": map[string]any{"content": "Enable JavaScript and cookies", "title": "Unusable title", "publication_date": "2026-01-01", "image_url": "https://fixture.invalid/bad.jpg", "media": []any{map[string]any{"type": "image", "url": "https://fixture.invalid/bad.jpg"}}, "method": "readability", "selector_used": "article"},
+			})
+		}))
+		defer server.Close()
+		client := NewExtractorClient(server.URL, "fixture-token")
+		client.UseBrowser = true
+		result, err := client.Extract(context.Background(), url, "title", "rss", "", "", 1000)
+		if err != nil || result.Error != "invalid_content" || result.Outcome != "rejected" || result.Content != "" || result.Title != "" || result.PublicationDate != "" || result.ImageURL != "" || len(result.MediaFiles) != 0 {
+			t.Fatalf("invalid native content metadata leaked through: result=%#v err=%v", result, err)
+		}
+		if len(usesBrowser) != 2 || usesBrowser[0] || !usesBrowser[1] || len(result.Observations) != 2 || result.Observations[0].Success || result.Observations[1].Success {
+			t.Fatalf("invalid native response did not stop after one retry with failed observations: result=%#v uses_browser=%v", result, usesBrowser)
+		}
+		if result.MethodUsed != "readability" || result.SelectorUsed != "article" {
+			t.Fatalf("feedback metadata was not retained: %#v", result)
+		}
+	})
+	t.Run("typed provider failure is unchanged", func(t *testing.T) {
+		var calls int
+		server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+			calls++
+			var body map[string]any
+			_ = json.NewDecoder(r.Body).Decode(&body)
+			_ = json.NewEncoder(w).Encode(map[string]any{"contract_version": "1", "request_id": body["request_id"], "original_url": url, "outcome": "failed", "error": map[string]any{"code": "provider_unavailable", "retryable": true}, "result": map[string]any{}})
+		}))
+		defer server.Close()
+		client := NewExtractorClient(server.URL, "fixture-token")
+		client.UseBrowser = true
+		result, err := client.Extract(context.Background(), url, "title", "rss", "", "", 1000)
+		if err != nil || result.Error != "provider_unavailable" || calls != 1 {
+			t.Fatalf("typed provider failure was changed or retried: result=%#v calls=%d err=%v", result, calls, err)
+		}
+	})
+}
+
+func TestExtractorClientInvalidContentNativeRetryRequiresEligibleHTTPSURL(t *testing.T) {
+	for _, rawURL := range []string{"http://fixture.invalid/a", "https://fixture.invalid:8443/a"} {
+		t.Run(rawURL, func(t *testing.T) {
+			var usesBrowser []bool
+			server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+				var body map[string]any
+				_ = json.NewDecoder(r.Body).Decode(&body)
+				useBrowser, _ := body["use_browser"].(bool)
+				usesBrowser = append(usesBrowser, useBrowser)
+				_ = json.NewEncoder(w).Encode(map[string]any{"contract_version": "1", "request_id": body["request_id"], "original_url": rawURL, "outcome": "success", "result": map[string]any{"content": "Enable JavaScript and cookies"}})
+			}))
+			defer server.Close()
+			client := NewExtractorClient(server.URL, "fixture-token")
+			client.UseBrowser = true
+			result, err := client.Extract(context.Background(), rawURL, "title", "rss", "", "", 1000)
+			if err != nil || result.Error != "invalid_content" || len(usesBrowser) != 1 || usesBrowser[0] {
+				t.Fatalf("ineligible URL triggered native retry: result=%#v uses_browser=%v err=%v", result, usesBrowser, err)
+			}
+		})
 	}
 }
 

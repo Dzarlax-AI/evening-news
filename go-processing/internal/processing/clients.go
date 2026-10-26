@@ -150,6 +150,7 @@ func (c *ExtractorClient) Extract(ctx context.Context, rawURL, title, sourceType
 	if err != nil {
 		return result, err
 	}
+	result = classifyInvalidSuccessfulContent(result, maxChars)
 	for busyRetries := 0; result.Error == "busy" && busyRetries < 8; busyRetries++ {
 		delay, ok := retryAfterDuration(result.RetryAfterSeconds)
 		deadline, hasDeadline := totalCtx.Deadline()
@@ -167,6 +168,7 @@ func (c *ExtractorClient) Extract(ctx context.Context, rawURL, title, sourceType
 		if err != nil {
 			return result, err
 		}
+		result = classifyInvalidSuccessfulContent(result, maxChars)
 	}
 	if result.Error == "busy" || !c.UseBrowser || !browserEligible(rawURL) || !nativeBrowserRetryAllowed(result.Error) {
 		return result, nil
@@ -175,7 +177,44 @@ func (c *ExtractorClient) Extract(ctx context.Context, rawURL, title, sourceType
 	if browserBytes <= 0 || browserBytes > 5*1024*1024 {
 		browserBytes = maxBytes
 	}
-	return c.admittedAttempt(totalCtx, rawURL, title, sourceType, selector, method, maxChars, true, browserBytes)
+	firstObservations := result.Observations
+	result, err = c.admittedAttempt(totalCtx, rawURL, title, sourceType, selector, method, maxChars, true, browserBytes)
+	if err != nil {
+		return result, err
+	}
+	result = classifyInvalidSuccessfulContent(result, maxChars)
+	result.Observations = appendObservationSets(firstObservations, result.Observations)
+	return result, nil
+}
+
+func classifyInvalidSuccessfulContent(result Extracted, maxChars int) Extracted {
+	if result.Error == "" && result.Outcome == "success" && !isGoodExtractionContent(result.Content, maxChars) {
+		result.Error = "invalid_content"
+		result.Retryable = true
+		result.Outcome = "rejected"
+		result.Content = ""
+		result.Title = ""
+		result.PublicationDate = ""
+		result.ImageURL = ""
+		result.MediaFiles = nil
+		for i := range result.Observations {
+			result.Observations[i].Success = false
+		}
+	}
+	return result
+}
+
+func appendObservationSets(first, second []ExtractorObservation) []ExtractorObservation {
+	out := make([]ExtractorObservation, 0, min(64, len(first)+len(second)))
+	for _, observations := range [][]ExtractorObservation{first, second} {
+		for _, observation := range observations {
+			if len(out) == 64 {
+				return out
+			}
+			out = append(out, observation)
+		}
+	}
+	return out
 }
 
 func (c *ExtractorClient) admittedAttempt(ctx context.Context, rawURL, title, sourceType, selector, method string, maxChars int, useBrowser bool, maxBytes int) (Extracted, error) {
