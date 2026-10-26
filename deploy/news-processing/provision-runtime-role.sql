@@ -5,6 +5,19 @@
 \else
 \set news_schema news
 \endif
+\if :{?news_callback_role}
+\else
+\echo 'Required psql variable news_callback_role is missing'
+SELECT 1 / 0;
+\quit
+\endif
+
+-- Validate the callback role before creating or altering any roles.
+SELECT 1 / CASE
+    WHEN :'news_callback_role' <> ''
+     AND EXISTS (SELECT 1 FROM pg_roles WHERE rolname = :'news_callback_role')
+    THEN 1 ELSE 0
+END;
 
 CREATE ROLE news_processing_fence_owner NOLOGIN NOINHERIT NOBYPASSRLS
     NOSUPERUSER NOCREATEDB NOCREATEROLE NOREPLICATION;
@@ -33,6 +46,9 @@ REVOKE ALL ON FUNCTION :"news_schema".fence_article_processing_attempt(
 GRANT EXECUTE ON FUNCTION :"news_schema".fence_article_processing_attempt(
     UUID, UUID, INTEGER, TEXT, UUID, INTEGER, INTEGER, UUID, TIMESTAMP
 ) TO news_processing_runtime;
+GRANT EXECUTE ON FUNCTION :"news_schema".fence_article_processing_attempt(
+    UUID, UUID, INTEGER, TEXT, UUID, INTEGER, INTEGER, UUID, TIMESTAMP
+) TO :"news_callback_role";
 
 GRANT SELECT (id, kind, payload, state, attempt_generation)
 ON :"news_schema".background_jobs TO news_processing_runtime;

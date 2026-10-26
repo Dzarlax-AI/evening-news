@@ -328,7 +328,8 @@ class IngestionGate(GoJobWorkerGate):
         path.write_text(processing)
         self.docker("cp", str(path), f"{self.prefix}-postgres:/tmp/provision-processing.sql")
         self.docker("exec", f"{self.prefix}-postgres", "psql", "-v", "ON_ERROR_STOP=1",
-                    "-v", "news_schema=public", "-U", "gate_user", "-d", "gate_db",
+                    "-v", "news_schema=public", "-v", "news_callback_role=gate_user",
+                    "-U", "gate_user", "-d", "gate_db",
                     "-f", "/tmp/provision-processing.sql", timeout=30)
 
 
