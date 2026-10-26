@@ -1,6 +1,6 @@
 # Go article processing
 
-This migration introduces a private Go service for article selection, extraction decisions, bounded processing, retry state, and atomic article/category persistence. The Python executor retains job composition, AI compute and prompts, selector learning, daily summaries, and delivery. This document describes the development target; it does not assert a production rollout.
+This migration introduces a private Go service for article selection, extraction decisions, bounded processing, retry state, and atomic article/category persistence. The Python executor retains job composition, AI compute and prompts, selector learning, daily summaries, and delivery. The service was deployed in production on 26 October 2026 from PR #28. The first scheduled collection covered all eight sources; after correcting the Python callback fence grant, both newly collected articles completed summarization and categorization through Go. Existing worker heartbeat timeouts remain a separate unresolved issue; this rollout does not claim to fix them.
 
 ## Request flow
 
@@ -18,7 +18,7 @@ Processing concurrency, batch size, retry policy, date filters and source/cycle 
 
 ## Database and deployment
 
-The additive migration installs `article_processing_runs`, `article_processing_items`, and a dedicated SQL fence. Preserve receipt history. Pass the actual schema explicitly with `psql -v news_schema=<schema>` and use a matching `search_path` in the service database URL. Provision the restricted runtime role using [the reviewed SQL template](../deploy/news-processing/provision-runtime-role.sql); it must not own queue tables or have broad article deletion privileges. The [deployment template](../deploy/news-processing/compose.processing.yml) exposes no host ports or mounts and uses a read-only filesystem. Its memory budget requires synthetic acceptance evidence before a separate production approval.
+The additive migration installs `article_processing_runs`, `article_processing_items`, and a dedicated SQL fence. Preserve receipt history. Pass the actual schema and the existing Python application database role explicitly when running [the reviewed SQL template](../deploy/news-processing/provision-runtime-role.sql), for example `psql -v news_schema=<schema> -v news_callback_role=<python-role> -f deploy/news-processing/provision-runtime-role.sql`. `news_callback_role` is required and must name an existing role; the template checks it before changing roles and grants that role only `EXECUTE` on the fence function. Use a matching `search_path` in the service database URL. The Go runtime role must not own queue tables or have broad article deletion privileges. The [deployment template](../deploy/news-processing/compose.processing.yml) exposes no host ports or mounts and uses a read-only filesystem. Its memory budget requires synthetic acceptance evidence before a separate production approval.
 
 The Python AI callback authorizes the active executor job and article claim and validates the bounded input fingerprint. It exposes fixed analyze/context/feedback operations only. Provider prompts and parsing remain in Python. Learning feedback may update extraction metadata, never Article or ArticleCategory.
 

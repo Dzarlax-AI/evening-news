@@ -26,19 +26,34 @@ async def processing_privileges():
         raise RuntimeError("Processor privilege tests require loopback PostgreSQL")
     url = parsed.set(drivername="postgresql+asyncpg").render_as_string(hide_password=False)
     suffix = uuid.uuid4().hex
-    schema, runtime, owner = "test_processing_role_" + suffix, "proc_rt_" + suffix, "proc_own_" + suffix
+    schema, runtime, owner, callback = (
+        "test_processing_role_" + suffix,
+        "proc_rt_" + suffix,
+        "proc_own_" + suffix,
+        "proc_cb_" + suffix,
+    )
     admin = create_async_engine(url)
     engine = create_async_engine(url, connect_args={"server_settings": {"search_path": schema}})
     try:
         async with admin.begin() as conn:
             await conn.execute(text(f'CREATE SCHEMA "{schema}"'))
+            await conn.execute(text(f'CREATE ROLE "{callback}" NOLOGIN'))
+            await conn.execute(text(f'GRANT USAGE ON SCHEMA "{schema}" TO "{callback}"'))
         async with engine.begin() as conn:
             await conn.run_sync(Base.metadata.create_all)
         async with AsyncSession(engine) as session:
             await ArticleProcessingMigration().execute(session)
         sql = (ROOT / "deploy/news-processing/provision-runtime-role.sql").read_text()
-        sql = "\n".join(line for line in sql.splitlines() if not line.lstrip().startswith("\\"))
+        # This fixture executes SQL statements directly rather than through psql,
+        # so omit psql meta-commands and the missing-variable branch's deliberate
+        # failure statement. The missing-variable branch is verified separately through psql.
+        sql = "\n".join(
+            line for line in sql.splitlines()
+            if not line.lstrip().startswith("\\") and line.strip() != "SELECT 1 / 0;"
+        )
         sql = sql.replace(' :"news_schema"', f' "{schema}"')
+        sql = sql.replace(":'news_callback_role'", f"'{callback}'")
+        sql = sql.replace(':"news_callback_role"', f'"{callback}"')
         sql = sql.replace("news_processing_fence_owner", owner).replace("news_processing_runtime", runtime)
         async with engine.begin() as conn:
             for statement in sql.split(";"):
@@ -46,19 +61,20 @@ async def processing_privileges():
                     await conn.execute(text(statement))
             await conn.execute(text("INSERT INTO articles(id,title,url,content) VALUES(1,'Synthetic story','https://fixture.invalid/story','Synthetic text')"))
             await conn.execute(text("INSERT INTO categories(id,name,display_name) VALUES(1,'Tech','Tech')"))
-        yield engine, schema, runtime, owner
+        yield engine, schema, runtime, owner, callback
     finally:
         await engine.dispose()
         async with admin.begin() as conn:
             await conn.execute(text(f'DROP SCHEMA IF EXISTS "{schema}" CASCADE'))
             await conn.execute(text(f'DROP ROLE IF EXISTS "{runtime}"'))
             await conn.execute(text(f'DROP ROLE IF EXISTS "{owner}"'))
+            await conn.execute(text(f'DROP ROLE IF EXISTS "{callback}"'))
         await admin.dispose()
 
 
 @pytest.mark.asyncio
 async def test_reviewed_role_can_save_processing_and_replace_categories(processing_privileges):
-    engine, _, runtime, _ = processing_privileges
+    engine, _, runtime, _, _ = processing_privileges
     async with engine.begin() as conn:
         await conn.execute(text(f'SET LOCAL ROLE "{runtime}"'))
         await conn.execute(text("SELECT id,kind,payload,state,attempt_generation FROM background_jobs LIMIT 1"))
@@ -70,7 +86,7 @@ async def test_reviewed_role_can_save_processing_and_replace_categories(processi
 
 @pytest.mark.asyncio
 async def test_reviewed_role_has_no_queue_ownership_or_article_deletion_rights(processing_privileges):
-    engine, schema, runtime, owner = processing_privileges
+    engine, schema, runtime, owner, callback = processing_privileges
     async with engine.connect() as conn:
         flags = (await conn.execute(text("SELECT rolsuper,rolcreaterole,rolcreatedb,rolbypassrls,rolinherit FROM pg_roles WHERE rolname=:name"), {"name": runtime})).one()
         assert not any(flags)
@@ -85,8 +101,10 @@ async def test_reviewed_role_has_no_queue_ownership_or_article_deletion_rights(p
                                      {"runtime": runtime, "owner": owner})
         function = schema + ".fence_article_processing_attempt(uuid,uuid,integer,text,uuid,integer,integer,uuid,timestamp without time zone)"
         assert await conn.scalar(text("SELECT has_function_privilege(:role,:fn,'EXECUTE')"), {"role": runtime,"fn":function})
+        assert await conn.scalar(text("SELECT has_function_privilege(:role,:fn,'EXECUTE')"), {"role": callback,"fn":function})
         public = await conn.scalar(text("SELECT EXISTS (SELECT 1 FROM pg_proc p, LATERAL aclexplode(COALESCE(p.proacl,acldefault('f',p.proowner))) a WHERE p.oid=CAST(:fn AS regprocedure) AND a.grantee=0 AND a.privilege_type='EXECUTE')"), {"fn": function})
         assert public is False
+
 
 
 @pytest.mark.asyncio
@@ -98,11 +116,13 @@ async def test_reviewed_role_has_no_queue_ownership_or_article_deletion_rights(p
     ("news_digest", '{"run_processing":false}', False),
     ("telegram_digest", "{}", False),
 ])
-async def test_runtime_fence_authorizes_only_processing_job_kinds(processing_privileges, kind, payload, allowed):
+@pytest.mark.parametrize("caller", ["runtime", "callback"])
+async def test_runtime_fence_authorizes_only_processing_job_kinds(processing_privileges, kind, payload, allowed, caller):
     from datetime import datetime, timedelta, timezone
     from sqlalchemy.exc import DBAPIError
 
-    engine, _, runtime, _ = processing_privileges
+    engine, _, runtime, _, callback = processing_privileges
+    role = runtime if caller == "runtime" else callback
     job, owner, executor_id, run = (uuid.uuid4() for _ in range(4))
     deadline = datetime.now(timezone.utc).replace(tzinfo=None) + timedelta(minutes=2)
     async with engine.connect() as lease:
@@ -114,7 +134,7 @@ async def test_runtime_fence_authorizes_only_processing_job_kinds(processing_pri
         await lease.commit()
         try:
             async with engine.connect() as conn:
-                await conn.execute(text(f'SET LOCAL ROLE "{runtime}"'))
+                await conn.execute(text(f'SET LOCAL ROLE "{role}"'))
                 query = text("SELECT * FROM fence_article_processing_attempt(:run,:job,3,:hash,:owner,7,:pid,:executor,:deadline)")
                 values = {"run":run,"job":job,"hash":"b"*64,"owner":owner,"pid":pid,"executor":executor_id,"deadline":deadline}
                 if allowed:
@@ -126,7 +146,7 @@ async def test_runtime_fence_authorizes_only_processing_job_kinds(processing_pri
                         ("executor", uuid.uuid4()), ("deadline", deadline + timedelta(seconds=1)),
                     ):
                         stale = dict(values, **{field: stale_value})
-                        await conn.execute(text(f'SET LOCAL ROLE "{runtime}"'))
+                        await conn.execute(text(f'SET LOCAL ROLE "{role}"'))
                         with pytest.raises(DBAPIError):
                             await conn.execute(query, stale)
                         await conn.rollback()
