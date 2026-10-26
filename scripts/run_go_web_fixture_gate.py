@@ -555,6 +555,12 @@ class GoWebGate(IngestionGate):
         cleanup_status, _ = self.request("POST", "/api/v1/backup/cleanup?keep_count=5",
                                           token=self.access_token)
         self.check("worker_backup_cleanup_stays_disabled", cleanup_status == 409)
+        migration_status, migration_body = self.request("POST", "/api/v1/system/migrations/run",
+                                                          token=self.access_token, body={})
+        self.check("private_migration_route_reachable", migration_status == 200
+                   and isinstance(migration_body, dict)
+                   and migration_body.get("message") == "Migrations completed"
+                   and not migration_body.get("result", {}).get("errors"))
         self.report["provider_calls"] = self.fake_counters_http()
         providers = self.report["provider_calls"].get("providers", {})
         self.check("fake_provider_called_by_pipeline", int(providers.get("gemini", 0)) > 0)

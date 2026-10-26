@@ -392,6 +392,35 @@ def test_private_backup_schedule_static_route_precedes_filename_download(monkeyp
     assert reads == 0
 
 
+def test_private_migrations_run_route_uses_mocked_command_without_ddl(monkeypatch):
+    from pydantic import SecretStr
+    from news_aggregator import executor, migrate
+
+    monkeypatch.setattr(executor.settings, "web_backend_token", SecretStr("expected"))
+    async def ready(_request):
+        return None
+    monkeypatch.setattr(executor, "_web_backend_ready", ready)
+    calls = []
+    async def fake_run_migrations():
+        calls.append("called")
+        return {"migrations_run": [], "errors": []}
+    monkeypatch.setattr(migrate, "run_migrations", fake_run_migrations)
+
+    sent, _ = _asgi_request(
+        executor,
+        "/internal/web/v1/migrations/run",
+        "POST",
+        [(b"authorization", b"Bearer expected"),
+         (b"content-type", b"application/json"),
+         (b"content-length", b"2")],
+        [(b"{}", False)],
+    )
+    assert sent[0]["status"] == 200
+    body = json.loads(sent[1]["body"])
+    assert body["result"] == {"migrations_run": [], "errors": []}
+    assert calls == ["called"]
+
+
 def test_empty_json_object_body_is_replayed_as_complete_request(monkeypatch):
     from pydantic import SecretStr
     from news_aggregator import executor
