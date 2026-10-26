@@ -1,6 +1,12 @@
 # Go article processing
 
-This migration introduces a private Go service for article selection, extraction decisions, bounded processing, retry state, and atomic article/category persistence. The Python executor retains job composition, AI compute and prompts, selector learning, daily summaries, and delivery. The service was deployed in production on 26 October 2026 from PR #28. The first scheduled collection covered all eight sources; after correcting the Python callback fence grant, both newly collected articles completed summarization and categorization through Go. Existing worker heartbeat timeouts remain a separate unresolved issue; this rollout does not claim to fix them.
+The processing module and private HTTP contract remain in place. The current
+local Compose architecture runs it as a component of the single Go
+`background` runtime, not as a separate service container. See [Core image
+build and release](core-image-build-and-release.md) for the packaging and
+release gate. This source consolidation has not been published or rolled out.
+
+This migration introduced a private Go processing component for article selection, extraction decisions, bounded processing, retry state, and atomic article/category persistence. The Python executor retains job composition, AI compute and prompts, selector learning, daily summaries, and delivery. The component was deployed separately in production on 26 October 2026 from PR #28; the release record is historical and is not evidence that this background consolidation was deployed. The first scheduled collection covered all eight sources; after correcting the Python callback fence grant, both newly collected articles completed summarization and categorization through Go. Existing worker heartbeat timeouts remain a separate unresolved issue; the earlier rollout did not claim to fix them.
 
 ## Request flow
 
@@ -12,7 +18,7 @@ See the [versioned internal contract](contracts/article-processing-v1.md) for en
 
 ## Local setup
 
-The [example Compose stack](../docker-compose.example.yml) includes `article-processing` on its private network. Supply distinct `ARTICLE_PROCESSING_TOKEN` and `ARTICLE_AI_TOKEN` secrets. Python needs `ARTICLE_PROCESSING_URL=http://article-processing:8094` and the processing token. The Go service needs the restricted database URL, fixed `ARTICLE_AI_URL` for the Python executor, the AI token, and existing extraction service URL/token. Never give it the general job executor token or AI provider credentials. The web application installs the additive processing migration; it must start before processing readiness is required. The worker waits for both executor and processor health, avoiding a fresh-database bootstrap cycle.
+The [example Compose stack](../docker-compose.example.yml) includes the processing listener on `background:8094`. Supply distinct `ARTICLE_PROCESSING_TOKEN` and `ARTICLE_AI_TOKEN` secrets. Python needs `ARTICLE_PROCESSING_URL=http://background:8094` and the processing token. The background component needs its restricted `PROCESSING_DATABASE_URL`, fixed `ARTICLE_AI_URL` for the Python executor, the AI token, and existing extraction service URL/token. Never give it the general job executor token or AI provider credentials. The one-shot migration completes before processing readiness is required; background waits for executor and extractor health without creating an executor/background dependency cycle.
 
 Processing concurrency, batch size, retry policy, date filters and source/cycle limits must match the reviewed deployment configuration. Go owns these settings after cutover; setting them only on the Python executor is insufficient. Text limits count Unicode characters rather than UTF-8 bytes. The private service does not connect to CDP or manage a browser.
 

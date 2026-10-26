@@ -22,15 +22,18 @@ flowchart LR
     Web["Web reader, admin UI, and API<br/>(Go web process)"]
     NewsDB[(News PostgreSQL)]
     Jobs["Durable job queue<br/>(in News PostgreSQL)"]
-    Worker["Job execution<br/>(Go worker process)"]
+    subgraph Background["Background runtime — one Go process"]
+      Scheduler["Schedule dispatch component"]
+      Worker["Queue worker component"]
+      Ingestion["Collection and ingestion component"]
+      Processing["Article processing component"]
+    end
     Domain["Private News operations<br/>(Python executor process)"]
     AI["AI analysis and prompts<br/>(private executor domain code)"]
     Delivery["Daily summaries and Telegram delivery<br/>(private executor domain code)"]
-    Ingestion["Configured-source collection and persistence<br/>(Go ingestion process)"]
     Sources["RSS, Telegram, and Page Monitor adapters<br/>(Go collection code)"]
-    Processing["Article processing and state transitions<br/>(Go processing process)"]
     Extract["Article extraction<br/>(Go extraction process)"]
-    Scheduler["Schedule management and dispatch<br/>(Go scheduler process + scheduler database)"]
+    SchedulerDB[(Scheduler PostgreSQL)]
     Migrate["One-shot schema bootstrap<br/>(Python migration command)"]
     Internet[Public source websites]
     Telegram[Telegram channel]
@@ -55,11 +58,12 @@ flowchart LR
     Delivery <--> NewsDB
     Web -->|typed private operations| Domain
     Web <--> Scheduler
+    Scheduler <--> SchedulerDB
     Scheduler -->|scheduled command| Web
     Migrate -->|successful completion required| NewsDB
 ```
 
-The Go web service replaces the former Python web application. It serves the public reader, admin pages, health endpoints, and public and management APIs. The private Python executor remains responsible for fixed job operations that use Python domain code, AI prompts and provider calls, summaries, and Telegram delivery. Go owns durable queue execution, collection and ingestion, article processing, extraction, and schedule dispatch in this architecture.
+The Go web service replaces the former Python web application. It serves the public reader, admin pages, health endpoints, and public and management APIs. The private Python executor remains responsible for fixed job operations that use Python domain code, AI prompts and provider calls, summaries, and Telegram delivery. One Go background runtime hosts the queue worker, scheduler, ingestion, and processing components. Those components retain separate configuration, database pools, HTTP boundaries, and recovery behavior inside the process. The extractor remains a separate Go service.
 
 The one-shot `migrate` service runs `python -m news_aggregator.migrate` before schema-dependent services start. The Go web service does not apply migrations. `WEB_BACKEND_URL` names only the private executor origin, such as `http://executor:8100`; the Go client appends its fixed operation paths. `WEB_BACKEND_TOKEN` is a separate service credential shared only by the Go web process and private executor. Provider credentials such as `GEMINI_API_KEY` and `TELEGRAM_TOKEN` belong to the executor and are not required by the Go web service.
 
@@ -75,7 +79,7 @@ Public data endpoints live under `/api/public/`; the authenticated management AP
 
 ## Local development
 
-The example Compose stack starts the Go web service, a one-shot Python schema migration command, the private Python executor, the Go job worker, the Go ingestion and processing services, the extractor, the scheduler, and separate PostgreSQL instances for News and scheduler data. These are distinct Compose services today; their deployment boundaries are not implied by the logical diagram above. The minimal profile uses HTTP-only extraction and does not include browser rendering.
+The example Compose stack starts the Go web service, one background runtime, the private Python executor, the extractor, and separate PostgreSQL instances for News and scheduler data. A one-shot migration command uses the executor image before schema-dependent services start. It does not include the separately managed egress policy service or shared browser. This local example is not a production deployment description; the planned production container count is documented separately and remains subject to its own rollout approval. The minimal profile uses HTTP-only extraction and does not include browser rendering.
 
 Create an ignored `.env` file or export the required local credentials before starting Compose. Use development-only values:
 
@@ -95,6 +99,10 @@ SCHEDULER_API_TOKEN=local-scheduler-api-token
 GEMINI_API_KEY=your-development-provider-key
 TELEGRAM_TOKEN=your-development-bot-token
 TELEGRAM_CHAT_ID=your-development-channel-id
+# Supply these as complete DSNs for the separately provisioned runtime roles.
+WORKER_DATABASE_URL=postgres://<worker-role>:<password>@postgres:5432/newsdb
+INGESTION_DATABASE_URL=postgres://<ingestion-role>:<password>@postgres:5432/newsdb
+PROCESSING_DATABASE_URL=postgres://<processing-role>:<password>@postgres:5432/newsdb
 ```
 
 Provider keys are passed to the Python executor because it owns provider operations. The Go web service receives the database URL, admin/JWT settings, `WEB_BACKEND_URL` and `WEB_BACKEND_TOKEN`, scheduler client settings, and HTTP trust configuration; it does not receive AI or Telegram provider keys.
@@ -127,11 +135,12 @@ PostgreSQL integration tests require `TEST_DATABASE_URL` to point to a dedicated
 
 ## Configuration and documentation
 
-The Compose example is the source of truth for the complete local service configuration. The Go web environment includes `DATABASE_URL`, `ADMIN_USERNAME`, `ADMIN_PASSWORD`, `JWT_SECRET`, `WEB_BACKEND_URL`, `WEB_BACKEND_TOKEN`, scheduler receiver settings, and HTTP trust settings. `WEB_BACKEND_URL` must be a fixed executor origin; the client does not accept arbitrary backend paths or URLs.
+The Compose example is the source of truth for the complete local service configuration. The Go web environment includes `DATABASE_URL`, `ADMIN_USERNAME`, `ADMIN_PASSWORD`, `JWT_SECRET`, `WEB_BACKEND_URL`, `WEB_BACKEND_TOKEN`, scheduler receiver settings, and HTTP trust settings. `WEB_BACKEND_URL` must be a fixed executor origin; the client does not accept arbitrary backend paths or URLs. The background runtime receives four component-specific database URLs; do not point them all at one privileged account.
 
 English technical guides:
 
 - [Web/API components](docs/web-api-components.md)
+- [Core image build and release](docs/core-image-build-and-release.md)
 - [Go web route coverage](docs/web-api-route-coverage.md)
 - [Article ingestion](docs/go-article-ingestion.md)
 - [Article processing](docs/go-article-processing.md)
@@ -141,4 +150,4 @@ English technical guides:
 - [Page Monitor](docs/go-page-monitor.md)
 - [Native browser worker](docs/go-cloak-native-worker.md)
 
-The web/API migration was deployed to production on 2026-10-26: the Go web service replaced the Python public/admin application, while the private executor retained the domain operations described above. The Compose example documents local development; production uses deployment-specific networking, database placement, browser integration, and pinned image digests.
+The web/API migration was deployed to production on 2026-10-26: the Go web service replaced the Python public/admin application, while the private executor retained the domain operations described above. That historical web cutover does not mean this background consolidation has been released or deployed. The Compose example documents local development; production uses deployment-specific networking, database placement, browser integration, and pinned image digests.

@@ -17,6 +17,8 @@ WORKER_TAG = "ghcr.io/dzarlax-ai/rss-job-worker:sha-0123456789abcdef0123456789ab
 INGESTION_TAG = "ghcr.io/dzarlax-ai/rss-article-ingestion:sha-0123456789abcdef0123456789abcdef01234567"
 PROCESSING_TAG = "ghcr.io/dzarlax-ai/rss-article-processing:sha-0123456789abcdef0123456789abcdef01234567"
 WEB_TAG = "ghcr.io/dzarlax-ai/rss-web:sha-0123456789abcdef0123456789abcdef01234567"
+BACKGROUND_TAG = "ghcr.io/dzarlax-ai/rss-background:sha-0123456789abcdef0123456789abcdef01234567"
+SUMMARIZER_TAG = "ghcr.io/dzarlax-ai/rss-summarizer:sha-0123456789abcdef0123456789abcdef01234567"
 CHALLENGE = (
     'Bearer realm="https://ghcr.io/token",service="ghcr.io",'
     'scope="repository:dzarlax-ai/rss-scheduler:pull"'
@@ -36,6 +38,14 @@ PROCESSING_CHALLENGE = (
 WEB_CHALLENGE = (
     'Bearer realm="https://ghcr.io/token",service="ghcr.io",'
     'scope="repository:dzarlax-ai/rss-web:pull"'
+)
+BACKGROUND_CHALLENGE = (
+    'Bearer realm="https://ghcr.io/token",service="ghcr.io",'
+    'scope="repository:dzarlax-ai/rss-background:pull"'
+)
+SUMMARIZER_CHALLENGE = (
+    'Bearer realm="https://ghcr.io/token",service="ghcr.io",'
+    'scope="repository:dzarlax-ai/rss-summarizer:pull"'
 )
 
 
@@ -310,6 +320,34 @@ class RegistryTagGuardTests(unittest.TestCase):
             WEB_TAG, "fixture-user", "fixture-token", opener=opener,
             repository="dzarlax-ai/rss-web",
         ))
+
+    def test_core_release_repositories_use_their_own_scope(self):
+        for image_tag, repository, challenge in (
+            (BACKGROUND_TAG, "dzarlax-ai/rss-background", BACKGROUND_CHALLENGE),
+            (SUMMARIZER_TAG, "dzarlax-ai/rss-summarizer", SUMMARIZER_CHALLENGE),
+        ):
+            with self.subTest(repository=repository):
+                calls = 0
+
+                def opener(request, timeout):
+                    nonlocal calls
+                    calls += 1
+                    if calls == 1:
+                        headers = Message()
+                        headers["WWW-Authenticate"] = challenge
+                        raise HTTPError(request.full_url, 401, "unauthorized", headers, io.BytesIO(b"{}"))
+                    if calls == 2:
+                        self.assertIn(repository.replace("/", "%2F"), request.full_url)
+                        return Response(200, b'{"token":"core-test-token"}')
+                    self.assertIn(f"/v2/{repository}/manifests/sha-", request.full_url)
+                    self.assertEqual(request.get_header("Authorization"), "Bearer core-test-token")
+                    return Response(404, b'{"errors":[{"code":"MANIFEST_UNKNOWN"}]}')
+
+                self.assertFalse(tag_exists(
+                    image_tag, "fixture-user", "fixture-token", opener=opener,
+                    repository=repository,
+                ))
+                self.assertEqual(calls, 3)
 
     def test_registry_guard_rejects_unapproved_repository(self):
         with self.assertRaises(RegistryCheckError) as caught:

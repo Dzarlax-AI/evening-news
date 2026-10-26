@@ -18,6 +18,8 @@ ALLOWED_REPOSITORIES = {
     "dzarlax-ai/rss-article-ingestion",
     "dzarlax-ai/rss-article-processing",
     "dzarlax-ai/rss-web",
+    "dzarlax-ai/rss-background",
+    "dzarlax-ai/rss-summarizer",
 }
 MANIFEST_ACCEPT = ", ".join((
     "application/vnd.oci.image.index.v1+json",

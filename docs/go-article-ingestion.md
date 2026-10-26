@@ -1,16 +1,23 @@
 # Go article ingestion
 
+The ingestion module and private HTTP contract remain in place. In the current
+local Compose architecture it runs as a component of the single Go
+`background` runtime, not as a separate service container. The approved image
+build and release process is in [Core image build and release](core-image-build-and-release.md).
+The background image consolidation in this branch has not been published or
+deployed.
+
 ## Ownership and status
 
-The private Go article ingestion service is a new database-aware application layer. It is distinct from the existing Go collector, which remains database-free and owns source collection/parsing and article extraction. The ingestion service reads source configuration and Page Monitor progress from the News database, calls the collector API, then persists articles and collection receipts under a live executor fence.
+The private Go article ingestion component is a database-aware application layer. It is distinct from the existing Go collector, which remains database-free and owns source collection/parsing and article extraction. The ingestion component reads source configuration and Page Monitor progress from the News database, calls the collector API, then persists articles and collection receipts under a live executor fence.
 
-The Python executor still owns the durable job execution boundary and the rest of the News operation. After ingestion succeeds, Python continues article quality checks, AI summarization and categorization, daily summaries, and digest delivery. Python also retains source CRUD and selector learning. The standalone Go scheduler and Go queue worker retain their current responsibilities.
+The Python executor still owns the rest of the News operation. After ingestion succeeds, Python continues article quality checks, AI summarization and categorization, daily summaries, and digest delivery. Python also retains source CRUD and selector learning. The Go queue worker and scheduler remain separate modules/components and share the background runtime process with ingestion and processing.
 
 `ARTICLE_INGESTION_MODE` defaults to `go`; the removed `python` value is rejected during settings validation. Go ingestion has been used in production since PR #22. This repository cleanup removes the dormant Python fallback; it does not deploy services or change production configuration. An ingestion error fails the active job and never falls back to Python collection.
 
 ## Private topology
 
-The service listens on `ARTICLE_INGESTION_LISTEN` (default `:8093`). It needs private network reachability to the News PostgreSQL database, existing Go collector, Python executor selector callback, and the Python executor that submits and polls runs. It has no published host port, public route, Traefik labels, browser/CDP connection, or shared-browser mount.
+The component listens on `ARTICLE_INGESTION_LISTEN` (default `:8093`) on the private background service interface. It needs private network reachability to the News PostgreSQL database, existing Go collector, Python executor selector callback, and the Python executor that submits and polls runs. Compose does not publish its private listener on the host. It has no public route, Traefik labels, browser/CDP connection, or shared-browser mount.
 
 The Python executor submits an immutable attempt envelope with the active job, worker lease, executor receipt, backend PID, and deadline. The Go service validates this fence through `fence_article_ingestion_attempt` before starting or committing work. Run IDs are deterministic per job attempt, so a repeated request resolves the same receipt. Source writes and Page Monitor cursor acknowledgement are committed transactionally. Selector-study callbacks return only bounded learned selectors to the Python executor.
 
@@ -48,7 +55,7 @@ The migration currently owns the fence function as the role that applies migrati
 
 ## Compose template
 
-`deploy/news-ingestion/compose.ingestion.yml` has no published ports, public labels, browser mounts, or provider credentials. It attaches the service to an operator-supplied private network shared with the News database, collector, and Python executor. The template applies a read-only root filesystem, drops Linux capabilities, disables privilege escalation, and sets bounded container resources. The template is for a separately managed production service; `docker-compose.example.yml` includes the local Go ingestion service and its private app connection.
+`deploy/news-ingestion/compose.ingestion.yml` documents the earlier separately managed production service topology and has no published ports, public labels, browser mounts, or provider credentials. It attaches the service to an operator-supplied private network shared with the News database, collector, and Python executor. The template applies a read-only root filesystem, drops Linux capabilities, disables privilege escalation, and sets bounded container resources. The current local `docker-compose.example.yml` runs this module within `background`; that source change does not change the production topology.
 
 Create separate random service tokens on the deployment host, store them in a mode-0600 ignored environment file, and pass the same token only to the two services on each authenticated boundary. Use a database URL for the dedicated runtime role; do not reuse the app administrator or migration credentials.
 

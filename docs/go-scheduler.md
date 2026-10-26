@@ -1,4 +1,10 @@
-# Standalone scheduler service
+# Go scheduler component
+
+The scheduler remains a separate Go module and private HTTP/API boundary. The
+current local Compose example runs it inside the Go `background` runtime rather
+than a standalone container. The approved core image build/release process is
+documented in [Core image build and release](core-image-build-and-release.md).
+This consolidation has not been published or rolled out to production.
 
 The scheduler is a separate Go service with its own image, PostgreSQL schema,
 API, and deployment lifecycle. It owns calendars and reliable command dispatch.
@@ -6,37 +12,19 @@ It has no access to News articles, background jobs, Gemini, Telegram, or the
 browser. Its HTTP wire format is specified in the
 [versioned contract](go-scheduler-contract.md).
 
-The service is deployed alongside the News app and worker. It owns scheduling
-and delivery state in a separate PostgreSQL database/schema; the Python worker
-continues to own durable job execution, persistence, article processing, and
-delivery. See the [dated production release record](../deploy/news-scheduler/RELEASE_2026-10-23.md)
-for image digests and acceptance evidence.
+The scheduler owns its state in a separate PostgreSQL database/schema. Its
+historical standalone production release is recorded in
+[the dated release record](../deploy/news-scheduler/RELEASE_2026-10-23.md); that
+record does not describe this source change or a production consolidation.
 
-## Immutable image publication
+## Core image publication
 
-The `Standalone Go scheduler` GitHub Actions workflow publishes no image on PRs
-or ordinary pushes. To publish a release candidate after the change is on
-`main`, start the workflow with its explicit publish flag:
-
-```bash
-gh workflow run go-scheduler.yml --ref main -f publish=true
-```
-
-Publication is gated on both `scheduler-tests` (race tests, isolated PostgreSQL,
-`go vet`, and cross-builds) and `scheduler-fixture` (the isolated combined
-service acceptance gate). The publish job is restricted to a manual dispatch on
-`main`; it builds only `linux/amd64` and tags the image with the full source
-commit as `ghcr.io/dzarlax-ai/rss-scheduler:sha-<commit>`. It sets the OCI
-revision label and embeds the fixture's scheduler source hash as
-`SCHEDULER_BUILD_ID`. The publish job serializes by commit and refuses to
-overwrite an existing SHA tag. It uploads `scheduler-image.txt` with the exact
-registry digest; use that digest reference for deployment and retain it for
-rollback. The preflight uses the authenticated GHCR registry API and fails
-closed on authentication, transport, or ambiguous responses. It accepts an
-explicit missing-manifest response, and treats an unknown package as absent
-only after obtaining a repository-scoped GHCR token and rechecking it. CI
-publication does not deploy the service. Production runs the image by digest;
-the deployed build ID and image digest are recorded in the release record.
+The previous standalone scheduler image workflow has been removed. The
+canonical core release workflow tests and publishes the `web`, `background`,
+and `executor` targets together on an explicit reviewed-main dispatch. It does
+not publish on pull requests or ordinary pushes, and this consolidation has
+not been published. See [the core image release guide](core-image-build-and-release.md)
+for the current release gate and immutable image inventory.
 
 ## Ownership and execution
 
@@ -46,7 +34,7 @@ flowchart LR
     Scheduler <--> Store[(Scheduler-owned schema)]
     Scheduler -->|command + occurrence ID| Ingress[News service adapter]
     Ingress --> Jobs[(News durable jobs)]
-    Jobs --> Worker[Python execution worker]
+    Jobs --> Worker[Go queue worker component]
     Ingress -->|durable acceptance receipt| Scheduler
     Scheduler --> Other[Another configured consumer]
 ```

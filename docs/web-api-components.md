@@ -1,96 +1,136 @@
 # Web and API components
 
-This document describes the repository's local development architecture after the Python web application was removed. It groups the system by responsibility; implementation language and current process placement are annotated as implementation details. It is not a production deployment record.
+This document describes the local Compose architecture. It is not a production
+deployment record. The background runtime packaging in this branch has not
+been published or rolled out.
 
 ## Responsibilities
 
-| Responsibility | Current implementation | Owns |
+| Responsibility | Runtime placement | Owns |
 |---|---|---|
-| Public reader and web API | Go web process | Public HTML pages and data APIs, admin pages, authentication, management routes, API documentation, HTTP trust middleware, and calls to the private executor for the narrow operations it owns |
-| Management and durable commands | Go web packages and News PostgreSQL | Source/category CRUD, summaries and statistics reads, settings, durable job submission and receipts |
-| Durable job execution | Go worker process | Queue claims, lease/recovery handling, and dispatch of fixed authenticated job operations to the private executor |
-| Python domain operations | Private Python executor process | Existing Python job/domain functions, AI and prompts, summary generation, Telegram delivery and diagnostics, and bounded private backup/cache operations |
-| Collection and ingestion | Go collection/ingestion process | RSS/Atom, public Telegram and Page Monitor capture, source progress, and fenced persistence of fetched articles |
-| Article processing | Go processing process | Article selection, processing states, retries, and article/category persistence; delegates AI analysis through the private executor callback |
-| Extraction | Go extractor process | Bounded HTTP extraction and the optional native browser-rendering profile |
-| Schedule dispatch | Go scheduler process and its own PostgreSQL database | Calendar schedule state and delivery of versioned commands to the Go web receiver |
-| Schema bootstrap | One-shot Python migration command | Existing database initialization, versioned migrations, and required schema checks before schema consumers start |
+| Public reader and web API | Go `web` process | Public pages and data APIs, admin pages, authentication, management routes, API documentation, HTTP trust middleware, and the narrow calls to the private executor |
+| Durable command management | Go web packages and News PostgreSQL | Source/category CRUD, summaries and statistics reads, settings, durable job submission, and receipts |
+| Queue execution | Go `background` process | The queue worker component, claims, lease/recovery handling, and fixed authenticated operations sent to the executor |
+| Schedule dispatch | Go `background` process | Scheduler API and dispatch component; scheduler state remains in its separate PostgreSQL database |
+| Collection and ingestion | Go `background` process | Ingestion listener, RSS/Atom, public Telegram and Page Monitor adapters, source progress, and fenced article persistence |
+| Article processing | Go `background` process | Processing listener, article selection, state transitions, retries, and article/category persistence; AI analysis calls the private executor |
+| Python domain operations | Private Python `executor` process | Existing Python job/domain functions, AI prompts and provider calls, summaries, Telegram delivery and diagnostics, and private backup operations |
+| Extraction | Separate Go `extractor` process | Bounded HTTP extraction. The example Compose profile uses HTTP-only extraction. |
+| Schema bootstrap | One-shot `migrate` command using the executor image | Existing database initialization, versioned migrations, and required schema checks before schema consumers start |
 
-Current implementation details in parentheses are not service consolidation requirements. The local Compose project runs separate services for the web process, migration command, executor, worker, ingestion, processing, extractor, scheduler, and the News and scheduler databases.
+The scheduler, worker, ingestion, and processing remain distinct Go modules and
+components with their own typed configuration, database pools, and listeners.
+They run together in one background process in the Compose example; they are
+not independently deployed containers there. The build graph still creates
+separate `web`, `background`, and `executor` runtime images. The extractor keeps
+its own image, and the shared browser stays outside this local example.
 
 ## Request and data flow
 
 ```mermaid
 flowchart LR
-    User[Reader or administrator] --> Web["Reader, admin, and API<br/>(Go web)"]
-    Web <--> DB[(News PostgreSQL)]
+    Reader[Reader or administrator] --> Web[Go web]
+    Web <--> NewsDB[(News PostgreSQL)]
     Web --> Jobs[Durable News jobs]
-    Worker["Job execution<br/>(Go worker)"] --> Jobs
-    Worker -->|fixed authenticated operation| Executor["Private domain operations<br/>(Python executor)"]
+    subgraph Background[One Go background process]
+      Worker[Queue worker component]
+      Scheduler[Schedule dispatch component]
+      Ingestion[Ingestion component]
+      Processing[Processing component]
+    end
+    Worker --> Jobs
+    Worker -->|fixed authenticated operation| Executor[Private Python executor]
     Web -->|typed private operation| Executor
-    Executor -->|configured-source collection| Ingestion["Collection and ingestion<br/>(Go)"]
-    Executor -->|article processing commands| Processing
-    Ingestion <--> DB
-    Ingestion --> Sources["Source adapters<br/>(Go)"]
-    Sources --> Extract["Article extraction<br/>(Go)"]
-    Extract --> Webs[External web origins]
-    Processing["Article processing<br/>(Go)"] <--> DB
+    Executor -->|source collection request| Ingestion
+    Executor -->|processing request| Processing
+    Ingestion <--> NewsDB
+    Ingestion --> Sources[Go source adapters]
+    Sources --> Extract[Go extractor]
+    Processing <--> NewsDB
     Processing --> Extract
     Processing -->|private AI callback| Executor
     Executor --> AI[AI provider]
     Executor --> Telegram[Telegram delivery]
-    Executor <--> DB
-    Scheduler["Schedule dispatch<br/>(Go scheduler)"] -->|scheduled command| Web
-    Migration[One-shot migration command] -->|must succeed before startup| DB
+    Executor <--> NewsDB
+    Web <--> Scheduler
+    Scheduler <--> SchedulerDB[(Scheduler PostgreSQL)]
+    Scheduler -->|scheduled command| Web
+    Migrate[One-shot Python migration] --> NewsDB
 ```
 
-The Go web is the only web UI/API implementation in the local example. It owns `/`, public feed pages and APIs, `/admin`, authenticated management endpoints, health endpoints, and the documented route contract. The private executor is a service boundary rather than a second web app: it exposes fixed, authenticated internal operations used by Go components and is not mounted into the public Go mux.
+The Go web is the only web UI/API implementation in the local example. It owns
+`/`, public feed pages and APIs, `/admin`, authenticated management endpoints,
+health endpoints, and the documented route contract. The executor exposes
+fixed authenticated internal operations and is not mounted into the public Go
+mux.
 
-The Go job worker claims durable jobs from News PostgreSQL and sends fixed job names and validated payloads to the executor. The executor uses Python domain code for the operations that remain there. Collection, ingestion, article processing, and extraction are separate responsibilities and may call each other through their service interfaces; this diagram does not require that they share a process.
+The Go worker uses the durable News queue and dispatches fixed job names and
+validated payloads to the executor. Collection, ingestion, article processing,
+and extraction retain their private HTTP contracts on the shared background
+service hostname at ports `8080`, `8093`, and `8094`; background health uses
+`8095`. Compose does not publish these private ports on the host.
 
-## Database lifecycle
+## Database lifecycle and configuration
 
-`migrate` is a one-shot Compose service that runs:
+`migrate` runs this command and exits after the one-shot bootstrap:
 
 ```sh
 python -m news_aggregator.migrate
 ```
 
-It initializes and upgrades the existing News schema, performs required schema checks, and exits. Schema-dependent services wait for successful completion. The Go web checks that the required schema is present at startup and does not apply DDL. The scheduler owns a separate database and schema.
+The Go web checks the required schema at startup and does not apply DDL. The
+scheduler keeps its own database and schema. Schema-dependent services wait for
+successful migration completion.
 
-Integration tests use isolated schemas on a dedicated loopback PostgreSQL instance. The repository's migration and readiness checks must not be pointed at production or a shared database during local test runs.
+The background runtime requires four independent connection strings:
 
-## Private executor connection and secrets
+| Variable | Component |
+|---|---|
+| `WORKER_DATABASE_URL` | Queue worker |
+| `SCHEDULER_DATABASE_URL` | Scheduler |
+| `INGESTION_DATABASE_URL` | Ingestion |
+| `PROCESSING_DATABASE_URL` | Article processing |
 
-The Go web configuration requires:
+Provide each News database URL using the corresponding provisioned least-
+privilege role. The example does not create these roles or substitute the
+executor's `DATABASE_URL` for them. The scheduler URL points to its separate
+database. Keep credentials in an ignored `.env` file or the shell environment;
+do not put DSNs in source control or diagnostics.
+
+The executor retains the News `DATABASE_URL` and provider credentials. The Go
+web gets a separate `WEB_BACKEND_TOKEN` for its fixed executor origin:
 
 | Variable | Purpose |
 |---|---|
-| `WEB_BACKEND_URL` | Fixed private executor origin, for example `http://executor:8100`; the client constructs only its typed internal paths |
-| `WEB_BACKEND_TOKEN` | Separate bearer credential for Go web to private executor calls |
+| `WEB_BACKEND_URL` | Private executor origin, such as `http://executor:8100` |
+| `WEB_BACKEND_TOKEN` | Bearer credential for Go web to executor operations |
+| `JOB_EXECUTOR_URL` / `JOB_EXECUTOR_TOKEN` | Worker-to-executor job boundary |
+| `ARTICLE_INGESTION_URL` / `ARTICLE_INGESTION_TOKEN` | Executor-to-background ingestion boundary |
+| `ARTICLE_PROCESSING_URL` / `ARTICLE_PROCESSING_TOKEN` | Executor-to-background processing boundary |
+| `SCHEDULER_API_URL` / `SCHEDULER_API_TOKEN` | Web and executor scheduler client configuration |
 
-The URL is an origin, not a reverse-proxy target. The Go client does not forward arbitrary user paths or provider credentials. `GEMINI_API_KEY` and `TELEGRAM_TOKEN` are configured only for services that call those providers, principally the private Python executor; they are not required by the Go web service and must not be passed to it.
-
-Other Go web settings include `DATABASE_URL`, `ADMIN_USERNAME`, `ADMIN_PASSWORD`, `JWT_SECRET`, scheduler API and receiver credentials, `ALLOWED_ORIGINS`, `TRUSTED_HOSTS`, `SITE_BASE_URL`, and proxy trust configuration. The complete values and service dependencies are defined by `docker-compose.example.yml`; keep secrets in an ignored local `.env` file or shell environment.
-
-## HTTP ownership
-
-The Go web process composes public pages/data, authentication, admin rendering, management handlers, scheduler facade and receiver, typed private-backend handlers, and local API documentation. The route ledger in [web API route coverage](web-api-route-coverage.md) lists these groups and their service boundaries. `go-web/contracts/openapi.json` is the checked-in API document served by `/openapi.json`; `/docs` and `/redoc` use local rendering and assets.
-
-The private executor listens only on its service interface. Its `/internal/web/v1/*` operations require `WEB_BACKEND_TOKEN` and are not part of the public web route inventory. Its domain operations include AI category analysis, Telegram configuration/test and service-cache refresh, backup-file operations, and process monitoring. Worker-mode backup upload, cleanup, and restore are rejected with 409; durable backup creation remains a Go job.
+Provider keys such as `GEMINI_API_KEY` and `TELEGRAM_TOKEN` remain on the
+executor. They are not required by the Go web or background image. The full
+local example is in [`docker-compose.example.yml`](../docker-compose.example.yml).
 
 ## Local checks
 
-From the repository root:
+Run the Python suite and the Go checks from the repository root:
 
 ```sh
 python -m pytest tests -q
-cd go-web
-go test -race -count=1 ./...
-go vet ./...
-go mod verify
+for module in go-worker go-scheduler go-ingestion go-processing go-background go-web; do
+  (cd "$module" && go test -race -count=1 ./... && go vet ./... && go mod verify)
+done
 ```
 
-PostgreSQL integration checks require `TEST_DATABASE_URL` to point to a loopback-only disposable test database. Docker acceptance checks use local fixture credentials and disposable data; they do not change production services.
+PostgreSQL integration tests require dedicated loopback-only databases. Do not
+use a production or shared database. Core image builds, runtime contents, and
+the consolidated synthetic fixture command are documented in
+[`core-image-build-and-release.md`](core-image-build-and-release.md).
 
-The historical Python route and OpenAPI capture is retained under `tests/fixtures/web-contract-v1/` as migration input. Go route tests compare the assembled mux with that frozen inventory and compare API docs with the checked-in Go OpenAPI contract; they do not import the deleted Python web application.
+The historical Python route and OpenAPI capture under
+`tests/fixtures/web-contract-v1/` remains migration input. Go route tests compare
+the assembled mux with that frozen inventory and compare the API document with
+the checked-in Go OpenAPI contract; they do not import the removed Python web
+application.

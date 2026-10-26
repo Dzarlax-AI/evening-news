@@ -1,0 +1,57 @@
+# Web framework
+fastapi>=0.104.1
+uvicorn[standard]>=0.24.0
+
+# Database
+asyncpg>=0.29.0  # Async PostgreSQL driver
+sqlalchemy[asyncio]>=2.0.23
+
+# HTTP clients
+aiohttp>=3.9.1
+tenacity>=8.2.3
+Brotli>=1.2.0                   # Bounded streaming decompression API
+
+# Cache (using file-based cache instead of Redis)
+
+# Configuration
+pydantic>=2.5.0
+pydantic-settings>=2.1.0
+
+# HTML utilities used by News processing and selector learning
+beautifulsoup4>=4.12.2
+
+# Date handling
+python-dateutil>=2.8.2
+pytz>=2023.3
+
+# Text processing (removed heavy ML deps - using API instead)
+
+# File operations
+aiofiles>=23.2.1
+python-magic>=0.4.27  # MIME type detection for media files
+
+# Cloud storage (removed - using DB only)
+# boto3>=1.34.0
+# aiobotocore>=2.8.0
+
+# Monitoring
+
+# Task scheduling (removed - using direct async processing)
+
+# Static files
+python-multipart>=0.0.6
+
+# CLI interface
+click>=8.1.7
+rich>=13.7.0
+
+# Machine learning removed - using Constructor KM API instead
+
+# Legacy dependencies removed (already specified above)
+
+# Process monitoring
+psutil>=5.9.6                 # System and process monitoring
+
+# Shared content utilities
+chardet>=5.2.0                # Character encoding detection
+

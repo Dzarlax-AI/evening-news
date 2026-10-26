@@ -1,0 +1,131 @@
+# Core image build and release
+
+This guide documents local build commands and the repository's gated release
+workflow. It does not describe production deployment state or authorize an
+image publication. The background consolidation remains unreleased until a
+separate explicit action publishes it; a production rollout needs its own
+approval.
+
+## Runtime images
+
+`docker/Dockerfile` defines three independent final targets in one Buildx Bake
+graph:
+
+| Bake target | Local fixture tag | Registry repository | Runtime contents |
+|---|---|---|---|
+| `web` | `evening-news-web:consolidation-fixture` | `ghcr.io/dzarlax-ai/rss-web` | Go web binary, templates, API contracts, web static files, CA certificates |
+| `background` | `evening-news-background:consolidation-fixture` | `ghcr.io/dzarlax-ai/rss-background` | One Go background process hosting scheduler, worker, ingestion, and processing components; CA certificates and timezone data |
+| `executor` | `evening-news-executor:consolidation-fixture` | `ghcr.io/dzarlax-ai/rss-summarizer` | Python domain runtime, migrations, runtime dependencies, PostgreSQL backup client, and `libmagic` runtime library |
+
+Each image has its own runtime boundary and registry digest. They share a build
+graph, not a common final image. The background build embeds the same `REVISION`
+in its runtime and scheduler version response. The final image OCI revision
+label carries that same source revision.
+
+The `web` and `background` images do not install Python, provider libraries,
+Go compilers, or PostgreSQL backup tools. The executor image does not include
+web assets, scripts, Go binaries, or Go build tools. `requirements.txt` is for
+local tests; runtime builds install only `requirements-runtime.txt`.
+
+## Build and inspect locally
+
+The Bake default group loads all three targets for the local ARM64 platform.
+Set a revision when you want to inspect source metadata:
+
+```sh
+REVISION="$(git rev-parse HEAD)" PLATFORM=linux/arm64 \
+  docker buildx bake -f docker-bake.hcl --set '*.platform=linux/arm64' --load
+python3 scripts/check_core_image_inventory.py
+```
+
+The inventory check runs without network access and with a read-only root
+filesystem. It inspects the locally loaded target contents and required
+executor runtime utilities. It does not assert image sizes as disk savings or
+make performance claims.
+
+The combined synthetic gate uses the three local targets and a separately
+built extractor fixture:
+
+```sh
+docker build --platform linux/arm64 -f docker/Dockerfile.extractor \
+  -t evening-news-collector:consolidation-fixture go
+python scripts/run_go_background_fixture_gate.py \
+  --web-image evening-news-web:consolidation-fixture \
+  --background-image evening-news-background:consolidation-fixture \
+  --executor-image evening-news-executor:consolidation-fixture \
+  --collector-image evening-news-collector:consolidation-fixture \
+  --output-dir artifacts/go-background-fixture
+```
+
+The gate uses its isolated PostgreSQL and synthetic services. It must not be
+given real provider, messaging, source-site, production network, or shared
+browser credentials. The extractor and browser build/release workflows remain
+independent from the core image release.
+
+## Local Compose
+
+The example stack uses the `web`, `background`, and `executor` targets. The
+one-shot `migrate` command uses the executor target. The background service
+waits for migration, PostgreSQL, the executor, the extractor, and the scheduler
+database; the executor does not wait on the background service. Web waits for
+the background and executor health checks. This avoids an executor/background
+startup cycle while allowing the scheduler's persisted outbox to retry dispatch
+until web is ready.
+
+The private scheduler, ingestion, processing, and health listeners use ports
+`8080`, `8093`, `8094`, and `8095` on the background service. Compose does not
+publish these ports on the host. The worker drain defaults to 20 seconds, the
+background shutdown bound to 60 seconds, and Compose allows 75 seconds before
+forcing the background container to stop.
+
+Set `WORKER_DATABASE_URL`, `INGESTION_DATABASE_URL`, and
+`PROCESSING_DATABASE_URL` to connection strings for the exact provisioned
+least-privilege News roles. The Compose example neither creates these roles nor
+falls back to one shared `DATABASE_URL`. `SCHEDULER_DATABASE_URL` must use the
+existing scheduler database role. The Python executor retains its existing
+News `DATABASE_URL`.
+
+The local example is intentionally HTTP-only and does not include production
+egress or a shared browser service. It has the core app roles, extractor, and
+two local database containers, plus a temporary migration command. The
+approved future production target is three core app containers plus extractor
+and protective egress; shared PostgreSQL and browser services are outside that
+count. That target is planned, not deployed by these source changes.
+
+## CI and explicit publication
+
+The canonical `Core images and full-stack acceptance` workflow runs the Python
+suite on PostgreSQL 16, all core Go module race tests and `go vet` against
+PostgreSQL 16 and 17, then builds the Bake targets and runs image inventory and
+consolidated synthetic acceptance on Linux amd64. Pull requests and ordinary
+pushes to `main` do not publish core images.
+
+Core module workflows retain their module, migration, and contract checks. They
+do not independently assemble or publish core runtime images. Extractor and
+shared-browser workflows retain their independent builds and publication
+paths.
+
+Publication is available only through `workflow_dispatch` on reviewed `main`
+with `publish=true`. That job repeats the Python/Go prerequisite jobs, then
+builds and accepts the exact local images it publishes. Before the first push,
+the workflow checks that all three immutable `sha-<40-character-commit>` tags
+are absent:
+
+- `ghcr.io/dzarlax-ai/rss-web`
+- `ghcr.io/dzarlax-ai/rss-background`
+- `ghcr.io/dzarlax-ai/rss-summarizer`
+
+The publisher requires one successful gate report and matches each target's
+accepted image ID, fixture tag, and revision against local Docker inspection.
+It also verifies each image's platform and OCI revision label before any push,
+then tags the captured image IDs directly. It does not retag mutable local
+names or run another build after the acceptance gate. Only after all three pushes
+succeed does it write `release-images.json` with target, repository, revision,
+platform, image ID, and registry digest. This manifest is the release's exact
+artifact inventory; consumers must not infer that targets share a digest.
+
+Registry writes across three repositories cannot be atomic. If a push succeeds
+for one target and a later push fails, the workflow produces no complete
+manifest and does not overwrite existing immutable SHA tags on retry. Treat
+that run as a partial release and inspect registry state before any further
+release action. This workflow has not been run for publication here.

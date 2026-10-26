@@ -2,7 +2,10 @@ services:
   web:
     build:
       context: .
-      dockerfile: go-web/Dockerfile
+      dockerfile: docker/Dockerfile
+      target: web
+      args:
+        REVISION: ${REVISION:-local}
     ports:
       - "8000:8000"
     environment:
@@ -20,7 +23,7 @@ services:
       SCHEDULED_JOBS_RECEIPT_LIMIT: ${SCHEDULED_JOBS_RECEIPT_LIMIT:-100000}
       WEB_BACKEND_URL: http://executor:8100
       WEB_BACKEND_TOKEN: ${WEB_BACKEND_TOKEN:?Set WEB_BACKEND_TOKEN}
-      SCHEDULER_API_URL: http://scheduler:8080
+      SCHEDULER_API_URL: http://background:8080
       SCHEDULER_API_TOKEN: ${SCHEDULER_API_TOKEN:?Set SCHEDULER_API_TOKEN}
       SCHEDULER_API_ALLOW_HTTP: "true"
       SITE_BASE_URL: ${SITE_BASE_URL:-http://localhost:8000}
@@ -31,7 +34,7 @@ services:
         condition: service_completed_successfully
       executor:
         condition: service_healthy
-      scheduler:
+      background:
         condition: service_healthy
     restart: unless-stopped
     healthcheck:
@@ -45,6 +48,9 @@ services:
     build:
       context: .
       dockerfile: docker/Dockerfile
+      target: executor
+      args:
+        REVISION: ${REVISION:-local}
     command: ["python", "-m", "news_aggregator.migrate"]
     environment:
       DATABASE_URL: postgresql+asyncpg://newsuser:${DB_PASSWORD:?Set DB_PASSWORD}@postgres:5432/newsdb
@@ -60,8 +66,10 @@ services:
     build:
       context: .
       dockerfile: docker/Dockerfile
-    command: ["python", "-m", "news_aggregator.executor"]
-    environment: &python-environment
+      target: executor
+      args:
+        REVISION: ${REVISION:-local}
+    environment:
       DATABASE_URL: postgresql+asyncpg://newsuser:${DB_PASSWORD:?Set DB_PASSWORD}@postgres:5432/newsdb
       GEMINI_API_KEY: ${GEMINI_API_KEY:?Set GEMINI_API_KEY}
       GEMINI_API_ENDPOINT: https://generativelanguage.googleapis.com/v1/models
@@ -78,15 +86,15 @@ services:
       ALLOW_CREATE_ALL: "true"
       BACKGROUND_EXECUTION_MODE: worker
       ARTICLE_AI_TOKEN: ${ARTICLE_AI_TOKEN:?Set ARTICLE_AI_TOKEN}
-      ARTICLE_PROCESSING_URL: http://article-processing:8094
+      ARTICLE_PROCESSING_URL: http://background:8094
       ARTICLE_PROCESSING_TOKEN: ${ARTICLE_PROCESSING_TOKEN:?Set ARTICLE_PROCESSING_TOKEN}
       WEB_BACKEND_TOKEN: ${WEB_BACKEND_TOKEN:?Set WEB_BACKEND_TOKEN}
       ARTICLE_INGESTION_MODE: go
-      ARTICLE_INGESTION_URL: http://article-ingestion:8093
+      ARTICLE_INGESTION_URL: http://background:8093
       ARTICLE_INGESTION_TOKEN: ${ARTICLE_INGESTION_TOKEN:?Set ARTICLE_INGESTION_TOKEN}
       SCHEDULE_DISPATCH_MODE: service
       SCHEDULER_ENABLED: "false"
-      SCHEDULER_API_URL: http://scheduler:8080
+      SCHEDULER_API_URL: http://background:8080
       SCHEDULER_API_TOKEN: ${SCHEDULER_API_TOKEN:?Set SCHEDULER_API_TOKEN}
       SCHEDULER_API_ALLOW_HTTP: "true"
       SCHEDULED_JOBS_TOKEN: ${SCHEDULED_JOBS_TOKEN:?Set SCHEDULED_JOBS_TOKEN}
@@ -109,11 +117,7 @@ services:
     depends_on:
       migrate:
         condition: service_completed_successfully
-      article-ingestion:
-        condition: service_healthy
       extractor:
-        condition: service_healthy
-      scheduler:
         condition: service_healthy
     volumes:
       - app_cache:/app/cache
@@ -127,62 +131,45 @@ services:
       start_period: 30s
       retries: 3
 
-  worker:
-    stop_grace_period: 180s
+  background:
+    stop_grace_period: 75s
     build:
       context: .
-      dockerfile: go-worker/Dockerfile
+      dockerfile: docker/Dockerfile
+      target: background
+      args:
+        REVISION: ${REVISION:-local}
     environment:
-      DATABASE_URL: postgres://newsuser:${DB_PASSWORD:?Set DB_PASSWORD}@postgres:5432/newsdb
+      BACKGROUND_HEALTH_LISTEN: ":8095"
+      BACKGROUND_SHUTDOWN_TIMEOUT_SECONDS: "60"
+      WORKER_DATABASE_URL: ${WORKER_DATABASE_URL:?Set WORKER_DATABASE_URL for the provisioned worker role}
       JOB_EXECUTOR_URL: http://executor:8100
       JOB_EXECUTOR_TOKEN: ${JOB_EXECUTOR_TOKEN:?Set JOB_EXECUTOR_TOKEN}
       WORKER_POLL_INTERVAL_SECONDS: ${WORKER_POLL_INTERVAL_SECONDS:-1}
       WORKER_SHUTDOWN_DRAIN_SECONDS: ${WORKER_SHUTDOWN_DRAIN_SECONDS:-20}
       WORKER_MAX_JOB_ATTEMPTS: ${WORKER_MAX_JOB_ATTEMPTS:-3}
       WORKER_JOB_RETENTION_DAYS: ${WORKER_JOB_RETENTION_DAYS:-7}
-    depends_on:
-      postgres:
-        condition: service_healthy
-      executor:
-        condition: service_healthy
-      article-processing:
-        condition: service_healthy
-    restart: unless-stopped
-
-  article-ingestion:
-    build:
-      context: .
-      dockerfile: go-ingestion/Dockerfile
-    environment:
+      SCHEDULER_LISTEN_ADDR: ":8080"
+      SCHEDULER_DATABASE_URL: postgres://scheduler:${SCHEDULER_DB_PASSWORD:?Set SCHEDULER_DB_PASSWORD}@scheduler-postgres:5432/schedulerdb
+      SCHEDULER_DB_SCHEMA: scheduler_service
+      SCHEDULER_API_TOKEN: ${SCHEDULER_API_TOKEN:?Set SCHEDULER_API_TOKEN}
+      SCHEDULER_TARGET_ALIASES: news-worker
+      SCHEDULER_TARGET_NEWS_WORKER_URL: http://web:8000/api/v1/internal/scheduled-jobs
+      SCHEDULER_TARGET_NEWS_WORKER_TOKEN: ${SCHEDULED_JOBS_TOKEN:?Set SCHEDULED_JOBS_TOKEN}
+      SCHEDULER_ALLOW_HTTP_TARGETS: "true"
       ARTICLE_INGESTION_LISTEN: ":8093"
       ARTICLE_INGESTION_TOKEN: ${ARTICLE_INGESTION_TOKEN:?Set ARTICLE_INGESTION_TOKEN}
       ARTICLE_INGESTION_DB_MAX_CONNS: ${ARTICLE_INGESTION_DB_MAX_CONNS:-5}
-      DATABASE_URL: postgres://newsuser:${DB_PASSWORD:?Set DB_PASSWORD}@postgres:5432/newsdb
+      INGESTION_DATABASE_URL: ${INGESTION_DATABASE_URL:?Set INGESTION_DATABASE_URL for the provisioned ingestion role}
       EXTRACTION_SERVICE_URL: http://extractor:8080
       EXTRACTION_SERVICE_TOKEN: ${EXTRACTION_SERVICE_TOKEN:?Set EXTRACTION_SERVICE_TOKEN}
       EXTRACTION_SERVICE_NATIVE_BROWSER: "false"
-      JOB_EXECUTOR_URL: http://executor:8100
-      JOB_EXECUTOR_TOKEN: ${JOB_EXECUTOR_TOKEN:?Set JOB_EXECUTOR_TOKEN}
-    depends_on:
-      migrate:
-        condition: service_completed_successfully
-      extractor:
-        condition: service_healthy
-    restart: unless-stopped
-
-  article-processing:
-    build:
-      context: .
-      dockerfile: go-processing/Dockerfile
-    environment:
       ARTICLE_PROCESSING_LISTEN: ":8094"
       ARTICLE_PROCESSING_TOKEN: ${ARTICLE_PROCESSING_TOKEN:?Set ARTICLE_PROCESSING_TOKEN}
       ARTICLE_PROCESSING_DB_MAX_CONNS: "5"
-      DATABASE_URL: postgres://newsuser:${DB_PASSWORD:?Set DB_PASSWORD}@postgres:5432/newsdb
+      PROCESSING_DATABASE_URL: ${PROCESSING_DATABASE_URL:?Set PROCESSING_DATABASE_URL for the provisioned processing role}
       ARTICLE_AI_URL: http://executor:8100
       ARTICLE_AI_TOKEN: ${ARTICLE_AI_TOKEN:?Set ARTICLE_AI_TOKEN}
-      EXTRACTION_SERVICE_URL: http://extractor:8080
-      EXTRACTION_SERVICE_TOKEN: ${EXTRACTION_SERVICE_TOKEN:?Set EXTRACTION_SERVICE_TOKEN}
       MAX_WORKERS: ${MAX_WORKERS:-5}
       PROCESSING_BATCH_SIZE: ${PROCESSING_BATCH_SIZE:-25}
       PROCESSING_MAX_ATTEMPTS: ${PROCESSING_MAX_ATTEMPTS:-3}
@@ -197,14 +184,26 @@ services:
       NEWS_LIMIT_PER_SOURCE: ${NEWS_LIMIT_PER_SOURCE:-50}
       NEWS_LIMIT_NEWEST_DATE: ${NEWS_LIMIT_NEWEST_DATE:-}
     depends_on:
+      postgres:
+        condition: service_healthy
+      scheduler-postgres:
+        condition: service_healthy
       migrate:
         condition: service_completed_successfully
       extractor:
+        condition: service_healthy
+      executor:
         condition: service_healthy
     read_only: true
     cap_drop: [ALL]
     security_opt: [no-new-privileges:true]
     restart: unless-stopped
+    healthcheck:
+      test: ["CMD", "/news-background", "healthcheck"]
+      interval: 15s
+      timeout: 4s
+      start_period: 30s
+      retries: 3
 
   postgres:
     image: postgres:16-alpine
@@ -241,30 +240,6 @@ services:
       timeout: 3s
       retries: 3
 
-  scheduler:
-    build:
-      context: ./go-scheduler
-      dockerfile: Dockerfile
-    environment:
-      LISTEN_ADDR: ":8080"
-      SCHEDULER_DATABASE_URL: postgres://scheduler:${SCHEDULER_DB_PASSWORD:?Set SCHEDULER_DB_PASSWORD}@scheduler-postgres:5432/schedulerdb
-      SCHEDULER_DB_SCHEMA: scheduler_service
-      SCHEDULER_API_TOKEN: ${SCHEDULER_API_TOKEN:?Set SCHEDULER_API_TOKEN}
-      SCHEDULER_TARGET_ALIASES: news-worker
-      SCHEDULER_TARGET_NEWS_WORKER_URL: http://web:8000/api/v1/internal/scheduled-jobs
-      SCHEDULER_TARGET_NEWS_WORKER_TOKEN: ${SCHEDULED_JOBS_TOKEN:?Set SCHEDULED_JOBS_TOKEN}
-      SCHEDULER_ALLOW_HTTP_TARGETS: "true"
-    depends_on:
-      scheduler-postgres:
-        condition: service_healthy
-    restart: unless-stopped
-    healthcheck:
-      test: ["CMD", "/scheduler", "healthcheck"]
-      interval: 15s
-      timeout: 3s
-      start_period: 15s
-      retries: 3
-
   scheduler-postgres:
     image: postgres:17-alpine
     environment:
@@ -284,6 +259,5 @@ volumes:
   postgres_data:
   scheduler_postgres_data:
   app_cache:
-  app_logs:
   executor_logs:
   app_backups:

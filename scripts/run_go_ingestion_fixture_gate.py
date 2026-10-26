@@ -211,7 +211,7 @@ class IngestionGate(GoJobWorkerGate):
             args.extend(["--mount", f"type=bind,src={GATE_FIXTURES},dst=/gate,readonly",
                          "--mount", f"type=bind,src={ROOT / 'tests/fixtures/background-worker'},dst=/background,readonly",
                          "--mount", f"type=bind,src={ORIGIN_FIXTURES},dst=/origin-fixtures,readonly"])
-        if name.endswith(("-origin", "-collector", "-ingestion", "-processing")) and self.fixture_temp:
+        if name.endswith(("-origin", "-collector", "-ingestion", "-processing", "-background")) and self.fixture_temp:
             args.extend(["--mount", f"type=bind,src={self.fixture_temp},dst=/fixtures,readonly"])
         for host in self.extra_hosts:
             args.extend(["--add-host", f"{host}:{ORIGIN_IP}"])

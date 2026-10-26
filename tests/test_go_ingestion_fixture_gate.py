@@ -85,9 +85,15 @@ def test_runtime_role_sql_is_manual_and_separates_function_owner():
 
 def test_ingestion_pool_bound_fits_one_dedicated_run_lock_connection():
     main = (ROOT / "go-ingestion/cmd/news-ingestion/main.go").read_text()
+    runner = (ROOT / "go-ingestion/runner/runner.go").read_text()
+    runner_tests = (ROOT / "go-ingestion/runner/config_test.go").read_text()
     readme = (ROOT / "go-ingestion/README.md").read_text()
     guide = (ROOT / "docs/go-article-ingestion.md").read_text()
-    assert 'envInt("ARTICLE_INGESTION_DB_MAX_CONNS", 5, 1, 5)' in main
+    # Limit validation moved into the typed runner config; main only wires signals.
+    assert "runner.ConfigFromEnv()" in main
+    assert 'getenv("ARTICLE_INGESTION_DB_MAX_CONNS")' in runner
+    assert "n < 1 || n > 5" in runner
+    assert 'v["ARTICLE_INGESTION_DB_MAX_CONNS"] = "nope"' in runner_tests
     assert "bounded to 1–5" in readme
     assert "five pooled PostgreSQL connections plus one dedicated connection" in readme
     assert "Defaults to 5; accepted range 1–5" in guide

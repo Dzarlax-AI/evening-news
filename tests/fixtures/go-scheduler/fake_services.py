@@ -17,6 +17,8 @@ INGESTION_RUNS = {}
 CONSUMER = {"mode": "normal", "requests": 0, "by_occurrence": {}, "operations": {}}
 GEMINI_RELEASE = threading.Event()
 GEMINI_RELEASE.set()
+TELEGRAM_RELEASE = threading.Event()
+TELEGRAM_RELEASE.set()
 HOLD = threading.Event()
 HOLD.set()
 TEXT = " ".join([
@@ -92,6 +94,9 @@ class Handler(BaseHTTPRequestHandler):
             gemini_mode = payload.get("gemini_mode")
             if gemini_mode in {"block", "release"}:
                 (GEMINI_RELEASE.clear if gemini_mode == "block" else GEMINI_RELEASE.set)()
+            telegram_mode = payload.get("telegram_mode")
+            if telegram_mode in {"normal", "accept_then_hold", "release"}:
+                (TELEGRAM_RELEASE.clear if telegram_mode == "accept_then_hold" else TELEGRAM_RELEASE.set)()
             self._json(200, {"status": "updated"})
             return
 
@@ -216,6 +221,9 @@ class Handler(BaseHTTPRequestHandler):
             with LOCK:
                 COUNTERS["telegram"] += 1
                 message_id = COUNTERS["telegram"]
+            # The fixture records provider acceptance before holding the HTTP
+            # response, modeling the ambiguous window without sending anything.
+            TELEGRAM_RELEASE.wait(timeout=180)
             self._json(200, {"ok": True, "result": {"message_id": message_id, "date": 1}})
             return
 
