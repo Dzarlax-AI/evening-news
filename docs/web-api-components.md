@@ -22,23 +22,25 @@ Current implementation details in parentheses are not service consolidation requ
 
 ```mermaid
 flowchart LR
-    User[Reader or administrator] --> Web[Reader, admin, and API<br/>(Go web)]
+    User[Reader or administrator] --> Web["Reader, admin, and API<br/>(Go web)"]
     Web <--> DB[(News PostgreSQL)]
     Web --> Jobs[Durable News jobs]
-    Worker[Job execution<br/>(Go worker)] --> Jobs
-    Worker -->|fixed authenticated operation| Executor[Private domain operations<br/>(Python executor)]
+    Worker["Job execution<br/>(Go worker)"] --> Jobs
+    Worker -->|fixed authenticated operation| Executor["Private domain operations<br/>(Python executor)"]
     Web -->|typed private operation| Executor
-    Executor -->|configured-source collection| Ingestion[Collection and ingestion<br/>(Go)]
+    Executor -->|configured-source collection| Ingestion["Collection and ingestion<br/>(Go)"]
+    Executor -->|article processing commands| Processing
     Ingestion <--> DB
-    Ingestion --> Sources[Source adapters<br/>(Go)]
-    Sources --> Extract[Article extraction<br/>(Go)]
+    Ingestion --> Sources["Source adapters<br/>(Go)"]
+    Sources --> Extract["Article extraction<br/>(Go)"]
     Extract --> Webs[External web origins]
-    Processing[Article processing<br/>(Go)] <--> DB
+    Processing["Article processing<br/>(Go)"] <--> DB
+    Processing --> Extract
     Processing -->|private AI callback| Executor
     Executor --> AI[AI provider]
     Executor --> Telegram[Telegram delivery]
     Executor <--> DB
-    Scheduler[Schedule dispatch<br/>(Go scheduler)] -->|scheduled command| Web
+    Scheduler["Schedule dispatch<br/>(Go scheduler)"] -->|scheduled command| Web
     Migration[One-shot migration command] -->|must succeed before startup| DB
 ```
 

@@ -14,24 +14,24 @@ Evening News collects stories from RSS/Atom feeds, public Telegram channels, and
 
 ## Architecture
 
-The local development stack is organized around product responsibilities. Go and Python are implementation details shown in parentheses; they are not the architectural boundaries. The diagram describes logical responsibilities and data flow, not a prescription to combine services or containers.
+The application is organized around product responsibilities. Go and Python are implementation details shown in parentheses; they are not the architectural boundaries. The diagram describes logical responsibilities and data flow, not a prescription to combine services or containers.
 
 ```mermaid
 flowchart LR
     Reader[Public readers and administrators]
-    Web[Web reader, admin UI, and API<br/>(Go web process)]
+    Web["Web reader, admin UI, and API<br/>(Go web process)"]
     NewsDB[(News PostgreSQL)]
-    Jobs[Durable job queue<br/>(in News PostgreSQL)]
-    Worker[Job execution<br/>(Go worker process)]
-    Domain[Private News operations<br/>(Python executor process)]
-    AI[AI analysis and prompts<br/>(private executor domain code)]
-    Delivery[Daily summaries and Telegram delivery<br/>(private executor domain code)]
-    Ingestion[Configured-source collection and persistence<br/>(Go ingestion process)]
-    Sources[RSS, Telegram, and Page Monitor adapters<br/>(Go collection code)]
-    Processing[Article processing and state transitions<br/>(Go processing process)]
-    Extract[Article extraction<br/>(Go extraction process)]
-    Scheduler[Schedule management and dispatch<br/>(Go scheduler process + scheduler database)]
-    Migrate[One-shot schema bootstrap<br/>(Python migration command)]
+    Jobs["Durable job queue<br/>(in News PostgreSQL)"]
+    Worker["Job execution<br/>(Go worker process)"]
+    Domain["Private News operations<br/>(Python executor process)"]
+    AI["AI analysis and prompts<br/>(private executor domain code)"]
+    Delivery["Daily summaries and Telegram delivery<br/>(private executor domain code)"]
+    Ingestion["Configured-source collection and persistence<br/>(Go ingestion process)"]
+    Sources["RSS, Telegram, and Page Monitor adapters<br/>(Go collection code)"]
+    Processing["Article processing and state transitions<br/>(Go processing process)"]
+    Extract["Article extraction<br/>(Go extraction process)"]
+    Scheduler["Schedule management and dispatch<br/>(Go scheduler process + scheduler database)"]
+    Migrate["One-shot schema bootstrap<br/>(Python migration command)"]
     Internet[Public source websites]
     Telegram[Telegram channel]
 
@@ -40,7 +40,8 @@ flowchart LR
     Web --> Jobs
     Worker --> Jobs
     Worker -->|authenticated fixed job operations| Domain
-    Domain -->|source and article commands| Ingestion
+    Domain -->|source collection commands| Ingestion
+    Domain -->|article processing commands| Processing
     Ingestion --> Sources
     Ingestion <--> NewsDB
     Sources --> Extract
@@ -58,7 +59,7 @@ flowchart LR
     Migrate -->|successful completion required| NewsDB
 ```
 
-The Go web service replaces the former Python web application. It serves the public reader, admin pages, health endpoints, and public and management APIs. The private Python executor remains responsible for fixed job operations that use Python domain code, AI prompts and provider calls, summaries, and Telegram delivery. Go owns durable queue execution, collection and ingestion, article processing, extraction, and schedule dispatch in this local stack.
+The Go web service replaces the former Python web application. It serves the public reader, admin pages, health endpoints, and public and management APIs. The private Python executor remains responsible for fixed job operations that use Python domain code, AI prompts and provider calls, summaries, and Telegram delivery. Go owns durable queue execution, collection and ingestion, article processing, extraction, and schedule dispatch in this architecture.
 
 The one-shot `migrate` service runs `python -m news_aggregator.migrate` before schema-dependent services start. The Go web service does not apply migrations. `WEB_BACKEND_URL` names only the private executor origin, such as `http://executor:8100`; the Go client appends its fixed operation paths. `WEB_BACKEND_TOKEN` is a separate service credential shared only by the Go web process and private executor. Provider credentials such as `GEMINI_API_KEY` and `TELEGRAM_TOKEN` belong to the executor and are not required by the Go web service.
 
@@ -140,4 +141,4 @@ English technical guides:
 - [Page Monitor](docs/go-page-monitor.md)
 - [Native browser worker](docs/go-cloak-native-worker.md)
 
-This documentation describes the repository's local development stack. It does not claim that production has been upgraded or switched to this topology.
+The web/API migration was deployed to production on 2026-10-26: the Go web service replaced the Python public/admin application, while the private executor retained the domain operations described above. The Compose example documents local development; production uses deployment-specific networking, database placement, browser integration, and pinned image digests.
