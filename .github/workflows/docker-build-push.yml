@@ -161,6 +161,8 @@ jobs:
       - uses: docker/setup-buildx-action@v3
       - name: Install isolated fixture dependencies
         run: python -m pip install -r requirements.txt
+      - name: Preload consolidated fixture infrastructure images
+        run: docker pull postgres:17-alpine && docker pull python:3.12-alpine
       - name: Build all three core runtime targets
         env:
           REVISION: ${{ github.sha }}
@@ -207,6 +209,8 @@ jobs:
       - uses: docker/setup-buildx-action@v3
       - name: Install isolated fixture dependencies
         run: python -m pip install -r requirements.txt
+      - name: Preload consolidated fixture infrastructure images
+        run: docker pull postgres:17-alpine && docker pull python:3.12-alpine
       - name: Build the candidate images for the acceptance gate
         env:
           REVISION: ${{ github.sha }}

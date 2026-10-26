@@ -44,9 +44,13 @@ executor runtime utilities. It does not assert image sizes as disk savings or
 make performance claims.
 
 The combined synthetic gate uses the three local targets and a separately
-built extractor fixture:
+built extractor fixture. Preload its versioned PostgreSQL and Python infrastructure
+images first; the gate intentionally uses `--pull=never` so its acceptance
+environment cannot silently change during a run:
 
 ```sh
+docker pull postgres:17-alpine
+docker pull python:3.12-alpine
 docker build --platform linux/arm64 -f docker/Dockerfile.extractor \
   -t evening-news-collector:consolidation-fixture go
 python scripts/run_go_background_fixture_gate.py \

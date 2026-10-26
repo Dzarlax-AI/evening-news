@@ -16,6 +16,19 @@ DIGEST = "sha256:" + "b" * 64
 
 
 class CoreImageReleaseTests(unittest.TestCase):
+    def test_each_fixture_workflow_path_preloads_its_infrastructure_images(self):
+        workflow = (Path(__file__).resolve().parents[1] / ".github/workflows/docker-build-push.yml").read_text()
+        for job_name, gate_step in (
+            ("assemble-fixture:", "Run consolidated synthetic acceptance"),
+            ("publish-reviewed-main:", "Run consolidated synthetic acceptance on the release candidates"),
+        ):
+            with self.subTest(job=job_name):
+                start = workflow.index(f"  {job_name}")
+                end = workflow.find("\n  publish-reviewed-main:", start + len(job_name) + 2)
+                job = workflow[start:] if end == -1 else workflow[start:end]
+                pull_step = job.index("docker pull postgres:17-alpine && docker pull python:3.12-alpine")
+                self.assertLess(pull_step, job.index(gate_step))
+
     def write_acceptance(self, directory):
         report = {
             "result": "passed",
