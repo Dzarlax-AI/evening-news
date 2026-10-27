@@ -235,7 +235,7 @@ class Handler(BaseHTTPRequestHandler):
                     COUNTERS["editorial_gemini"] += 1
                     self._json(200, {
                     "candidates": [{"finishReason": "STOP",
-                                    "content": {"parts": [{"text": json.dumps({"main_stories": main_stories, "article_stories": article_stories}, ensure_ascii=False)}]}}],
+                                    "content": {"parts": [{"text": json.dumps({"main_stories": main_stories, "brief_stories": [], "article_stories": article_stories}, ensure_ascii=False)}]}}],
                     "usageMetadata": {"promptTokenCount": 100, "candidatesTokenCount": 100,
                                       "totalTokenCount": 200},
                 })

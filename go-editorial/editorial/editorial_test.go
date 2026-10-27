@@ -48,7 +48,7 @@ func syntheticSnapshot(n int) Snapshot {
 }
 
 func syntheticDraft(s Snapshot) modelDraft {
-	d := modelDraft{ArticleStories: make(map[string]modelArticleStory, len(s.Articles))}
+	d := modelDraft{MainStories: []modelMainStory{}, BriefStories: []modelMainStory{}, ArticleStories: make(map[string]modelArticleStory, len(s.Articles))}
 	for i, a := range s.Articles {
 		d.ArticleStories[a.ID] = articleStoryFor(a)
 		if len(s.Articles) >= 8 && i == 1 {
@@ -78,7 +78,7 @@ func syntheticStories(t *testing.T, s Snapshot) []Story {
 		t.Fatal(err)
 	}
 	draft := syntheticDraft(s)
-	stories, err := resolveModelStories(s, draft.MainStories, draft.ArticleStories, spans)
+	stories, err := resolveModelStories(s, draft.MainStories, draft.BriefStories, draft.ArticleStories, spans)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -143,8 +143,8 @@ func TestGenerateWithFakeProviderAndRenderSafeLinks(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if !strings.Contains(rendered.RichHTML, "https://news.example/article/1005") || !strings.Contains(rendered.RichHTML, "https://source.example/story/5?a=1&amp;b=2") {
-		t.Fatal("expected internal and original source links")
+	if !strings.Contains(rendered.RichHTML, "https://news.example/article/1005") || strings.Contains(rendered.RichHTML, "https://source.example/story/") {
+		t.Fatal("expected app-owned story links and no original source URLs")
 	}
 	if strings.Contains(rendered.RichHTML, "<script>") || strings.Contains(rendered.RichHTML, "<img src=x onerror=") {
 		t.Fatal("untrusted article markup was not escaped")
@@ -152,8 +152,50 @@ func TestGenerateWithFakeProviderAndRenderSafeLinks(t *testing.T) {
 	if !strings.Contains(rendered.RichHTML, "https://news.example/digest/2026-10-27?edition=fixture") || !strings.Contains(rendered.PreviewText, s.EditionURL) {
 		t.Fatal("edition URL missing")
 	}
-	if !strings.Contains(rendered.RichHTML, "Источник: <a") {
-		t.Fatal("source links missing")
+	if !strings.Contains(rendered.RichHTML, "Источник: Источник 5") {
+		t.Fatal("plain-text source names missing")
+	}
+}
+
+func TestRenderUsesAppOwnedHeadlineLinksAndDeduplicatesPlainSourceNames(t *testing.T) {
+	s := syntheticSnapshot(8)
+	s.Articles[1].SourceName = s.Articles[0].SourceName
+	stories := syntheticStories(t, s)
+	var grouped Story
+	for _, story := range stories {
+		if story.Kind == "main" && len(story.ArticleIDs) == 2 {
+			grouped = story
+			break
+		}
+	}
+	if len(grouped.ArticleIDs) != 2 {
+		t.Fatal("expected a two-article main story")
+	}
+	e, err := FinalizeEdition(s, RussianLocale, stories, nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+	rendered, err := Render(s, RussianLocale, e)
+	if err != nil {
+		t.Fatal(err)
+	}
+	internalURL := "https://news.example/article/1001"
+	for name, output := range map[string]string{"rich": rendered.RichHTML, "plain": strings.Join(rendered.PlainParts, "\n"), "preview": rendered.PreviewText} {
+		if !strings.Contains(output, internalURL) {
+			t.Errorf("%s output is missing app-owned headline URL", name)
+		}
+		if strings.Contains(output, "https://source.example/") {
+			t.Errorf("%s output contains an original source URL", name)
+		}
+		if strings.Count(output, "Источник: "+s.Articles[0].SourceName) != 1 {
+			t.Errorf("%s output should list the identical publisher once: %s", name, output)
+		}
+	}
+	if !strings.Contains(rendered.RichHTML, `<a href="https://news.example/article/1001">Город начал строительство моста</a>`) {
+		t.Fatal("rich headline does not link to the app-owned article")
+	}
+	if !strings.Contains(rendered.PlainParts[0], `<a href="https://news.example/article/1001">Город начал строительство моста</a>`) {
+		t.Fatal("plain headline does not link to the app-owned article")
 	}
 }
 
@@ -232,7 +274,7 @@ func TestModelDraftRejectsFreeformEvidenceQuote(t *testing.T) {
 	}
 }
 
-func TestModelDraftRequiresPerArticleRecordsAndRejectsListBasedBriefOutput(t *testing.T) {
+func TestModelDraftRequiresPerArticleRecordsAndSupportsBriefGroups(t *testing.T) {
 	s := syntheticSnapshot(3)
 	schema := geminiSchema(s)
 	properties := schema["properties"].(map[string]any)
@@ -260,15 +302,19 @@ func TestModelDraftRequiresPerArticleRecordsAndRejectsListBasedBriefOutput(t *te
 	if _, hasExcluded := properties["excluded"]; hasExcluded {
 		t.Fatal("generation schema still permits article exclusions")
 	}
-	if _, hasBriefArray := properties["brief_stories"]; hasBriefArray {
-		t.Fatal("model schema still permits omission-prone brief story arrays")
+	if _, hasBriefArray := properties["brief_stories"]; !hasBriefArray {
+		t.Fatal("model schema does not permit brief event groups")
 	}
-	legacyBundle := `{"main_stories":[],"brief_stories":[{"title":"Дайджест","summary":"Общие новости","article_ids":["1001","1002"],"evidence":[{"article_id":"1001","span_id":"a"},{"article_id":"1002","span_id":"b"}]}]}`
+	rootRequired := schema["required"].([]string)
+	if !contains(rootRequired, "brief_stories") {
+		t.Fatal("model schema does not require the brief group array")
+	}
+	legacyBundle := `{"main_stories":[],"brief_stories":[{"title":"Дайджест","summary":"Общие новости","article_ids":["1001","1002"],"primary_article_id":"1001"}],"article_stories":{}}`
 	var draft modelDraft
 	dec := json.NewDecoder(strings.NewReader(legacyBundle))
 	dec.DisallowUnknownFields()
-	if err := dec.Decode(&draft); err == nil {
-		t.Fatal("old list-based brief output was accepted")
+	if err := dec.Decode(&draft); err != nil || len(draft.BriefStories) != 1 || len(draft.BriefStories[0].ArticleIDs) != 2 {
+		t.Fatalf("valid grouped brief draft was rejected: %v", err)
 	}
 }
 
@@ -280,39 +326,73 @@ func TestArticleStoryMapRejectsMissingUnknownAndCrossArticleSpanKeys(t *testing.
 	}
 	draft := syntheticDraft(s)
 	draft.ArticleStories[s.Articles[0].ID] = modelArticleStory{Title: s.Articles[0].Title, Summary: "Кратко", SpanID: "unknown-span"}
-	if _, err := resolveModelStories(s, draft.MainStories, draft.ArticleStories, spanByID); err == nil {
+	if _, err := resolveModelStories(s, draft.MainStories, draft.BriefStories, draft.ArticleStories, spanByID); err == nil {
 		t.Fatal("unknown source span accepted")
 	}
 	draft = syntheticDraft(s)
 	draft.ArticleStories[s.Articles[0].ID] = modelArticleStory{Title: s.Articles[0].Title, Summary: "Кратко", SpanID: articleStoryFor(s.Articles[1]).SpanID}
-	if _, err := resolveModelStories(s, draft.MainStories, draft.ArticleStories, spanByID); err == nil {
+	if _, err := resolveModelStories(s, draft.MainStories, draft.BriefStories, draft.ArticleStories, spanByID); err == nil {
 		t.Fatal("cross-article source span accepted")
 	}
 	draft = syntheticDraft(s)
 	delete(draft.ArticleStories, s.Articles[1].ID)
-	if _, err := resolveModelStories(s, draft.MainStories, draft.ArticleStories, spanByID); err == nil {
+	if _, err := resolveModelStories(s, draft.MainStories, draft.BriefStories, draft.ArticleStories, spanByID); err == nil {
 		t.Fatal("missing required article record accepted")
 	}
 	draft = syntheticDraft(s)
 	draft.ArticleStories["999999"] = modelArticleStory{Title: "Other", Summary: "Other", SpanID: "foreign"}
-	if _, err := resolveModelStories(s, draft.MainStories, draft.ArticleStories, spanByID); err == nil {
+	if _, err := resolveModelStories(s, draft.MainStories, draft.BriefStories, draft.ArticleStories, spanByID); err == nil {
 		t.Fatal("unknown article record key accepted")
 	}
 }
 
-func TestBriefStoriesMustBeSingleArticleButMainStoriesMayGroup(t *testing.T) {
+func TestBriefStoriesMayGroupArticlesButRejectDuplicateMembership(t *testing.T) {
 	s := syntheticSnapshot(2)
 	brief := Story{
 		Kind: "brief", Title: "Сводка", Summary: "Общие краткие новости.",
 		PrimaryArticleID: s.Articles[0].ID, ArticleIDs: []string{s.Articles[0].ID, s.Articles[1].ID},
 		Evidence: []Evidence{{ArticleID: s.Articles[0].ID, Quote: preferredEvidenceText(s.Articles[0])}, {ArticleID: s.Articles[1].ID, Quote: preferredEvidenceText(s.Articles[1])}},
 	}
-	if _, err := FinalizeEdition(s, RussianLocale, []Story{brief}, nil); err == nil {
-		t.Fatal("multi-article brief accepted")
-	}
-	brief.Kind = "main"
 	if _, err := FinalizeEdition(s, RussianLocale, []Story{brief}, nil); err != nil {
-		t.Fatalf("grouped main story rejected: %v", err)
+		t.Fatalf("grouped brief story rejected: %v", err)
+	}
+	brief.ArticleIDs = []string{s.Articles[0].ID, s.Articles[0].ID, s.Articles[1].ID}
+	brief.Evidence = append(brief.Evidence, Evidence{ArticleID: s.Articles[0].ID, Quote: preferredEvidenceText(s.Articles[0])})
+	if _, err := FinalizeEdition(s, RussianLocale, []Story{brief}, nil); err == nil {
+		t.Fatal("duplicate article membership in grouped brief accepted")
+	}
+}
+
+func TestModelBriefGroupsPreserveCompletenessAndRejectOverlaps(t *testing.T) {
+	s := syntheticSnapshot(3)
+	_, spans, err := buildPrompt(s)
+	if err != nil {
+		t.Fatal(err)
+	}
+	draft := syntheticDraft(s)
+	draft.MainStories = []modelMainStory{}
+	draft.BriefStories = []modelMainStory{{
+		Title: "Ремонт парка продолжается", Summary: "Город и подрядчик сообщают об одном этапе ремонта.",
+		PrimaryArticleID: s.Articles[0].ID, ArticleIDs: []string{s.Articles[0].ID, s.Articles[1].ID},
+	}}
+	stories, err := resolveModelStories(s, draft.MainStories, draft.BriefStories, draft.ArticleStories, spans)
+	if err != nil {
+		t.Fatalf("valid brief event group rejected: %v", err)
+	}
+	if len(stories) != 2 || stories[0].Kind != "brief" || len(stories[0].ArticleIDs) != 2 || stories[1].ArticleIDs[0] != s.Articles[2].ID {
+		t.Fatalf("group resolution lost coverage or snapshot ordering: %+v", stories)
+	}
+	if _, err := FinalizeEdition(s, RussianLocale, stories, nil); err != nil {
+		t.Fatalf("complete grouped brief edition rejected: %v", err)
+	}
+	draft.MainStories = []modelMainStory{{Title: "Same", Summary: "Same event.", PrimaryArticleID: s.Articles[0].ID, ArticleIDs: []string{s.Articles[0].ID}}}
+	if _, err := resolveModelStories(s, draft.MainStories, draft.BriefStories, draft.ArticleStories, spans); err == nil {
+		t.Fatal("article assigned to both a main and brief group accepted")
+	}
+	draft.MainStories = []modelMainStory{}
+	draft.BriefStories = append(draft.BriefStories, modelMainStory{Title: "Duplicate", Summary: "Duplicate membership.", PrimaryArticleID: s.Articles[1].ID, ArticleIDs: []string{s.Articles[1].ID}})
+	if _, err := resolveModelStories(s, draft.MainStories, draft.BriefStories, draft.ArticleStories, spans); err == nil {
+		t.Fatal("article assigned to two brief groups accepted")
 	}
 }
 
@@ -436,14 +516,14 @@ func TestRenderCountsLiteralAmpEntitiesInPlainHTMLParts(t *testing.T) {
 	s := syntheticSnapshot(100)
 	story := Story{Kind: "main", Title: "Один большой сюжет", Summary: "Короткий текст", PrimaryArticleID: s.Articles[0].ID}
 	for _, a := range s.Articles {
-		a.SourceName = strings.Repeat("&amp;", 60)
+		a.SourceName = fmt.Sprintf("%s-%d", strings.Repeat("&amp;", 55), len(story.ArticleIDs))
 		story.ArticleIDs = append(story.ArticleIDs, a.ID)
 		story.Evidence = append(story.Evidence, Evidence{ArticleID: a.ID, Quote: preferredEvidenceText(a)})
 	}
 	s.Articles = func() []Article {
 		out := append([]Article(nil), s.Articles...)
 		for i := range out {
-			out[i].SourceName = strings.Repeat("&amp;", 60)
+			out[i].SourceName = fmt.Sprintf("%s-%d", strings.Repeat("&amp;", 55), i+1)
 		}
 		return out
 	}()
@@ -496,8 +576,8 @@ func TestRenderPlacesMainFirstAndGroupsBriefsBySuppliedCategory(t *testing.T) {
 	if strings.Index(part, "Событие номер 2") > strings.Index(part, "Ещё коротко") {
 		t.Fatal("plain parts did not put main stories first")
 	}
-	if !strings.Contains(part, `<a href="https://news.example/article/1001">Событие номер 1</a>`) || !strings.Contains(part, `<a href="https://source.example/story/1?a=1&amp;b=2">Источник 1</a>`) {
-		t.Fatal("ordinary fallback lost internal or source links")
+	if !strings.Contains(part, `<a href="https://news.example/article/1001">Событие номер 1</a>`) || !strings.Contains(part, `Источник: Источник 1`) || strings.Contains(part, "https://source.example/") {
+		t.Fatal("ordinary fallback lost internal headline link or included an original source URL")
 	}
 	if strings.Contains(part, "<h2>") || strings.Contains(part, "<h3>") || strings.Contains(part, "<p>") || strings.Contains(part, "<ul>") {
 		t.Fatal("ordinary fallback contains unsupported block markup")

@@ -110,12 +110,10 @@ func renderStoryRich(out *strings.Builder, story Story, articles map[string]Arti
 	} else {
 		out.WriteString("<h3><a href=\"" + html.EscapeString(internal) + "\">" + html.EscapeString(story.Title) + "</a></h3>")
 	}
-	out.WriteString("<p>" + html.EscapeString(story.Summary) + "</p><ul>")
-	for _, id := range story.ArticleIDs {
-		a := articles[id]
-		out.WriteString("<li>Источник: <a href=\"" + html.EscapeString(a.URL) + "\">" + html.EscapeString(a.SourceName) + "</a></li>")
+	out.WriteString("<p>" + html.EscapeString(story.Summary) + "</p>")
+	if sources := storySourceNames(story, articles); len(sources) > 0 {
+		out.WriteString("<p>" + sourceLabel(len(sources)) + ": " + escapeJoined(sources) + "</p>")
 	}
-	out.WriteString("</ul>")
 }
 
 func storyPlainHTML(story Story, articles map[string]Article, siteBaseURL string) string {
@@ -123,9 +121,8 @@ func storyPlainHTML(story Story, articles map[string]Article, siteBaseURL string
 	var out strings.Builder
 	out.WriteString("<b><a href=\"" + html.EscapeString(articleURL(siteBaseURL, primary.ID)) + "\">" + html.EscapeString(story.Title) + "</a></b>\n")
 	out.WriteString(html.EscapeString(story.Summary))
-	for _, id := range story.ArticleIDs {
-		a := articles[id]
-		out.WriteString("\nИсточник: <a href=\"" + html.EscapeString(a.URL) + "\">" + html.EscapeString(a.SourceName) + "</a>")
+	if sources := storySourceNames(story, articles); len(sources) > 0 {
+		out.WriteString("\n" + sourceLabel(len(sources)) + ": " + escapeJoined(sources))
 	}
 	return out.String()
 }
@@ -133,10 +130,41 @@ func storyPlainHTML(story Story, articles map[string]Article, siteBaseURL string
 func renderStoryPreview(out *strings.Builder, story Story, articles map[string]Article, siteBaseURL string) {
 	primary := articles[story.PrimaryArticleID]
 	out.WriteString("• " + story.Title + "\n" + articleURL(siteBaseURL, primary.ID) + "\n" + story.Summary + "\n")
-	for _, id := range story.ArticleIDs {
-		a := articles[id]
-		out.WriteString("Источник: " + a.SourceName + " — " + a.URL + "\n")
+	if sources := storySourceNames(story, articles); len(sources) > 0 {
+		out.WriteString(sourceLabel(len(sources)) + ": " + strings.Join(sources, ", ") + "\n")
 	}
+}
+
+func storySourceNames(story Story, articles map[string]Article) []string {
+	sources := make([]string, 0, len(story.ArticleIDs))
+	seen := make(map[string]struct{}, len(story.ArticleIDs))
+	for _, id := range story.ArticleIDs {
+		name := strings.TrimSpace(articles[id].SourceName)
+		if name == "" {
+			continue
+		}
+		if _, ok := seen[name]; ok {
+			continue
+		}
+		seen[name] = struct{}{}
+		sources = append(sources, name)
+	}
+	return sources
+}
+
+func sourceLabel(count int) string {
+	if count == 1 {
+		return "Источник"
+	}
+	return "Источники"
+}
+
+func escapeJoined(sources []string) string {
+	escaped := make([]string, len(sources))
+	for i, source := range sources {
+		escaped[i] = html.EscapeString(source)
+	}
+	return strings.Join(escaped, ", ")
 }
 
 func packPlainParts(blocks []plainBlock, editionURL string) ([]string, error) {

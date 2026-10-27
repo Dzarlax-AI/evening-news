@@ -95,9 +95,6 @@ func ValidateEdition(s Snapshot, locale string, e Edition) error {
 		if story.Kind == "main" && mainCount > MaxMainStories {
 			return fmt.Errorf("%w: too many main stories", ErrInvalidEdition)
 		}
-		if story.Kind == "brief" && len(story.ArticleIDs) != 1 {
-			return fmt.Errorf("%w: brief story must contain exactly one article", ErrInvalidEdition)
-		}
 		if len(story.ArticleIDs) == 0 || len(story.ArticleIDs) > 100 || strings.TrimSpace(story.Title) == "" || strings.TrimSpace(story.Summary) == "" || len(story.Title) > MaxStoryText || len(story.Summary) > MaxStoryText {
 			return fmt.Errorf("%w: incomplete story", ErrInvalidEdition)
 		}

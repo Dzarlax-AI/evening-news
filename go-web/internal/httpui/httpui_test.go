@@ -242,6 +242,28 @@ func TestEditorialDigestUsesPinnedImmutableEditionAndSourceLinks(t *testing.T) {
 	}
 }
 
+func TestEditorialGroupedBriefKeepsBothOriginalsAndOneInternalHeadline(t *testing.T) {
+	reader := &fakeEditorialReader{fakeReader: &fakeReader{}, edition: &repositories.EditorialDigestEdition{
+		ID: "8c93bb34-383d-449c-9e85-28aa9121a4fe", Date: "2026-10-26", Locale: "ru",
+		Edition: repositories.EditorialDigestContent{Locale: "ru", Stories: []repositories.EditorialDigestStory{
+			{ID: "brief-cleanup", Kind: "brief", Title: "Завершилась уборка парка", Summary: "Начало и завершение одной уборки.", PrimaryArticleID: "2", ArticleIDs: []string{"1", "2"}},
+		}},
+		Snapshot: repositories.EditorialDigestSnapshot{Articles: []repositories.EditorialDigestArticle{
+			{ID: "1", SourceName: "Канал", URL: "https://source.example/start", CategoryName: "Сербия"},
+			{ID: "2", SourceName: "Канал", URL: "https://source.example/finish", CategoryName: "Сербия"},
+		}},
+	}}
+	mux := http.NewServeMux()
+	testHandler(reader).Register(mux)
+	w := request(mux, "GET", "/digest/2026-10-26?edition="+reader.edition.ID)
+	body := w.Body.String()
+	if w.Code != http.StatusOK || strings.Count(body, `href="/article/2"`) != 1 ||
+		!strings.Contains(body, `href="https://source.example/start"`) || !strings.Contains(body, `href="https://source.example/finish"`) ||
+		!strings.Contains(body, "2 материала") || !strings.Contains(body, "1 короткая новость") {
+		t.Fatalf("grouped brief lost source membership or internal headline: status=%d body=%s", w.Code, body)
+	}
+}
+
 func TestEditorialDigestMissingPinnedEditionDoesNotFallBack(t *testing.T) {
 	pinnedID := "8c93bb34-383d-449c-9e85-28aa9121a4fe"
 	base := &fakeReader{digest: repositories.DigestPage{Summaries: []repositories.DigestSummary{{Category: "Архив", Text: "legacy"}}}}

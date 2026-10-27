@@ -230,7 +230,7 @@ class Handler(BaseHTTPRequestHandler):
                             "primary_article_id": article["id"],
                             "article_ids": [article["id"]],
                         })
-                editorial_text = json.dumps({"main_stories": main_stories, "article_stories": article_stories}, ensure_ascii=False)
+                editorial_text = json.dumps({"main_stories": main_stories, "brief_stories": [], "article_stories": article_stories}, ensure_ascii=False)
                 self._json(200, {
                     "candidates": [{"finishReason": "STOP",
                                     "content": {"parts": [{"text": editorial_text}]}}],
