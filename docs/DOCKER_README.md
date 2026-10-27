@@ -26,6 +26,8 @@ AI / rate limiting:
 - CATEGORIZATION_MODEL
 - DIGEST_MODEL
 
+All three default to `gemini-3.5-flash-lite`; set them individually in the Compose environment to override a task.
+
 Telegram:
 - TELEGRAM_TOKEN
 - TELEGRAM_CHAT_ID
