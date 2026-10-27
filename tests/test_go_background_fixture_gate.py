@@ -37,9 +37,14 @@ def test_fixture_environment_uses_only_scoped_database_urls_and_background_endpo
     images = dict(module.DEFAULT_IMAGES)
     gate = module.ConsolidatedBackgroundGate(images, tmp_path)
     env = gate.background_environment()
-    assert set(("WORKER_DATABASE_URL", "SCHEDULER_DATABASE_URL", "INGESTION_DATABASE_URL",
+    assert set(("WORKER_DATABASE_URL", "EXECUTION_DATABASE_URL", "SCHEDULER_DATABASE_URL", "INGESTION_DATABASE_URL",
                 "PROCESSING_DATABASE_URL")).issubset(env)
     assert "DATABASE_URL" not in env
+    assert env["JOB_EXECUTOR_URL"] == "http://background:8101"
+    assert env["DOMAIN_SERVICE_URL"] == "http://executor:8100"
+    assert env["EXECUTION_MAX_CONNECTIONS"] == "2"
+    assert env["SELECTOR_SERVICE_URL"] == "http://executor:8100"
+    assert env["EXECUTION_DATABASE_URL"].startswith("postgres://fixture_execution_runtime:")
     assert env["SCHEDULER_LISTEN_ADDR"] == ":8080"
     assert env["ARTICLE_INGESTION_LISTEN"] == ":8093"
     assert env["ARTICLE_PROCESSING_LISTEN"] == ":8094"
@@ -51,6 +56,15 @@ def test_fixture_environment_uses_only_scoped_database_urls_and_background_endpo
     assert executor_env["ARTICLE_PROCESSING_URL"] == "http://background:8094"
     assert executor_env["ARTICLE_PROCESSING_TOKEN"] == env["ARTICLE_PROCESSING_TOKEN"]
     assert executor_env["ARTICLE_AI_TOKEN"] == env["ARTICLE_AI_TOKEN"]
+    assert executor_env["EXECUTION_SERVICE_URL"] == "http://background:8101"
+
+
+def test_gate_checks_authenticated_go_execution_status():
+    source = SCRIPT.read_text()
+    assert '"http://background:8101/internal/v1/status"' in source
+    assert "missing_token_status == 401" in source
+    assert '"executor_instance_id", "active_executions", "ready"' in source
+    assert "component_codes == [200, 200, 200, 200, 200]" in source
 
 
 def test_scheduler_probe_command_is_valid_python_and_targets_internal_runtime(monkeypatch, tmp_path):

@@ -119,7 +119,8 @@ async def test_feedback_records_observations_and_selector_learning_without_artic
 
     transaction_fence = asynccontextmanager(transaction_fence)
     lease = SimpleNamespace(owner_id=uuid.uuid4(), generation=7, backend_pid=4567,
-                            deadline_at=None, transaction_fence=transaction_fence)
+                            executor_instance_id=uuid.uuid4(), deadline_at=None,
+                            transaction_fence=transaction_fence)
     fence = ArticleProcessingCallbackFence(
         lease, run_id=run_id, envelope_digest="a" * 64, article_id=article_id,
         article_attempt=2, input_fingerprint=fingerprint)

@@ -21,6 +21,7 @@ COPY go-worker/ /src/go-worker/
 COPY go-scheduler/ /src/go-scheduler/
 COPY go-ingestion/ /src/go-ingestion/
 COPY go-processing/ /src/go-processing/
+COPY go-execution/ /src/go-execution/
 RUN go mod download && go mod verify
 COPY go-background/ ./
 ARG TARGETOS
@@ -67,7 +68,7 @@ RUN apk add --no-cache ca-certificates tzdata \
     && adduser -S -D -H -u 65532 -G app app
 COPY --from=go-background-build /out/news-background /news-background
 USER 65532:65532
-EXPOSE 8080 8093 8094 8095
+EXPOSE 8080 8093 8094 8095 8101
 ENTRYPOINT ["/news-background"]
 HEALTHCHECK --interval=15s --timeout=4s --start-period=30s --retries=3 \
     CMD ["/news-background", "healthcheck"]

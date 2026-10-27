@@ -94,6 +94,8 @@ async def test_refresh_closes_read_and_preserves_media_on_missing_post(monkeypat
             return self.session.execute(query)
         async def commit(self):
             self.session.commit()
+        async def rollback(self):
+            self.session.rollback()
     async def fetch(url, source_url):
         assert not opened
         assert url == 'https://t.me/fixture/1'

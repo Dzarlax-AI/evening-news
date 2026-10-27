@@ -16,6 +16,41 @@ from news_aggregator import executor
 from news_aggregator.services.article_processing_client import _run_id
 
 
+def install_go_authority(monkeypatch, envelope, kind="news_processing", payload=None):
+    """Supply the Go context and a transaction-fence double for callback tests."""
+    from news_aggregator.services import domain_fence
+
+    parsed = domain_fence.parse_envelope(envelope)
+    context = domain_fence.ExecutionContext(parsed, 7890, kind, payload or {})
+
+    async def get_context(job_id, attempt):
+        assert (job_id, attempt) == (parsed["job_uuid"], parsed["attempt_generation"])
+        return context
+
+    class Fence:
+        def __init__(self, current, **_kwargs):
+            self.job_id = current.job_id
+            self.attempt_generation = current.attempt_generation
+            self.owner_id = current.envelope["owner_uuid"]
+            self.generation = current.envelope["generation"]
+            self.worker_backend_pid = current.envelope["backend_pid"]
+            self.executor_instance_id = current.envelope["executor_uuid"]
+            self.executor_backend_pid = current.executor_backend_pid
+            self.deadline_at = current.envelope["deadline_db"]
+            self.active = True
+
+        async def validate(self, _session):
+            return None
+
+        @asynccontextmanager
+        async def transaction_fence(self, _session, job_id, attempt):
+            assert (job_id, attempt) == (self.job_id, self.attempt_generation)
+            yield
+
+    monkeypatch.setattr(domain_fence, "get_execution_context", get_context)
+    monkeypatch.setattr(domain_fence, "RemoteDomainFence", Fence)
+
+
 def test_callback_fingerprint_matches_go_compact_utf8_encoding():
     value = {
         "title": "café <news> \u2028 \u2029 & \U0001f680",
@@ -162,30 +197,19 @@ def request_for_payload(payload, authorization="Bearer fixture-ai-token"):
 @pytest.mark.asyncio
 async def test_article_ai_callback_fences_claim_and_caches_provider_replay(monkeypatch):
     job_id, owner_id = uuid.uuid4(), uuid.uuid4()
-    executor_id = executor.executor.instance_id
+    executor_id = uuid.uuid4()
     deadline = datetime.now(timezone.utc) + timedelta(minutes=2)
-    lease = SimpleNamespace(owner_id=owner_id, generation=7, backend_pid=3456,
-                            deadline_at=deadline.replace(tzinfo=None))
-
-    @asynccontextmanager
-    async def transaction_fence(session, requested_job, attempt):
-        assert requested_job == job_id and attempt == 1
-        yield
-
-    lease.transaction_fence = transaction_fence
-    active = SimpleNamespace(active=True, executor_instance_id=executor_id, lease=lease,
-                             job_id=job_id, attempt_generation=1)
     body_input = {"title": "Synthetic story", "content": "Synthetic body",
                   "url": "https://example.test/story"}
     fingerprint = executor._article_ai_input_fingerprint(body_input)
     run_id = uuid.UUID(_run_id(job_id, 1))
     body = callback_body(job_id, owner_id, executor_id, deadline, run_id, fingerprint)
+    install_go_authority(monkeypatch, body["envelope"])
     ai = SimpleNamespace(analyze_article_complete=AsyncMock(return_value={
         "summary": "Synthetic summary", "categories": [{"name": "Tech"}],
     }))
     from news_aggregator.services import ai_client
     monkeypatch.setattr(ai_client, "get_ai_client", lambda: ai)
-    monkeypatch.setattr(executor, "_ACTIVE_FENCES", {(job_id, 1): active})
     monkeypatch.setattr(executor, "_article_ai_auth", lambda _request: None)
     monkeypatch.setattr(executor, "_require_executor_guard", AsyncMock())
     monkeypatch.setattr(executor, "AsyncSessionLocal", lambda: CallbackSession(
@@ -238,24 +262,12 @@ def test_article_ai_auth_uses_its_separate_token(monkeypatch):
 @pytest.mark.asyncio
 async def test_context_then_feedback_preserves_observations_and_learned_pattern(monkeypatch):
     job_id, owner_id = uuid.uuid4(), uuid.uuid4()
-    executor_id = executor.executor.instance_id
+    executor_id = uuid.uuid4()
     deadline = datetime.now(timezone.utc) + timedelta(minutes=2)
-    lease = SimpleNamespace(owner_id=owner_id, generation=7, backend_pid=3456,
-                            deadline_at=deadline.replace(tzinfo=None))
-
-    @asynccontextmanager
-    async def transaction_fence(session, requested_job, attempt):
-        assert requested_job == job_id and attempt == 1
-        yield
-
-    lease.transaction_fence = transaction_fence
-    active = SimpleNamespace(active=True, executor_instance_id=executor_id, lease=lease,
-                             job_id=job_id, attempt_generation=1)
     article_input = {"title": "Synthetic story", "content": "Synthetic body",
                      "url": "https://example.test/story"}
     fingerprint = executor._article_ai_input_fingerprint(article_input)
     run_id = uuid.UUID(_run_id(job_id, 1))
-    monkeypatch.setattr(executor, "_ACTIVE_FENCES", {(job_id, 1): active})
     monkeypatch.setattr(executor, "_article_ai_auth", lambda _request: None)
     monkeypatch.setattr(executor, "_require_executor_guard", AsyncMock())
     monkeypatch.setattr(executor, "AsyncSessionLocal", lambda: CallbackSession(
@@ -280,6 +292,7 @@ async def test_context_then_feedback_preserves_observations_and_learned_pattern(
 
     monkeypatch.setattr(executor, "_record_article_extraction_feedback", record_feedback)
     context_body = callback_body(job_id, owner_id, executor_id, deadline, run_id, fingerprint)
+    install_go_authority(monkeypatch, context_body["envelope"])
     context_body.update(operation="extraction_context", input={"url": article_input["url"]})
     context_result = await executor.article_ai_callback(request_for_payload(context_body))
     assert context_result["result"] == {"selector": ".learned", "method": "readability"}
@@ -307,23 +320,12 @@ async def test_context_then_feedback_preserves_observations_and_learned_pattern(
 @pytest.mark.asyncio
 async def test_feedback_rejects_malformed_observations_and_stale_article_url(monkeypatch):
     job_id, owner_id = uuid.uuid4(), uuid.uuid4()
-    executor_id = executor.executor.instance_id
+    executor_id = uuid.uuid4()
     deadline = datetime.now(timezone.utc) + timedelta(minutes=2)
-    lease = SimpleNamespace(owner_id=owner_id, generation=7, backend_pid=3456,
-                            deadline_at=deadline.replace(tzinfo=None))
-
-    @asynccontextmanager
-    async def transaction_fence(session, requested_job, attempt):
-        yield
-
-    lease.transaction_fence = transaction_fence
-    active = SimpleNamespace(active=True, executor_instance_id=executor_id, lease=lease,
-                             job_id=job_id, attempt_generation=1)
     article_input = {"title": "Synthetic story", "content": "Synthetic body",
                      "url": "https://example.test/story"}
     fingerprint = executor._article_ai_input_fingerprint(article_input)
     run_id = uuid.UUID(_run_id(job_id, 1))
-    monkeypatch.setattr(executor, "_ACTIVE_FENCES", {(job_id, 1): active})
     monkeypatch.setattr(executor, "_article_ai_auth", lambda _request: None)
     monkeypatch.setattr(executor, "_require_executor_guard", AsyncMock())
     monkeypatch.setattr(executor, "_ARTICLE_AI_CACHE", executor.OrderedDict())
@@ -331,6 +333,7 @@ async def test_feedback_rejects_malformed_observations_and_stale_article_url(mon
     monkeypatch.setattr(executor, "_ARTICLE_AI_CACHE_BYTES", 0)
     monkeypatch.setattr(executor, "_ARTICLE_AI_CONTEXT_PATTERNS", executor.OrderedDict())
     body = callback_body(job_id, owner_id, executor_id, deadline, run_id, fingerprint)
+    install_go_authority(monkeypatch, body["envelope"])
     body.update(operation="extraction_feedback", input={
         "url": article_input["url"], "method": "readability", "success": False,
         "observations": [{"selector": ".learned", "method": "readability", "success": False}],

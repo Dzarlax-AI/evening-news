@@ -9,7 +9,10 @@ require (
 	github.com/Dzarlax-AI/evening-news/go-worker v0.0.0
 )
 
+require github.com/google/uuid v1.6.0 // indirect
+
 require (
+	github.com/Dzarlax-AI/evening-news/go-execution v0.0.0
 	github.com/jackc/pgpassfile v1.0.0 // indirect
 	github.com/jackc/pgservicefile v0.0.0-20240606120523-5a60cdf6a761 // indirect
 	github.com/jackc/pgx/v5 v5.11.0 // indirect
@@ -25,3 +28,5 @@ replace github.com/Dzarlax-AI/evening-news/go-processing => ../go-processing
 replace github.com/Dzarlax-AI/evening-news/go-scheduler => ../go-scheduler
 
 replace github.com/Dzarlax-AI/evening-news/go-worker => ../go-worker
+
+replace github.com/Dzarlax-AI/evening-news/go-execution => ../go-execution

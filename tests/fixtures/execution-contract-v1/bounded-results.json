@@ -1,0 +1,42 @@
+[
+  {
+    "kind":"news_processing",
+    "input":{"status":"success","success":true,"articles_fetched":3,"articles_processed":2,"errors":["source warning"],"errors_count":1},
+    "expected":{"status":"warning","success":true,"articles_fetched":3,"articles_processed":2,"errors_count":1}
+  },
+  {
+    "kind":"article_reprocess",
+    "input":{"status":"incomplete","success":false,"article_outcomes":[{"article_id":72,"state":"rejected","reason":"advertisement"},{"article_id":73,"state":"retry_wait","reason":"provider_timeout"},{"article_id":74,"state":"completed","reason":"private detail"}],"article_outcomes_total":25},
+    "expected":{"status":"incomplete","success":false,"article_outcomes":[{"article_id":72,"state":"rejected","reason":"advertisement"},{"article_id":73,"state":"retry_wait","reason":"provider_timeout"},{"article_id":74,"state":"completed","reason":"other"}],"article_outcomes_total":25,"article_outcomes_omitted":22}
+  },
+  {
+    "kind":"source_test",
+    "input":{"success":false},
+    "expected":{"status":"warning","success":false,"connection_ok":false}
+  },
+  {
+    "kind":"news_digest",
+    "input":{"status":"success","success":true,"articles_processed":5,"summaries_generated":2,"parts_sent":3,"duration_seconds":1.25},
+    "expected":{"status":"success","success":true,"articles_processed":5,"summaries_generated":2,"parts_sent":3,"duration_seconds":1.25}
+  },
+  {
+    "kind":"telegram_digest",
+    "input":{"status":"success","success":true,"parts_sent":2,"duration_seconds":0.75},
+    "expected":{"status":"success","success":true,"parts_sent":2,"duration_seconds":0.75}
+  },
+  {
+    "kind":"backup",
+    "input":{"status":"success","backup_bytes":1536,"duration_seconds":0.4},
+    "expected":{"status":"success","backup_bytes":1536,"duration_seconds":0.4}
+  },
+  {
+    "kind":"reprocess_failed",
+    "input":{"status":"dry_run","processed":4,"improved":1,"errors":["fixture error"]},
+    "expected":{"status":"dry_run","errors_count":1,"articles_processed":4,"processed":4,"improved":1,"dry_run":true}
+  },
+  {
+    "kind":"summaries_generate",
+    "input":{"status":"success","summaries_generated":3,"duration_seconds":12},
+    "expected":{"status":"success","summaries_generated":3,"duration_seconds":12}
+  }
+]

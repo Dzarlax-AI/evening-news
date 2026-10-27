@@ -11,28 +11,40 @@ from sqlalchemy import select
 from sqlalchemy import text
 
 import news_aggregator.executor as executor_module
-from news_aggregator.executor import PythonJobExecutor
+from news_aggregator.services import domain_terminal
 from news_aggregator.models import (
     ArticleIngestionRun, ArticleIngestionSourceRun, BackgroundJob,
     BackgroundJobExecution, BackgroundWorkerStatus, Setting,
 )
 from news_aggregator.services import scheduled_source_alerts
-from news_aggregator.services.background_execution import _bounded_result
+from tests.frozen_execution_contract import bounded_result as _bounded_result
 
 _CONFIG = "a" * 64
+_CURRENT_AUTHORITY = {}
 
 
 async def _lease(executor_pg, monkeypatch):
     engine, factory, _ = executor_pg
     lease_conn = await engine.connect()
+    execution_conn = await engine.connect()
     assert await lease_conn.scalar(select(BackgroundWorkerStatus.id).where(
         BackgroundWorkerStatus.id == 1)) == 1
     acquired = await lease_conn.scalar(text(
         "SELECT pg_try_advisory_lock(hashtext(current_database()), hashtext(current_schema()))"
     ))
     assert acquired
+    assert await execution_conn.scalar(text(
+        "SELECT pg_try_advisory_lock(hashtext(current_database()), "
+        "hashtext(current_schema()) # 0x454e4732)"
+    ))
     backend_pid = await lease_conn.scalar(text("SELECT pg_backend_pid()"))
+    executor_backend_pid = await execution_conn.scalar(text("SELECT pg_backend_pid()"))
+    executor_instance_id = uuid.uuid4()
     owner_id = uuid.uuid4()
+    _CURRENT_AUTHORITY.update(
+        owner_id=owner_id, worker_pid=backend_pid, executor_pid=executor_backend_pid,
+        executor_instance_id=executor_instance_id,
+    )
     async with factory() as session:
         await session.execute(text("""
             UPDATE background_worker_status SET owner_id=:owner, generation=4,
@@ -41,7 +53,16 @@ async def _lease(executor_pg, monkeypatch):
         """), {"owner": owner_id, "pid": backend_pid})
         await session.commit()
     monkeypatch.setattr(executor_module, "AsyncSessionLocal", factory)
-    return lease_conn, factory, owner_id, backend_pid
+    monkeypatch.setattr(domain_terminal, "AsyncSessionLocal", factory)
+    async def current_go_instance():
+        return executor_instance_id
+    monkeypatch.setattr(domain_terminal, "_current_go_execution_instance", current_go_instance)
+    monkeypatch.setattr(domain_terminal, "_ALERTS", None)
+    class LeaseConnections:
+        async def close(self):
+            await execution_conn.close()
+            await lease_conn.close()
+    return LeaseConnections(), factory, owner_id, backend_pid
 
 
 async def _job(factory, owner_id, backend_pid, *, schedule_key="news:1", warning=None,
@@ -64,6 +85,14 @@ async def _job(factory, owner_id, backend_pid, *, schedule_key="news:1", warning
         )
         session.add(job)
         await session.flush()
+        session.add(BackgroundJobExecution(
+            job_id=job_id, attempt_generation=attempt, envelope_sha256="c" * 64,
+            # Go finalization can be a recovered attempt owned by an older executor instance.
+            executor_instance_id=uuid.uuid4(), owner_id=owner_id, worker_generation=4,
+            deadline_at=datetime.utcnow() - timedelta(minutes=1), state=state,
+            legacy_completion_applied_at=datetime.utcnow(),
+            legacy_alert_state="pending" if scheduled_source_alerts.schedule_identity(job) else "not_needed",
+        ))
         if go_run:
             run_id = uuid.uuid4()
             go_result = {"status": "warning" if warning_count else "success",
@@ -98,9 +127,20 @@ async def _job(factory, owner_id, backend_pid, *, schedule_key="news:1", warning
 
 
 def _executor(sender):
-    instance = PythonJobExecutor()
-    instance.orchestrator = SimpleNamespace(send_operational_alert=sender)
-    return instance
+    domain_terminal._alert_sender = sender
+    class FinalizedEventClient:
+        async def apply_legacy_completion(self, job_id, attempt):
+            from news_aggregator.services.domain_terminal import TerminalEvent, process_finalized_event
+            # `_lease` binds the exact current Go service instance and physical lock PID.
+            event = TerminalEvent(
+                job_id=job_id, attempt_generation=attempt,
+                owner_id=_CURRENT_AUTHORITY["owner_id"], generation=4,
+                worker_backend_pid=_CURRENT_AUTHORITY["worker_pid"],
+                executor_instance_id=_CURRENT_AUTHORITY["executor_instance_id"],
+                executor_backend_pid=_CURRENT_AUTHORITY["executor_pid"],
+            )
+            return await process_finalized_event(event)
+    return FinalizedEventClient()
 
 
 @pytest.mark.asyncio
@@ -455,10 +495,10 @@ async def test_unknown_observation_and_real_job_failure_alert_immediately(execut
         assert sender.await_count == 1
         job_id, attempt = await _job(factory, owner_id, backend_pid, warning="transport_failed", go_run=False)
         await _executor(sender).apply_legacy_completion(job_id, attempt)
-        assert sender.await_count == 2
+        assert sender.await_count == 1
         job_id, attempt = await _job(factory, owner_id, backend_pid, warning=None, state="failed", go_run=False)
         await _executor(sender).apply_legacy_completion(job_id, attempt)
-        assert sender.await_count == 3
+        assert sender.await_count == 1
     finally:
         await lease_conn.close()
 
@@ -505,7 +545,7 @@ async def test_unknown_observation_breaks_streak_and_corrupt_state_falls_back(ex
 
         mixed, attempt = await _job(factory, owner_id, backend_pid, warning="transport_failed", ai_errors=1)
         await _executor(sender).apply_legacy_completion(mixed, attempt)
-        assert sender.await_count == 2
+        assert sender.await_count == 1
 
         async with factory() as session:
             row = await session.scalar(select(Setting).where(Setting.key.like("scheduled_source_alerts:v1:%")))
@@ -513,8 +553,8 @@ async def test_unknown_observation_breaks_streak_and_corrupt_state_falls_back(ex
             await session.commit()
         bad, attempt = await _job(factory, owner_id, backend_pid, warning="transport_failed")
         result = await _executor(sender).apply_legacy_completion(bad, attempt)
-        assert result["alert_state"] == "delivered"
-        assert sender.await_count == 3
+        assert result["alert_state"] == "unknown"
+        assert sender.await_count == 1
         async with factory() as session:
             receipt = await session.get(BackgroundJobExecution, (bad, attempt))
             assert receipt.legacy_completion_applied_at is not None

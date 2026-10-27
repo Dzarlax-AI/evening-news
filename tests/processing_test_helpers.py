@@ -6,7 +6,7 @@ from sqlalchemy import create_engine, event
 from sqlalchemy.orm import Session
 
 from news_aggregator.database import Base
-from news_aggregator.orchestrator import NewsOrchestrator
+from news_aggregator.services.domain_operations import _group_articles_by_category
 
 
 class AsyncSessionAdapter:
@@ -37,6 +37,4 @@ def isolated_publication_database():
         connection.create_function("now", 0, lambda: datetime.utcnow().isoformat())
 
     Base.metadata.create_all(engine)
-    orchestrator = NewsOrchestrator.__new__(NewsOrchestrator)
-    orchestrator.db_queue_manager = IsolatedQueue(engine)
-    return orchestrator, engine
+    return IsolatedQueue(engine), engine

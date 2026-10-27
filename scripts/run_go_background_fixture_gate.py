@@ -43,6 +43,8 @@ WORKER_DB_USER = "fixture_worker_runtime"
 WORKER_DB_PASSWORD = "fixture-worker-only"
 SCHEDULER_DB_USER = "fixture_scheduler_runtime"
 SCHEDULER_DB_PASSWORD = "fixture-scheduler-db-only"
+EXECUTION_DB_USER = "fixture_execution_runtime"
+EXECUTION_DB_PASSWORD = "fixture-execution-only"
 SCHEDULER_SCHEMA = "scheduler_fixture"
 WORKER_DRAIN_SECONDS = 8
 
@@ -89,6 +91,7 @@ class ConsolidatedBackgroundGate(GoWebGate):
             env["SCHEDULER_API_URL"] = "http://background:8080"
             env["SCHEDULER_API_TOKEN"] = SCHEDULER_TOKEN
         elif role == "executor":
+            env["EXECUTION_SERVICE_URL"] = "http://background:8101"
             env["SCHEDULER_API_URL"] = "http://background:8080"
             env["SCHEDULER_API_TOKEN"] = SCHEDULER_TOKEN
             env["ARTICLE_INGESTION_URL"] = "http://background:8093"
@@ -191,13 +194,22 @@ class ConsolidatedBackgroundGate(GoWebGate):
         sql = f"""
         CREATE ROLE {WORKER_DB_USER} LOGIN PASSWORD '{WORKER_DB_PASSWORD}';
         CREATE ROLE {SCHEDULER_DB_USER} LOGIN PASSWORD '{SCHEDULER_DB_PASSWORD}';
+        CREATE ROLE {EXECUTION_DB_USER} LOGIN PASSWORD '{EXECUTION_DB_PASSWORD}';
         GRANT CONNECT ON DATABASE gate_db TO {WORKER_DB_USER};
+        GRANT CONNECT ON DATABASE gate_db TO {EXECUTION_DB_USER};
         GRANT USAGE ON SCHEMA public TO {WORKER_DB_USER};
+        GRANT USAGE ON SCHEMA public TO {EXECUTION_DB_USER};
         GRANT SELECT, INSERT, UPDATE, DELETE ON TABLE
             public.background_jobs, public.background_worker_status, public.background_job_executions
             TO {WORKER_DB_USER};
         GRANT USAGE, SELECT, UPDATE ON SEQUENCE public.background_jobs_queue_position_seq
             TO {WORKER_DB_USER};
+        GRANT SELECT, UPDATE ON TABLE public.background_jobs, public.background_worker_status
+            TO {EXECUTION_DB_USER};
+        GRANT SELECT, INSERT, UPDATE ON TABLE public.background_job_executions
+            TO {EXECUTION_DB_USER};
+        GRANT SELECT, UPDATE ON TABLE public.schedule_settings, public.articles
+            TO {EXECUTION_DB_USER};
         """
         result = self.docker("exec", self.prefix + "-postgres", "psql", "-v", "ON_ERROR_STOP=1",
                              "-U", "gate_user", "-d", "gate_db", "-c", sql, check=False)
@@ -208,12 +220,16 @@ class ConsolidatedBackgroundGate(GoWebGate):
                                  f"CREATE DATABASE gate_scheduler OWNER {SCHEDULER_DB_USER}", check=False)
         if created_db.returncode:
             raise GateFailure("consolidated_fixture_scheduler_database_not_created")
-        self.report["database_roles_provisioned"] = sorted((WORKER_DB_USER, SCHEDULER_DB_USER,
+        self.report["database_roles_provisioned"] = sorted((WORKER_DB_USER, EXECUTION_DB_USER, SCHEDULER_DB_USER,
                                                              "news_ingestion_runtime", "news_processing_runtime"))
 
     def background_environment(self):
         return {
             "WORKER_DATABASE_URL": f"postgres://{WORKER_DB_USER}:{WORKER_DB_PASSWORD}@postgres:5432/gate_db?sslmode=disable",
+            "EXECUTION_DATABASE_URL": f"postgres://{EXECUTION_DB_USER}:{EXECUTION_DB_PASSWORD}@postgres:5432/gate_db?sslmode=disable",
+            "EXECUTION_MAX_CONNECTIONS": "2",
+            "DOMAIN_SERVICE_URL": "http://executor:8100",
+            "JOB_EXECUTOR_LISTEN": ":8101",
             "SCHEDULER_DATABASE_URL": f"postgres://{SCHEDULER_DB_USER}:{SCHEDULER_DB_PASSWORD}@postgres:5432/gate_scheduler?sslmode=disable",
             "INGESTION_DATABASE_URL": f"postgres://news_ingestion_runtime:{DB_PASSWORD}@postgres:5432/gate_db?search_path=public&sslmode=disable",
             "PROCESSING_DATABASE_URL": f"postgres://news_processing_runtime:{DB_PASSWORD}@postgres:5432/gate_db?search_path=public&sslmode=disable",
@@ -232,8 +248,9 @@ class ConsolidatedBackgroundGate(GoWebGate):
             "EXTRACTION_SERVICE_URL": "http://collector:8080",
             "EXTRACTION_SERVICE_TOKEN": self.collector_token,
             "EXTRACTION_SERVICE_NATIVE_BROWSER": "false",
-            "JOB_EXECUTOR_URL": "http://executor:8100",
+            "JOB_EXECUTOR_URL": "http://background:8101",
             "JOB_EXECUTOR_TOKEN": self.executor_token,
+            "SELECTOR_SERVICE_URL": "http://executor:8100",
             "ARTICLE_PROCESSING_LISTEN": ":8094",
             "ARTICLE_PROCESSING_TOKEN": ARTICLE_PROCESSING_TOKEN,
             "ARTICLE_PROCESSING_DB_MAX_CONNS": "3",
@@ -483,6 +500,18 @@ class ConsolidatedBackgroundGate(GoWebGate):
                                     f"label={self.owner_label}={self.owner}").stdout.splitlines()))
         self.check("background_health_ready", self.health_request("/readyz")[0] == 200)
         self.check("background_health_liveness", self.health_request("/healthz")[0] == 200)
+        missing_token_status, _ = self.execution_status(authenticated=False)
+        status, body = self.execution_status(authenticated=True)
+        exact_fields = isinstance(body, dict) and set(body) == {
+            "executor_instance_id", "active_executions", "ready"
+        }
+        self.check("execution_status_requires_auth", missing_token_status == 401)
+        self.check("execution_status_strict_ready_contract", status == 200 and exact_fields
+                   and body.get("ready") is True
+                   and isinstance(body.get("active_executions"), int)
+                   and not isinstance(body.get("active_executions"), bool)
+                   and body.get("active_executions") >= 0
+                   and isinstance(body.get("executor_instance_id"), str))
         self.check("container_identity_and_pid_captured", self.report["background_process"]["host_pid"] is not None)
         return bg_id, self.report["background_process"]["host_pid"]
 
@@ -499,6 +528,29 @@ class ConsolidatedBackgroundGate(GoWebGate):
         result = self.docker("exec", probe_container, "python", "-c", code, check=False)
         status = int(result.stdout.strip()) if result.returncode == 0 and result.stdout.strip().isdigit() else 0
         return status, {}
+
+    def execution_status(self, *, authenticated):
+        url = "http://background:8101/internal/v1/status"
+        headers = {"Authorization": "Bearer " + self.executor_token} if authenticated else {}
+        script = (
+            "import json,urllib.request,urllib.error\n"
+            "u=" + repr(url) + "\n"
+            "h=" + repr(headers) + "\n"
+            "q=urllib.request.Request(u,headers=h)\n"
+            "try:\n r=urllib.request.urlopen(q,timeout=3); s=r.status; b=r.read()\n"
+            "except urllib.error.HTTPError as e:\n s=e.code; b=e.read()\n"
+            "try: body=json.loads(b) if b else None\n"
+            "except Exception: body=None\n"
+            "print(json.dumps({'status':s,'body':body}))\n"
+        )
+        result = self.docker("exec", self.prefix + "-executor", "python", "-c", script, check=False)
+        if result.returncode:
+            return 0, None
+        try:
+            response = json.loads(result.stdout.strip().splitlines()[-1])
+            return int(response.get("status", 0)), response.get("body")
+        except (ValueError, TypeError, IndexError, json.JSONDecodeError):
+            return 0, None
 
     def control_fake_services(self, **changes):
         url = "http://fixture-services:8090/__gate/control"
@@ -784,9 +836,12 @@ class ConsolidatedBackgroundGate(GoWebGate):
         current_id = self.docker("inspect", "--format", "{{.Id}}", self.prefix + "-background").stdout.strip()
         current_pid = self.docker("inspect", "--format", "{{.State.Pid}}", self.prefix + "-background").stdout.strip()
         component_codes = []
-        for port, path in ((8080, "/healthz"), (8093, "/healthz"), (8094, "/healthz"), (8095, "/healthz")):
+        for port, path in ((8080, "/healthz"), (8093, "/healthz"), (8094, "/healthz"),
+                           (8095, "/healthz"), (8101, "/internal/v1/status")):
             url = f"http://background:{port}{path}"
-            code = "import urllib.request;print(urllib.request.urlopen(" + repr(url) + ",timeout=3).status)"
+            headers = "{'Authorization':'Bearer ' + " + repr(self.executor_token) + "} " if port == 8101 else "{} "
+            code = ("import urllib.request;print(urllib.request.urlopen(urllib.request.Request(" + repr(url)
+                    + ",headers=" + headers + "),timeout=3).status)")
             result = self.docker("exec", self.prefix + "-executor", "python", "-c", code, check=False)
             component_codes.append(int(result.stdout.strip()) if result.returncode == 0 and result.stdout.strip().isdigit() else 0)
         self.report["lease_recovery"] = {
@@ -803,7 +858,7 @@ class ConsolidatedBackgroundGate(GoWebGate):
                    and current_pid == str(background_pid)
                    and old_backend_released and new_backend_pid != old_backend_pid)
         self.check("all_background_listeners_remain_healthy_after_worker_recovery",
-                   component_codes == [200, 200, 200, 200])
+                   component_codes == [200, 200, 200, 200, 200])
         job = self.wait_job_http(job_id, timeout=180)
         self.check("blocked_fixture_job_finishes_after_lease_recovery", job.get("status") == "succeeded")
         self.report["recovery_fault_injection"] = "completed"
@@ -1109,7 +1164,7 @@ class ConsolidatedBackgroundGate(GoWebGate):
     def verify_runtime_db_users(self):
         result = self.docker("exec", self.prefix + "-postgres", "psql", "-U", "gate_user", "-d", "gate_db",
                              "-Atc", "SELECT usename,datname,count(*) FROM pg_stat_activity "
-                             "WHERE usename IN ('fixture_worker_runtime','fixture_scheduler_runtime',"
+                             "WHERE usename IN ('fixture_worker_runtime','fixture_execution_runtime','fixture_scheduler_runtime',"
                              "'news_ingestion_runtime','news_processing_runtime') "
                              "GROUP BY usename,datname ORDER BY usename,datname")
         sessions = {}
@@ -1117,25 +1172,27 @@ class ConsolidatedBackgroundGate(GoWebGate):
             fields = line.split("|")
             if len(fields) == 3 and fields[2].isdigit():
                 sessions[fields[0]] = {"database": fields[1], "count": int(fields[2])}
-        runtime_users = {WORKER_DB_USER, SCHEDULER_DB_USER, "news_ingestion_runtime", "news_processing_runtime"}
+        runtime_users = {WORKER_DB_USER, EXECUTION_DB_USER, SCHEDULER_DB_USER, "news_ingestion_runtime", "news_processing_runtime"}
         self.report["runtime_db_users"] = {user: sessions.get(user, {"database": None, "count": 0})
                                             for user in sorted(runtime_users)}
         self.report["runtime_db_pool_caps"] = {
-            WORKER_DB_USER: 4, SCHEDULER_DB_USER: 3,
+            WORKER_DB_USER: 4, EXECUTION_DB_USER: 3, SCHEDULER_DB_USER: 3,
             "news_ingestion_runtime": 3, "news_processing_runtime": 3,
         }
         expected_database = {SCHEDULER_DB_USER: "gate_scheduler"}
         expected_database.update({user: "gate_db" for user in runtime_users if user != SCHEDULER_DB_USER})
-        self.check("four_scoped_component_pools_use_distinct_users_and_databases", all(
+        self.check("five_scoped_component_pools_use_distinct_users_and_databases", all(
             sessions.get(user, {}).get("count", 0) > 0
             and sessions[user].get("database") == expected_database[user]
             for user in runtime_users))
+        self.check("execution_pool_stays_within_two_plus_guard_connections",
+                   sessions.get(EXECUTION_DB_USER, {}).get("count", 0) <= 3)
         raw_env = self.docker("inspect", "--format", "{{json .Config.Env}}", self.prefix + "-background").stdout
         env_names = {entry.split("=", 1)[0] for entry in json.loads(raw_env)}
-        scoped_names = {"WORKER_DATABASE_URL", "SCHEDULER_DATABASE_URL", "INGESTION_DATABASE_URL",
+        scoped_names = {"WORKER_DATABASE_URL", "EXECUTION_DATABASE_URL", "SCHEDULER_DATABASE_URL", "INGESTION_DATABASE_URL",
                         "PROCESSING_DATABASE_URL"}
         self.report["background_database_env_names"] = sorted(scoped_names & env_names)
-        self.check("background_uses_four_scoped_dsn_keys_without_generic_fallback",
+        self.check("background_uses_five_scoped_dsn_keys_without_generic_fallback",
                    scoped_names.issubset(env_names) and "DATABASE_URL" not in env_names)
         article_privileges = self.pg_value(
             "SELECT (has_table_privilege('" + WORKER_DB_USER + "','public.articles','SELECT') OR "

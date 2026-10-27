@@ -15,6 +15,8 @@ import (
 	"time"
 
 	"github.com/Dzarlax-AI/evening-news/go-background/internal/config"
+	execution "github.com/Dzarlax-AI/evening-news/go-execution"
+	orchestration "github.com/Dzarlax-AI/evening-news/go-execution/orchestration"
 	ingestion "github.com/Dzarlax-AI/evening-news/go-ingestion/runner"
 	processing "github.com/Dzarlax-AI/evening-news/go-processing/runner"
 	scheduler "github.com/Dzarlax-AI/evening-news/go-scheduler/runner"
@@ -41,6 +43,7 @@ type runnerSet struct {
 	ingestion  func(context.Context, ingestion.Config, func(), func(time.Time)) error
 	processing func(context.Context, processing.Config, func()) error
 	worker     func(context.Context, worker.Config, func(), func(time.Time)) error
+	execution  func(context.Context, config.Config, func(bool)) error
 }
 
 type probes struct {
@@ -48,6 +51,7 @@ type probes struct {
 	scheduler  func(context.Context, string) error
 	ingestion  func(context.Context, ingestion.Config) error
 	processing func(context.Context, processing.Config) error
+	execution  func(context.Context, config.Config) error
 }
 
 type dependencies struct {
@@ -78,7 +82,7 @@ type state struct {
 
 func newState(buildID string) *state {
 	return &state{snapshot: snapshot{Phase: "starting", BuildID: buildID, Components: map[string]status{
-		"scheduler": {State: "starting"}, "ingestion": {State: "starting"}, "processing": {State: "starting"}, "worker": {State: "starting"},
+		"scheduler": {State: "starting"}, "ingestion": {State: "starting"}, "processing": {State: "starting"}, "worker": {State: "starting"}, "execution": {State: "starting"},
 	}}}
 }
 func (s *state) phase(phase string) { s.mu.Lock(); s.snapshot.Phase = phase; s.mu.Unlock() }
@@ -206,14 +210,16 @@ func (s *state) ready() bool {
 		return false
 	}
 	now := time.Now()
-	for _, name := range []string{"worker", "ingestion"} {
+	for _, name := range []string{"worker", "ingestion", "execution"} {
 		current := s.snapshot.Components[name]
 		if current.State == "ready" || current.State == "unhealthy" {
 			current.Healthy = false
 			if name == "worker" {
 				current.Healthy = fresh(s.workerHealthAt, now, 20*time.Second)
-			} else {
+			} else if name == "ingestion" {
 				current.Healthy = s.ingestionAPIHealthy && fresh(s.ingestionHealthAt, now, 20*time.Second)
+			} else {
+				current.Healthy = current.State == "ready"
 			}
 			if current.Healthy {
 				current.State = "ready"
@@ -233,10 +239,135 @@ func (s *state) ready() bool {
 
 func productionDependencies() dependencies {
 	return dependencies{
-		runners: runnerSet{scheduler: scheduler.Run, ingestion: ingestion.RunWithHealth, processing: processing.Run, worker: worker.RunWithHealth},
-		probes:  probes{executor: executorReady, scheduler: schedulerReady, ingestion: ingestionReady, processing: processingReady},
+		runners: runnerSet{scheduler: scheduler.Run, ingestion: ingestion.RunWithHealth, processing: processing.Run, worker: worker.RunWithHealth, execution: runExecution},
+		probes:  probes{executor: executorReady, scheduler: schedulerReady, ingestion: ingestionReady, processing: processingReady, execution: executionReady},
 		listen:  net.Listen,
 	}
+}
+
+func runExecution(ctx context.Context, cfg config.Config, onReady func(bool)) error {
+	server, err := execution.New(cfg.Execution, execution.Handlers{})
+	if err != nil {
+		return errors.New("execution runner configuration is invalid")
+	}
+	err = server.Open(ctx)
+	if err != nil {
+		return errors.New("execution runner could not acquire its database guard")
+	}
+	closed := false
+	defer func() {
+		if !closed {
+			closeCtx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
+			defer cancel()
+			_ = server.Close(closeCtx)
+		}
+	}()
+	domain, err := orchestration.NewDomainClient(orchestration.DomainConfig{BaseURL: cfg.DomainServiceURL, Token: cfg.Execution.Token})
+	if err != nil {
+		return errors.New("domain service configuration is invalid")
+	}
+	delay := cfg.BackoffMin
+	for {
+		probeCtx, cancel := context.WithTimeout(ctx, cfg.ProbeTimeout)
+		err = domain.Ready(probeCtx)
+		cancel()
+		if err == nil {
+			break
+		}
+		if errors.Is(err, orchestration.ErrDomainAuth) {
+			return failure("waiting_domain", "executor", "authorization rejected", ErrExecutorAuth)
+		}
+		if err := pause(ctx, delay); err != nil {
+			return nil
+		}
+		delay = nextDelay(delay, cfg.BackoffMax)
+	}
+	pipeline, err := orchestration.NewPipeline(orchestration.Config{
+		Domain:     domainConfig(cfg),
+		Ingestion:  orchestration.ServiceConfig{URL: localServiceURL(cfg.Ingestion.ListenAddr), Token: cfg.Ingestion.Token},
+		Processing: orchestration.ServiceConfig{URL: localServiceURL(cfg.Processing.ListenAddr), Token: cfg.Processing.Token},
+	})
+	if err != nil {
+		return errors.New("execution pipeline configuration is invalid")
+	}
+	legacy, err := orchestration.NewLegacyAdapter(server.DatabasePool(), domain, server.GuardBackendPID, server.InstanceID)
+	if err != nil {
+		return errors.New("execution lifecycle configuration is invalid")
+	}
+	server.SetHandlers(execution.Handlers{Pipeline: pipeline, Finalizer: legacy, Recovery: legacy, Ready: pipeline.Ready})
+	listener, err := net.Listen("tcp", cfg.ExecutionListenAddr)
+	if err != nil {
+		return errors.New("execution listener could not bind")
+	}
+	httpServer := &http.Server{Handler: server.Handler(), ReadHeaderTimeout: 2 * time.Second, ReadTimeout: 10 * time.Second, WriteTimeout: 10 * time.Second, IdleTimeout: 30 * time.Second, MaxHeaderBytes: 16 << 10}
+	serveDone := make(chan error, 1)
+	go func() {
+		e := httpServer.Serve(listener)
+		if errors.Is(e, http.ErrServerClosed) {
+			e = nil
+		}
+		serveDone <- e
+	}()
+	monitorCtx, stopMonitor := context.WithCancel(ctx)
+	defer stopMonitor()
+	monitorDone := make(chan struct{})
+	go func() {
+		defer close(monitorDone)
+		server.MonitorGuard(monitorCtx, func(ok bool) {
+			if onReady != nil {
+				onReady(ok)
+			}
+		})
+	}()
+	if onReady != nil {
+		onReady(true)
+	}
+	var runErr error
+	select {
+	case <-ctx.Done():
+	case <-monitorDone:
+		if ctx.Err() == nil {
+			runErr = execution.ErrNotReady
+		}
+	case err := <-serveDone:
+		if ctx.Err() == nil {
+			runErr = err
+		}
+	}
+	stopMonitor()
+	shutdownCtx, cancelShutdown := context.WithTimeout(context.Background(), cfg.ShutdownTimeout)
+	select {
+	case <-monitorDone:
+	case <-shutdownCtx.Done():
+		if runErr == nil && ctx.Err() == nil {
+			runErr = errors.New("execution guard monitor did not stop within bound")
+		}
+	}
+	if err := httpServer.Shutdown(shutdownCtx); err != nil {
+		_ = httpServer.Close()
+		if runErr == nil && ctx.Err() == nil {
+			runErr = errors.New("execution listener shutdown exceeded bound")
+		}
+	}
+	closeErr := server.Close(shutdownCtx)
+	cancelShutdown()
+	closed = true
+	if runErr == nil && closeErr != nil && ctx.Err() == nil {
+		runErr = errors.New("execution runner shutdown failed")
+	}
+	return runErr
+}
+
+func domainConfig(cfg config.Config) orchestration.DomainConfig {
+	return orchestration.DomainConfig{BaseURL: cfg.DomainServiceURL, Token: cfg.Execution.Token}
+}
+
+func localServiceURL(addr string) string {
+	_, port, err := net.SplitHostPort(addr)
+	if err != nil {
+		return ""
+	}
+	return "http://127.0.0.1:" + port
 }
 
 // Run starts the four internal components under a single process lifecycle.
@@ -282,10 +413,12 @@ func run(ctx context.Context, cfg config.Config, deps dependencies) error {
 	serviceCtx, cancelServices := context.WithCancel(context.Background())
 	coreCtx, cancelCore := context.WithCancel(serviceCtx)
 	listenerCtx, cancelListeners := context.WithCancel(serviceCtx)
+	executionCtx, cancelExecution := context.WithCancel(serviceCtx)
 	defer cancelServices()
 	defer cancelCore()
 	defer cancelListeners()
-	readyEvents := make(chan string, 4)
+	defer cancelExecution()
+	readyEvents := make(chan string, 5)
 	probeKick := make(chan struct{}, 1)
 	probeDone := make(chan struct{})
 	componentDone := map[string]<-chan struct{}{}
@@ -294,6 +427,9 @@ func run(ctx context.Context, cfg config.Config, deps dependencies) error {
 		componentDone[name] = done
 		go func() {
 			componentCtx := selectCtx(name, coreCtx, listenerCtx)
+			if name == "execution" {
+				componentCtx = executionCtx
+			}
 			var once sync.Once
 			onReady := func() {
 				once.Do(func() {
@@ -323,11 +459,38 @@ func run(ctx context.Context, cfg config.Config, deps dependencies) error {
 		})
 	})
 	start("processing", func(c context.Context, r func()) error { return deps.runners.processing(c, cfg.Processing, r) })
+	executionDone := make(chan struct{})
+	componentDone["execution"] = executionDone
+	go func() {
+		var once sync.Once
+		e := deps.runners.execution(executionCtx, cfg, func(healthy bool) {
+			if healthy {
+				once.Do(func() {
+					state.set("execution", "ready", false)
+					readyEvents <- "execution"
+					select {
+					case probeKick <- struct{}{}:
+					default:
+					}
+				})
+				return
+			}
+			state.health("execution", false)
+		})
+		if executionCtx.Err() == nil || (e != nil && !errors.Is(e, context.Canceled)) {
+			if errors.Is(e, ErrExecutorAuth) {
+				fatal <- e
+			} else {
+				fatal <- unexpectedExit(componentExit{name: "execution", err: e}, state)
+			}
+		}
+		close(executionDone)
+	}()
 	go func() { defer close(probeDone); probeLoop(serviceCtx, cfg, deps.probes, state, probeKick) }()
 
 	var runErr error
 	readyCount := 0
-	for readyCount < 3 && runErr == nil {
+	for readyCount < 4 && runErr == nil {
 		select {
 		case <-ctx.Done():
 			state.phase("draining")
@@ -407,7 +570,12 @@ shutdown:
 	if err := waitDoneSet(shutdownCtx, []<-chan struct{}{componentDone["scheduler"]}); err != nil && runErr == nil {
 		runErr = failure("draining", "scheduler", "shutdown exceeded bound", nil)
 	}
-	// Ingestion and processing continue serving until the worker has drained.
+	// The execution service drains while ingestion and processing remain available.
+	cancelExecution()
+	if err := waitDoneSet(shutdownCtx, []<-chan struct{}{componentDone["execution"]}); err != nil && runErr == nil {
+		runErr = failure("draining", "execution", "shutdown exceeded bound", nil)
+	}
+	// Ingestion and processing continue serving until execution has drained.
 	cancelListeners()
 	if err := waitDoneSet(shutdownCtx, []<-chan struct{}{componentDone["ingestion"], componentDone["processing"]}); err != nil && runErr == nil {
 		runErr = failure("draining", "listeners", "shutdown exceeded bound", nil)
@@ -431,6 +599,7 @@ shutdown:
 	state.set("worker", "stopped", false)
 	state.set("ingestion", "stopped", false)
 	state.set("processing", "stopped", false)
+	state.set("execution", "stopped", false)
 	if err := healthServer.Shutdown(shutdownCtx); err != nil {
 		_ = healthServer.Close()
 		if runErr == nil {
@@ -509,7 +678,7 @@ func waitComponentHealth(ctx context.Context, s *state, fatal <-chan error, inte
 	defer t.Stop()
 	for {
 		x := s.get()
-		if x.Components["scheduler"].Healthy && x.Components["ingestion"].Healthy && x.Components["processing"].Healthy {
+		if x.Components["scheduler"].Healthy && x.Components["ingestion"].Healthy && x.Components["processing"].Healthy && x.Components["execution"].Healthy {
 			return nil
 		}
 		select {
@@ -675,6 +844,7 @@ func probeLoop(ctx context.Context, cfg config.Config, p probes, s *state, kick 
 			{"scheduler", func(c context.Context) error { return p.scheduler(c, cfg.Scheduler.ListenAddr) }},
 			{"ingestion", func(c context.Context) error { return p.ingestion(c, cfg.Ingestion) }},
 			{"processing", func(c context.Context) error { return p.processing(c, cfg.Processing) }},
+			{"execution", func(c context.Context) error { return p.execution(c, cfg) }},
 		}
 		type result struct {
 			name string
@@ -706,7 +876,7 @@ func probeLoop(ctx context.Context, cfg config.Config, p probes, s *state, kick 
 }
 
 func validateDeps(d dependencies) error {
-	if d.listen == nil || d.runners.scheduler == nil || d.runners.ingestion == nil || d.runners.processing == nil || d.runners.worker == nil || d.probes.executor == nil || d.probes.scheduler == nil || d.probes.ingestion == nil || d.probes.processing == nil {
+	if d.listen == nil || d.runners.scheduler == nil || d.runners.ingestion == nil || d.runners.processing == nil || d.runners.worker == nil || d.runners.execution == nil || d.probes.executor == nil || d.probes.scheduler == nil || d.probes.ingestion == nil || d.probes.processing == nil || d.probes.execution == nil {
 		return errors.New("background runtime dependencies are incomplete")
 	}
 	return nil
@@ -770,6 +940,44 @@ func executorReady(ctx context.Context, cfg worker.Config) error {
 	}
 	if json.NewDecoder(io.LimitReader(resp.Body, 8192)).Decode(&status) != nil || status.InstanceID == "" || !status.Ready {
 		return errors.New("executor unavailable")
+	}
+	return nil
+}
+
+func executionReady(ctx context.Context, cfg config.Config) error {
+	host, port, err := net.SplitHostPort(cfg.ExecutionListenAddr)
+	if err != nil {
+		return errors.New("execution service unavailable")
+	}
+	if host == "" || host == "0.0.0.0" || host == "::" {
+		host = "127.0.0.1"
+	}
+	req, err := http.NewRequestWithContext(ctx, http.MethodGet, "http://"+net.JoinHostPort(host, port)+"/internal/v1/status", nil)
+	if err != nil {
+		return errors.New("execution service unavailable")
+	}
+	req.Header.Set("Authorization", "Bearer "+cfg.Execution.Token)
+	client := http.Client{Timeout: 2 * time.Second, CheckRedirect: func(*http.Request, []*http.Request) error { return http.ErrUseLastResponse }}
+	resp, err := client.Do(req)
+	if err != nil {
+		return errors.New("execution service unavailable")
+	}
+	defer resp.Body.Close()
+	if resp.StatusCode == http.StatusUnauthorized || resp.StatusCode == http.StatusForbidden {
+		return ErrExecutorAuth
+	}
+	if resp.StatusCode != http.StatusOK {
+		return errors.New("execution service unavailable")
+	}
+	var wire struct {
+		InstanceID string `json:"executor_instance_id"`
+		Active     int    `json:"active_executions"`
+		Ready      bool   `json:"ready"`
+	}
+	dec := json.NewDecoder(io.LimitReader(resp.Body, 8192))
+	dec.DisallowUnknownFields()
+	if dec.Decode(&wire) != nil || wire.InstanceID == "" || wire.Active < 0 || !wire.Ready {
+		return errors.New("execution service unavailable")
 	}
 	return nil
 }

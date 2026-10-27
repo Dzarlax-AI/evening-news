@@ -23,6 +23,9 @@ class ProcessingStatsService:
     async def update_processing_stats(self, db: AsyncSession, stats: Dict[str, Any]):
         """Update processing statistics in database."""
         today = datetime.utcnow().date()
+        errors_count = stats.get('errors_count')
+        if not isinstance(errors_count, int) or isinstance(errors_count, bool) or errors_count < 0:
+            errors_count = len(stats.get('errors', []))
         
         # Get or create today's stats
         existing_stats = await db.execute(
@@ -35,7 +38,7 @@ class ProcessingStatsService:
             existing_stats.articles_fetched += stats.get('articles_fetched', 0)
             existing_stats.articles_processed += stats.get('articles_processed', 0)
             existing_stats.api_calls_made += stats.get('api_calls_made', 0)
-            existing_stats.errors_count += len(stats.get('errors', []))
+            existing_stats.errors_count += errors_count
             existing_stats.processing_time_seconds += int(stats.get('duration_seconds', 0))
             logger.info(f"  📊 Updated daily stats: {existing_stats.articles_processed} processed, {existing_stats.api_calls_made} API calls")
         else:
@@ -45,7 +48,7 @@ class ProcessingStatsService:
                 articles_fetched=stats.get('articles_fetched', 0),
                 articles_processed=stats.get('articles_processed', 0),
                 api_calls_made=stats.get('api_calls_made', 0),
-                errors_count=len(stats.get('errors', [])),
+                errors_count=errors_count,
                 processing_time_seconds=int(stats.get('duration_seconds', 0))
             )
             db.add(processing_stat)

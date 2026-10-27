@@ -35,8 +35,8 @@ func baseDeps() dependencies {
 			return waitWithHealth(c, r, h)
 		}, processing: func(c context.Context, _ processing.Config, r func()) error { return wait(c, r) }, worker: func(c context.Context, _ worker.Config, r func(), h func(time.Time)) error {
 			return waitWithHealth(c, r, h)
-		}},
-		probes: probes{executor: func(context.Context, worker.Config) error { return nil }, scheduler: func(context.Context, string) error { return nil }, ingestion: func(context.Context, ingestion.Config) error { return nil }, processing: func(context.Context, processing.Config) error { return nil }},
+		}, execution: func(c context.Context, _ config.Config, ready func(bool)) error { ready(true); <-c.Done(); return nil }},
+		probes: probes{executor: func(context.Context, worker.Config) error { return nil }, scheduler: func(context.Context, string) error { return nil }, ingestion: func(context.Context, ingestion.Config) error { return nil }, processing: func(context.Context, processing.Config) error { return nil }, execution: func(context.Context, config.Config) error { return nil }},
 		listen: net.Listen,
 	}
 }
@@ -274,6 +274,7 @@ func TestWorkerLateHealthCallbackCannotRefreshReplacementAttempt(t *testing.T) {
 	s.set("scheduler", "ready", true)
 	s.set("ingestion", "ready", true)
 	s.set("processing", "ready", true)
+	s.set("execution", "ready", true)
 	s.mu.Lock()
 	s.ingestionHealthAt = time.Now()
 	s.ingestionAPIHealthy = true
@@ -351,6 +352,7 @@ func TestFailedHeartbeatDropsReadinessBeforeRunExitsThenRecovers(t *testing.T) {
 	s.set("scheduler", "ready", true)
 	s.set("ingestion", "ready", true)
 	s.set("processing", "ready", true)
+	s.set("execution", "ready", true)
 	s.mu.Lock()
 	s.ingestionHealthAt = time.Now()
 	s.ingestionAPIHealthy = true
@@ -641,7 +643,7 @@ func TestHealthHandlerSeparatesLivenessAndReadiness(t *testing.T) {
 		t.Fatalf("starting readiness = %d", code)
 	}
 	s.phase("running")
-	for _, name := range []string{"scheduler", "ingestion", "processing", "worker"} {
+	for _, name := range []string{"scheduler", "ingestion", "processing", "worker", "execution"} {
 		s.set(name, "ready", true)
 	}
 	s.workerHealthAt = time.Now()

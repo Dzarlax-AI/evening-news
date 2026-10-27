@@ -45,7 +45,7 @@ func LoadConfig(getenv func(string) string) (Config, error) {
 		Token:          strings.TrimSpace(getenv("ARTICLE_INGESTION_TOKEN")),
 		ExtractorURL:   strings.TrimSpace(getenv("EXTRACTION_SERVICE_URL")),
 		ExtractorToken: strings.TrimSpace(getenv("EXTRACTION_SERVICE_TOKEN")),
-		SelectorURL:    get("JOB_EXECUTOR_URL", "http://127.0.0.1:8100"),
+		SelectorURL:    get("SELECTOR_SERVICE_URL", get("JOB_EXECUTOR_URL", "http://127.0.0.1:8100")),
 		SelectorToken:  strings.TrimSpace(getenv("JOB_EXECUTOR_TOKEN")),
 		DBMaxConns:     5,
 	}

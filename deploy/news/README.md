@@ -60,6 +60,7 @@ application's existing `DATABASE_URL` name:
 | `app` | `DATABASE_URL` | `WEB_DATABASE_URL` |
 | `executor` (and `migrate`) | `DATABASE_URL` | `EXECUTOR_DATABASE_URL` |
 | `background` | `WORKER_DATABASE_URL` | `WORKER_DATABASE_URL` |
+| `background` | `EXECUTION_DATABASE_URL` | `EXECUTION_DATABASE_URL` |
 | `background` | `INGESTION_DATABASE_URL` | `INGESTION_DATABASE_URL` |
 | `background` | `PROCESSING_DATABASE_URL` | `PROCESSING_DATABASE_URL` |
 | `background` | `SCHEDULER_DATABASE_URL` | `SCHEDULER_DATABASE_URL` |
@@ -115,8 +116,12 @@ Set the passwords entered at the prompts in `INGESTION_DATABASE_URL` and
 `PROCESSING_DATABASE_URL` in `.env`. Use the exact template role names
 `news_ingestion_runtime` and `news_processing_runtime`, and keep
 `search_path=public` in both URLs. `WORKER_DATABASE_URL` uses the already
-created `newsuser` role for local development; this is an owner connection for
-the disposable example and must not be copied to production. The separate
+created `newsuser` role for local development. The disposable example also
+sets `EXECUTION_DATABASE_URL` explicitly to that owner role for its separate
+execution pool; neither owner connection may be copied to production. A future
+production rollout must provision and review a separate execution role before
+starting the new background version; it must not reuse the worker's credentials.
+This code migration does not apply those production grants. The separate
 scheduler database already initializes its `scheduler` login. Then start the
 remaining services:
 
