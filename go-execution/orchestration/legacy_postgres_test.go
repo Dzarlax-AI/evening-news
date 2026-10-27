@@ -7,7 +7,6 @@ import (
 	"net"
 	"net/http"
 	"net/http/httptest"
-	"net/url"
 	"os"
 	"strings"
 	"testing"
@@ -219,6 +218,11 @@ func TestLoopbackPostgresDSNValidation(t *testing.T) {
 		{"postgres://user:pass@127.0.0.1/db", true},
 		{"postgresql://user:pass@[::1]:5432/db", true},
 		{"postgres://user:pass@localhost/db", true},
+		{"postgres://user:pass@db.internal/db?host=127.0.0.1", true},
+		{"postgres://user:pass@127.0.0.1/db?host=db.internal", false},
+		{"postgres://user:pass@127.0.0.1/db?host=127.0.0.1,db.internal", false},
+		{"postgres://user:pass@127.0.0.1/db?host=localhost,db.internal", false},
+		{"postgres://user:pass@127.0.0.1/db?host=127.0.0.1,localhost", true},
 		{"postgres://user:pass@db.internal/db", false},
 		{"postgres://user:pass@192.0.2.1/db", false},
 		{"not a url", false},
@@ -230,11 +234,20 @@ func TestLoopbackPostgresDSNValidation(t *testing.T) {
 }
 
 func isLoopbackPostgresDSN(dsn string) bool {
-	u, err := url.Parse(dsn)
-	if err != nil || (u.Scheme != "postgres" && u.Scheme != "postgresql") || u.Hostname() == "" {
+	config, err := pgx.ParseConfig(dsn)
+	if err != nil || config == nil || !isLoopbackPostgresHost(config.Host) {
 		return false
 	}
-	host := u.Hostname()
+	for _, fallback := range config.Fallbacks {
+		if fallback == nil || !isLoopbackPostgresHost(fallback.Host) {
+			return false
+		}
+	}
+	return true
+}
+
+func isLoopbackPostgresHost(host string) bool {
+	host = strings.TrimSpace(host)
 	if strings.EqualFold(host, "localhost") {
 		return true
 	}

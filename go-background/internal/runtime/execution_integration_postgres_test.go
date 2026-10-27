@@ -7,7 +7,6 @@ import (
 	"net"
 	"net/http"
 	"net/http/httptest"
-	"net/url"
 	"os"
 	"strings"
 	"testing"
@@ -18,13 +17,56 @@ import (
 	"github.com/jackc/pgx/v5"
 )
 
+func isLoopbackExecutionTestDSN(dsn string) bool {
+	config, err := pgx.ParseConfig(dsn)
+	if err != nil || config == nil || !isLoopbackExecutionTestHost(config.Host) {
+		return false
+	}
+	for _, fallback := range config.Fallbacks {
+		if fallback == nil || !isLoopbackExecutionTestHost(fallback.Host) {
+			return false
+		}
+	}
+	return true
+}
+
+func isLoopbackExecutionTestHost(host string) bool {
+	host = strings.TrimSpace(host)
+	if strings.EqualFold(host, "localhost") {
+		return true
+	}
+	ip := net.ParseIP(host)
+	return ip != nil && ip.IsLoopback()
+}
+
+func TestLoopbackExecutionTestDSNUsesEffectiveHosts(t *testing.T) {
+	for _, tc := range []struct {
+		name, dsn string
+		want      bool
+	}{
+		{"direct IPv4", "postgres://user:pass@127.0.0.1:55446/db", true},
+		{"direct IPv6", "postgres://user:pass@[::1]:55446/db", true},
+		{"localhost", "postgres://user:pass@localhost:55446/db", true},
+		{"loopback query override", "postgres://user:pass@db.internal:55446/db?host=127.0.0.1", true},
+		{"remote query override", "postgres://user:pass@127.0.0.1:55446/db?host=db.internal", false},
+		{"safe fallback hosts", "postgres://user:pass@127.0.0.1:55446/db?host=127.0.0.1,localhost", true},
+		{"remote fallback host", "postgres://user:pass@127.0.0.1:55446/db?host=127.0.0.1,192.0.2.1", false},
+		{"remote authority", "postgres://user:pass@192.0.2.1:55446/db", false},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			if got := isLoopbackExecutionTestDSN(tc.dsn); got != tc.want {
+				t.Fatalf("isLoopbackExecutionTestDSN(%q) = %v, want %v", tc.dsn, got, tc.want)
+			}
+		})
+	}
+}
+
 func TestComposedExecutionRunnerKeepsPipelineAliveAfterInitialization(t *testing.T) {
 	dsn := os.Getenv("TEST_DATABASE_URL")
 	if dsn == "" {
 		t.Skip("TEST_DATABASE_URL is required for PostgreSQL execution tests")
 	}
-	parsed, err := url.Parse(dsn)
-	if err != nil || (parsed.Hostname() != "127.0.0.1" && parsed.Hostname() != "localhost" && parsed.Hostname() != "::1") {
+	if !isLoopbackExecutionTestDSN(dsn) {
 		t.Fatal("execution tests require a loopback-only TEST_DATABASE_URL")
 	}
 	ctx, cancel := context.WithCancel(context.Background())

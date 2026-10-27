@@ -6,7 +6,6 @@ import (
 	"errors"
 	"fmt"
 	"net/http/httptest"
-	"net/url"
 	"os"
 	"strings"
 	"sync"
@@ -24,8 +23,7 @@ func TestCloseBoundsCancellationResistantPipelineAndFencesLateResult(t *testing.
 	if dsn == "" {
 		t.Skip("TEST_DATABASE_URL is required for PostgreSQL execution tests")
 	}
-	parsed, err := url.Parse(dsn)
-	if err != nil || (parsed.Hostname() != "127.0.0.1" && parsed.Hostname() != "localhost" && parsed.Hostname() != "::1") {
+	if !isLoopbackPostgresTestDSN(dsn) {
 		t.Fatal("execution tests require a loopback-only TEST_DATABASE_URL")
 	}
 	ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
@@ -144,8 +142,7 @@ func TestExpiredDeadlineBeforeRunningWritesTerminalReceiptWithoutPipeline(t *tes
 	if dsn == "" {
 		t.Skip("TEST_DATABASE_URL is required for PostgreSQL execution tests")
 	}
-	parsed, err := url.Parse(dsn)
-	if err != nil || (parsed.Hostname() != "127.0.0.1" && parsed.Hostname() != "localhost" && parsed.Hostname() != "::1") {
+	if !isLoopbackPostgresTestDSN(dsn) {
 		t.Fatal("execution tests require a loopback-only TEST_DATABASE_URL")
 	}
 	ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
@@ -253,8 +250,7 @@ func TestWorkerGenerationTakeoverSerializesFencedWrite(t *testing.T) {
 	if dsn == "" {
 		t.Skip("TEST_DATABASE_URL is required for PostgreSQL execution tests")
 	}
-	parsed, err := url.Parse(dsn)
-	if err != nil || (parsed.Hostname() != "127.0.0.1" && parsed.Hostname() != "localhost" && parsed.Hostname() != "::1") {
+	if !isLoopbackPostgresTestDSN(dsn) {
 		t.Fatal("execution tests require a loopback-only TEST_DATABASE_URL")
 	}
 	ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)

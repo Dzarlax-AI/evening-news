@@ -5,6 +5,7 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"net"
 	"net/http/httptest"
 	"net/url"
 	"os"
@@ -19,13 +20,57 @@ import (
 	"github.com/jackc/pgx/v5/pgxpool"
 )
 
+func isLoopbackPostgresTestDSN(dsn string) bool {
+	config, err := pgx.ParseConfig(dsn)
+	if err != nil || config == nil || !isLoopbackPostgresTestHost(config.Host) {
+		return false
+	}
+	for _, fallback := range config.Fallbacks {
+		if fallback == nil || !isLoopbackPostgresTestHost(fallback.Host) {
+			return false
+		}
+	}
+	return true
+}
+
+func isLoopbackPostgresTestHost(host string) bool {
+	host = strings.TrimSpace(host)
+	if strings.EqualFold(host, "localhost") {
+		return true
+	}
+	ip := net.ParseIP(host)
+	return ip != nil && ip.IsLoopback()
+}
+
+func TestLoopbackPostgresTestDSNUsesEffectivePrimaryAndFallbackHosts(t *testing.T) {
+	for _, tc := range []struct {
+		name, dsn string
+		want      bool
+	}{
+		{"direct IPv4", "postgres://user:pass@127.0.0.1:55446/db", true},
+		{"direct IPv6", "postgres://user:pass@[::1]:55446/db", true},
+		{"localhost", "postgres://user:pass@localhost:55446/db", true},
+		{"loopback query override", "postgres://user:pass@db.internal:55446/db?host=127.0.0.1", true},
+		{"remote query override", "postgres://user:pass@127.0.0.1:55446/db?host=db.internal", false},
+		{"safe fallback hosts", "postgres://user:pass@127.0.0.1:55446/db?host=127.0.0.1,localhost", true},
+		{"remote fallback host", "postgres://user:pass@127.0.0.1:55446/db?host=127.0.0.1,192.0.2.1", false},
+		{"remote authority", "postgres://user:pass@192.0.2.1:55446/db", false},
+		{"invalid DSN", "not a postgres URL", false},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			if got := isLoopbackPostgresTestDSN(tc.dsn); got != tc.want {
+				t.Fatalf("isLoopbackPostgresTestDSN(%q) = %v, want %v", tc.dsn, got, tc.want)
+			}
+		})
+	}
+}
+
 func TestPostgresAcceptFenceContextCancelAndDuplicate(t *testing.T) {
 	dsn := os.Getenv("TEST_DATABASE_URL")
 	if dsn == "" {
 		t.Skip("TEST_DATABASE_URL is required for PostgreSQL execution tests")
 	}
-	parsedURL, err := url.Parse(dsn)
-	if err != nil || (parsedURL.Hostname() != "127.0.0.1" && parsedURL.Hostname() != "localhost" && parsedURL.Hostname() != "::1") {
+	if !isLoopbackPostgresTestDSN(dsn) {
 		t.Fatal("execution tests require a loopback-only TEST_DATABASE_URL")
 	}
 	ctx, cancel := context.WithTimeout(context.Background(), 20*time.Second)
@@ -506,9 +551,12 @@ func TestPostgresReceiptDeadlineIsUTCAcrossSessionTimezones(t *testing.T) {
 	if dsn == "" {
 		t.Skip("TEST_DATABASE_URL is required for PostgreSQL execution tests")
 	}
-	parsedURL, err := url.Parse(dsn)
-	if err != nil || (parsedURL.Hostname() != "127.0.0.1" && parsedURL.Hostname() != "localhost" && parsedURL.Hostname() != "::1") {
+	if !isLoopbackPostgresTestDSN(dsn) {
 		t.Fatal("execution tests require a loopback-only TEST_DATABASE_URL")
+	}
+	parsedURL, err := url.Parse(dsn)
+	if err != nil {
+		t.Fatal("invalid TEST_DATABASE_URL")
 	}
 	for _, zone := range []string{"Europe/Belgrade", "America/New_York"} {
 		t.Run(zone, func(t *testing.T) {
