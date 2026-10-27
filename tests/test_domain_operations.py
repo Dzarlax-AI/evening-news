@@ -137,6 +137,40 @@ def test_payload_parser_is_exact_eight_field_fence_and_rejects_bool_integer():
         parse_envelope({key: value for key, value in envelope.items() if key != "executor_instance_id"})
 
 
+def test_context_matching_accepts_only_equal_postgres_microsecond_deadlines():
+    from news_aggregator.services.domain_fence import ExecutionContext, context_matches_envelope
+
+    trusted = _envelope()
+    trusted["deadline_at"] = "2026-10-27T14:45:54.726260Z"
+    context = ExecutionContext(parse_envelope(trusted), 7890, "news_processing", {})
+
+    # Go's time.Time JSON marshaler trims the last zero while the execution
+    # service emits PostgreSQL timestamps with six fractional digits.
+    equivalent = {**trusted, "deadline_at": "2026-10-27T14:45:54.72626Z"}
+    assert context_matches_envelope(context, equivalent)
+    assert context_matches_envelope(
+        context, {**trusted, "deadline_at": "2026-10-27T16:45:54.72626+02:00"})
+
+    whole_seconds = {**trusted, "deadline_at": "2026-10-27T14:45:54.000000Z"}
+    whole_seconds_context = ExecutionContext(parse_envelope(whole_seconds), 7890, "news_processing", {})
+    assert context_matches_envelope(
+        whole_seconds_context, {**whole_seconds, "deadline_at": "2026-10-27T14:45:54Z"})
+
+    changed = {**trusted, "deadline_at": "2026-10-27T14:45:54.726261Z"}
+    assert not context_matches_envelope(context, changed)
+    assert not context_matches_envelope(context, {**trusted, "deadline_at": "2026-10-27T14:45:54.7262601Z"})
+    assert not context_matches_envelope(context, {**trusted, "deadline_at": "not-a-deadline"})
+    assert not context_matches_envelope(context, {**equivalent, "unexpected": True})
+    assert not context_matches_envelope(context, {**equivalent, "generation": trusted["generation"] + 1})
+    assert not context_matches_envelope(context, {**equivalent, "version": True})
+    assert not context_matches_envelope(
+        context, {**equivalent, "attempt_generation": float(trusted["attempt_generation"])})
+    assert not context_matches_envelope(
+        context, {**trusted, "deadline_at": "0001-01-01T00:00:00+23:59"})
+    assert not context_matches_envelope(
+        context, {**trusted, "deadline_at": "2026-10-27T16:15:54.726260+00:90"})
+
+
 @pytest.mark.asyncio
 async def test_post_receipt_is_registered_before_background_leaf_and_conflicts_on_changed_input(monkeypatch):
     started = asyncio.Event()
