@@ -45,6 +45,12 @@ def safe_time(value: Any) -> str | None:
         return None
 
 
+def safe_log_cursor(value: Any) -> str | None:
+    if not isinstance(value, str) or not re.fullmatch(r"\d{4}-\d{2}-\d{2}T\d{2}:\d{2}:\d{2}Z", value):
+        return None
+    return value if safe_time(value) is not None else None
+
+
 def integer(value: Any, minimum: int = 0, maximum: int = 2**63 - 1) -> int | None:
     if isinstance(value, bool) or not isinstance(value, int) or not minimum <= value <= maximum:
         return None
@@ -141,7 +147,7 @@ def sanitize_snapshot(raw: Any) -> dict[str, Any]:
         if cgroup.get("cpu_throttled_usec_delta") is None or cgroup.get("cpu_throttled_periods_delta") is None:
             missing.append("container_" + name + "_cpu_delta")
     errors = raw.get("collection_errors")
-    allowed_errors = {"ssh_failed", "timeout", "remote_snapshot_failed", "database_unavailable", "container_unavailable", "cgroup_unavailable", "log_unavailable"}
+    allowed_errors = {"ssh_failed", "timeout", "log_overflow", "remote_snapshot_failed", "database_unavailable", "container_unavailable", "cgroup_unavailable", "log_unavailable"}
     result["collection_errors"] = [finite(item, allowed_errors) for item in errors[:16]] if isinstance(errors, list) else []
     result["missing"] = missing
     return result
@@ -182,6 +188,14 @@ def sanitize_event(raw: Any) -> dict[str, Any] | None:
 
 
 def parse_log_line(line: str) -> dict[str, Any] | None:
+    try:
+        record = json.loads(line)
+    except (json.JSONDecodeError, TypeError, RecursionError):
+        record = None
+    if isinstance(record, dict) and isinstance(record.get("event"), str) and record["event"] in EVENTS:
+        if "event_utc" not in record and isinstance(record.get("time"), str):
+            record = {**record, "event_utc": record["time"]}
+        return sanitize_event(record)
     try:
         fields = dict(part.split("=", 1) for part in shlex.split(line) if "=" in part)
     except ValueError:
@@ -248,19 +262,28 @@ def write_bundle(directory: Path, value: dict[str, Any], count: int, byte_count:
     return byte_count + len(payload)
 
 
-def replay_fixture(path: Path, output: Path, max_bundles: int, byte_limit: int) -> tuple[int, int]:
+def replay_fixture(path: Path, output: Path, max_bundles: int, byte_limit: int, duration_seconds: int = MAX_SECONDS) -> tuple[int, int]:
+    if not path.is_file():
+        raise ValueError("fixture must be a regular file")
+    if not 1 <= duration_seconds <= MAX_SECONDS:
+        raise ValueError("fixture duration exceeds the hard safety bound")
+    if not 1 <= max_bundles <= MAX_BUNDLES or not 1 <= byte_limit <= MAX_OUTPUT_BYTES:
+        raise ValueError("fixture output exceeds the hard safety bound")
     directory = create_output_dir(output)
+    deadline = time.monotonic() + duration_seconds
     ring: deque[dict[str, Any]] = deque(maxlen=30)
     count = size = 0
     seen: set[str] = set()
     with path.open(encoding="utf-8", errors="replace") as source:
-        while True:
+        while time.monotonic() < deadline and count < max_bundles and size < byte_limit:
             raw_line = source.readline(MAX_INPUT_LINE + 1)
             if not raw_line:
                 break
             if len(raw_line) > MAX_INPUT_LINE:
-                while raw_line and not raw_line.endswith("\n"):
+                while raw_line and not raw_line.endswith("\n") and time.monotonic() < deadline:
                     raw_line = source.readline(MAX_INPUT_LINE + 1)
+                if time.monotonic() >= deadline:
+                    break
                 continue
             try:
                 item = json.loads(raw_line)
@@ -281,6 +304,8 @@ def replay_fixture(path: Path, output: Path, max_bundles: int, byte_limit: int) 
                         break
                     size = write_bundle(directory, bundle(event, ring), count, size, byte_limit)
                     count += 1
+                    if count >= max_bundles:
+                        break
             elif item.get("kind") == "log":
                 event = parse_log_line(item.get("line", "")) if isinstance(item.get("line"), str) else None
                 if event is not None:
@@ -292,13 +317,19 @@ def replay_fixture(path: Path, output: Path, max_bundles: int, byte_limit: int) 
                         break
                     size = write_bundle(directory, bundle(event, ring), count, size, byte_limit)
                     count += 1
+                    if count >= max_bundles:
+                        break
             if size >= byte_limit:
                 break
     return count, size
 
 
 REMOTE_SCRIPT = r'''set +e
+set -o pipefail
 BACKGROUND='@BACKGROUND@'; EXTRACTOR='@EXTRACTOR@'; DB='@DB@'; DBUSER='@DBUSER@'; DBNAME='@DBNAME@'; SCHEMA='@SCHEMA@'
+LOG_CURSOR_BACKGROUND='@LOG_CURSOR_BACKGROUND@'; LOG_CURSOR_EXTRACTOR='@LOG_CURSOR_EXTRACTOR@'
+POLL_START_UTC=$(date -u +'%Y-%m-%dT%H:%M:%SZ' 2>/dev/null)
+case "$POLL_START_UTC" in ????-??-??T??:??:??Z) printf 'log_cursor_seed=%s\n' "$POLL_START_UTC" ;; *) POLL_START_UTC= ;; esac
 awk '/^(MemTotal|MemAvailable|SwapTotal|SwapFree):/ {gsub(":", "", $1); print tolower($1) "=" $2}' /proc/meminfo 2>/dev/null
 awk '/^(some|full) / {for(i=1;i<=NF;i++) if($i ~ /^avg10=/) {split($i,a,"="); print "psi_" $1 "=" a[2]}}' /proc/pressure/memory 2>/dev/null
 container_snapshot() {
@@ -320,29 +351,175 @@ container_snapshot background "$BACKGROUND"; container_snapshot extractor "$EXTR
 sql="BEGIN READ ONLY; SET LOCAL statement_timeout='500ms'; SELECT jsonb_build_object('captured_at',to_char(clock_timestamp() AT TIME ZONE 'UTC','YYYY-MM-DD\"T\"HH24:MI:SS.US') || 'Z','worker',(SELECT jsonb_build_object('generation',generation,'pid',lock_backend_pid,'heartbeat_at',to_char(heartbeat_at,'YYYY-MM-DD\"T\"HH24:MI:SS.US') || 'Z') FROM \"$SCHEMA\".background_worker_status WHERE id=1),'pg_stat_activity',(SELECT coalesce(jsonb_agg(jsonb_build_object('pid',pid,'state',state,'wait_type',wait_event_type,'wait_event',wait_event,'transaction_age_seconds',extract(epoch FROM (clock_timestamp()-xact_start)),'blocker_pids',pg_blocking_pids(pid))),'[]'::jsonb) FROM (SELECT pid,state,wait_event_type,wait_event,xact_start FROM pg_stat_activity WHERE pid<>pg_backend_pid() ORDER BY pid LIMIT 64) a),'pg_metrics',(SELECT jsonb_build_object('wal_bytes',pg_wal_lsn_diff(pg_current_wal_lsn(),'0/0'),'checkpoints_timed',nullif(to_jsonb(b)->>'checkpoints_timed','')::numeric,'checkpoints_requested',nullif(to_jsonb(b)->>'checkpoints_req','')::numeric,'checkpoint_write_time_ms',nullif(to_jsonb(b)->>'checkpoint_write_time','')::numeric,'checkpoint_sync_time_ms',nullif(to_jsonb(b)->>'checkpoint_sync_time','')::numeric,'buffers_checkpoint',nullif(to_jsonb(b)->>'buffers_checkpoint','')::numeric,'buffers_clean',nullif(to_jsonb(b)->>'buffers_clean','')::numeric) FROM pg_stat_bgwriter b)); COMMIT;"
 dbresult=$(docker exec "$DB" psql -XAtq -v ON_ERROR_STOP=1 -U "$DBUSER" -d "$DBNAME" -c "$sql" 2>/dev/null)
 if [ -n "$dbresult" ]; then echo "db_json=$dbresult"; else echo "database_error=database_unavailable"; fi
-capture_logs() { role="$1"; name="$2"; [ -n "$name" ] || return; docker logs --since 2s --tail 64 "$name" 2>&1 | head -c 262144 | awk -v src="$role" '
-function finite(v, allowed, n,a,i) {n=split(allowed,a,"|"); for(i=1;i<=n;i++) if(v==a[i]) return v; return "other"}
-function num(v) {return v ~ /^[0-9]+$/ && length(v)<=18}
-{
-  delete f; for(i=1;i<=NF;i++){p=index($i,"="); if(p>1) f[substr($i,1,p-1)]=substr($i,p+1)}
-  if(f["event"]!="worker_heartbeat_failure" && f["event"]!="page_monitor_failure") next
-  if(f["event_utc"] !~ /^[0-9T:.+-]+Z?$/ || length(f["event_utc"])>40) next
-  out="log=event=" f["event"] " event_utc=" f["event_utc"] " source=" src
-  if(f["event"]=="worker_heartbeat_failure") {
-    out=out " stage=" finite(f["stage"],"begin|update|commit|unknown") " reason=" finite(f["reason"],"context_timeout|context_cancelled|event_overflow|ownership_loss|unsupported|protocol_error|transport_error|operation_failed|navigation_failed|evaluation_failed|navigation_dns|navigation_connection|navigation_tls|navigation_aborted|navigation_other|browser_busy|resource_limit|sqlstate|timeout|canceled|cancelled|transaction_closed|connection_closed|other|lease_mismatch|malformed_detach|owned_detach|target_crashed|client_disconnected")
-    if(f["sqlstate"] ~ /^[A-Z0-9]{5}$/) out=out " sqlstate=" f["sqlstate"]
-    split("generation backend_pid mutex_wait_ms begin_ms update_ms commit_ms",a," "); for(i in a) if(num(f[a[i]])) out=out " " a[i] "=" f[a[i]]
-  } else {
-    if(f["request_token"] ~ /^[a-f0-9]{64}$/) out=out " request_token=" f["request_token"]
-    if(num(f["source_id"])) out=out " source_id=" f["source_id"]
-    out=out " stage=" finite(f["stage"],"admission|readiness|discovery|websocket|events|create_context|create_target|attach_target|configure|navigate|dom|cleanup|parse|validation")
-    out=out " reason=" finite(f["reason"],"context_timeout|context_cancelled|event_overflow|ownership_loss|unsupported|protocol_error|transport_error|operation_failed|navigation_failed|evaluation_failed|navigation_dns|navigation_connection|navigation_tls|navigation_aborted|navigation_other|browser_busy|resource_limit|sqlstate|timeout|canceled|cancelled|transaction_closed|connection_closed|other|lease_mismatch|malformed_detach|owned_detach|target_crashed|client_disconnected")
-    if(num(f["elapsed_ms"])) out=out " elapsed_ms=" f["elapsed_ms"]
-    out=out " outcome=" finite(f["outcome"],"success|partial|failed|rejected") " error_code=" finite(f["error_code"],"cancelled|deadline_exceeded|event_overflow|invalid_input|native_browser_busy|native_browser_policy_denied|parse_failed|public_url_denied|resource_limit|transport_failed|unavailable|unsupported_selector|response_too_large|page_monitor_unavailable|invalid_runner_response|other")
-  }
-  print out
-}' | head -n 64; }
-capture_logs background "$BACKGROUND"; capture_logs extractor "$EXTRACTOR"
+capture_logs() {
+  role="$1"; name="$2"; cursor="$3"; [ -n "$name" ] || return
+  case "$cursor" in ????-??-??T??:??:??Z) since="$cursor" ;; *) since="$POLL_START_UTC" ;; esac
+  case "$since" in ????-??-??T??:??:??Z) ;; *) echo "${role}_log_error=log_unavailable"; return ;; esac
+  boundary=$(date -u +'%Y-%m-%dT%H:%M:%SZ' 2>/dev/null)
+  case "$boundary" in ????-??-??T??:??:??Z) ;; *) echo "${role}_log_error=log_unavailable"; return ;; esac
+  python3 - "$role" "$name" "$since" "$boundary" <<'PYLOG'
+import datetime
+import json
+import os
+import re
+import selectors
+import shlex
+import subprocess
+import sys
+import time
+
+role, container, since, boundary = sys.argv[1:5]
+MAX_BYTES = 262144
+MAX_LINES = 64
+MAX_LINE_BYTES = 8192
+EVENTS = {"worker_heartbeat_failure", "page_monitor_failure"}
+REASONS = "context_timeout|context_cancelled|event_overflow|ownership_loss|unsupported|protocol_error|transport_error|operation_failed|navigation_failed|evaluation_failed|navigation_dns|navigation_connection|navigation_tls|navigation_aborted|navigation_other|browser_busy|resource_limit|sqlstate|timeout|canceled|cancelled|transaction_closed|connection_closed|other|lease_mismatch|malformed_detach|owned_detach|target_crashed|client_disconnected".split("|")
+CODES = "cancelled|deadline_exceeded|event_overflow|invalid_input|native_browser_busy|native_browser_policy_denied|parse_failed|public_url_denied|resource_limit|transport_failed|unavailable|unsupported_selector|response_too_large|page_monitor_unavailable|invalid_runner_response|other".split("|")
+STAGES = "admission|readiness|discovery|websocket|events|create_context|create_target|attach_target|configure|navigate|dom|cleanup|parse|validation".split("|")
+
+def valid_time(value):
+    if not isinstance(value, str) or not re.fullmatch(r"\d{4}-\d{2}-\d{2}T\d{2}:\d{2}:\d{2}(?:\.\d{1,9})?Z", value):
+        return False
+    try:
+        datetime.datetime.fromisoformat(value[:-1] + "+00:00")
+        return True
+    except ValueError:
+        return False
+
+def finite(value, choices):
+    return value if value in choices else "other"
+
+def uint(value, maximum=2**63-1, minimum=0):
+    if isinstance(value, bool):
+        return None
+    if isinstance(value, int):
+        result = value
+    elif isinstance(value, str) and re.fullmatch(r"\d{1,18}", value):
+        result = int(value)
+    else:
+        return None
+    return result if minimum <= result <= maximum else None
+
+def sanitize(line):
+    if len(line) > MAX_LINE_BYTES:
+        return None
+    try:
+        record = json.loads(line)
+    except (json.JSONDecodeError, RecursionError):
+        record = None
+    if isinstance(record, dict):
+        fields = record
+    else:
+        try:
+            fields = dict(part.split("=", 1) for part in shlex.split(line) if "=" in part)
+        except ValueError:
+            return None
+    event_type = fields.get("event")
+    if not isinstance(event_type, str) or event_type not in EVENTS:
+        return None
+    stamp = fields.get("event_utc") or fields.get("time")
+    if not valid_time(stamp):
+        return None
+    output = ["log=event=" + event_type, "event_utc=" + stamp, "source=" + role]
+    if event_type == "worker_heartbeat_failure":
+        output += ["stage=" + finite(fields.get("stage"), ["begin", "update", "commit", "unknown"]), "reason=" + finite(fields.get("reason"), REASONS)]
+        sqlstate = fields.get("sqlstate", "")
+        if isinstance(sqlstate, str) and re.fullmatch(r"[A-Z0-9]{5}", sqlstate):
+            output.append("sqlstate=" + sqlstate)
+        for key, minimum in (("backend_pid", 1), ("generation", 1), ("mutex_wait_ms", 0), ("begin_ms", 0), ("update_ms", 0), ("commit_ms", 0)):
+            parsed = uint(fields.get(key), minimum=minimum)
+            if parsed is not None:
+                output.append(key + "=" + str(parsed))
+    else:
+        token = fields.get("request_token", "")
+        if isinstance(token, str) and re.fullmatch(r"[a-f0-9]{64}", token):
+            output.append("request_token=" + token)
+        source_id = uint(fields.get("source_id"), minimum=1)
+        if source_id is not None:
+            output.append("source_id=" + str(source_id))
+        output += ["stage=" + finite(fields.get("stage"), STAGES), "reason=" + finite(fields.get("reason"), REASONS)]
+        elapsed = uint(fields.get("elapsed_ms"))
+        if elapsed is not None:
+            output.append("elapsed_ms=" + str(elapsed))
+        output += ["outcome=" + finite(fields.get("outcome"), ["success", "partial", "failed", "rejected"]), "error_code=" + finite(fields.get("error_code"), CODES)]
+    return " ".join(output)
+
+def stop_observer(process):
+    if process.poll() is None:
+        process.terminate()
+        try:
+            process.wait(timeout=0.5)
+        except subprocess.TimeoutExpired:
+            process.kill()
+            process.wait()
+
+try:
+    if not valid_time(since) or not valid_time(boundary) or role not in {"background", "extractor"}:
+        raise ValueError
+    process = subprocess.Popen(["docker", "logs", "--since", since, "--tail", "65", container], stdout=subprocess.PIPE, stderr=subprocess.STDOUT)
+    selector = selectors.DefaultSelector()
+    selector.register(process.stdout, selectors.EVENT_READ)
+    data = bytearray()
+    deadline = time.monotonic() + 3.0
+    overflow = False
+    timed_out = False
+    while True:
+        remaining = deadline - time.monotonic()
+        if remaining <= 0:
+            timed_out = True
+            break
+        if not selector.select(remaining):
+            timed_out = True
+            break
+        chunk = os.read(process.stdout.fileno(), min(65536, MAX_BYTES + 1 - len(data)))
+        if not chunk:
+            break
+        data.extend(chunk)
+        if len(data) > MAX_BYTES:
+            overflow = True
+            break
+    selector.close()
+    if overflow or timed_out:
+        stop_observer(process)
+        lines = bytes(data).decode("utf-8", errors="replace").splitlines()
+        if len(lines) > MAX_LINES:
+            lines = lines[-MAX_LINES:]
+        for raw_line in lines:
+            safe = sanitize(raw_line)
+            if safe is not None:
+                print(safe)
+        print(role + "_log_error=" + ("log_overflow" if overflow else "timeout"))
+    else:
+        try:
+            return_code = process.wait(timeout=0.5)
+        except subprocess.TimeoutExpired:
+            stop_observer(process)
+            print(role + "_log_error=timeout")
+            raise SystemExit(0)
+        lines = bytes(data).decode("utf-8", errors="replace").splitlines()
+        overflow = len(lines) > MAX_LINES
+        if overflow:
+            lines = lines[-MAX_LINES:]
+        for raw_line in lines:
+            safe = sanitize(raw_line)
+            if safe is not None:
+                print(safe)
+        if overflow:
+            print(role + "_log_error=log_overflow")
+        elif return_code != 0:
+            print(role + "_log_error=log_unavailable")
+        else:
+            print("log_cursor_" + role + "=" + boundary)
+except (OSError, ValueError, subprocess.SubprocessError):
+    if "process" in locals():
+        stop_observer(process)
+    if "selector" in locals():
+        selector.close()
+    print(role + "_log_error=log_unavailable")
+PYLOG
+}
+capture_logs background "$BACKGROUND" "$LOG_CURSOR_BACKGROUND"
+capture_logs extractor "$EXTRACTOR" "$LOG_CURSOR_EXTRACTOR"
 '''
 
 
@@ -358,7 +535,7 @@ def safe_pg_identifier(value: str, label: str) -> str:
     return value
 
 
-def parse_live_output(output: str) -> tuple[dict[str, Any], list[dict[str, Any]]]:
+def parse_live_output(output: str, log_cursors: dict[str, str] | None = None) -> tuple[dict[str, Any], list[dict[str, Any]]]:
     raw: dict[str, Any] = {"pg_stat_activity": [], "pg_metrics": {}, "host": {"memory_psi": {}}, "containers": {}, "collection_errors": []}
     events = []
     for line in output[:1024 * 1024].splitlines()[:1024]:
@@ -375,7 +552,17 @@ def parse_live_output(output: str) -> tuple[dict[str, Any], list[dict[str, Any]]
                 pass
         elif "=" in line:
             key, value = line.split("=", 1)
-            if key in {"background_error", "extractor_error", "postgres_error", "database_error"}:
+            cursor_match = re.fullmatch(r"log_cursor_(background|extractor)", key)
+            if key == "log_cursor_seed":
+                seed = safe_log_cursor(value)
+                if seed is not None and log_cursors is not None:
+                    log_cursors.setdefault("background", seed)
+                    log_cursors.setdefault("extractor", seed)
+            elif cursor_match:
+                cursor = safe_log_cursor(value)
+                if cursor is not None and log_cursors is not None:
+                    log_cursors[cursor_match.group(1)] = cursor
+            elif key in {"background_error", "extractor_error", "postgres_error", "background_log_error", "extractor_log_error", "database_error"}:
                 raw["collection_errors"].append(value)
             elif key in {"memtotal", "memavailable", "swaptotal", "swapfree"}:
                 raw["host"][{"memtotal":"memory_total_bytes", "memavailable":"memory_available_bytes", "swaptotal":"swap_total_bytes", "swapfree":"swap_free_bytes"}[key]] = _int_text(value) * 1024 if _int_text(value) is not None else None
@@ -415,13 +602,28 @@ def _float_text(value: str) -> float | None:
         return None
 
 
-def live_poll(host: str, background: str, extractor: str, db: str, dbuser: str, dbname: str, schema: str, timeout: float = 12.0) -> tuple[dict[str, Any], list[dict[str, Any]]]:
-    command = ["ssh", "-T", "-o", "BatchMode=yes", "-o", "ConnectTimeout=5", host, "sh", "-s"]
+def live_poll(host: str, background: str, extractor: str, db: str, dbuser: str, dbname: str, schema: str, timeout: float = 12.0, log_cursors: dict[str, str] | None = None) -> tuple[dict[str, Any], list[dict[str, Any]]]:
+    command = ["ssh", "-T", "-o", "BatchMode=yes", "-o", "ConnectTimeout=5", host, "bash", "-s"]
+    cursors = log_cursors if log_cursors is not None else {}
     script = (REMOTE_SCRIPT.replace("@BACKGROUND@", background).replace("@EXTRACTOR@", extractor)
-              .replace("@DB@", db).replace("@DBUSER@", dbuser).replace("@DBNAME@", dbname).replace("@SCHEMA@", schema))
-    completed = subprocess.run(command, input=script, text=True, capture_output=True, timeout=max(0.01, timeout), check=False)
-    raw, events = parse_live_output(completed.stdout[:1024 * 1024])
-    if completed.returncode != 0:
+              .replace("@DB@", db).replace("@DBUSER@", dbuser).replace("@DBNAME@", dbname).replace("@SCHEMA@", schema)
+              .replace("@LOG_CURSOR_BACKGROUND@", safe_log_cursor(cursors.get("background")) or "")
+              .replace("@LOG_CURSOR_EXTRACTOR@", safe_log_cursor(cursors.get("extractor")) or ""))
+    try:
+        completed = subprocess.run(command, input=script, text=True, capture_output=True, timeout=max(0.01, timeout), check=False)
+        output = completed.stdout[:1024 * 1024]
+        returncode = completed.returncode
+    except subprocess.TimeoutExpired as error:
+        output = error.stdout or ""
+        if isinstance(output, bytes):
+            output = output[:1024 * 1024].decode("utf-8", errors="replace")
+        else:
+            output = output[:1024 * 1024]
+        returncode = -1
+    raw, events = parse_live_output(output, cursors)
+    if returncode == -1:
+        raw["collection_errors"].append("timeout")
+    elif returncode != 0:
         raw["collection_errors"].append("ssh_failed")
     if "captured_at" not in raw:
         raw["captured_at"] = None
@@ -436,6 +638,7 @@ def collect_live(output: Path, host: str, background: str, extractor: str, db: s
     last_poll = 0.0
     previous: dict[str, Any] | None = None
     seen: set[str] = set()
+    log_cursors: dict[str, str] = {}
     while time.monotonic() < deadline and count < max_bundles:
         remaining = deadline - time.monotonic()
         wait = min(remaining, POLL_SECONDS - (time.monotonic() - last_poll))
@@ -445,7 +648,7 @@ def collect_live(output: Path, host: str, background: str, extractor: str, db: s
         if remaining <= 0:
             break
         try:
-            snapshot, events = live_poll(host, background, extractor, db, dbuser, dbname, schema, timeout=min(12.0, remaining))
+            snapshot, events = live_poll(host, background, extractor, db, dbuser, dbname, schema, timeout=min(12.0, remaining), log_cursors=log_cursors)
         except (OSError, subprocess.SubprocessError):
             snapshot = sanitize_snapshot({"captured_at": utc_now(), "collection_errors": ["timeout"]})
             events = []
@@ -503,7 +706,7 @@ def main(argv: list[str] | None = None) -> int:
         else:
             if args.fixture is None:
                 parser.error("offline mode requires --fixture; live collection requires explicit --live")
-            count, size = replay_fixture(args.fixture, args.output, args.max_bundles, args.max_output_bytes)
+            count, size = replay_fixture(args.fixture, args.output, args.max_bundles, args.max_output_bytes, args.duration_seconds)
     except (OSError, ValueError, RuntimeError, subprocess.SubprocessError) as error:
         print(f"collector stopped: {type(error).__name__}", file=sys.stderr)
         return 2

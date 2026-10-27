@@ -96,7 +96,15 @@ class RuntimeIncidentCollectorTests(unittest.TestCase):
         self.assertIn('"/sys/fs/cgroup$cgpath"', sql)
         self.assertNotIn('docker exec "$background"', sql)
         self.assertNotIn('docker exec "$extractor"', sql)
-        self.assertIn('docker logs --since 2s --tail 64 "$name" 2>&1 | head -c 262144 | awk', sql)
+        self.assertIn('["docker", "logs", "--since", since, "--tail", "65", container]', sql)
+        self.assertIn("max_bytes = 262144", sql)
+        self.assertIn("max_lines = 64", sql)
+        self.assertIn("process.terminate()", sql)
+        self.assertIn("set -o pipefail", sql)
+        self.assertIn('print("log_cursor_" + role + "=" + boundary)', sql)
+        self.assertIn('print(role + "_log_error=log_overflow")', sql)
+        self.assertLess(sql.index("poll_start_utc=$(date"), sql.index("container_snapshot background"))
+        self.assertIn("log_cursor_seed=%s", sql)
         self.assertNotIn('pg_stat_activity.*query', sql)
         with self.assertRaises(ValueError):
             collector.safe_identifier("host;cat ~/.ssh/id_rsa", "SSH host alias")
@@ -111,6 +119,12 @@ class RuntimeIncidentCollectorTests(unittest.TestCase):
         self.assertEqual(event["backend_pid"], 123)
         self.assertEqual(event["commit_ms"], 7)
         self.assertIsNone(collector.parse_log_line("event=worker_heartbeat_failure stage=commit reason=timeout generation=7"))
+        json_log = json.dumps({"time": now, "level": "ERROR", "msg": "heartbeat failed JSON_CANARY", "event": "worker_heartbeat_failure", "event_utc": now, "stage": "commit", "reason": "timeout", "sqlstate": "57014", "backend_pid": 321, "generation": 9, "mutex_wait_ms": 2, "begin_ms": 3, "update_ms": 4, "commit_ms": 5, "error": "RAW_JSON_ERROR"})
+        json_event = collector.parse_log_line(json_log)
+        self.assertEqual(json_event["backend_pid"], 321)
+        self.assertEqual(json_event["commit_ms"], 5)
+        self.assertNotIn("msg", json_event)
+        self.assertIsNone(collector.parse_log_line('{"event":[],"event_utc":"' + now + '"}'))
 
     def test_fake_live_runner_captures_stderr_logs_from_two_sources_and_sanitizes_before_bundle(self):
         now = "2026-10-27T10:00:00.123Z"
@@ -129,9 +143,8 @@ class RuntimeIncidentCollectorTests(unittest.TestCase):
             snapshot, events = collector.live_poll("news-vps", "background", "extractor", "postgres", "postgres", "aistack", "news")
         command = runner.call_args.args[0]
         remote = runner.call_args.kwargs["input"]
-        self.assertEqual(command[-3:], ["news-vps", "sh", "-s"])
-        self.assertIn("docker logs", remote)
-        self.assertIn('docker logs --since 2s --tail 64 "$name" 2>&1', remote)
+        self.assertEqual(command[-3:], ["news-vps", "bash", "-s"])
+        self.assertIn('subprocess.Popen(["docker", "logs", "--since", since, "--tail", "65", container]', remote)
         self.assertIn('background_worker_status WHERE id=1', remote)
         self.assertIn("SCHEMA='news'", remote)
         self.assertIn('background_worker_status WHERE id=1', remote)
@@ -157,21 +170,26 @@ case "$1" in
   inspect) echo "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa 2026-10-27T10:00:00.000000000Z 0 false 0" ;;
   exec) printf '%s\\n' '{"worker":{"generation":7,"pid":123,"heartbeat_at":"2026-10-27T10:00:00Z"},"pg_stat_activity":[],"pg_metrics":{"wal_bytes":1}}' ;;
   logs)
+    printf '%s\\n' '{"time":"2026-10-27T10:00:00.100Z","event":"page_monitor_failure","event_utc":"2026-10-27T10:00:00.100Z","request_token":[],"source_id":8,"stage":"navigate","reason":"timeout","elapsed_ms":1,"outcome":"failed","error_code":"deadline_exceeded","canary":"BAD_TOKEN_FIELD"}' >&2
+    printf '%s\\n' '{"time":"2026-10-27T10:00:00.200Z","event":"worker_heartbeat_failure","event_utc":"2026-10-27T10:00:00.200Z","stage":"commit","reason":"timeout","sqlstate":{},"generation":7,"backend_pid":123,"canary":"BAD_SQLSTATE_FIELD"}'
     printf '%s\\n' 'event=page_monitor_failure event_utc=2026-10-27T10:00:00.123Z request_token=aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa source_id=7 stage=navigate reason=context_timeout elapsed_ms=9 outcome=failed error_code=deadline_exceeded url=https://CANARY.invalid html=CANARY_HTML'
-    printf '%s\\n' 'event=worker_heartbeat_failure event_utc=2026-10-27T10:00:00.456Z stage=commit reason=timeout generation=7 backend_pid=123 sqlstate=08006 error=CANARY_ERROR' >&2
+    printf '%s\\n' '{"time":"2026-10-27T10:00:00.456Z","level":"ERROR","msg":"heartbeat failed JSON_CANARY","event":"worker_heartbeat_failure","event_utc":"2026-10-27T10:00:00.456Z","stage":"commit","reason":"timeout","generation":7,"backend_pid":123,"sqlstate":"08006","mutex_wait_ms":2,"begin_ms":3,"update_ms":4,"commit_ms":5,"error":"CANARY_ERROR"}' >&2
     ;;
 esac
 """, encoding="utf-8")
             docker.chmod(0o700)
             script = (collector.REMOTE_SCRIPT.replace("@BACKGROUND@", "background").replace("@EXTRACTOR@", "extractor")
-                      .replace("@DB@", "postgres").replace("@DBUSER@", "postgres").replace("@DBNAME@", "aistack").replace("@SCHEMA@", "news"))
-            result = collector.subprocess.run(["sh", "-c", script], capture_output=True, text=True, check=False, env={**os.environ, "PATH": str(fakebin) + os.pathsep + os.environ["PATH"]})
-        self.assertEqual(result.returncode, 0)
+                      .replace("@DB@", "postgres").replace("@DBUSER@", "postgres").replace("@DBNAME@", "aistack").replace("@SCHEMA@", "news")
+                      .replace("@LOG_CURSOR_BACKGROUND@", "").replace("@LOG_CURSOR_EXTRACTOR@", ""))
+            result = collector.subprocess.run(["bash", "-c", script], capture_output=True, text=True, check=False, env={**os.environ, "PATH": str(fakebin) + os.pathsep + os.environ["PATH"]})
+        self.assertEqual(result.returncode, 0, result.stderr + result.stdout)
         self.assertIn("source=background", result.stdout, result.stderr)
         self.assertIn("source=extractor", result.stdout)
         self.assertIn("event=worker_heartbeat_failure", result.stdout)
         self.assertIn("event=page_monitor_failure", result.stdout)
         self.assertIn("reason=context_timeout", result.stdout)
+        self.assertIn("log_cursor_background=", result.stdout)
+        self.assertIn("log_cursor_extractor=", result.stdout)
         live_snapshot, _ = collector.parse_live_output(result.stdout)
         background = collector.sanitize_snapshot(live_snapshot)["containers"]["background"]
         self.assertEqual(background["container_id"], "a" * 32)
@@ -192,8 +210,41 @@ esac
         self.assertEqual(background["cpu_throttled_periods"], 2)
         self.assertEqual(background["cpu_throttled_usec"], 30)
         self.assertEqual(background["oom_count"], 1)
-        for canary in ("CANARY.invalid", "CANARY_HTML", "CANARY_ERROR", "url=", "html="):
+        for canary in ("CANARY.invalid", "CANARY_HTML", "CANARY_ERROR", "JSON_CANARY", "BAD_TOKEN_FIELD", "BAD_SQLSTATE_FIELD", "url=", "html="):
             self.assertNotIn(canary, result.stdout)
+
+    def test_remote_log_reader_marks_65_lines_and_262145_bytes_as_overflow(self):
+        with tempfile.TemporaryDirectory() as temporary:
+            fakebin = Path(temporary) / "bin"
+            fakebin.mkdir()
+            docker = fakebin / "docker"
+            docker.write_text("""#!/bin/sh
+case "$1" in
+  inspect) echo "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa 2026-10-27T10:00:00.000000000Z 0 false 0" ;;
+  exec) printf '%s\\n' '{"worker":{"generation":7,"pid":123,"heartbeat_at":"2026-10-27T10:00:00Z"},"pg_stat_activity":[],"pg_metrics":{"wal_bytes":1}}' ;;
+  logs)
+    if [ "$FAKE_LOG_MODE" = lines ]; then
+      i=1; while [ "$i" -le 65 ]; do printf 'event=page_monitor_failure event_utc=2026-10-27T10:00:00Z request_token=%064d source_id=7 stage=navigate reason=timeout elapsed_ms=1 outcome=failed error_code=deadline_exceeded\\n' "$i"; i=$((i+1)); done
+    else
+      dd if=/dev/zero bs=262145 count=1 2>/dev/null
+    fi
+    ;;
+esac
+""", encoding="utf-8")
+            docker.chmod(0o700)
+            script = (collector.REMOTE_SCRIPT.replace("@BACKGROUND@", "background").replace("@EXTRACTOR@", "extractor")
+                      .replace("@DB@", "postgres").replace("@DBUSER@", "postgres").replace("@DBNAME@", "aistack").replace("@SCHEMA@", "news")
+                      .replace("@LOG_CURSOR_BACKGROUND@", "2026-10-27T10:00:00Z").replace("@LOG_CURSOR_EXTRACTOR@", "2026-10-27T10:00:00Z"))
+            for mode in ("lines", "bytes"):
+                result = collector.subprocess.run(["bash", "-c", script], capture_output=True, text=True, check=False, env={**os.environ, "PATH": str(fakebin) + os.pathsep + os.environ["PATH"], "FAKE_LOG_MODE": mode})
+                self.assertEqual(result.returncode, 0, result.stderr)
+                cursors = {"background": "2026-10-27T10:00:00Z", "extractor": "2026-10-27T10:00:00Z"}
+                collector.parse_live_output(result.stdout, cursors)
+                self.assertIn("background_log_error=log_overflow", result.stdout)
+                self.assertIn("extractor_log_error=log_overflow", result.stdout)
+                self.assertEqual(cursors, {"background": "2026-10-27T10:00:00Z", "extractor": "2026-10-27T10:00:00Z"})
+                self.assertNotIn("log_cursor_background=", result.stdout)
+                self.assertNotIn("log_cursor_extractor=", result.stdout)
 
     def test_replay_deduplicates_events_and_skips_oversized_lines_with_private_output(self):
         now = datetime.now(timezone.utc).isoformat().replace("+00:00", "Z")
@@ -210,6 +261,95 @@ esac
             self.assertEqual(files[0].stat().st_mode & 0o777, 0o600)
             self.assertEqual(files[0].parent.stat().st_mode & 0o777, 0o700)
 
+    def test_replay_stops_reading_immediately_after_bundle_limit(self):
+        now = datetime.now(timezone.utc).isoformat().replace("+00:00", "Z")
+        event_line = json.dumps({"kind": "event", "event": {"event": "worker_heartbeat_failure", "event_utc": now, "stage": "commit", "reason": "timeout", "generation": 1}}) + "\n"
+        class Reader:
+            def __init__(self): self.calls = 0
+            def __enter__(self): return self
+            def __exit__(self, *_args): return None
+            def readline(self, _limit):
+                self.calls += 1
+                if self.calls == 1: return event_line
+                raise AssertionError("replay read beyond max bundle count")
+
+        with tempfile.TemporaryDirectory() as temporary:
+            source, output = Path(temporary) / "fixture.jsonl", Path(temporary) / "out"
+            source.write_text("regular fixture", encoding="utf-8")
+            reader = Reader()
+            original_open = Path.open
+            def fixture_open(path, *args, **kwargs):
+                return reader if path == source else original_open(path, *args, **kwargs)
+            with patch.object(Path, "open", fixture_open):
+                count, _ = collector.replay_fixture(source, output, 1, collector.MAX_OUTPUT_BYTES, 1)
+            self.assertEqual(count, 1)
+            self.assertEqual(reader.calls, 1)
+
+    def test_replay_deadline_interrupts_oversized_line_drain_and_rejects_fifo(self):
+        with tempfile.TemporaryDirectory() as temporary:
+            source, output = Path(temporary) / "oversized.jsonl", Path(temporary) / "out"
+            source.write_text("x" * (collector.MAX_INPUT_LINE * 3) + "\n", encoding="utf-8")
+            ticks = iter([0.0, 0.1, 0.2, 1.1, 1.2])
+            with patch.object(collector.time, "monotonic", side_effect=lambda: next(ticks)):
+                count, _ = collector.replay_fixture(source, output, 3, collector.MAX_OUTPUT_BYTES, 1)
+            self.assertEqual(count, 0)
+            fifo = Path(temporary) / "fixture.fifo"
+            os.mkfifo(fifo)
+            with self.assertRaisesRegex(ValueError, "regular file"):
+                collector.replay_fixture(fifo, output, 3, collector.MAX_OUTPUT_BYTES, 1)
+
+    def test_log_cursor_advances_only_after_success_and_recovers_events_from_gap(self):
+        cursor0 = "2026-10-27T10:00:00Z"
+        cursor1 = "2026-10-27T10:00:13Z"
+        recovered = "log=event=page_monitor_failure event_utc=2026-10-27T10:00:12Z source=background request_token=" + "a" * 64 + " source_id=7 stage=navigate reason=timeout elapsed_ms=2 outcome=failed error_code=deadline_exceeded"
+        outputs = [
+            "log_cursor_seed=2026-10-27T09:59:59Z\nlog_cursor_background=" + cursor0 + "\nlog_cursor_extractor=" + cursor0,
+            "background_log_error=log_unavailable\nlog_cursor_extractor=2026-10-27T10:00:02Z",
+            recovered + "\nlog_cursor_background=" + cursor1,
+        ]
+        cursor_state: dict[str, str] = {}
+        scripts: list[str] = []
+        def fake_run(command, **kwargs):
+            scripts.append(kwargs["input"])
+            return type("Completed", (), {"stdout": outputs[len(scripts) - 1], "stderr": "", "returncode": 0})()
+
+        with patch.object(collector.subprocess, "run", side_effect=fake_run):
+            collector.live_poll("host", "background", "extractor", "db", "user", "aistack", "news", log_cursors=cursor_state)
+            self.assertEqual(cursor_state["background"], cursor0)
+            self.assertEqual(cursor_state["extractor"], cursor0)
+            collector.live_poll("host", "background", "extractor", "db", "user", "aistack", "news", log_cursors=cursor_state)
+            self.assertEqual(cursor_state["background"], cursor0)
+            self.assertEqual(cursor_state["extractor"], "2026-10-27T10:00:02Z")
+            _, events = collector.live_poll("host", "background", "extractor", "db", "user", "aistack", "news", log_cursors=cursor_state)
+        self.assertIn("LOG_CURSOR_BACKGROUND='2026-10-27T10:00:00Z'", scripts[1])
+        self.assertIn("LOG_CURSOR_BACKGROUND='2026-10-27T10:00:00Z'", scripts[2])
+        self.assertIn("LOG_CURSOR_EXTRACTOR='2026-10-27T10:00:02Z'", scripts[2])
+        self.assertEqual(cursor_state["background"], cursor1)
+        self.assertEqual(events[0]["event_utc"], "2026-10-27T10:00:12.000Z")
+
+    def test_live_poll_salvages_sanitized_partial_output_after_ssh_timeout(self):
+        seed = "2026-10-27T10:00:00Z"
+        recovered = "log=event=page_monitor_failure event_utc=2026-10-27T10:00:12Z source=background request_token=" + "a" * 64 + " source_id=7 stage=navigate reason=timeout elapsed_ms=2 outcome=failed error_code=deadline_exceeded"
+        timeout = collector.subprocess.TimeoutExpired(["ssh"], 12, output=("log_cursor_seed=" + seed + "\n" + recovered + " url=RAW_TIMEOUT_CANARY").encode())
+        success = type("Completed", (), {"stdout": recovered + "\nlog_cursor_background=2026-10-27T10:00:13Z", "stderr": "", "returncode": 0})()
+        cursor_state: dict[str, str] = {}
+        calls = []
+        def fake_run(command, **kwargs):
+            calls.append(kwargs["input"])
+            if len(calls) == 1:
+                raise timeout
+            return success
+
+        with patch.object(collector.subprocess, "run", side_effect=fake_run):
+            first_snapshot, first_events = collector.live_poll("host", "background", "extractor", "db", "user", "aistack", "news", timeout=12, log_cursors=cursor_state)
+            second_snapshot, second_events = collector.live_poll("host", "background", "extractor", "db", "user", "aistack", "news", timeout=12, log_cursors=cursor_state)
+        self.assertEqual(cursor_state["background"], "2026-10-27T10:00:13Z")
+        self.assertIn("timeout", first_snapshot["collection_errors"])
+        self.assertEqual(first_events[0]["event_utc"], "2026-10-27T10:00:12.000Z")
+        self.assertEqual(second_events[0]["event_utc"], "2026-10-27T10:00:12.000Z")
+        self.assertIn("LOG_CURSOR_BACKGROUND='2026-10-27T10:00:00Z'", calls[1])
+        self.assertNotIn("RAW_TIMEOUT_CANARY", json.dumps(first_snapshot) + json.dumps(first_events))
+
     def test_live_polling_respects_remaining_deadline_deduplicates_and_resets_container_deltas(self):
         now = datetime.now(timezone.utc).isoformat(timespec="milliseconds").replace("+00:00", "Z")
         token1, token2 = "a" * 64, "b" * 64
@@ -222,7 +362,7 @@ esac
             ticks[0] += 0.1
             return value
 
-        def poll(*_args, timeout):
+        def poll(*_args, timeout, log_cursors=None):
             calls.append(timeout)
             container_id = "a" * 32 if len(calls) == 1 else "b" * 32
             snapshot = collector.sanitize_snapshot({"captured_at": now, "worker": {"generation": 1, "pid": 2, "heartbeat_at": now}, "pg_stat_activity": [], "pg_metrics": {"wal_bytes": 1, "checkpoints_timed": 1, "checkpoints_requested": 1, "checkpoint_write_time_ms": 1, "checkpoint_sync_time_ms": 1, "buffers_checkpoint": 1, "buffers_clean": 1}, "host": {"memory_total_bytes": 1, "memory_available_bytes": 1, "swap_total_bytes": 0, "swap_free_bytes": 0, "memory_psi": {"some_avg10": 0, "full_avg10": 0}}, "containers": {"background": {"container_id": container_id, "started_at": now, "restart_count": 0, "oom_count": 0, "oom_killed": False, "working_set_bytes": 1, "file_bytes": 1, "cpu_periods": 5, "cpu_throttled_periods": 3, "cpu_throttled_usec": 100 if len(calls) == 1 else 1}, "extractor": {}, "postgres": {}}})
