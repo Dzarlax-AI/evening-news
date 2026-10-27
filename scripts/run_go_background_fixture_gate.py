@@ -811,32 +811,45 @@ class ConsolidatedBackgroundGate(GoWebGate):
                 job_status = job.get("status")
                 error_code = job.get("error_code") if isinstance(job.get("error_code"), str) else None
                 error_type = job.get("error_type") if isinstance(job.get("error_type"), str) else None
+        article_id_value = None
+        if type(article_id) is int:
+            article_id_value = article_id
+        elif isinstance(article_id, str) and re.fullmatch(r"[0-9]{1,19}", article_id):
+            try:
+                article_id_value = int(article_id)
+            except ValueError:
+                article_id_value = None
+        if article_id_value is not None and not 0 < article_id_value <= 9223372036854775807:
+            article_id_value = None
         article_state = None
         article_error_code = None
-        if isinstance(article_id, int) and article_id > 0:
+        if article_id_value is not None:
             value = self.pg_value(
                 "SELECT processing_state || '|' || processed::text || '|' || summary_processed::text || '|' || "
                 "category_processed::text || '|' || ad_processed::text FROM articles WHERE id="
-                + str(article_id)
+                + str(article_id_value)
             )
             if re.fullmatch(r"[a-z_]{1,32}\|(?:true|false)\|(?:true|false)\|(?:true|false)\|(?:true|false)", value):
                 article_state = value
             raw_error_code = self.pg_value(
-                "SELECT COALESCE(last_processing_error,'') FROM articles WHERE id=" + str(article_id)
+                "SELECT COALESCE(last_processing_error,'') FROM articles WHERE id=" + str(article_id_value)
             )
             if re.fullmatch(r"[a-z0-9_]{1,64}", raw_error_code):
                 article_error_code = raw_error_code
-        self.report.setdefault("blocked_ai_wait_diagnostics", {})[phase] = {
+        wait_diagnostic = {
             "job_http_status": http_status,
             "job_status": job_status,
             "job_error_code": error_code,
             "job_error_type": error_type,
             "gemini_count_before": previous_count,
             "gemini_count_current": current.get("providers", {}).get("gemini"),
-            "article_id": article_id,
+            "article_id": article_id_value,
             "article_stage_state": article_state,
             "article_last_processing_error": article_error_code,
         }
+        if job_id and job_status in {"failed", "interrupted", "delivery_unknown"}:
+            wait_diagnostic["failure_diagnostics"] = self.capture_execution_failure_diagnostics(job_id)
+        self.report.setdefault("blocked_ai_wait_diagnostics", {})[phase] = wait_diagnostic
         raise GateFailure("fixture_job_did_not_reach_blocked_fake_ai")
 
     def wait_worker_generation(self, previous, timeout=90):

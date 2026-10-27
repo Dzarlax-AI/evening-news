@@ -116,6 +116,40 @@ def test_default_news_digest_gate_uses_python_queue_producer_and_precedes_ambigu
     assert 'result->>\'parts_sent\'' in source
 
 
+def test_blocked_ai_failure_captures_safe_attempt_diagnostics_and_parses_article_id(monkeypatch, tmp_path):
+    module = load_gate_module()
+    gate = module.ConsolidatedBackgroundGate(dict(module.DEFAULT_IMAGES), tmp_path)
+    gate.access_token = "fixture-token"
+    monkeypatch.setattr(gate, "fake_counters_http", lambda: {"providers": {"gemini": 15}})
+    monkeypatch.setattr(gate, "request", lambda *args, **kwargs: (
+        200, {"status": "failed", "error_code": "worker_error", "error_type": None}
+    ))
+    article_queries = []
+
+    def pg_value(query):
+        article_queries.append(query)
+        return "pending|false|false|false|false" if "processing_state" in query else ""
+
+    monkeypatch.setattr(gate, "pg_value", pg_value)
+    monkeypatch.setattr(gate, "capture_execution_failure_diagnostics", lambda job_id: {
+        "execution_attempts": [{"attempt_generation": 2, "state": "failed", "error_code": "worker_error"}],
+        "execution_log_phases": [{"phase": "pipeline_execute", "reason_code": "handler_failed"}],
+    })
+    try:
+        gate.wait_gemini_call(15, timeout=0, job_id="11111111-1111-4111-8111-111111111111",
+                              phase="worker_reprocess", article_id="5")
+    except module.GateFailure as exc:
+        assert str(exc) == "fixture_job_did_not_reach_blocked_fake_ai"
+    else:
+        raise AssertionError("blocked AI wait unexpectedly succeeded")
+
+    diagnostic = gate.report["blocked_ai_wait_diagnostics"]["worker_reprocess"]
+    assert diagnostic["article_id"] == 5
+    assert diagnostic["article_stage_state"] == "pending|false|false|false|false"
+    assert diagnostic["failure_diagnostics"]["execution_attempts"][0]["error_code"] == "worker_error"
+    assert len(article_queries) == 2
+
+
 def test_scheduler_probe_command_is_valid_python_and_targets_internal_runtime(monkeypatch, tmp_path):
     module = load_gate_module()
     gate = module.ConsolidatedBackgroundGate(dict(module.DEFAULT_IMAGES), tmp_path)
