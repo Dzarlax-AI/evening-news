@@ -22,6 +22,10 @@ _ENVELOPE_FIELDS = {
     "version", "job_id", "attempt_generation", "owner_id", "generation",
     "backend_pid", "executor_instance_id", "deadline_at",
 }
+_RFC3339_DEADLINE = re.compile(
+    r"\A[0-9]{4}-[0-9]{2}-[0-9]{2}T[0-9]{2}:[0-9]{2}:[0-9]{2}"
+    r"(?:\.([0-9]{1,6}))?(?:Z|[+-][0-9]{2}:[0-9]{2})\Z"
+)
 
 
 class DomainAuthorityError(ValueError):
@@ -131,7 +135,30 @@ async def get_execution_context(job_id: uuid.UUID, attempt_generation: int) -> E
 def context_matches_envelope(context: ExecutionContext, raw_envelope: Any) -> bool:
     if not isinstance(raw_envelope, dict) or set(raw_envelope) != _ENVELOPE_FIELDS:
         return False
-    return all(context.envelope.get(key) == raw_envelope.get(key) for key in _ENVELOPE_FIELDS)
+    if not all(type(context.envelope.get(key)) is type(raw_envelope.get(key))
+               and context.envelope.get(key) == raw_envelope.get(key)
+               for key in _ENVELOPE_FIELDS - {"deadline_at"}):
+        return False
+    expected_deadline = _deadline_instant(context.envelope.get("deadline_at"))
+    submitted_deadline = _deadline_instant(raw_envelope.get("deadline_at"))
+    return (expected_deadline is not None and submitted_deadline is not None
+            and expected_deadline == submitted_deadline)
+
+
+def _deadline_instant(value: Any):
+    """Parse RFC3339 timestamps only at PostgreSQL's microsecond precision."""
+    if not isinstance(value, str) or _RFC3339_DEADLINE.fullmatch(value) is None:
+        return None
+    try:
+        deadline = datetime.fromisoformat(value.replace("Z", "+00:00"))
+    except ValueError:
+        return None
+    if deadline.tzinfo is None or deadline.utcoffset() is None:
+        return None
+    try:
+        return deadline.astimezone(timezone.utc)
+    except OverflowError:
+        return None
 
 
 async def _read_json_bounded(response, limit: int):
