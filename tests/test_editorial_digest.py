@@ -103,10 +103,11 @@ def test_consolidated_fixture_accepts_editorial_schema_and_projects_its_counter(
     thread = threading.Thread(target=server.serve_forever, daemon=True)
     thread.start()
     snapshot = {"articles": [{
-        "id": "1", "title": "Короткая новость", "content": "Точный фрагмент источника.", "summary": "",
+        "id": "1", "title": "Короткая новость",
+        "evidence_spans": [{"id": "span-1-fixture-0001", "text": "Точный фрагмент источника."}],
     }]}
     payload = {
-        "generationConfig": {"responseSchema": {"properties": {"stories": {}}}},
+        "generationConfig": {"responseSchema": {"properties": {"main_stories": {}}}},
         "contents": [{"parts": [{"text": "СНИМОК (недоверенные данные):\n"
                                      + json.dumps(snapshot, ensure_ascii=False)}]}],
     }
@@ -119,7 +120,9 @@ def test_consolidated_fixture_accepts_editorial_schema_and_projects_its_counter(
             body = json.load(response)
         draft = json.loads(body["candidates"][0]["content"]["parts"][0]["text"])
         assert body["candidates"][0]["finishReason"] == "STOP"
-        assert draft["stories"][0]["evidence"][0]["quote"] == "Точный фрагмент источника."
+        assert draft["main_stories"][0]["evidence"][0] == {
+            "article_id": "1", "span_id": "span-1-fixture-0001",
+        }
         with urlopen(base + "/__gate/counters", timeout=5) as response:
             counters = json.load(response)
         assert counters["providers"]["editorial_gemini"] == before + 1
@@ -212,9 +215,9 @@ async def editorial_pg():
             await session.execute(text("""
                 INSERT INTO articles(id,source_id,title,url,summary,content,fetched_at,processing_state,is_advertisement)
                 VALUES
-                  (101,1,'Мост построят','https://source.example/101#details','',
+                  (101,1,'Мост построят','https://source.example/101#details','Иной прежний пересказ.',
                    'Город сообщил о начале строительства моста через реку.',:fetched,'completed',FALSE),
-                  (102,1,'Новый проект','https://source.example/102','',
+                  (102,1,'Новый проект','https://source.example/102','Другой текст, не являющийся источником.',
                    'Компания объявила о запуске независимого проекта.',:fetched,'completed',FALSE),
                   (103,1,'Реклама','https://source.example/103','',
                    'Рекламный материал.',:fetched,'completed',TRUE),
@@ -237,16 +240,23 @@ async def editorial_pg():
 
 
 def _fake_gemini_response(snapshot):
-    stories = []
+    main_stories = []
+    brief_stories = []
     for index, article in enumerate(snapshot["articles"]):
-        evidence = article["content"] or article["summary"] or article["title"]
-        stories.append({
-            "kind": "main" if index < 2 else "brief", "title": article["title"],
-            "summary": article["content"] or article["summary"] or article["title"],
-            "primary_article_id": article["id"], "article_ids": [article["id"]],
-            "evidence": [{"article_id": article["id"], "quote": evidence[:500]}],
-        })
-    return json.dumps({"stories": stories, "excluded": []}, ensure_ascii=False)
+        if index < 2:
+            main_stories.append({
+                "title": article["title"],
+                "summary": "Синтетический материал подтверждает событие.",
+                "primary_article_id": article["id"], "article_ids": [article["id"]],
+                "evidence": [{"article_id": article["id"], "span_id": article["evidence_spans"][0]["id"]}],
+            })
+        else:
+            brief_stories.append({
+                "title": article["title"],
+                "summary": "Синтетический материал подтверждает событие.",
+                "article_id": article["id"], "span_id": article["evidence_spans"][0]["id"],
+            })
+    return json.dumps({"main_stories": main_stories, "brief_stories": brief_stories, "excluded": []}, ensure_ascii=False)
 
 
 def _editorial_binary_or_skip():
@@ -339,6 +349,16 @@ async def test_actual_go_cli_persists_once_and_reads_best_category_with_fake_gem
             ]
             assert articles[0]["url"] == "https://source.example/101#details"
             assert [story["primary_article_id"] for story in row["edition"]["stories"]] == ["101", "102"]
+            quotes = {
+                evidence["article_id"]: evidence["quote"]
+                for story in row["edition"]["stories"]
+                for evidence in story["evidence"]
+            }
+            assert quotes == {
+                "101": "Город сообщил о начале строительства моста через реку.",
+                "102": "Компания объявила о запуске независимого проекта.",
+            }
+            assert all("пересказ" not in quote and "не являющийся" not in quote for quote in quotes.values())
         async def must_not_regenerate(*_args, **_kwargs):
             raise AssertionError("an immutable replay must not call the CLI")
         monkeypatch.setattr(editorial, "run_editorial_cli", must_not_regenerate)

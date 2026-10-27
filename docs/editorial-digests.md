@@ -1,6 +1,6 @@
 # Editorial digests
 
-The Russian editorial format is **Главное + ещё коротко**: up to five main stories, followed by short stories grouped by category. Related reports may form one story; unrelated reports must not be joined merely because they share a category. Each supplied article must belong to one story or have an explicit exclusion reason.
+The Russian editorial format is **Главное + ещё коротко**: up to five main stories, followed by short stories grouped by category. Related reports may form one story; unrelated reports must not be joined merely because they share a category. Generation must assign every supplied eligible article to exactly one story and rejects model-proposed exclusions. The snapshot already comes from completed, non-advertisement, categorized articles; editorial importance is not permission to drop a material. Offline validation of an explicitly curated edition retains support for recorded exclusion reasons. Brief stories each contain exactly one article; same-event grouping is currently limited to main stories to prevent broad category roundups from hiding individual news.
 
 ## Responsibility boundaries
 
@@ -22,7 +22,7 @@ The public article page uses the existing published-article visibility boundary.
 
 ## Validation and limits
 
-Article and category IDs are canonical positive signed-32-bit identifiers matching the current database schema. Category IDs are stable classification identities; display labels are separate supplied metadata. Generated source IDs, evidence snippets and coverage are checked against the fixed input. The application builds links; the model does not choose URLs or HTML.
+Article and category IDs are canonical positive signed-32-bit identifiers matching the current database schema. Category IDs are stable classification identities; display labels are separate supplied metadata. The provider receives deterministic, article-bound source-span IDs and exact source text, preferring content with summary/title fallback only when content is empty. Its internal draft has separate main-story and brief-story arrays; a brief has one scalar article ID and span ID. Story kinds and public evidence fields are constructed by the application. The provider returns span references rather than copied quotations. Go resolves each reference back to an exact source substring and rejects unknown, cross-article, duplicate, or missing references. The persisted evidence format remains quote text. Source IDs, evidence snippets and coverage are checked against the fixed input. The application builds links; the model does not choose URLs or HTML.
 
 Generation uses the configured Gemini digest model. Request, response, deadline and subprocess output bounds apply. Errors use finite codes and must not reveal provider payloads or credentials. Rendering is available offline. Provider tests use local fake endpoints.
 
