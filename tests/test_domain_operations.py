@@ -167,6 +167,8 @@ def test_context_matching_accepts_only_equal_postgres_microsecond_deadlines():
         context, {**equivalent, "attempt_generation": float(trusted["attempt_generation"])})
     assert not context_matches_envelope(
         context, {**trusted, "deadline_at": "0001-01-01T00:00:00+23:59"})
+    assert not context_matches_envelope(
+        context, {**trusted, "deadline_at": "2026-10-27T16:15:54.726260+00:90"})
 
 
 @pytest.mark.asyncio
