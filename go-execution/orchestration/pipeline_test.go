@@ -280,6 +280,8 @@ func TestPipelineAllJobKindsAndOrdering(t *testing.T) {
 		want          []string
 	}{
 		{"news_processing", `{}`, []string{"ingestion", "processing", "stats_publish"}},
+		{"news_digest", `{}`, []string{"ingestion", "processing", "stats_publish", "summary_status", "summaries_generate", "digest_prepare", "digest_publish"}},
+		{"news_digest", `{"send_telegram":false}`, []string{"ingestion", "processing", "stats_publish"}},
 		{"news_digest", `{"run_processing":false,"send_telegram":false}`, []string{}},
 		{"news_digest", `{"run_processing":false}`, []string{"summary_status", "summaries_generate", "digest_prepare", "digest_publish"}},
 		{"telegram_digest", `{}`, []string{"summary_status", "summaries_generate", "digest_prepare", "digest_publish"}},
@@ -326,7 +328,7 @@ func TestPipelineAllJobKindsAndOrdering(t *testing.T) {
 					t.Fatalf("article outcomes missing: %s", got.Value)
 				}
 			}
-			if tc.kind == "telegram_digest" || (tc.kind == "news_digest" && tc.payload == `{"run_processing":false}`) {
+			if tc.kind == "telegram_digest" || tc.kind == "news_digest" && tc.payload != `{"run_processing":false,"send_telegram":false}` && tc.payload != `{"send_telegram":false}` {
 				if output["parts_sent"] != float64(2) {
 					t.Fatalf("digest parts_sent missing or incorrect: %s", got.Value)
 				}

@@ -167,6 +167,26 @@ func TestValidateStoredPayloadAllKinds(t *testing.T) {
 	}
 }
 
+func TestPayloadScalarTypesMatchPythonStrictTypes(t *testing.T) {
+	invalid := []struct {
+		kind, payload string
+	}{
+		{"source_test", `{"source_id":"123"}`},
+		{"reprocess_failed", `{"limit":"5"}`},
+		{"news_processing", `{"schedule_id":"3","scheduled_for":"2026-10-27T12:34:56"}`},
+		{"article_reprocess", `{"article_ids":["4"]}`},
+		{"news_digest", `{"run_processing":null}`},
+		{"news_digest", `{"send_telegram":null}`},
+		{"reprocess_failed", `{"dry_run":null}`},
+		{"article_reprocess", `{"article_ids":[4],"force":null}`},
+	}
+	for _, tc := range invalid {
+		if _, err := validatePayload(tc.kind, json.RawMessage(tc.payload)); err == nil {
+			t.Errorf("%s accepted non-Python scalar payload %s", tc.kind, tc.payload)
+		}
+	}
+}
+
 func TestScheduledForUsesPythonISOFormatRoundTrip(t *testing.T) {
 	valid := []string{
 		"2026-10-27T12:34:56",
@@ -225,6 +245,7 @@ func TestAuthPrecedesBodyParsingAndStatusShape(t *testing.T) {
 func TestSafeResultRejectsContentAndBounds(t *testing.T) {
 	for _, raw := range []string{
 		`{"secret":"x"}`, `{"articles_processed":-1}`, `{"processed":1e999}`,
+		`{"success":1}`, `{"connection_ok":0}`, `{"retryable":null}`,
 		`{"status":"success","status":"warning"}`,
 		`{"article_outcomes":[{"article_id":1,"article_id":2,"state":"completed","reason":"other"}],"article_outcomes_total":1,"article_outcomes_omitted":0}`,
 		`{"article_outcomes":[{"article_id":true,"state":"completed","reason":"other"}],"article_outcomes_total":1,"article_outcomes_omitted":0}`,

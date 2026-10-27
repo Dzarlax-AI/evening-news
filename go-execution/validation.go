@@ -11,10 +11,18 @@ import (
 )
 
 func rawInt(raw json.RawMessage) (int64, bool) {
-	var n json.Number
+	var value any
 	d := json.NewDecoder(bytes.NewReader(raw))
 	d.UseNumber()
-	if d.Decode(&n) != nil {
+	if d.Decode(&value) != nil {
+		return 0, false
+	}
+	n, ok := value.(json.Number)
+	if !ok {
+		return 0, false
+	}
+	var trailing any
+	if d.Decode(&trailing) != io.EOF {
 		return 0, false
 	}
 	v, e := strconv.ParseInt(n.String(), 10, 64)
@@ -94,8 +102,11 @@ func validatePayload(kind string, payload json.RawMessage) (json.RawMessage, err
 	}
 	for _, k := range []string{"run_processing", "send_telegram", "dry_run", "force", "reextract_media"} {
 		if raw, ok := p[k]; ok {
-			var b bool
-			if json.Unmarshal(raw, &b) != nil {
+			var value any
+			if json.Unmarshal(raw, &value) != nil {
+				return nil, ErrInvalidPayload
+			}
+			if _, ok := value.(bool); !ok {
 				return nil, ErrInvalidPayload
 			}
 		}
@@ -141,13 +152,6 @@ func validatePayload(kind string, payload json.RawMessage) (json.RawMessage, err
 	if kind == "source_test" {
 		if _, ok := p["source_id"]; !ok {
 			return nil, ErrInvalidPayload
-		}
-	}
-	if kind == "news_digest" {
-		for _, k := range []string{"run_processing", "send_telegram"} {
-			if _, ok := p[k]; !ok {
-				p[k] = json.RawMessage("true")
-			}
 		}
 	}
 	var b bytes.Buffer
@@ -196,17 +200,18 @@ func safeResult(raw json.RawMessage) (json.RawMessage, error) {
 		if d.Decode(&x) != nil {
 			return nil, ErrInvalidPayload
 		}
-		switch z := x.(type) {
-		case bool:
-			if !strings.Contains("|success|settled|retryable|dry_run|connection_ok|", "|"+k+"|") {
+		if strings.Contains("|success|settled|retryable|dry_run|connection_ok|", "|"+k+"|") {
+			if _, ok := x.(bool); !ok {
 				return nil, ErrInvalidPayload
 			}
-		case json.Number:
-			f, e := z.Float64()
-			if e != nil || math.IsNaN(f) || math.IsInf(f, 0) || f < 0 || f > 1e9 {
-				return nil, ErrInvalidPayload
-			}
-		default:
+			continue
+		}
+		z, ok := x.(json.Number)
+		if !ok {
+			return nil, ErrInvalidPayload
+		}
+		f, e := z.Float64()
+		if e != nil || math.IsNaN(f) || math.IsInf(f, 0) || f < 0 || f > 1e9 {
 			return nil, ErrInvalidPayload
 		}
 	}

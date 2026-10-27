@@ -343,6 +343,72 @@ func TestPostgresAcceptFenceContextCancelAndDuplicate(t *testing.T) {
 		t.Fatalf("retry reset already initialized article: %s %d %v %v %v %v", processingState, attempts, processed, summary, category, ad)
 	}
 
+	// The context endpoint must preserve Python's normalized digest payload
+	// verbatim. Execution defaults are applied by the pipeline, not by payload
+	// normalization, so omitted and partial flags stay omitted in this contract.
+	for i, tc := range []struct {
+		payload  string
+		expected string
+	}{
+		{payload: `{}`, expected: `{}`},
+		{payload: `{"run_processing":false}`, expected: `{"run_processing":false}`},
+		{payload: `{"send_telegram":false}`, expected: `{"send_telegram":false}`},
+	} {
+		digestJob := uuid.New()
+		if _, err = pool.Exec(ctx, `INSERT INTO background_jobs(id,kind,payload,state,owner_generation,attempt_generation) VALUES($1,'news_digest',$2::jsonb,'running',8,1)`, digestJob, tc.payload); err != nil {
+			t.Fatal(err)
+		}
+		startedDigest, releaseDigest := make(chan struct{}), make(chan struct{})
+		var releaseDigestOnce sync.Once
+		releaseDigestPipeline := func() { releaseDigestOnce.Do(func() { close(releaseDigest) }) }
+		defer releaseDigestPipeline()
+		srv.SetHandlers(Handlers{Pipeline: PipelineFunc(func(c context.Context, _ ExecutionContext, kind string, _ json.RawMessage) (Result, error) {
+			if kind != "news_digest" {
+				return Result{}, errors.New("unexpected fixture pipeline kind")
+			}
+			close(startedDigest)
+			<-releaseDigest
+			return Result{Value: json.RawMessage(`{"status":"success","parts_sent":0}`)}, nil
+		})})
+		digestDeadline := time.Now().UTC().Add(2 * time.Minute).Format(time.RFC3339Nano)
+		digestEnvelope := fmt.Sprintf(`{"version":1,"job_id":%q,"owner_id":%q,"generation":8,"attempt_generation":1,"deadline_at":%q}`, digestJob.String(), newOwner.String(), digestDeadline)
+		if rr := request("POST", "/internal/v1/job-executions", digestEnvelope); rr.Code != 202 {
+			t.Fatalf("digest accept case %d: %d %s", i, rr.Code, rr.Body.String())
+		}
+		select {
+		case <-startedDigest:
+		case <-time.After(5 * time.Second):
+			t.Fatalf("digest pipeline did not start for case %d", i)
+		}
+		contextResp := request("GET", fmt.Sprintf("/internal/v1/job-executions/%s/1/context", digestJob), "")
+		if contextResp.Code != 200 {
+			t.Fatalf("digest context case %d: %d %s", i, contextResp.Code, contextResp.Body.String())
+		}
+		var contextBody struct {
+			Kind    string          `json:"kind"`
+			Payload json.RawMessage `json:"payload"`
+		}
+		var gotPayload, wantPayload any
+		if json.Unmarshal(contextResp.Body.Bytes(), &contextBody) != nil || contextBody.Kind != "news_digest" ||
+			json.Unmarshal(contextBody.Payload, &gotPayload) != nil || json.Unmarshal([]byte(tc.expected), &wantPayload) != nil ||
+			!reflect.DeepEqual(gotPayload, wantPayload) {
+			t.Fatalf("digest context payload case %d got=%s want=%s", i, contextBody.Payload, tc.expected)
+		}
+		releaseDigestPipeline()
+		until := time.Now().Add(2 * time.Second)
+		var digestState string
+		for time.Now().Before(until) {
+			_ = pool.QueryRow(ctx, `SELECT state FROM background_job_executions WHERE job_id=$1 AND attempt_generation=1`, digestJob).Scan(&digestState)
+			if digestState == "succeeded" {
+				break
+			}
+			time.Sleep(10 * time.Millisecond)
+		}
+		if digestState != "succeeded" {
+			t.Fatalf("digest receipt case %d state=%q", i, digestState)
+		}
+	}
+
 	// Late terminal writes are fenced after the worker lease becomes invalid.
 	if _, err = pool.Exec(ctx, `UPDATE background_job_executions SET state='running',result=NULL,error_code=NULL,finished_at=NULL WHERE job_id=$1 AND attempt_generation=2`, articleJob); err != nil {
 		t.Fatal(err)

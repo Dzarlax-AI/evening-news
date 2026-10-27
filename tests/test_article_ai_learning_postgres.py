@@ -1,9 +1,8 @@
 """PostgreSQL checks for fenced article extraction learning only."""
 
-from contextlib import asynccontextmanager
+from datetime import datetime, timedelta, timezone
 import os
 import uuid
-from types import SimpleNamespace
 from unittest.mock import AsyncMock
 
 import pytest
@@ -14,8 +13,17 @@ from sqlalchemy.orm import sessionmaker
 
 from news_aggregator.database import Base
 from news_aggregator.executor import ArticleProcessingCallbackFence, _record_article_extraction_feedback
-from news_aggregator.models import Article, ExtractionAttempt, ExtractionPattern, Source
+from news_aggregator.migrations.background_jobs import BackgroundJobsMigration
+from news_aggregator.migrations.job_executor import JobExecutorMigration
+from news_aggregator.migrations.scheduled_job_metadata import ScheduledJobMetadataMigration
+from news_aggregator.models import (
+    Article, BackgroundJob, BackgroundJobExecution, BackgroundWorkerStatus,
+    ExtractionAttempt, ExtractionPattern, Source,
+)
 from news_aggregator.services.extraction_memory import ExtractionMemoryEntry
+from news_aggregator.services.domain_fence import (
+    ExecutionContext, GO_EXECUTION_GUARD_XOR, RemoteDomainFence, parse_envelope,
+)
 
 
 def _database_url():
@@ -42,6 +50,10 @@ async def learning_db():
             await connection.execute(text(f'CREATE SCHEMA "{schema}"'))
         async with engine.begin() as connection:
             await connection.run_sync(lambda sync: Base.metadata.create_all(sync, tables=tables))
+        async with factory() as session:
+            await BackgroundJobsMigration().execute(session)
+            await ScheduledJobMetadataMigration().execute(session)
+            await JobExecutorMigration().execute(session)
         yield engine, factory
     finally:
         await engine.dispose()
@@ -62,7 +74,7 @@ class _Result:
 
 
 class _GuardedSession:
-    """Use real tables while supplying the independent run/item fence receipt."""
+    """Use real job/domain tables and stub only the Go run/item claim rows."""
 
     def __init__(self, factory, run_id, article_id, attempt, fingerprint):
         self.factory = factory
@@ -78,6 +90,13 @@ class _GuardedSession:
 
     async def __aexit__(self, *args):
         return await self.session.__aexit__(*args)
+
+    @property
+    def no_autoflush(self):
+        return self.session.no_autoflush
+
+    async def scalar(self, statement, params=None):
+        return await self.session.scalar(statement, params or {})
 
     async def execute(self, statement, params=None):
         sql = str(statement)
@@ -113,14 +132,48 @@ async def test_feedback_records_observations_and_selector_learning_without_artic
     import news_aggregator.executor as executor_module
     from news_aggregator.services import domain_stability_tracker, extraction_memory
 
-    async def transaction_fence(session, job_id, attempt_generation):
-        assert job_id == uuid.UUID(int=1) and attempt_generation == 1
-        yield
+    job_id, owner_id, executor_id = uuid.uuid4(), uuid.uuid4(), uuid.uuid4()
+    worker_generation, attempt_generation = 7, 1
+    deadline = datetime.now(timezone.utc).replace(tzinfo=None) + timedelta(minutes=2)
+    worker_lock = await engine.connect()
+    execution_lock = await engine.connect()
+    await worker_lock.execute(text(
+        "SELECT pg_advisory_lock(hashtext(current_database()), hashtext(current_schema()))"))
+    await worker_lock.commit()
+    await execution_lock.execute(text(
+        "SELECT pg_advisory_lock(hashtext(current_database()), "
+        "hashtext(current_schema()) # :xor)"), {"xor": GO_EXECUTION_GUARD_XOR})
+    await execution_lock.commit()
+    worker_pid = await worker_lock.scalar(text("SELECT pg_backend_pid()"))
+    executor_pid = await execution_lock.scalar(text("SELECT pg_backend_pid()"))
 
-    transaction_fence = asynccontextmanager(transaction_fence)
-    lease = SimpleNamespace(owner_id=uuid.uuid4(), generation=7, backend_pid=4567,
-                            executor_instance_id=uuid.uuid4(), deadline_at=None,
-                            transaction_fence=transaction_fence)
+    async with factory() as session:
+        status = await session.get(BackgroundWorkerStatus, 1)
+        status.owner_id = owner_id
+        status.generation = worker_generation
+        status.status = "running"
+        status.lock_backend_pid = worker_pid
+        status.heartbeat_at = datetime.now(timezone.utc).replace(tzinfo=None)
+        session.add(BackgroundJob(
+            id=job_id, kind="news_processing", payload={}, idempotency_key="feedback-fixture",
+            state="running", owner_generation=worker_generation,
+            attempt_generation=attempt_generation,
+        ))
+        session.add(BackgroundJobExecution(
+            job_id=job_id, attempt_generation=attempt_generation, envelope_sha256="a" * 64,
+            executor_instance_id=executor_id, owner_id=owner_id,
+            worker_generation=worker_generation, deadline_at=deadline, state="running",
+        ))
+        await session.commit()
+
+    envelope = {
+        "version": 1, "job_id": str(job_id), "attempt_generation": attempt_generation,
+        "owner_id": str(owner_id), "generation": worker_generation, "backend_pid": worker_pid,
+        "executor_instance_id": str(executor_id),
+        "deadline_at": deadline.replace(tzinfo=timezone.utc).isoformat().replace("+00:00", "Z"),
+    }
+    context = ExecutionContext(parse_envelope(envelope), executor_pid, "news_processing", {})
+    lease = RemoteDomainFence(context)
     fence = ArticleProcessingCallbackFence(
         lease, run_id=run_id, envelope_digest="a" * 64, article_id=article_id,
         article_attempt=2, input_fingerprint=fingerprint)
@@ -144,12 +197,6 @@ async def test_feedback_records_observations_and_selector_learning_without_artic
         return tracker
     monkeypatch.setattr(domain_stability_tracker, "get_stability_tracker", get_tracker)
 
-    @asynccontextmanager
-    async def callback_fence(session, job_id, attempt_generation):
-        async with transaction_fence(session, job_id, attempt_generation):
-            yield
-
-    lease.transaction_fence = callback_fence
     metadata = {
         "url": "https://example.test/story", "method": "readability", "success": True,
         "selector_used": ".fallback", "content_length": 240, "quality_score": 0.9,
@@ -160,7 +207,7 @@ async def test_feedback_records_observations_and_selector_learning_without_artic
         ],
     }
     await _record_article_extraction_feedback(
-        lease, uuid.UUID(int=1), 1, fence, metadata,
+        lease, job_id, attempt_generation, fence, metadata,
         learned_selector=".learned", learned_method="readability")
 
     async with factory() as session:
@@ -185,3 +232,5 @@ async def test_feedback_records_observations_and_selector_learning_without_artic
         assert article == ("Synthetic title", "Original synthetic content",
                            "Original synthetic summary", 2, "pending")
     assert learned.failure_count == 1 and learned.is_stable is False
+    await worker_lock.close()
+    await execution_lock.close()

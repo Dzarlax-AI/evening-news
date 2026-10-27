@@ -1,5 +1,8 @@
 [
   {"kind":"news_processing","input":{},"normalized":{}},
+  {"kind":"news_digest","input":{},"normalized":{}},
+  {"kind":"news_digest","input":{"run_processing":false},"normalized":{"run_processing":false}},
+  {"kind":"news_digest","input":{"send_telegram":false},"normalized":{"send_telegram":false}},
   {"kind":"news_digest","input":{"run_processing":false,"send_telegram":true},"normalized":{"run_processing":false,"send_telegram":true}},
   {"kind":"telegram_digest","input":{},"normalized":{}},
   {"kind":"backup","input":{},"normalized":{}},

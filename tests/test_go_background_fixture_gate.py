@@ -105,6 +105,17 @@ def test_gate_checks_authenticated_go_execution_status():
     assert "component_codes == [200, 200, 200, 200, 200]" in source
 
 
+def test_default_news_digest_gate_uses_python_queue_producer_and_precedes_ambiguous_send():
+    source = SCRIPT.read_text()
+    fixture_producer = (ROOT / "tests/fixtures/go-background/enqueue_news_digest.py").read_text()
+    run_body = source[source.index("    def run(self):"):]
+    assert "enqueue_job_in_session(session, \"news_digest\", payload, key" in fixture_producer
+    assert '"{}", idempotency_key' in source
+    assert '"news_digest_omitted_flags_authority_and_delivery"' in source
+    assert run_body.index("self.verify_default_news_digest_authority()") < run_body.index("self.verify_ambiguous_delivery_recovery()")
+    assert 'result->>\'parts_sent\'' in source
+
+
 def test_scheduler_probe_command_is_valid_python_and_targets_internal_runtime(monkeypatch, tmp_path):
     module = load_gate_module()
     gate = module.ConsolidatedBackgroundGate(dict(module.DEFAULT_IMAGES), tmp_path)

@@ -1000,7 +1000,7 @@ async def _record_article_extraction_feedback(lease, job_id, attempt_generation,
             """), {
                 "run_id": fence.run_id, "job_id": job_id, "attempt": attempt_generation,
                 "envelope_sha256": fence.envelope_digest, "owner_id": lease.owner_id,
-                "worker_generation": lease.generation, "backend_pid": lease.backend_pid,
+                "worker_generation": lease.generation, "backend_pid": lease.worker_backend_pid,
                         "executor_instance_id": lease.executor_instance_id, "deadline_at": lease.deadline_at,
             })).mappings().one_or_none()
             item = (await session.execute(text("""

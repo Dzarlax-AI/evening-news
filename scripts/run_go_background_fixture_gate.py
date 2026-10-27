@@ -1114,6 +1114,43 @@ class ConsolidatedBackgroundGate(GoWebGate):
         self.check("accepted_ambiguous_delivery_resolves_unknown_without_replay",
                    job.get("status") == "delivery_unknown" and after == accepted_count)
 
+    def verify_default_news_digest_authority(self):
+        """Exercise omitted digest flags through the real Go-to-Python authority path."""
+        before = self.fake_counters_http().get("providers", {}).get("telegram")
+        if type(before) is not int or before < 0:
+            raise GateFailure("default_news_digest_telegram_counter_unavailable")
+        idempotency_key = "go-news-digest-default-" + self.run_id
+        queued = self.docker(
+            "exec", self.prefix + "-executor", "python", "/consolidated-fixtures/enqueue_news_digest.py",
+            "{}", idempotency_key, check=False,
+        )
+        try:
+            accepted = json.loads(queued.stdout.strip().splitlines()[-1]) if queued.returncode == 0 else None
+        except (ValueError, IndexError):
+            accepted = None
+        job_id = accepted.get("job_id") if isinstance(accepted, dict) else None
+        if not isinstance(job_id, str) or re.fullmatch(
+                r"[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}", job_id) is None:
+            raise GateFailure("default_news_digest_job_not_accepted")
+
+        job = self.wait_job_http(job_id, timeout=180)
+        raw_parts = self.pg_value(
+            "SELECT COALESCE(result->>'parts_sent','') FROM background_jobs WHERE id='" + job_id + "'::uuid"
+        )
+        parts_sent = int(raw_parts) if raw_parts.isdigit() else None
+        after = self.fake_counters_http().get("providers", {}).get("telegram")
+        self.report["default_news_digest_authority"] = {
+            "status": job.get("status"),
+            "error_code": self._safe_code(job.get("error_code")),
+            "parts_sent": parts_sent,
+            "telegram_count_before": before,
+            "telegram_count_after": after if type(after) is int and after >= 0 else None,
+        }
+        self.check("news_digest_omitted_flags_authority_and_delivery",
+                   job.get("status") == "succeeded" and job.get("error_code") is None
+                   and isinstance(parts_sent, int) and parts_sent > 0
+                   and type(after) is int and after > before)
+
     def verify_bounded_sigterm(self):
         name = self.prefix + "-background"
         container_id = self.docker("inspect", "--format", "{{.Id}}", name).stdout.strip()
@@ -1368,6 +1405,7 @@ class ConsolidatedBackgroundGate(GoWebGate):
         self.check("background_container_pid_stable_before_worker_only_recovery",
                    pre_recovery_identity["container_id"] == bg_id and pre_recovery_identity["pid"] == str(bg_pid))
         self.capture_consolidated_resources("load_after_web_pipeline")
+        self.verify_default_news_digest_authority()
         self.verify_ambiguous_delivery_recovery()
         self.verify_lease_loss_recovery(bg_id, bg_pid)
         self.capture_consolidated_resources("after_worker_recovery")
