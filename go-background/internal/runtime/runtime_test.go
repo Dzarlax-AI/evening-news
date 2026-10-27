@@ -9,6 +9,7 @@ import (
 	"net/http/httptest"
 	"strings"
 	"sync/atomic"
+	"syscall"
 	"testing"
 	"time"
 
@@ -22,6 +23,91 @@ import (
 func testConfig() config.Config {
 	return config.Config{BuildID: "test-build", HealthAddr: "127.0.0.1:0", ShutdownTimeout: time.Second, BackoffMin: 5 * time.Millisecond, BackoffMax: 20 * time.Millisecond, ProbeInterval: 15 * time.Millisecond, ProbeTimeout: 30 * time.Millisecond}
 }
+
+func TestLocalServiceURLPreservesExplicitHost(t *testing.T) {
+	tests := []struct {
+		addr, want string
+	}{
+		{"127.0.0.1:8093", "http://127.0.0.1:8093"},
+		{"localhost:8093", "http://localhost:8093"},
+		{"[::1]:8093", "http://[::1]:8093"},
+		{"0.0.0.0:8093", "http://127.0.0.1:8093"},
+		{"[::]:8093", "http://127.0.0.1:8093"},
+		{"[fe80::1%lo0]:8093", "http://[fe80::1%25lo0]:8093"},
+		{"bad-listener", ""},
+	}
+	for _, tc := range tests {
+		t.Run(tc.addr, func(t *testing.T) {
+			if got := localServiceURL(tc.addr); got != tc.want {
+				t.Fatalf("localServiceURL(%q) = %q, want %q", tc.addr, got, tc.want)
+			}
+		})
+	}
+}
+
+func TestLocalServiceURLIPv6LoopbackHTTP(t *testing.T) {
+	listener, err := net.Listen("tcp6", "[::1]:0")
+	if err != nil {
+		if errors.Is(err, syscall.EAFNOSUPPORT) || errors.Is(err, syscall.EPROTONOSUPPORT) || errors.Is(err, syscall.EADDRNOTAVAIL) {
+			t.Skipf("IPv6 loopback is unavailable in this kernel: %v", err)
+		}
+		t.Fatalf("listen on IPv6 loopback: %v", err)
+	}
+	const token = "fixture-token-with-enough-bytes"
+	server := &http.Server{Handler: http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		switch r.URL.Path {
+		case "/healthz":
+			w.WriteHeader(http.StatusOK)
+		case "/internal/v1/status":
+			if r.Header.Get("Authorization") != "Bearer "+token {
+				w.WriteHeader(http.StatusUnauthorized)
+				return
+			}
+			_ = json.NewEncoder(w).Encode(map[string]any{
+				"executor_instance_id": "fixture-instance",
+				"active_executions":    0,
+				"ready":                true,
+			})
+		default:
+			http.NotFound(w, r)
+		}
+	})}
+	serveDone := make(chan error, 1)
+	go func() { serveDone <- server.Serve(listener) }()
+	defer func() {
+		_ = server.Close()
+		<-serveDone
+	}()
+
+	url := localServiceURL(listener.Addr().String())
+	if !strings.HasPrefix(url, "http://[::1]:") {
+		t.Fatalf("IPv6 listener URL = %q", url)
+	}
+	ctx, cancel := context.WithTimeout(context.Background(), time.Second)
+	defer cancel()
+	req, err := http.NewRequestWithContext(ctx, http.MethodGet, url+"/healthz", nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+	resp, err := (&http.Client{Timeout: time.Second}).Do(req)
+	if err != nil {
+		t.Fatalf("request to preserved IPv6 listener failed: %v", err)
+	}
+	defer resp.Body.Close()
+	if resp.StatusCode != http.StatusOK {
+		t.Fatalf("IPv6 listener response status = %d, want %d", resp.StatusCode, http.StatusOK)
+	}
+	if err := getHealth(ctx, listener.Addr().String(), "/healthz"); err != nil {
+		t.Fatalf("health probe through shared URL builder failed: %v", err)
+	}
+	cfg := testConfig()
+	cfg.ExecutionListenAddr = listener.Addr().String()
+	cfg.Execution.Token = token
+	if err := executionReady(ctx, cfg); err != nil {
+		t.Fatalf("execution readiness probe through shared URL builder failed: %v", err)
+	}
+}
+
 func baseDeps() dependencies {
 	wait := func(ctx context.Context, ready func()) error { ready(); <-ctx.Done(); return nil }
 	waitWithHealth := func(ctx context.Context, ready func(), health func(time.Time)) error {

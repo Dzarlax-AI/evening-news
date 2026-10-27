@@ -363,14 +363,17 @@ func domainConfig(cfg config.Config) orchestration.DomainConfig {
 }
 
 func localServiceURL(addr string) string {
-	_, port, err := net.SplitHostPort(addr)
+	host, port, err := net.SplitHostPort(addr)
 	if err != nil {
 		return ""
 	}
-	return "http://127.0.0.1:" + port
+	if host == "" || host == "0.0.0.0" || host == "::" {
+		host = "127.0.0.1"
+	}
+	return (&url.URL{Scheme: "http", Host: net.JoinHostPort(host, port)}).String()
 }
 
-// Run starts the four internal components under a single process lifecycle.
+// Run starts the five internal components under a single process lifecycle.
 // The caller owns ctx and should provide the process signal handler.
 func Run(ctx context.Context, cfg config.Config) error {
 	return run(ctx, cfg, productionDependencies())
@@ -945,14 +948,11 @@ func executorReady(ctx context.Context, cfg worker.Config) error {
 }
 
 func executionReady(ctx context.Context, cfg config.Config) error {
-	host, port, err := net.SplitHostPort(cfg.ExecutionListenAddr)
-	if err != nil {
+	baseURL := localServiceURL(cfg.ExecutionListenAddr)
+	if baseURL == "" {
 		return errors.New("execution service unavailable")
 	}
-	if host == "" || host == "0.0.0.0" || host == "::" {
-		host = "127.0.0.1"
-	}
-	req, err := http.NewRequestWithContext(ctx, http.MethodGet, "http://"+net.JoinHostPort(host, port)+"/internal/v1/status", nil)
+	req, err := http.NewRequestWithContext(ctx, http.MethodGet, baseURL+"/internal/v1/status", nil)
 	if err != nil {
 		return errors.New("execution service unavailable")
 	}
@@ -998,14 +998,11 @@ func processingReady(ctx context.Context, c processing.Config) error {
 	return getHealth(ctx, c.ListenAddr, "/healthz")
 }
 func getHealth(ctx context.Context, addr, path string) error {
-	host, port, err := net.SplitHostPort(addr)
-	if err != nil {
+	baseURL := localServiceURL(addr)
+	if baseURL == "" {
 		return errors.New("component unavailable")
 	}
-	if host == "" || host == "0.0.0.0" || host == "::" {
-		host = "127.0.0.1"
-	}
-	req, err := http.NewRequestWithContext(ctx, http.MethodGet, "http://"+net.JoinHostPort(host, port)+path, nil)
+	req, err := http.NewRequestWithContext(ctx, http.MethodGet, baseURL+path, nil)
 	if err != nil {
 		return errors.New("component unavailable")
 	}
