@@ -238,6 +238,138 @@ func TestPostgresFencedArticleCommitAndQueuePrivilegeBoundary(t *testing.T) {
 	if err := lease.QueryRow(ctx, `SELECT COUNT(*) FROM articles`).Scan(&articleCount); err != nil || articleCount != 1 {
 		t.Fatalf("late cancelled commit changed articles: count=%d err=%v", articleCount, err)
 	}
+	beginURLSourceRun := func(attempt int32) Fence {
+		jobID := fmt.Sprintf("10000000-0000-4000-8000-%012d", 100+attempt)
+		executorID := fmt.Sprintf("30000000-0000-4000-8000-%012d", 100+attempt)
+		next := newFencedRun(jobID, executorID, attempt)
+		if _, ok, err := s.BeginSource(ctx, next, source); err != nil || !ok {
+			t.Fatalf("begin URL collision source run %d: ok=%v err=%v", attempt, ok, err)
+		}
+		return next
+	}
+	insertURLPair := func(canonicalURL, aliasURL, canonicalTitle, aliasTitle string) {
+		t.Helper()
+		_, err := lease.Exec(ctx, `INSERT INTO articles(source_id,title,url,fetched_at,processed,summary_processed,category_processed,processing_state,processing_attempts,is_advertisement,ad_confidence,ad_markers,ad_processed) VALUES(42,$3,$4,now(),false,false,false,'pending',0,false,0,'[]',false),(42,$1,$2,now(),false,false,false,'pending',0,false,0,'[]',false)`, canonicalTitle, canonicalURL, aliasTitle, aliasURL)
+		if err != nil {
+			t.Fatalf("insert canonical and alias rows: %v", err)
+		}
+	}
+	articleForURLs := func(title, canonicalURL, aliasURL string) Article {
+		return Article{Title: title, URL: canonicalURL, SourceType: source.Type, SourceName: source.Name, RawData: map[string]any{"telegram_url": aliasURL}}
+	}
+	// The alias is inserted first and sorts before the canonical URL; lookup
+	// must still honor candidateURLs' canonical-first order.
+	canonicalURL, aliasURL := "https://z.example/story", "https://t.me/channel/123"
+	insertURLPair(canonicalURL, aliasURL, "canonical before update", "alias stays intact")
+	urlFence := beginURLSourceRun(6)
+	urlCounts, err := s.CommitSource(ctx, urlFence, source, []Article{articleForURLs("canonical updated", canonicalURL, aliasURL)}, "success", "", nil)
+	if err != nil || urlCounts.Updated != 1 || urlCounts.Saved != 0 || urlCounts.Skipped != 0 {
+		t.Fatalf("canonical URL must win duplicate lookup: counts=%+v err=%v", urlCounts, err)
+	}
+	var canonicalTitle, aliasTitle, receiptState string
+	var receiptUpdated, receiptSkipped int
+	if err := lease.QueryRow(ctx, `SELECT title FROM articles WHERE url=$1`, canonicalURL).Scan(&canonicalTitle); err != nil {
+		t.Fatal(err)
+	}
+	if err := lease.QueryRow(ctx, `SELECT title FROM articles WHERE url=$1`, aliasURL).Scan(&aliasTitle); err != nil {
+		t.Fatal(err)
+	}
+	if err := lease.QueryRow(ctx, `SELECT state,updated,skipped FROM article_ingestion_source_runs WHERE run_id=$1 AND source_id=42`, urlFence.RunID).Scan(&receiptState, &receiptUpdated, &receiptSkipped); err != nil {
+		t.Fatal(err)
+	}
+	if err := lease.QueryRow(ctx, `SELECT result::text FROM article_ingestion_runs WHERE id=$1`, urlFence.RunID).Scan(&runResult); err != nil {
+		t.Fatal(err)
+	}
+	if canonicalTitle != "canonical updated" || aliasTitle != "alias stays intact" || receiptState != "succeeded" || receiptUpdated != 1 || receiptSkipped != 0 || !strings.Contains(runResult, `"sources_completed": 1`) || !strings.Contains(runResult, `"articles_fetched": 1`) {
+		t.Fatalf("canonical URL commit lost metadata, alias, or progress: canonical=%q alias=%q receipt=%s/%d/%d result=%s", canonicalTitle, aliasTitle, receiptState, receiptUpdated, receiptSkipped, runResult)
+	}
+	// A direct alias update can collide if another row owns the incoming
+	// canonical URL. The savepoint must leave its caller transaction usable.
+	conflictCanonicalURL, conflictAliasURL := "https://fixture.invalid/b-collision-canonical", "https://fixture.invalid/b-collision-alias"
+	insertURLPair(conflictCanonicalURL, conflictAliasURL, "canonical owner", "old alias metadata")
+	conflictFence := beginURLSourceRun(7)
+	conflictTx, err := s.Pool.Begin(ctx)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer rollback(conflictTx)
+	var aliasRow dbArticle
+	if err := conflictTx.QueryRow(ctx, `SELECT id,title,url,COALESCE(content,''),COALESCE(summary,''),COALESCE(image_url,''),processed FROM articles WHERE url=$1`, conflictAliasURL).Scan(&aliasRow.ID, &aliasRow.Title, &aliasRow.URL, &aliasRow.Content, &aliasRow.Summary, &aliasRow.ImageURL, &aliasRow.Processed); err != nil {
+		t.Fatal(err)
+	}
+	conflictArticle := articleForURLs("new alias metadata", conflictCanonicalURL, conflictAliasURL)
+	updatedAlias, updateErr := updateExisting(ctx, conflictTx, aliasRow, conflictArticle)
+	if updateErr != nil || updatedAlias {
+		t.Fatalf("canonical conflict should be a skipped alias update: updated=%v err=%v", updatedAlias, updateErr)
+	}
+	var unchangedAliasTitle, unchangedAliasURL string
+	if err := conflictTx.QueryRow(ctx, `SELECT title,url FROM articles WHERE id=$1`, aliasRow.ID).Scan(&unchangedAliasTitle, &unchangedAliasURL); err != nil {
+		t.Fatalf("parent transaction unusable after alias conflict: %v", err)
+	}
+	validArticle := Article{Title: "valid after alias conflict", URL: "https://fixture.invalid/b-valid", SourceType: source.Type, SourceName: source.Name}
+	if err := insertArticle(ctx, conflictTx, source.ID, validArticle, time.Now().UTC()); err != nil {
+		t.Fatalf("valid article insert after alias conflict: %v", err)
+	}
+	conflictCounts := CommitCounts{Candidates: 2, Saved: 1, Skipped: 1}
+	if _, err := conflictTx.Exec(ctx, `UPDATE sources SET last_fetch=$2 WHERE id=$1`, source.ID, time.Now().UTC()); err != nil {
+		t.Fatalf("source metadata update after alias conflict: %v", err)
+	}
+	if err := saveSourceRun(ctx, conflictTx, conflictFence, source, conflictCounts, "success", "", time.Now().UTC(), ""); err != nil {
+		t.Fatalf("source receipt after alias conflict: %v", err)
+	}
+	if err := updateRunProgress(ctx, conflictTx, conflictFence, source.ID, conflictCounts); err != nil {
+		t.Fatalf("source progress after alias conflict: %v", err)
+	}
+	if err := conflictTx.Commit(ctx); err != nil {
+		t.Fatalf("parent commit after alias conflict: %v", err)
+	}
+	if unchangedAliasTitle != "old alias metadata" || unchangedAliasURL != conflictAliasURL {
+		t.Fatalf("alias changed after unique conflict: title=%q url=%q", unchangedAliasTitle, unchangedAliasURL)
+	}
+	var conflictReceiptState string
+	var conflictSaved, conflictSkipped int
+	if err := lease.QueryRow(ctx, `SELECT state,saved,skipped FROM article_ingestion_source_runs WHERE run_id=$1 AND source_id=42`, conflictFence.RunID).Scan(&conflictReceiptState, &conflictSaved, &conflictSkipped); err != nil {
+		t.Fatal(err)
+	}
+	if conflictReceiptState != "succeeded" || conflictSaved != 1 || conflictSkipped != 1 {
+		t.Fatalf("source receipt did not commit after alias conflict: state=%s saved=%d skipped=%d", conflictReceiptState, conflictSaved, conflictSkipped)
+	}
+	var validArticleCount int
+	if err := lease.QueryRow(ctx, `SELECT COUNT(*) FROM articles WHERE url=$1`, validArticle.URL).Scan(&validArticleCount); err != nil || validArticleCount != 1 {
+		t.Fatalf("valid article did not persist after alias conflict: count=%d err=%v", validArticleCount, err)
+	}
+	var conflictRunResult string
+	if err := lease.QueryRow(ctx, `SELECT result::text FROM article_ingestion_runs WHERE id=$1`, conflictFence.RunID).Scan(&conflictRunResult); err != nil {
+		t.Fatal(err)
+	}
+	if !strings.Contains(conflictRunResult, `"sources_completed": 1`) || !strings.Contains(conflictRunResult, `"articles_fetched": 1`) {
+		t.Fatalf("source progress missing after alias conflict: %s", conflictRunResult)
+	}
+	// A completed canonical summary remains authoritative when an alias exists.
+	processedCanonicalURL, processedAliasURL := "https://fixture.invalid/c-processed-canonical", "https://fixture.invalid/c-processed-alias"
+	insertURLPair(processedCanonicalURL, processedAliasURL, "processed canonical", "processed alias")
+	if _, err := lease.Exec(ctx, `UPDATE articles SET processed=true,summary='preserve this summary' WHERE url=$1`, processedCanonicalURL); err != nil {
+		t.Fatal(err)
+	}
+	processedFence := beginURLSourceRun(8)
+	processedCounts, err := s.CommitSource(ctx, processedFence, source, []Article{articleForURLs("replacement title", processedCanonicalURL, processedAliasURL)}, "success", "", nil)
+	if err != nil || processedCounts.Skipped != 1 || processedCounts.Updated != 0 || processedCounts.Saved != 0 {
+		t.Fatalf("processed canonical summary policy changed: counts=%+v err=%v", processedCounts, err)
+	}
+	var preservedSummary, processedAliasTitle string
+	if err := lease.QueryRow(ctx, `SELECT summary FROM articles WHERE url=$1`, processedCanonicalURL).Scan(&preservedSummary); err != nil {
+		t.Fatal(err)
+	}
+	if err := lease.QueryRow(ctx, `SELECT title FROM articles WHERE url=$1`, processedAliasURL).Scan(&processedAliasTitle); err != nil {
+		t.Fatal(err)
+	}
+	var processedReceiptSkipped int
+	if err := lease.QueryRow(ctx, `SELECT skipped FROM article_ingestion_source_runs WHERE run_id=$1 AND source_id=42`, processedFence.RunID).Scan(&processedReceiptSkipped); err != nil {
+		t.Fatal(err)
+	}
+	if preservedSummary != "preserve this summary" || processedAliasTitle != "processed alias" || processedReceiptSkipped != 1 {
+		t.Fatalf("processed summary or alias changed: summary=%q alias=%q skipped=%d", preservedSummary, processedAliasTitle, processedReceiptSkipped)
+	}
 	failedFence := newFencedRun("10000000-0000-4000-8000-000000000003", "30000000-0000-4000-8000-000000000003", 5)
 	if err := restarted.UpdateRun(ctx, failedFence, "failed", map[string]any{"status": "error", "articles_fetched": 0}, "fixture_failure"); err != nil {
 		t.Fatalf("restricted runtime role could not finalize failed ingestion run: %v", err)

@@ -646,7 +646,7 @@ func findURLDuplicate(ctx context.Context, tx pgx.Tx, urls []string) (*dbArticle
 		return nil, nil
 	}
 	var a dbArticle
-	err := tx.QueryRow(ctx, `SELECT id,title,url,COALESCE(content,''),COALESCE(summary,''),COALESCE(image_url,''),processed FROM articles WHERE url=ANY($1::text[]) LIMIT 1 FOR UPDATE`, urls).Scan(&a.ID, &a.Title, &a.URL, &a.Content, &a.Summary, &a.ImageURL, &a.Processed)
+	err := tx.QueryRow(ctx, `SELECT id,title,url,COALESCE(content,''),COALESCE(summary,''),COALESCE(image_url,''),processed FROM articles WHERE url=ANY($1::text[]) ORDER BY array_position($1::text[],url),id LIMIT 1 FOR UPDATE`, urls).Scan(&a.ID, &a.Title, &a.URL, &a.Content, &a.Summary, &a.ImageURL, &a.Processed)
 	if errors.Is(err, pgx.ErrNoRows) {
 		return nil, nil
 	}
@@ -660,8 +660,22 @@ func updateExisting(ctx context.Context, tx pgx.Tx, old dbArticle, a Article) (b
 	if a.PublishedAt != nil {
 		published = a.PublishedAt.UTC()
 	}
-	result, err := tx.Exec(ctx, `UPDATE articles SET title=COALESCE(NULLIF($2,''),title),content=COALESCE($3,content),url=COALESCE(NULLIF($4,''),url),image_url=COALESCE($5,image_url),published_at=COALESCE($6,published_at),hash_content=COALESCE(NULLIF($7,''),hash_content) WHERE id=$1 AND NOT (processed IS TRUE AND COALESCE(summary,'')<>'')`, old.ID, a.Title, nullableNonempty(a.Content), a.URL, nullableNonempty(a.ImageURL), published, contentHash(a.Title, a.URL))
+	sp, err := tx.Begin(ctx)
 	if err != nil {
+		return false, errors.New("article metadata savepoint unavailable")
+	}
+	defer rollback(sp)
+	result, err := sp.Exec(ctx, `UPDATE articles SET title=COALESCE(NULLIF($2,''),title),content=COALESCE($3,content),url=COALESCE(NULLIF($4,''),url),image_url=COALESCE($5,image_url),published_at=COALESCE($6,published_at),hash_content=COALESCE(NULLIF($7,''),hash_content) WHERE id=$1 AND NOT (processed IS TRUE AND COALESCE(summary,'')<>'')`, old.ID, a.Title, nullableNonempty(a.Content), a.URL, nullableNonempty(a.ImageURL), published, contentHash(a.Title, a.URL))
+	if err != nil {
+		if pgCode(err) == "23505" {
+			if rollbackErr := sp.Rollback(ctx); rollbackErr != nil {
+				return false, errors.New("article metadata savepoint rollback failed")
+			}
+			return false, nil
+		}
+		return false, errors.New("article metadata update failed")
+	}
+	if err := sp.Commit(ctx); err != nil {
 		return false, errors.New("article metadata update failed")
 	}
 	return result.RowsAffected() == 1, nil
