@@ -131,14 +131,12 @@ async function loadSummaries(reset = true) {
 function loadMore() { loadSummaries(false); }
 
 let editorialStatusRequest = 0;
-function currentLocalDate() {
-    const now = new Date();
-    const pad = value => String(value).padStart(2, '0');
-    return `${now.getFullYear()}-${pad(now.getMonth() + 1)}-${pad(now.getDate())}`;
+function currentUTCDate(now = new Date()) {
+    return now.toISOString().slice(0, 10);
 }
 
 async function loadEditorialStatus(dateOverride = '') {
-    const date = dateOverride || document.getElementById('date-filter').value || currentLocalDate();
+    const date = dateOverride || document.getElementById('date-filter').value || currentUTCDate();
     const requestID = ++editorialStatusRequest;
     const section = document.querySelector('.sum-editorial-status');
     const message = document.getElementById('editorial-status-message');
@@ -232,7 +230,7 @@ function render() {
 async function generateDailySummaries() {
     const button = document.getElementById('generate-summaries-button');
     const generationState = document.getElementById('editorial-generation-state');
-    const today = currentLocalDate();
+    const today = currentUTCDate();
     button.disabled = true;
     generationState.dataset.state = 'pending';
     generationState.textContent = 'Задача генерации для сегодняшней даты запускается…';
