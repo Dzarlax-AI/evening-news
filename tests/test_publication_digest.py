@@ -1,6 +1,6 @@
 """Partial stage results are private to processing until publication is ready."""
 
-from datetime import date, datetime
+from datetime import datetime
 
 import pytest
 from sqlalchemy.orm import Session
@@ -20,6 +20,8 @@ def isolated():
 @pytest.mark.asyncio
 async def test_digest_excludes_incomplete_outcomes(isolated):
     queue, engine = isolated
+    # Database timestamps are naive UTC; keep eligibility independent of host time.
+    fixture_time = datetime(2026, 10, 27, 12, 30)
     with Session(engine) as db:
         source = Source(name='Fixture Source', source_type='rss', url='https://feed.example/test')
         category = Category(name='Tech', display_name='Tech')
@@ -28,21 +30,21 @@ async def test_digest_excludes_incomplete_outcomes(isolated):
         for index, state in enumerate(('completed', 'pending', 'retry_wait', 'rejected', 'exhausted'), 1):
             db.add(Article(id=index, title=f'Publication fixture {state}',
                 url=f'https://example.test/{index}', content='A source article.', summary='A saved partial summary.',
-                source_id=source.id, fetched_at=datetime.utcnow(), processing_state=state,
+                source_id=source.id, fetched_at=fixture_time, processing_state=state,
                 summary_processed=True, category_processed=True, ad_processed=state == 'completed',
                 is_advertisement=False))
             db.add(ArticleCategory(article_id=index, category_id=category.id, confidence=0.9, ai_category='Tech'))
         db.add(Article(id=6, title='Publication fixture confirmed ad', url='https://example.test/6',
             summary='An ad summary.', content='A promotion.', processing_state='rejected',
-            source_id=source.id, ad_processed=True, is_advertisement=True))
+            source_id=source.id, fetched_at=fixture_time, ad_processed=True, is_advertisement=True))
         db.add(Article(id=7, title='Publication fixture without category', url='https://example.test/7',
             summary='A completed but uncategorized article.', content='No category mapping.',
-            source_id=source.id, fetched_at=datetime.now(), processing_state='completed',
+            source_id=source.id, fetched_at=fixture_time, processing_state='completed',
             ad_processed=True, is_advertisement=False))
         db.commit()
 
     async def snapshot_articles(db):
-        rows = await _fetch_snapshot_rows(db, date.today())
+        rows = await _fetch_snapshot_rows(db, fixture_time.date())
         return _snapshot_articles(rows)
 
     selected = await queue.execute_read(snapshot_articles)
