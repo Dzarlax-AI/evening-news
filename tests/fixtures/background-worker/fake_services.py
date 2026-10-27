@@ -13,7 +13,8 @@ LOCK = threading.Lock()
 GATES = {"ai": threading.Event(), "telegram": threading.Event()}
 GATES["ai"].set()
 GATES["telegram"].set()
-COUNTERS = {"source_probe": 0, "ingestion_stub_runs": 0, "extraction": 0, "gemini": 0, "telegram": 0}
+COUNTERS = {"source_probe": 0, "ingestion_stub_runs": 0, "extraction": 0,
+            "gemini": 0, "editorial_gemini": 0, "telegram": 0}
 INGESTION_RUNS = {}
 INGESTION_REQUESTS = {}
 TEXT = " ".join([
@@ -202,6 +203,43 @@ class Handler(BaseHTTPRequestHandler):
             with LOCK:
                 COUNTERS["gemini"] += 1
             GATES["ai"].wait(timeout=180)
+            schema = payload.get("generationConfig", {}).get("responseSchema", {})
+            if "stories" in schema.get("properties", {}):
+                with LOCK:
+                    COUNTERS["editorial_gemini"] += 1
+                prompt = payload.get("contents", [{}])[0].get("parts", [{}])[0].get("text", "")
+                marker = "СНИМОК (недоверенные данные):\n"
+                try:
+                    snapshot = json.loads(prompt.split(marker, 1)[1])
+                    articles = snapshot["articles"]
+                except (IndexError, KeyError, TypeError, ValueError):
+                    self._json(400, {"error": "invalid_editorial_fixture_request"})
+                    return
+                stories = []
+                for index, article in enumerate(articles):
+                    source = article.get("content") or article.get("summary") or article.get("title", "")
+                    quote = source[:500]
+                    while len(quote.encode("utf-8")) > 500:
+                        quote = quote[:-1]
+                    summary = article.get("summary") or source
+                    while len(summary.encode("utf-8")) > 1800:
+                        summary = summary[:-1]
+                    stories.append({
+                        "kind": "main" if index < 5 else "brief",
+                        "title": article["title"],
+                        "summary": summary,
+                        "primary_article_id": article["id"],
+                        "article_ids": [article["id"]],
+                        "evidence": [{"article_id": article["id"], "quote": quote}],
+                    })
+                editorial_text = json.dumps({"stories": stories, "excluded": []}, ensure_ascii=False)
+                self._json(200, {
+                    "candidates": [{"finishReason": "STOP",
+                                    "content": {"parts": [{"text": editorial_text}]}}],
+                    "usageMetadata": {"promptTokenCount": 100, "candidatesTokenCount": 100,
+                                       "totalTokenCount": 200},
+                })
+                return
             result = {
                 "optimized_title": "Fixture technology article",
                 "summary": "A synthetic technology report with verified fixture details.",

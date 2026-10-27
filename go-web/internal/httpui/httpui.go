@@ -61,6 +61,7 @@ func (h *Handler) Register(mux *http.ServeMux) {
 	mux.HandleFunc("GET /list", h.listPage)
 	mux.HandleFunc("GET /search", h.searchPage)
 	mux.HandleFunc("GET /digest/{date}", h.digestPage)
+	mux.HandleFunc("GET /article/{articleID}", h.articlePage)
 	for _, path := range []string{"/news", "/feed", "/cards"} {
 		mux.HandleFunc("GET "+path, func(w http.ResponseWriter, r *http.Request) { http.Redirect(w, r, "/", http.StatusMovedPermanently) })
 	}
@@ -404,11 +405,63 @@ func (h *Handler) digestPage(w http.ResponseWriter, r *http.Request) {
 		writeProblem(w, 404, "Digest not found")
 		return
 	}
+	query := r.URL.Query()
+	localeValues, localeSupplied := query["locale"]
+	locale := "ru"
+	if localeSupplied {
+		if len(localeValues) != 1 || localeValues[0] != "ru" {
+			writeProblem(w, http.StatusNotFound, "Digest not found")
+			return
+		}
+		locale = localeValues[0]
+	}
+	if locale != "ru" {
+		writeProblem(w, http.StatusNotFound, "Digest not found")
+		return
+	}
+	editionValues, editionSupplied := query["edition"]
+	editionID := ""
+	if editionSupplied {
+		if len(editionValues) != 1 || !validUUID(editionValues[0]) {
+			writeProblem(w, http.StatusNotFound, "Digest not found")
+			return
+		}
+		editionID = editionValues[0]
+	}
+	if h.cfg.Reader == nil {
+		writeProblem(w, http.StatusServiceUnavailable, "Public data unavailable")
+		return
+	}
 	ctx, cancel := context.WithTimeout(r.Context(), 30*time.Second)
 	defer cancel()
+	editorial, supportsEditions := h.cfg.Reader.(repositories.EditorialDigestReader)
+	if editionID != "" && !supportsEditions {
+		writeProblem(w, http.StatusNotFound, "Digest not found")
+		return
+	}
+	if supportsEditions {
+		edition, readErr := editorial.EditorialDigest(ctx, date, editionID, locale)
+		if readErr != nil {
+			writeProblem(w, http.StatusServiceUnavailable, "Public data unavailable")
+			return
+		}
+		if editionID != "" && edition == nil {
+			writeProblem(w, http.StatusNotFound, "Digest not found")
+			return
+		}
+		if edition != nil {
+			if edition.Date != date.Format("2006-01-02") || edition.Locale != locale || edition.Edition.Locale != locale {
+				writeProblem(w, http.StatusNotFound, "Digest not found")
+				return
+			}
+			view := buildEditorialDigestView(date, edition)
+			h.renderPage(w, r, "public/digest.html", map[string]any{"Title": "Главное за " + date.Format("02.01.2006"), "Page": "digest", "Editorial": view})
+			return
+		}
+	}
 	page, err := h.cfg.Reader.Digest(ctx, date)
 	if err != nil {
-		writeProblem(w, 500, "Internal server error")
+		writeProblem(w, http.StatusServiceUnavailable, "Public data unavailable")
 		return
 	}
 	if len(page.Summaries) == 0 && len(page.Categories) == 0 {
@@ -416,7 +469,35 @@ func (h *Handler) digestPage(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	page.Date = date
-	h.renderPage(w, r, "public/digest.html", map[string]any{"Title": "Сводка новостей за " + date.Format("02.01.2006"), "Page": "digest", "Digest": page})
+	h.renderPage(w, r, "public/digest.html", map[string]any{"Title": "Главное за " + date.Format("02.01.2006"), "Page": "digest", "Legacy": buildLegacyDigestView(page)})
+}
+
+func (h *Handler) articlePage(w http.ResponseWriter, r *http.Request) {
+	id, err := strconv.ParseInt(r.PathValue("articleID"), 10, 64)
+	if err != nil || id < 1 {
+		writeProblem(w, http.StatusNotFound, "Article not found")
+		return
+	}
+	if h.cfg.Reader == nil {
+		writeProblem(w, http.StatusServiceUnavailable, "Public data unavailable")
+		return
+	}
+	ctx, cancel := context.WithTimeout(r.Context(), 5*time.Second)
+	defer cancel()
+	article, err := h.cfg.Reader.Article(ctx, id, false)
+	if err != nil {
+		writeProblem(w, http.StatusServiceUnavailable, "Public data unavailable")
+		return
+	}
+	if article == nil || article["is_advertisement"] == true {
+		writeProblem(w, http.StatusNotFound, "Article not found")
+		return
+	}
+	view := buildArticleView(id, article)
+	if view.Title == "" {
+		view.Title = "Статья"
+	}
+	h.renderPage(w, r, "public/article.html", map[string]any{"Title": view.Title, "Page": "article", "Article": view})
 }
 
 // RenderTemplate is shared with the admin page component. Dynamic values pass

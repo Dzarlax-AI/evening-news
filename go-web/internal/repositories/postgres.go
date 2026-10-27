@@ -702,3 +702,41 @@ func (p *Postgres) Digest(ctx context.Context, date time.Time) (DigestPage, erro
 	}
 	return page, nil
 }
+
+// EditorialDigest returns the requested immutable edition, or the latest
+// edition for the date and locale when editionID is empty. A missing table is
+// treated as an installation that has not yet enabled editorial editions, so
+// callers can continue to show the historical daily summaries.
+func (p *Postgres) EditorialDigest(ctx context.Context, date time.Time, editionID, locale string) (*EditorialDigestEdition, error) {
+	var tableName *string
+	if err := p.pool.QueryRow(ctx, `SELECT to_regclass('editorial_digest_editions')::text`).Scan(&tableName); err != nil {
+		return nil, err
+	}
+	if tableName == nil {
+		return nil, nil
+	}
+
+	var row pgx.Row
+	if editionID != "" {
+		row = p.pool.QueryRow(ctx, `SELECT id::text,edition_date::text,locale,snapshot_hash,snapshot,edition
+			FROM editorial_digest_editions WHERE edition_date=$1 AND locale=$2 AND id=$3::uuid`, date.Format("2006-01-02"), locale, editionID)
+	} else {
+		row = p.pool.QueryRow(ctx, `SELECT id::text,edition_date::text,locale,snapshot_hash,snapshot,edition
+			FROM editorial_digest_editions WHERE edition_date=$1 AND locale=$2 ORDER BY created_at DESC,id DESC LIMIT 1`, date.Format("2006-01-02"), locale)
+	}
+	var edition EditorialDigestEdition
+	var snapshotJSON, editionJSON []byte
+	if err := row.Scan(&edition.ID, &edition.Date, &edition.Locale, &edition.SnapshotHash, &snapshotJSON, &editionJSON); err != nil {
+		if errors.Is(err, pgx.ErrNoRows) {
+			return nil, nil
+		}
+		return nil, err
+	}
+	if err := json.Unmarshal(snapshotJSON, &edition.Snapshot); err != nil {
+		return nil, fmt.Errorf("decode editorial digest snapshot: %w", err)
+	}
+	if err := json.Unmarshal(editionJSON, &edition.Edition); err != nil {
+		return nil, fmt.Errorf("decode editorial digest content: %w", err)
+	}
+	return &edition, nil
+}

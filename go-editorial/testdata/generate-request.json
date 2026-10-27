@@ -1,0 +1,20 @@
+{
+  "operation": "generate",
+  "locale": "ru",
+  "snapshot": {
+    "date": "2026-10-27",
+    "cutoff_utc": "2026-10-27T18:00:00Z",
+    "site_base_url": "https://news.example",
+    "edition_url": "https://news.example/digest/2026-10-27?edition=fixture",
+    "articles": [
+      {"id":"1001","title":"Город начал строительство моста","summary":"","content":"Город сообщил о начале строительства нового моста через реку.","source_name":"Источник 1","url":"https://source.example/story/1?a=1&b=2","category_id":"4","category_name":"Технологии"},
+      {"id":"1002","title":"Началось строительство нового моста","summary":"","content":"Работы по строительству моста через реку начались сегодня.","source_name":"Источник 2","url":"https://source.example/story/2?a=1&b=2","category_id":"4","category_name":"Технологии"},
+      {"id":"1003","title":"Событие номер 3","summary":"","content":"Подтверждённый фрагмент материала 3.","source_name":"Источник 3","url":"https://source.example/story/3?a=1&b=2","category_id":"4","category_name":"Технологии"},
+      {"id":"1004","title":"Событие номер 4","summary":"","content":"Подтверждённый фрагмент материала 4.","source_name":"Источник 4","url":"https://source.example/story/4?a=1&b=2","category_id":"4","category_name":"Технологии"},
+      {"id":"1005","title":"<script>alert(1)</script> & «заголовок»","summary":"","content":"<img src=x onerror=alert(1)> заявляет: это проверяется.","source_name":"Источник 5","url":"https://source.example/story/5?a=1&b=2","category_id":"4","category_name":"Технологии"},
+      {"id":"1006","title":"Српске вести о мосту","summary":"","content":"Независимый текст на српском језику — фрагмент.","source_name":"Источник 6","url":"https://source.example/story/6?a=1&b=2","category_id":"4","category_name":"Технологии"},
+      {"id":"1007","title":"Событие номер 7","summary":"","content":"Источник пересказывает неподтверждённый слух; редакция не подтверждает сообщение.","source_name":"Источник 7","url":"https://source.example/story/7?a=1&b=2","category_id":"4","category_name":"Технологии"},
+      {"id":"1008","title":"Событие номер 8","summary":"","content":"Подтверждённый фрагмент материала 8.","source_name":"Источник 8","url":"https://source.example/story/8?a=1&b=2","category_id":"4","category_name":"Технологии"}
+    ]
+  }
+}

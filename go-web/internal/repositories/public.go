@@ -75,6 +75,74 @@ type DigestArticle struct {
 	FetchedAt  *time.Time
 }
 
+// EditorialDigestReader is an optional extension implemented by readers that
+// can load immutable editorial editions. Keeping it separate preserves the
+// existing public-reader contract for lightweight adapters and legacy tests.
+type EditorialDigestReader interface {
+	EditorialDigest(context.Context, time.Time, string, string) (*EditorialDigestEdition, error)
+}
+
+type EditorialDigestEdition struct {
+	ID           string                  `json:"id"`
+	Date         string                  `json:"date"`
+	Locale       string                  `json:"locale"`
+	SnapshotHash string                  `json:"snapshot_hash"`
+	Edition      EditorialDigestContent  `json:"edition"`
+	Snapshot     EditorialDigestSnapshot `json:"snapshot"`
+}
+
+type EditorialDigestContent struct {
+	Version            string                   `json:"version"`
+	Locale             string                   `json:"locale"`
+	Date               string                   `json:"date"`
+	CutoffUTC          string                   `json:"cutoff_utc"`
+	SiteBaseURL        string                   `json:"site_base_url"`
+	EditionURL         string                   `json:"edition_url"`
+	SourceSnapshotHash string                   `json:"source_snapshot_hash"`
+	ContentHash        string                   `json:"content_hash"`
+	Stories            []EditorialDigestStory   `json:"stories"`
+	Excluded           []EditorialDigestExclude `json:"excluded"`
+}
+
+type EditorialDigestStory struct {
+	ID               string                    `json:"id"`
+	Kind             string                    `json:"kind"`
+	Title            string                    `json:"title"`
+	Summary          string                    `json:"summary"`
+	PrimaryArticleID string                    `json:"primary_article_id"`
+	ArticleIDs       []string                  `json:"article_ids"`
+	Evidence         []EditorialDigestEvidence `json:"evidence"`
+}
+
+type EditorialDigestEvidence struct {
+	ArticleID string `json:"article_id"`
+	Quote     string `json:"quote"`
+}
+
+type EditorialDigestExclude struct {
+	ArticleID string `json:"article_id"`
+	Reason    string `json:"reason"`
+}
+
+type EditorialDigestSnapshot struct {
+	Date        string                   `json:"date"`
+	CutoffUTC   string                   `json:"cutoff_utc"`
+	SiteBaseURL string                   `json:"site_base_url"`
+	EditionURL  string                   `json:"edition_url"`
+	Articles    []EditorialDigestArticle `json:"articles"`
+}
+
+type EditorialDigestArticle struct {
+	ID           string `json:"id"`
+	Title        string `json:"title"`
+	Summary      string `json:"summary"`
+	Content      string `json:"content"`
+	SourceName   string `json:"source_name"`
+	URL          string `json:"url"`
+	CategoryID   string `json:"category_id"`
+	CategoryName string `json:"category_name"`
+}
+
 type APIFeedQuery struct {
 	Limit, Offset int
 	SinceHours    *int

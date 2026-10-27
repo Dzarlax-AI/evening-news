@@ -1129,7 +1129,11 @@ class ConsolidatedBackgroundGate(GoWebGate):
 
     def verify_default_news_digest_authority(self):
         """Exercise omitted digest flags through the real Go-to-Python authority path."""
-        before = self.fake_counters_http().get("providers", {}).get("telegram")
+        before_counters = self.fake_counters_http()
+        before = before_counters.get("providers", {}).get("telegram", before_counters.get("telegram"))
+        before_editorial = before_counters.get("providers", {}).get(
+            "editorial_gemini", before_counters.get("editorial_gemini")
+        )
         if type(before) is not int or before < 0:
             raise GateFailure("default_news_digest_telegram_counter_unavailable")
         idempotency_key = "go-news-digest-default-" + self.run_id
@@ -1151,18 +1155,39 @@ class ConsolidatedBackgroundGate(GoWebGate):
             "SELECT COALESCE(result->>'parts_sent','') FROM background_jobs WHERE id='" + job_id + "'::uuid"
         )
         parts_sent = int(raw_parts) if raw_parts.isdigit() else None
-        after = self.fake_counters_http().get("providers", {}).get("telegram")
+        edition_count_raw = self.pg_value(
+            "SELECT count(*) FROM editorial_digest_editions WHERE job_id='" + job_id + "'::uuid AND locale='ru'"
+        )
+        material_count_raw = self.pg_value(
+            "SELECT COALESCE(max(jsonb_array_length(snapshot->'articles')),0) "
+            "FROM editorial_digest_editions WHERE job_id='" + job_id + "'::uuid AND locale='ru'"
+        )
+        after_counters = self.fake_counters_http()
+        after = after_counters.get("providers", {}).get("telegram", after_counters.get("telegram"))
+        after_editorial = after_counters.get("providers", {}).get(
+            "editorial_gemini", after_counters.get("editorial_gemini")
+        )
+        edition_count = int(edition_count_raw) if edition_count_raw.isdigit() else 0
+        material_count = int(material_count_raw) if material_count_raw.isdigit() else 0
         self.report["default_news_digest_authority"] = {
             "status": job.get("status"),
             "error_code": self._safe_code(job.get("error_code")),
             "parts_sent": parts_sent,
             "telegram_count_before": before,
             "telegram_count_after": after if type(after) is int and after >= 0 else None,
+            "editorial_gemini_count_before": before_editorial,
+            "editorial_gemini_count_after": after_editorial,
+            "persisted_editions": edition_count,
+            "snapshot_materials": material_count,
         }
         self.check("news_digest_omitted_flags_authority_and_delivery",
                    job.get("status") == "succeeded" and job.get("error_code") is None
                    and isinstance(parts_sent, int) and parts_sent > 0
-                   and type(after) is int and after > before)
+                   and type(after) is int and type(before) is int and after > before)
+        self.check("news_digest_persists_complete_editorial_edition",
+                   edition_count == 1 and material_count > 0
+                   and type(before_editorial) is int and type(after_editorial) is int
+                   and after_editorial > before_editorial)
 
     def verify_bounded_sigterm(self):
         name = self.prefix + "-background"

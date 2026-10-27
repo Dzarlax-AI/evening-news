@@ -3,15 +3,17 @@
 
 
 {{define "content"}}
-<div style="display:flex;justify-content:space-between;align-items:center;margin-bottom:1rem;">
+<div style="display:flex;justify-content:space-between;align-items:center;gap:1rem;margin-bottom:1rem;flex-wrap:wrap;">
     <h1 style="margin:0;">Сводки</h1>
     <div style="display:flex;gap:8px;align-items:center;">
         <select id="category-filter" class="sum-select" onchange="loadSummaries()">
             <option value="">Все категории</option>
         </select>
         <input type="date" id="date-filter" class="sum-select" onchange="loadSummaries()">
+        <button class="btn btn--secondary" type="button" id="generate-summaries-button" onclick="generateDailySummaries()">Сформировать сводки</button>
     </div>
 </div>
+<p class="sum-help">После завершения генерации откройте выпуск за нужную дату прямо из списка.</p>
 
 <div id="summaries-container">
     <div style="text-align:center;padding:3rem;color:var(--text-muted);">Загрузка...</div>
@@ -39,6 +41,15 @@
 .sum-card-actions { display:flex; gap:.5rem; margin-top:.75rem; }
 .sum-copy-btn { padding:4px 10px; border:1px solid var(--border,#ddd); border-radius:5px; background:var(--surface,#fff); color:var(--text-muted); font-size:.75rem; cursor:pointer; }
 .sum-copy-btn:hover { background:var(--surface-hover,#f8f9fa); }
+.sum-help { margin:-.5rem 0 1rem; color:var(--text-muted); font-size:.85rem; }
+.sum-date-heading { display:flex; justify-content:space-between; align-items:baseline; gap:1rem; }
+.sum-preview-link { color:var(--text-color); font-size:.8rem; font-weight:500; text-transform:none; letter-spacing:0; text-decoration:underline; text-underline-offset:.2em; white-space:nowrap; }
+.sum-preview-link:hover { color:var(--primary-color); }
+@media (max-width:680px) {
+    .sum-select { min-height:40px; }
+    #generate-summaries-button { min-height:40px; }
+    .sum-date-heading { align-items:flex-start; flex-direction:column; gap:.35rem; }
+}
 </style>
 
 <script>
@@ -140,8 +151,31 @@ function render() {
             </div>`;
         }).join('');
 
-        return `<div class="sum-date-group"><div class="sum-date-header">${dateLabel}</div>${cards}</div>`;
+        const preview = /^\d{4}-\d{2}-\d{2}$/.test(date)
+            ? `<a class="sum-preview-link" href="/digest/${date}">Открыть выпуск</a>`
+            : '';
+        return `<div class="sum-date-group"><div class="sum-date-header sum-date-heading"><span>${dateLabel}</span>${preview}</div>${cards}</div>`;
     }).join('');
+}
+
+async function generateDailySummaries() {
+    const button = document.getElementById('generate-summaries-button');
+    button.disabled = true;
+    try {
+        const response = await apiRequest('/api/v1/summaries/generate', {
+            method: 'POST',
+            onJobUpdate: job => showNotification(
+                job.status === 'queued' ? 'Генерация поставлена в очередь' : 'Сводки генерируются', 'info'
+            )
+        });
+        if (!response.success) throw new Error(response.error || 'Не удалось поставить генерацию в очередь');
+        showNotification('Генерация сводок завершена', 'success');
+        await loadSummaries();
+    } catch (error) {
+        showNotification(error.message || 'Ошибка генерации сводок', 'error');
+    } finally {
+        button.disabled = false;
+    }
 }
 
 function toggleCard(id) {

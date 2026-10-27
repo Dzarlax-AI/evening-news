@@ -23,6 +23,9 @@ type fakeReader struct {
 	digest                    repositories.DigestPage
 	err                       error
 	articleIncludeUnpublished bool
+	digestCalls               int
+	articleID                 int64
+	articleCalls              int
 }
 
 func (f *fakeReader) Feed(_ context.Context, q repositories.FeedQuery) (repositories.FeedResponse, error) {
@@ -34,8 +37,10 @@ func (f *fakeReader) Feed(_ context.Context, q repositories.FeedQuery) (reposito
 	out.Offset = q.Offset
 	return out, nil
 }
-func (f *fakeReader) Article(_ context.Context, _ int64, include bool) (map[string]any, error) {
+func (f *fakeReader) Article(_ context.Context, id int64, include bool) (map[string]any, error) {
 	f.articleIncludeUnpublished = include
+	f.articleID = id
+	f.articleCalls++
 	if f.err != nil {
 		return nil, f.err
 	}
@@ -66,10 +71,26 @@ func (f *fakeReader) Search(_ context.Context, q repositories.SearchQuery) (map[
 	return map[string]any{"articles": []any{}, "query": q.Query, "results_count": 0}, nil
 }
 func (f *fakeReader) Digest(context.Context, time.Time) (repositories.DigestPage, error) {
+	f.digestCalls++
 	if f.err != nil {
 		return repositories.DigestPage{}, f.err
 	}
 	return f.digest, nil
+}
+
+type fakeEditorialReader struct {
+	*fakeReader
+	edition         *repositories.EditorialDigestEdition
+	requestedDate   time.Time
+	requestedID     string
+	requestedLocale string
+	editorialCalls  int
+}
+
+func (f *fakeEditorialReader) EditorialDigest(_ context.Context, date time.Time, editionID, locale string) (*repositories.EditorialDigestEdition, error) {
+	f.editorialCalls++
+	f.requestedDate, f.requestedID, f.requestedLocale = date, editionID, locale
+	return f.edition, f.err
 }
 func (f *fakeReader) APIFeed(context.Context, repositories.APIFeedQuery) (repositories.APIFeedResponse, error) {
 	if f.err != nil {
@@ -84,7 +105,7 @@ func (f *fakeReader) RSS(context.Context, int) ([]repositories.RSSArticle, error
 	return []repositories.RSSArticle{}, nil
 }
 
-func testHandler(reader *fakeReader) *Handler {
+func testHandler(reader repositories.PublicReader) *Handler {
 	return New(Config{Reader: reader, TemplatesDir: "../../templates", StaticDir: "../../../web/static", StartedAt: time.Date(2026, 10, 26, 10, 0, 0, 0, time.UTC), PublicAdmin: func(r *http.Request) bool { return r.Header.Get("X-Test-Admin") == "yes" }})
 }
 
@@ -163,7 +184,10 @@ func TestPublicArticlePassesOnlyAdminVisibilityFlag(t *testing.T) {
 }
 
 func TestDigestTemplateEscapesUntrustedArticleText(t *testing.T) {
-	reader := &fakeReader{digest: repositories.DigestPage{Summaries: []repositories.DigestSummary{{Category: "Tech", Text: "safe"}}, Categories: []repositories.DigestCategory{{Name: "Tech", Articles: []repositories.DigestArticle{{Title: `<script>alert(1)</script>`, URL: `javascript:alert(1)`, SourceName: `<b>source</b>`}}}}}}
+	reader := &fakeReader{digest: repositories.DigestPage{Summaries: []repositories.DigestSummary{{Category: "Tech", Text: "safe"}}, Categories: []repositories.DigestCategory{{Name: "Tech", Articles: []repositories.DigestArticle{
+		{ID: 5, Title: `<script>alert(1)</script>`, URL: `javascript:alert(1)`, SourceName: `unsafe`},
+		{ID: 6, Title: "Safe link", URL: "https://example.org/safe", SourceName: `<b>source</b>`},
+	}}}}}
 	h := testHandler(reader)
 	mux := http.NewServeMux()
 	h.Register(mux)
@@ -171,8 +195,129 @@ func TestDigestTemplateEscapesUntrustedArticleText(t *testing.T) {
 	if w.Code != 200 {
 		t.Fatalf("digest status=%d body=%s", w.Code, w.Body)
 	}
-	if strings.Contains(w.Body.String(), "<script>alert(1)</script>") || strings.Contains(w.Body.String(), `href="javascript:alert(1)"`) {
+	if strings.Contains(w.Body.String(), "<script>alert(1)</script>") || strings.Contains(w.Body.String(), `href="javascript:alert(1)"`) || !strings.Contains(w.Body.String(), "&lt;script&gt;alert(1)&lt;/script&gt;") || !strings.Contains(w.Body.String(), "&lt;b&gt;source&lt;/b&gt;") {
 		t.Fatalf("untrusted content escaped unsafely: %s", w.Body)
+	}
+}
+
+func TestEditorialDigestUsesPinnedImmutableEditionAndSourceLinks(t *testing.T) {
+	base := &fakeReader{}
+	reader := &fakeEditorialReader{fakeReader: base, edition: &repositories.EditorialDigestEdition{
+		ID: "8c93bb34-383d-449c-9e85-28aa9121a4fe", Date: "2026-10-26", Locale: "ru",
+		Edition: repositories.EditorialDigestContent{Locale: "ru", Stories: []repositories.EditorialDigestStory{
+			{ID: "main-1", Kind: "main", Title: "Главная история", Summary: "Замороженный вывод", PrimaryArticleID: "1", ArticleIDs: []string{"1", "2"}},
+			{ID: "brief-duplicate", Kind: "brief", Title: "Повтор главной темы", PrimaryArticleID: "2", ArticleIDs: []string{"2"}},
+			{ID: "brief-2", Kind: "brief", Title: "Короткая новость", Summary: "Кратко", PrimaryArticleID: "3", ArticleIDs: []string{"3"}},
+		}},
+		Snapshot: repositories.EditorialDigestSnapshot{Articles: []repositories.EditorialDigestArticle{
+			{ID: "1", SourceName: "Первый источник", URL: "https://one.example/story", CategoryName: "Технологии"},
+			{ID: "2", SourceName: "Второй источник", URL: "https://user:pass@two.example/story", CategoryName: "Технологии"},
+			{ID: "3", SourceName: "Поддельная ссылка", URL: "javascript:alert(1)", CategoryName: "Мир"},
+		}},
+	}}
+	mux := http.NewServeMux()
+	testHandler(reader).Register(mux)
+	w := request(mux, "GET", "/digest/2026-10-26?edition="+reader.edition.ID)
+	body := w.Body.String()
+	if w.Code != http.StatusOK {
+		t.Fatalf("digest status=%d body=%s", w.Code, body)
+	}
+	if reader.requestedID != reader.edition.ID || reader.requestedLocale != "ru" || reader.requestedDate.Format("2006-01-02") != "2026-10-26" {
+		t.Fatalf("edition selection args date=%s id=%q locale=%q", reader.requestedDate, reader.requestedID, reader.requestedLocale)
+	}
+	if strings.Contains(body, "Повтор главной темы") || strings.Contains(body, `href="javascript:alert(1)"`) || strings.Contains(body, "user:pass@two.example") {
+		t.Fatalf("duplicate or unsafe source was rendered: %s", body)
+	}
+	if !strings.Contains(body, `href="/article/1"`) || !strings.Contains(body, `href="https://one.example/story"`) || !strings.Contains(body, "Ссылка на этот выпуск") {
+		t.Fatalf("internal headline/source links or permalink are missing: %s", body)
+	}
+	if !strings.Contains(body, "Главное за день") || !strings.Contains(body, "Ещё коротко") || !strings.Contains(body, "Замороженный вывод") || !strings.Contains(body, "26 октября 2026") {
+		t.Fatalf("editorial hierarchy or frozen content missing: %s", body)
+	}
+	if base.digestCalls != 0 {
+		t.Fatalf("legacy reader was called despite a ready edition: %d", base.digestCalls)
+	}
+	if base.articleCalls != 0 {
+		t.Fatalf("edition page reread mutable articles: %d", base.articleCalls)
+	}
+}
+
+func TestEditorialDigestMissingPinnedEditionDoesNotFallBack(t *testing.T) {
+	pinnedID := "8c93bb34-383d-449c-9e85-28aa9121a4fe"
+	base := &fakeReader{digest: repositories.DigestPage{Summaries: []repositories.DigestSummary{{Category: "Архив", Text: "legacy"}}}}
+	reader := &fakeEditorialReader{fakeReader: base}
+	mux := http.NewServeMux()
+	testHandler(reader).Register(mux)
+	w := request(mux, "GET", "/digest/2026-10-26?edition=8c93bb34-383d-449c-9e85-28aa9121a4fe")
+	if w.Code != http.StatusNotFound || base.digestCalls != 0 {
+		t.Fatalf("explicit missing edition fell back: status=%d legacyCalls=%d body=%s", w.Code, base.digestCalls, w.Body)
+	}
+	legacyOnly := &fakeReader{digest: repositories.DigestPage{Summaries: []repositories.DigestSummary{{Category: "Архив", Text: "legacy"}}}}
+	legacyMux := http.NewServeMux()
+	testHandler(legacyOnly).Register(legacyMux)
+	w = request(legacyMux, "GET", "/digest/2026-10-26?edition=8c93bb34-383d-449c-9e85-28aa9121a4fe")
+	if w.Code != http.StatusNotFound || legacyOnly.digestCalls != 0 {
+		t.Fatalf("reader without edition support fell back for a pin: status=%d legacyCalls=%d", w.Code, legacyOnly.digestCalls)
+	}
+	w = request(mux, "GET", "/digest/2026-10-26?locale=sr")
+	if w.Code != http.StatusNotFound || reader.editorialCalls != 1 {
+		t.Fatalf("unsupported locale status=%d editionCalls=%d", w.Code, reader.editorialCalls)
+	}
+	for _, query := range []string{
+		"edition=", "edition=%20", "edition=" + pinnedID + "&edition=" + pinnedID,
+		"edition=" + pinnedID + "&edition=8c93bb34-383d-449c-9e85-28aa9121a4fd",
+		"locale=", "locale=ru&locale=ru",
+	} {
+		invalidReader := &fakeEditorialReader{fakeReader: &fakeReader{}}
+		invalidMux := http.NewServeMux()
+		testHandler(invalidReader).Register(invalidMux)
+		invalid := request(invalidMux, "GET", "/digest/2026-10-26?"+query)
+		if invalid.Code != http.StatusNotFound || invalidReader.editorialCalls != 0 || invalidReader.digestCalls != 0 {
+			t.Errorf("invalid explicit query %q reached readers or fell back: status=%d editorial=%d legacy=%d", query, invalid.Code, invalidReader.editorialCalls, invalidReader.digestCalls)
+		}
+	}
+}
+
+func TestRussianDigestCountForms(t *testing.T) {
+	for _, test := range []struct {
+		count int
+		want  string
+	}{
+		{1, "1 главный сюжет"},
+		{2, "2 главных сюжета"},
+		{5, "5 главных сюжетов"},
+		{11, "11 главных сюжетов"},
+		{21, "21 главный сюжет"},
+	} {
+		if got := russianCount(test.count, "главный сюжет", "главных сюжета", "главных сюжетов"); got != test.want {
+			t.Errorf("russianCount(%d)=%q want %q", test.count, got, test.want)
+		}
+	}
+}
+
+func TestLegacyDigestAndServerRenderedArticleStayOnInternalReader(t *testing.T) {
+	reader := &fakeReader{digest: repositories.DigestPage{Date: time.Date(2026, 10, 26, 0, 0, 0, 0, time.UTC), Categories: []repositories.DigestCategory{{Name: "Технологии", Articles: []repositories.DigestArticle{{ID: 42, Title: "Архивная история", URL: "javascript:alert(1)", SourceName: "Оригинал"}}}}}, article: map[string]any{"title": `<img src=x onerror=alert(1)>`, "summary": "Краткое описание", "content": "Обычный текст", "url": "https://news.example/story", "source_name": "Источник", "category": "Новости", "published_at": "2026-10-27T16:30:00"}}
+	mux := http.NewServeMux()
+	h := testHandler(reader)
+	h.Register(mux)
+	w := request(mux, "GET", "/digest/2026-10-26")
+	if w.Code != http.StatusOK || !strings.Contains(w.Body.String(), `href="/article/42"`) || strings.Contains(w.Body.String(), `href="javascript:alert(1)"`) {
+		t.Fatalf("legacy digest links were not safe: status=%d body=%s", w.Code, w.Body)
+	}
+	req := httptest.NewRequest("GET", "/article/42", nil)
+	req.Header.Set("X-Test-Admin", "yes")
+	w = httptest.NewRecorder()
+	mux.ServeHTTP(w, req)
+	if w.Code != http.StatusOK || reader.articleIncludeUnpublished || reader.articleID != 42 {
+		t.Fatalf("article view visibility/id wrong: status=%d include=%t id=%d body=%s", w.Code, reader.articleIncludeUnpublished, reader.articleID, w.Body)
+	}
+	if strings.Contains(w.Body.String(), `<img src=x onerror=alert(1)>`) || !strings.Contains(w.Body.String(), "Краткое описание") || !strings.Contains(w.Body.String(), `href="https://news.example/story"`) || !strings.Contains(w.Body.String(), `datetime="2026-10-27T16:30:00Z"`) || !strings.Contains(w.Body.String(), "27.10.2026, 16:30 UTC") {
+		t.Fatalf("article content escaped/rendered incorrectly: %s", w.Body)
+	}
+	reader.article = nil
+	w = request(mux, "GET", "/article/999")
+	if w.Code != http.StatusNotFound {
+		t.Fatalf("unavailable article status=%d", w.Code)
 	}
 }
 
