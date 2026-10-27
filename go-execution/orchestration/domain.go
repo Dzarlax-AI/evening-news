@@ -33,6 +33,7 @@ func (e *DomainOperationError) Error() string { return "domain operation failed"
 
 var ErrStaleFence = errors.New("stale execution fence")
 var ErrDomainAuth = errors.New("domain service rejected credentials")
+var ErrDomainBusy = errors.New("domain service is at capacity")
 
 type DomainConfig struct {
 	BaseURL      string
@@ -147,8 +148,11 @@ func (d *DomainClient) ExecutePinned(ctx context.Context, fence execution.Execut
 	}
 	path := "/internal/v1/domain-operations"
 	var receipt domainReceipt
-	err = d.request(ctx, http.MethodPost, path, instance, body, http.StatusAccepted, &receipt)
+	err = d.postWithBusyRetry(ctx, path, instance, body, &receipt)
 	if err != nil {
+		if errors.Is(err, ErrDomainBusy) || ctx.Err() != nil {
+			return nil, err
+		}
 		// The POST may have committed. Reconcile the exact operation once; never
 		// replay the POST, including when the status endpoint says 404.
 		receipt, err = d.read(ctx, fence, instance, op, opID)
@@ -202,6 +206,29 @@ func (d *DomainClient) ExecutePinned(ctx context.Context, fence execution.Execut
 	}
 }
 
+func (d *DomainClient) postWithBusyRetry(ctx context.Context, path, instance string, body []byte, receipt *domainReceipt) error {
+	delay := 100 * time.Millisecond
+	for {
+		err := d.request(ctx, http.MethodPost, path, instance, body, http.StatusAccepted, receipt)
+		if !errors.Is(err, ErrDomainBusy) {
+			return err
+		}
+		timer := time.NewTimer(delay)
+		select {
+		case <-ctx.Done():
+			timer.Stop()
+			return ctx.Err()
+		case <-timer.C:
+		}
+		if delay < time.Second {
+			delay *= 2
+			if delay > time.Second {
+				delay = time.Second
+			}
+		}
+	}
+}
+
 func operationUUID(f execution.ExecutionContext, operation, logicalID string) string {
 	data, _ := json.Marshal([]string{f.JobID, fmt.Sprint(f.AttemptGeneration), operation, logicalID})
 	sum := sha256.Sum256(append([]byte(domainOperationIDNamespace), data...))
@@ -249,6 +276,9 @@ func (d *DomainClient) request(ctx context.Context, method, path, instance strin
 		return errors.New("domain service unavailable")
 	}
 	defer resp.Body.Close()
+	if resp.StatusCode == http.StatusTooManyRequests && method == http.MethodPost {
+		return ErrDomainBusy
+	}
 	data, err := io.ReadAll(io.LimitReader(resp.Body, maxDomainBody+1))
 	if err != nil || len(data) > maxDomainBody {
 		return errors.New("domain service response exceeded its limit")

@@ -4,8 +4,10 @@ import (
 	"context"
 	"encoding/json"
 	"fmt"
+	"net"
 	"net/http"
 	"net/http/httptest"
+	"net/url"
 	"os"
 	"strings"
 	"testing"
@@ -23,7 +25,10 @@ func TestLegacyAdapterPostgresFinalizationAndRecovery(t *testing.T) {
 		dsn = os.Getenv("EXECUTION_FIXTURE_DSN")
 	}
 	if dsn == "" {
-		t.Fatal("TEST_DATABASE_URL (or EXECUTION_FIXTURE_DSN) is required for PostgreSQL orchestration tests")
+		t.Skip("TEST_DATABASE_URL (or EXECUTION_FIXTURE_DSN) is required for PostgreSQL orchestration tests")
+	}
+	if !isLoopbackPostgresDSN(dsn) {
+		t.Fatal("orchestration PostgreSQL tests require a loopback-only test database URL")
 	}
 	ctx, cancel := context.WithTimeout(context.Background(), 30*time.Second)
 	defer cancel()
@@ -204,6 +209,37 @@ func TestLegacyAdapterPostgresFinalizationAndRecovery(t *testing.T) {
 	if schedStatus != "delivery_unknown" || running || lastErr == nil {
 		t.Fatalf("recovered schedule status=%s running=%v error=%v", schedStatus, running, lastErr)
 	}
+}
+
+func TestLoopbackPostgresDSNValidation(t *testing.T) {
+	for _, tc := range []struct {
+		dsn  string
+		want bool
+	}{
+		{"postgres://user:pass@127.0.0.1/db", true},
+		{"postgresql://user:pass@[::1]:5432/db", true},
+		{"postgres://user:pass@localhost/db", true},
+		{"postgres://user:pass@db.internal/db", false},
+		{"postgres://user:pass@192.0.2.1/db", false},
+		{"not a url", false},
+	} {
+		if got := isLoopbackPostgresDSN(tc.dsn); got != tc.want {
+			t.Errorf("isLoopbackPostgresDSN(%q)=%v want %v", tc.dsn, got, tc.want)
+		}
+	}
+}
+
+func isLoopbackPostgresDSN(dsn string) bool {
+	u, err := url.Parse(dsn)
+	if err != nil || (u.Scheme != "postgres" && u.Scheme != "postgresql") || u.Hostname() == "" {
+		return false
+	}
+	host := u.Hostname()
+	if strings.EqualFold(host, "localhost") {
+		return true
+	}
+	ip := net.ParseIP(host)
+	return ip != nil && ip.IsLoopback()
 }
 
 func connectLockConn(t *testing.T, ctx context.Context, dsn, schema string, xor int64) *pgx.Conn {

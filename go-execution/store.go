@@ -328,7 +328,7 @@ func (s *Server) loadReceiptTx(ctx context.Context, tx pgx.Tx, key attemptKey, r
 	return scanReceipt(tx.QueryRow(ctx, receiptSQL, key.job, key.attempt), r)
 }
 
-const receiptSQL = `SELECT job_id::text,attempt_generation,owner_id,worker_generation,to_char(deadline_at AT TIME ZONE 'UTC','YYYY-MM-DD"T"HH24:MI:SS.US')||'Z',executor_instance_id::text,state,to_char(accepted_at,'YYYY-MM-DD"T"HH24:MI:SS.US'),COALESCE(to_char(started_at,'YYYY-MM-DD"T"HH24:MI:SS.US'),''),COALESCE(to_char(finished_at,'YYYY-MM-DD"T"HH24:MI:SS.US'),''),COALESCE(result::text,'null'),error_code,envelope_sha256 FROM background_job_executions WHERE job_id=$1 AND attempt_generation=$2`
+const receiptSQL = `SELECT job_id::text,attempt_generation,owner_id,worker_generation,to_char(deadline_at,'YYYY-MM-DD"T"HH24:MI:SS.US')||'Z',executor_instance_id::text,state,to_char(accepted_at,'YYYY-MM-DD"T"HH24:MI:SS.US'),COALESCE(to_char(started_at,'YYYY-MM-DD"T"HH24:MI:SS.US'),''),COALESCE(to_char(finished_at,'YYYY-MM-DD"T"HH24:MI:SS.US'),''),COALESCE(result::text,'null'),error_code,envelope_sha256 FROM background_job_executions WHERE job_id=$1 AND attempt_generation=$2`
 
 func scanReceipt(row interface{ Scan(...any) error }, r *Receipt) error {
 	var owner, deadline *string

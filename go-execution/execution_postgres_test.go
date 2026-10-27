@@ -500,3 +500,181 @@ func TestPostgresAcceptFenceContextCancelAndDuplicate(t *testing.T) {
 		t.Fatalf("late result escaped executor guard: receipt=%s result=%s job=%s", guardState, guardResult, guardJobState)
 	}
 }
+
+func TestPostgresReceiptDeadlineIsUTCAcrossSessionTimezones(t *testing.T) {
+	dsn := os.Getenv("TEST_DATABASE_URL")
+	if dsn == "" {
+		t.Skip("TEST_DATABASE_URL is required for PostgreSQL execution tests")
+	}
+	parsedURL, err := url.Parse(dsn)
+	if err != nil || (parsedURL.Hostname() != "127.0.0.1" && parsedURL.Hostname() != "localhost" && parsedURL.Hostname() != "::1") {
+		t.Fatal("execution tests require a loopback-only TEST_DATABASE_URL")
+	}
+	for _, zone := range []string{"Europe/Belgrade", "America/New_York"} {
+		t.Run(zone, func(t *testing.T) {
+			ctx, cancel := context.WithTimeout(context.Background(), 20*time.Second)
+			defer cancel()
+			admin, err := pgx.Connect(ctx, dsn)
+			if err != nil {
+				t.Fatalf("connect fixture: %v", err)
+			}
+			defer closeConn(admin)
+			schema := fmt.Sprintf("go_execution_tz_%d", time.Now().UnixNano())
+			quotedSchema := pgx.Identifier{schema}.Sanitize()
+			if _, err = admin.Exec(ctx, `CREATE SCHEMA `+quotedSchema); err != nil {
+				t.Fatalf("create isolated schema: %v", err)
+			}
+			defer func() { _, _ = admin.Exec(context.Background(), `DROP SCHEMA `+quotedSchema+` CASCADE`) }()
+			if _, err = admin.Exec(ctx, `SET search_path TO `+quotedSchema); err != nil {
+				t.Fatal(err)
+			}
+			for _, ddl := range []string{
+				`CREATE TABLE background_worker_status(id integer PRIMARY KEY,generation integer NOT NULL,owner_id uuid,lock_backend_pid integer,heartbeat_at timestamp,status text NOT NULL)`,
+				`CREATE TABLE background_jobs(id uuid PRIMARY KEY,kind text NOT NULL,payload jsonb NOT NULL,result jsonb,state text NOT NULL,owner_generation integer,attempt_generation integer NOT NULL,initialized_at timestamp)`,
+				`CREATE TABLE background_job_executions(job_id uuid NOT NULL REFERENCES background_jobs(id),attempt_generation integer NOT NULL,envelope_sha256 text NOT NULL,executor_instance_id uuid NOT NULL,owner_id uuid,worker_generation integer,deadline_at timestamp,state text NOT NULL,accepted_at timestamp NOT NULL DEFAULT clock_timestamp(),started_at timestamp,finished_at timestamp,result jsonb,error_code text,legacy_completion_applied_at timestamp,PRIMARY KEY(job_id,attempt_generation))`,
+			} {
+				if _, err = admin.Exec(ctx, ddl); err != nil {
+					t.Fatalf("create isolated fixture table: %v", err)
+				}
+			}
+
+			tzURL := *parsedURL
+			query := tzURL.Query()
+			query.Set("options", "-c TimeZone="+zone)
+			tzURL.RawQuery = strings.ReplaceAll(query.Encode(), "+", "%20")
+			tzDSN := tzURL.String()
+			poolConfig, err := pgxpool.ParseConfig(tzDSN)
+			if err != nil {
+				t.Fatal(err)
+			}
+			poolConfig.ConnConfig.RuntimeParams["search_path"] = schema
+			poolConfig.MaxConns = 3
+			worker, err := pgx.ConnectConfig(ctx, poolConfig.ConnConfig.Copy())
+			if err != nil {
+				t.Fatalf("connect timezone-configured worker: %v", err)
+			}
+			defer closeConn(worker)
+			var workerPID int32
+			var acquired bool
+			if err = worker.QueryRow(ctx, `SELECT pg_try_advisory_lock(hashtext(current_database()),hashtext(current_schema())),pg_backend_pid()`).Scan(&acquired, &workerPID); err != nil || !acquired {
+				t.Fatalf("acquire fixture worker lease: acquired=%v err=%v", acquired, err)
+			}
+			owner, job := uuid.New(), uuid.New()
+			if _, err = admin.Exec(ctx, `INSERT INTO background_worker_status(id,generation,owner_id,lock_backend_pid,heartbeat_at,status) VALUES(1,7,$1,$2,clock_timestamp() AT TIME ZONE 'UTC','running')`, owner, workerPID); err != nil {
+				t.Fatal(err)
+			}
+			if _, err = admin.Exec(ctx, `INSERT INTO background_jobs(id,kind,payload,state,owner_generation,attempt_generation) VALUES($1,'news_processing','{}','running',7,1)`, job); err != nil {
+				t.Fatal(err)
+			}
+
+			started := make(chan struct{})
+			release := make(chan struct{})
+			srv, err := New(Config{DatabaseURL: tzDSN, Schema: schema, Token: "fixture-token", QueryTimeout: time.Second, GuardInterval: time.Hour}, Handlers{
+				Pipeline: PipelineFunc(func(c context.Context, _ ExecutionContext, _ string, _ json.RawMessage) (Result, error) {
+					close(started)
+					select {
+					case <-c.Done():
+					case <-release:
+					}
+					return Result{Value: json.RawMessage(`{"status":"success"}`)}, nil
+				}),
+			})
+			if err != nil {
+				t.Fatal(err)
+			}
+			if err = srv.Open(ctx); err != nil {
+				t.Fatalf("open timezone-configured execution server: %v", err)
+			}
+			defer func() { close(release); _ = srv.Close(context.Background()) }()
+			var sessionZone string
+			if err = srv.pool.QueryRow(ctx, `SELECT current_setting('TimeZone')`).Scan(&sessionZone); err != nil || sessionZone != zone {
+				t.Fatalf("execution pool timezone=%q want=%q err=%v", sessionZone, zone, err)
+			}
+
+			deadline := time.Now().Add(3 * time.Minute).Truncate(time.Microsecond).In(time.FixedZone("fixture plus two", 2*60*60))
+			deadlineRaw := deadline.Format(time.RFC3339Nano)
+			expectedUTC := deadline.UTC().Format("2006-01-02T15:04:05.000000Z")
+			body := fmt.Sprintf(`{"version":1,"job_id":%q,"owner_id":%q,"generation":7,"attempt_generation":1,"deadline_at":%q}`, job.String(), owner.String(), deadlineRaw)
+			request := func(method, path, rawBody string) *httptest.ResponseRecorder {
+				req := httptest.NewRequest(method, path, strings.NewReader(rawBody))
+				req.Header.Set("Authorization", "Bearer fixture-token")
+				rr := httptest.NewRecorder()
+				srv.Handler().ServeHTTP(rr, req)
+				return rr
+			}
+			accepted := request("POST", "/internal/v1/job-executions", body)
+			if accepted.Code != 202 {
+				t.Fatalf("accept status=%d body=%s", accepted.Code, accepted.Body.String())
+			}
+			var first struct {
+				AcceptedAt string `json:"accepted_at"`
+			}
+			if err = json.Unmarshal(accepted.Body.Bytes(), &first); err != nil || first.AcceptedAt == "" {
+				t.Fatalf("first receipt changed accepted/deadline projection: %+v body=%s err=%v", first, accepted.Body.String(), err)
+			}
+			select {
+			case <-started:
+			case <-time.After(5 * time.Second):
+				t.Fatal("pipeline did not start")
+			}
+
+			for _, path := range []string{
+				fmt.Sprintf("/internal/v1/job-executions/%s/1", job),
+				fmt.Sprintf("/internal/v1/job-executions/%s/1/context", job),
+			} {
+				response := request("GET", path, "")
+				if response.Code != 200 {
+					t.Fatalf("GET %s status=%d body=%s", path, response.Code, response.Body.String())
+				}
+				var wire map[string]json.RawMessage
+				if err = json.Unmarshal(response.Body.Bytes(), &wire); err != nil {
+					t.Fatal(err)
+				}
+				var acceptedAt, deadlineAt string
+				if strings.HasSuffix(path, "/context") {
+					var contextWire struct {
+						Envelope struct {
+							DeadlineAt string `json:"deadline_at"`
+						} `json:"envelope"`
+					}
+					if err = json.Unmarshal(response.Body.Bytes(), &contextWire); err != nil {
+						t.Fatal(err)
+					}
+					deadlineAt = contextWire.Envelope.DeadlineAt
+				} else {
+					if json.Unmarshal(wire["accepted_at"], &acceptedAt) != nil || acceptedAt != first.AcceptedAt {
+						t.Fatalf("GET %s accepted_at=%q want first=%q", path, acceptedAt, first.AcceptedAt)
+					}
+					if json.Unmarshal(wire["deadline_at"], &deadlineAt) != nil {
+						t.Fatalf("GET %s omitted deadline_at", path)
+					}
+				}
+				if deadlineAt != expectedUTC {
+					t.Fatalf("GET %s deadline=%q want Python UTC form %q (session timezone %s)", path, deadlineAt, expectedUTC, zone)
+				}
+			}
+			duplicate := request("POST", "/internal/v1/job-executions", body)
+			var duplicateWire struct {
+				AcceptedAt string `json:"accepted_at"`
+				Duplicate  bool   `json:"duplicate"`
+			}
+			if duplicate.Code != 202 || json.Unmarshal(duplicate.Body.Bytes(), &duplicateWire) != nil || !duplicateWire.Duplicate || duplicateWire.AcceptedAt != first.AcceptedAt {
+				t.Fatalf("duplicate acceptance timestamp mismatch: first=%q response=%s", first.AcceptedAt, duplicate.Body.String())
+			}
+
+			_, submittedDigest, err := parseEnvelope([]byte(body))
+			if err != nil {
+				t.Fatal(err)
+			}
+			var storedDigest string
+			if err = srv.pool.QueryRow(ctx, `SELECT envelope_sha256 FROM background_job_executions WHERE job_id=$1 AND attempt_generation=1`, job).Scan(&storedDigest); err != nil || storedDigest != submittedDigest {
+				t.Fatalf("stored raw-offset envelope digest=%q want=%q err=%v", storedDigest, submittedDigest, err)
+			}
+			utcEnvelope := strings.Replace(body, deadlineRaw, expectedUTC, 1)
+			_, utcDigest, err := parseEnvelope([]byte(utcEnvelope))
+			if err != nil || utcDigest == submittedDigest {
+				t.Fatalf("main envelope digest did not bind original deadline spelling: submitted=%q UTC=%q err=%v", submittedDigest, utcDigest, err)
+			}
+		})
+	}
+}

@@ -5,11 +5,13 @@ import (
 	"crypto/sha256"
 	"encoding/hex"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"math"
 	"net/http"
 	"net/http/httptest"
 	"os"
+	"reflect"
 	"strconv"
 	"sync"
 	"testing"
@@ -46,6 +48,9 @@ type fakeServices struct {
 	restartAfterPrepare     bool
 	restartOnLostPublishAck bool
 	pendingDomain           bool
+	rateLimitPosts          int
+	domainOperationGets     int
+	postRequests            []domainRequest
 }
 
 func newFakeServer(t *testing.T, f *fakeServices) *httptest.Server {
@@ -87,6 +92,12 @@ func newFakeServer(t *testing.T, f *fakeServices) *httptest.Server {
 			return
 		}
 		f.postCount++
+		f.postRequests = append(f.postRequests, req)
+		if f.rateLimitPosts > 0 {
+			f.rateLimitPosts--
+			w.WriteHeader(http.StatusTooManyRequests)
+			return
+		}
 		f.calls = append(f.calls, req.Operation)
 		key := opKey(req.Envelope.JobID, req.Envelope.AttemptGeneration, req.Operation, req.OperationID)
 		result := domainResult(req.Operation, req.Input)
@@ -148,6 +159,7 @@ func newFakeServer(t *testing.T, f *fakeServices) *httptest.Server {
 		key := r.PathValue("job") + "/" + r.PathValue("attempt") + "/" + r.PathValue("operation") + "/" + r.PathValue("id")
 		f.mu.Lock()
 		defer f.mu.Unlock()
+		f.domainOperationGets++
 		op, ok := f.ops[key]
 		if !ok {
 			w.WriteHeader(404)
@@ -420,6 +432,46 @@ func TestDomainLostAckReconcilesWithoutResend(t *testing.T) {
 	defer f.mu.Unlock()
 	if f.postCount != 1 {
 		t.Fatalf("post count=%d want 1", f.postCount)
+	}
+}
+
+func TestDomainRetriesConfirmed429WithoutReceiptLookup(t *testing.T) {
+	f := &fakeServices{rateLimitPosts: 2}
+	srv := newFakeServer(t, f)
+	defer srv.Close()
+	d, err := NewDomainClient(DomainConfig{BaseURL: srv.URL, Token: "t", PollInterval: time.Millisecond})
+	if err != nil {
+		t.Fatal(err)
+	}
+	result, err := d.Execute(context.Background(), testFence(), "backup", "backup", map[string]any{})
+	if err != nil || len(result) == 0 {
+		t.Fatalf("confirmed 429 retry failed: result=%s err=%v", result, err)
+	}
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	if f.postCount != 3 || f.domainOperationGets != 0 || len(f.postRequests) != 3 || !reflect.DeepEqual(f.postRequests[0], f.postRequests[1]) || !reflect.DeepEqual(f.postRequests[1], f.postRequests[2]) {
+		t.Fatalf("posts=%d receipt GETs=%d requestCount=%d requestsStable=%v", f.postCount, f.domainOperationGets, len(f.postRequests), len(f.postRequests) == 3 && reflect.DeepEqual(f.postRequests[0], f.postRequests[1]) && reflect.DeepEqual(f.postRequests[1], f.postRequests[2]))
+	}
+}
+
+func TestDomainRepeated429WaitHonorsContextCancellation(t *testing.T) {
+	f := &fakeServices{rateLimitPosts: 10}
+	srv := newFakeServer(t, f)
+	defer srv.Close()
+	d, err := NewDomainClient(DomainConfig{BaseURL: srv.URL, Token: "t"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	ctx, cancel := context.WithTimeout(context.Background(), 30*time.Millisecond)
+	defer cancel()
+	_, err = d.Execute(ctx, testFence(), "backup", "backup", map[string]any{})
+	if !errors.Is(err, context.DeadlineExceeded) {
+		t.Fatalf("result=%v want context deadline exceeded", err)
+	}
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	if f.postCount != 1 || f.domainOperationGets != 0 || len(f.calls) != 0 {
+		t.Fatalf("posts=%d receipt GETs=%d accepted calls=%v", f.postCount, f.domainOperationGets, f.calls)
 	}
 }
 
