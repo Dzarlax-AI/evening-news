@@ -1,6 +1,7 @@
 package worker
 
 import (
+	"bytes"
 	"context"
 	"encoding/json"
 	"errors"
@@ -8,6 +9,7 @@ import (
 	"log/slog"
 	"net/http"
 	"net/http/httptest"
+	"strings"
 	"sync"
 	"sync/atomic"
 	"testing"
@@ -84,6 +86,31 @@ func TestAcceptAndWaitResolvesLostAcceptanceAckWithoutDuplicatePost(t *testing.T
 	}
 	if postCount != 1 {
 		t.Fatalf("accept POST count = %d, want 1 after lost ACK", postCount)
+	}
+}
+
+func TestHeartbeatLoopEmitsSafeStructuredFailureEvent(t *testing.T) {
+	var output bytes.Buffer
+	logger := slog.New(slog.NewTextHandler(&output, nil))
+	queue := &fakeQueueStore{heartbeatErr: &store.HeartbeatError{
+		Stage: "commit", Reason: "timeout", SQLState: "57014", BackendPID: 321, Generation: 9,
+		MutexWait: 2 * time.Millisecond, BeginDuration: 3 * time.Millisecond,
+		UpdateDuration: 4 * time.Millisecond, CommitDuration: 5 * time.Millisecond,
+	}}
+	worker := &Worker{config: config.Config{HeartbeatInterval: time.Millisecond, RequestTimeout: time.Second}, store: queue, logger: logger}
+	ctx, cancel := context.WithCancel(context.Background())
+	lost := make(chan struct{})
+	worker.heartbeatLoop(ctx, cancel, lost)
+	<-lost
+	cancel()
+	line := output.String()
+	for _, field := range []string{"event=worker_heartbeat_failure", "event_utc=", "stage=commit", "reason=timeout", "sqlstate=57014", "backend_pid=321", "generation=9", "mutex_wait_ms=2", "begin_ms=3", "update_ms=4", "commit_ms=5"} {
+		if !strings.Contains(line, field) {
+			t.Errorf("heartbeat log missing %q: %s", field, line)
+		}
+	}
+	if strings.Contains(line, "UPDATE background_worker_status") || strings.Contains(line, "postgres://") {
+		t.Fatalf("heartbeat log leaked driver details: %s", line)
 	}
 }
 

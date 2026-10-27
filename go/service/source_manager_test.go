@@ -2,10 +2,14 @@ package service
 
 import (
 	"bufio"
+	"bytes"
 	"context"
+	"crypto/sha256"
+	"encoding/hex"
 	"encoding/json"
 	"fmt"
 	"io"
+	"log"
 	"net"
 	"net/http"
 	"net/http/httptest"
@@ -170,6 +174,116 @@ func TestSourceBatchPageMonitorDefaultsCollectSyntheticArticleWithoutAI(t *testi
 		len(response.Results[0].PageMonitor.Items) != 1 || response.Results[0].PageMonitor.Items[0].Title != "Ordinary synthetic article title" ||
 		response.Results[0].PageMonitor.Items[0].Link != "https://pm.fixture.test/story" || articleCount.Load() != 1 {
 		t.Fatalf("default-selector synthetic collection failed: results=%+v count=%d", response.Results, articleCount.Load())
+	}
+}
+
+func TestConcurrentPageMonitorDiagnosticsStayScopedAndSanitized(t *testing.T) {
+	var output bytes.Buffer
+	previousOutput := log.Writer()
+	log.SetOutput(&output)
+	t.Cleanup(func() { log.SetOutput(previousOutput) })
+
+	started := make(chan struct{}, 2)
+	release := make(chan struct{})
+	runner := sourceManagerTestRunner{PageMonitor: func(ctx context.Context, req PageMonitorRequest) PageMonitorResponse {
+		started <- struct{}{}
+		select {
+		case <-release:
+		case <-ctx.Done():
+			t.Errorf("source %s context ended before release: %v", req.RequestID, ctx.Err())
+		}
+		// The first source carries attacker-shaped values; the second has a distinct
+		// valid failure. Their concurrent log fields must remain request-scoped.
+		if req.RequestID == "source-41" {
+			transport.RecordPageMonitorDiagnostic(ctx, "navigate\nLEAK_SOURCE", "https://secret.example/path")
+		} else {
+			transport.RecordPageMonitorDiagnostic(ctx, "dom", "evaluation_failed")
+		}
+		return PageMonitorResponse{Outcome: "failed", OriginalURL: req.URL, FinalURL: req.URL,
+			Items: []extractor.PageMonitorItem{}, SelectorsUsed: []string{},
+			Error: &Failure{Code: "transport_failed\nLEAK_CODE", Retryable: true}}
+	}}
+	s, err := New(Config{Token: "0123456789abcdef", MaxConcurrent: 2, NativeBrowser: true}, runner)
+	if err != nil {
+		t.Fatal(err)
+	}
+	body := `{"contract_version":"1","request_id":"batch-secret-id","batch_budget_ms":2000,"sources":[{"source_id":41,"type":"custom","source_name":"source-secret-one","url":"https://source-one-secret.test/path"},{"source_id":82,"type":"custom","source_name":"source-secret-two","url":"https://source-two-secret.test/path"}]}`
+	writer := &deadlineRecorder{ResponseRecorder: httptest.NewRecorder()}
+	done := make(chan struct{})
+	go func() { sourceBatchPost(s, body, writer); close(done) }()
+	for i := 0; i < 2; i++ {
+		select {
+		case <-started:
+		case <-time.After(2 * time.Second):
+			close(release)
+			t.Fatal("both custom source requests did not enter concurrently")
+		}
+	}
+	close(release)
+	select {
+	case <-done:
+	case <-time.After(2 * time.Second):
+		t.Fatal("source batch did not complete")
+	}
+
+	logs := output.String()
+	if strings.Contains(logs, "batch-secret-id") || strings.Contains(logs, "source-secret") || strings.Contains(logs, "LEAK_") || strings.Contains(logs, "secret.example") {
+		t.Fatalf("diagnostic log leaked request payload: %s", logs)
+	}
+	tokenHash := sha256.Sum256([]byte("batch-secret-id"))
+	token := hex.EncodeToString(tokenHash[:])
+	if strings.Count(logs, "event=page_monitor_failure") != 2 {
+		t.Fatalf("failure log count = %d, want one per failed source: %s", strings.Count(logs, "event=page_monitor_failure"), logs)
+	}
+	for _, want := range []string{"request_token=" + token, "source_id=41", "source_id=82", "stage=other", "reason=operation_failed", "stage=dom", "reason=evaluation_failed", "outcome=failed", "error_code=other"} {
+		if !strings.Contains(logs, want) {
+			t.Errorf("diagnostics missing %q: %s", want, logs)
+		}
+	}
+	for _, line := range strings.Split(strings.TrimSpace(logs), "\n") {
+		switch {
+		case strings.Contains(line, "source_id=41"):
+			if !strings.Contains(line, "stage=other") || !strings.Contains(line, "reason=operation_failed") {
+				t.Errorf("source 41 received another request's diagnostic: %s", line)
+			}
+		case strings.Contains(line, "source_id=82"):
+			if !strings.Contains(line, "stage=dom") || !strings.Contains(line, "reason=evaluation_failed") {
+				t.Errorf("source 82 received another request's diagnostic: %s", line)
+			}
+		}
+	}
+}
+
+func TestDirectPageMonitorDiagnosticUsesServerToken(t *testing.T) {
+	var output bytes.Buffer
+	previousOutput := log.Writer()
+	log.SetOutput(&output)
+	t.Cleanup(func() { log.SetOutput(previousOutput) })
+	runner := sourceManagerTestRunner{PageMonitor: func(ctx context.Context, req PageMonitorRequest) PageMonitorResponse {
+		transport.RecordPageMonitorDiagnostic(ctx, "navigate", "navigation_dns")
+		return PageMonitorResponse{Outcome: "failed", OriginalURL: req.URL, FinalURL: req.URL,
+			Items: []extractor.PageMonitorItem{}, SelectorsUsed: []string{}, Error: &Failure{Code: "transport_failed", Retryable: true}}
+	}}
+	s, err := New(Config{Token: "0123456789abcdef", MaxConcurrent: 1}, runner)
+	if err != nil {
+		t.Fatal(err)
+	}
+	body := `{"contract_version":"1","request_id":"caller-request-secret","operation":"fetch","url":"https://origin-secret.test/feed","source_name":"source-secret","budget_ms":2000,"use_browser":false,"wait_for_js":false}`
+	request := httptest.NewRequest(http.MethodPost, "/v1/page-monitor/extract", strings.NewReader(body))
+	request.Header.Set("Authorization", "Bearer 0123456789abcdef")
+	writer := httptest.NewRecorder()
+	s.ServeHTTP(writer, request)
+	if writer.Code != http.StatusOK {
+		t.Fatalf("status=%d body=%s", writer.Code, writer.Body.String())
+	}
+	logs := output.String()
+	for _, secret := range []string{"caller-request-secret", "origin-secret", "source-secret"} {
+		if strings.Contains(logs, secret) {
+			t.Fatalf("direct diagnostic leaked %q: %s", secret, logs)
+		}
+	}
+	if strings.Count(logs, "event=page_monitor_failure") != 1 || !strings.Contains(logs, "stage=navigate") || !strings.Contains(logs, "reason=navigation_dns") {
+		t.Fatalf("unexpected direct diagnostic: %s", logs)
 	}
 }
 

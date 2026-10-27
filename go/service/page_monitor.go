@@ -2,6 +2,8 @@ package service
 
 import (
 	"context"
+	"crypto/rand"
+	"encoding/hex"
 	"encoding/json"
 	"errors"
 	"math"
@@ -13,6 +15,7 @@ import (
 
 	"github.com/Dzarlax-AI/evening-news/go/extractor"
 	"github.com/Dzarlax-AI/evening-news/go/internal/jsonsingle"
+	"github.com/Dzarlax-AI/evening-news/go/transport"
 )
 
 func (s *Server) extractPageMonitor(w http.ResponseWriter, r *http.Request) {
@@ -70,6 +73,12 @@ func (s *Server) extractPageMonitor(w http.ResponseWriter, r *http.Request) {
 	}
 	ctx, cancel := context.WithTimeout(r.Context(), time.Duration(req.BudgetMS)*time.Millisecond)
 	defer cancel()
+	diagnosticToken := directPageMonitorDiagnosticToken()
+	var diagnostic *transport.PageMonitorDiagnostic
+	if diagnosticToken != "" {
+		diagnostic = transport.NewPageMonitorDiagnostic(diagnosticToken, 0)
+		ctx = transport.WithPageMonitorDiagnostic(ctx, diagnostic)
+	}
 	s.mu.Lock()
 	if s.draining {
 		s.mu.Unlock()
@@ -121,6 +130,7 @@ func (s *Server) extractPageMonitor(w http.ResponseWriter, r *http.Request) {
 		resp.Error = &Failure{Code: "invalid_runner_response"}
 	}
 	resp = boundPageMonitorResponse(resp, req.Offset, req.Limit)
+	logPageMonitorFailure(diagnostic, resp.Outcome, failureCode(resp.Error))
 	s.mu.Lock()
 	s.completed++
 	s.latency += time.Since(started)
@@ -128,6 +138,14 @@ func (s *Server) extractPageMonitor(w http.ResponseWriter, r *http.Request) {
 	s.methods["page_monitor_"+req.Operation]++
 	s.mu.Unlock()
 	s.writePageMonitor(w, http.StatusOK, resp)
+}
+
+func directPageMonitorDiagnosticToken() string {
+	var value [32]byte
+	if _, err := rand.Read(value[:]); err != nil {
+		return ""
+	}
+	return hex.EncodeToString(value[:])
 }
 
 func validPageMonitorAdmissionBusy(resp PageMonitorResponse) bool {

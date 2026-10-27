@@ -2,8 +2,11 @@ package service
 
 import (
 	"context"
+	"crypto/sha256"
+	"encoding/hex"
 	"encoding/json"
 	"errors"
+	"log"
 	"net/http"
 	"net/url"
 	"reflect"
@@ -16,6 +19,7 @@ import (
 	"github.com/Dzarlax-AI/evening-news/go/extractor"
 	"github.com/Dzarlax-AI/evening-news/go/internal/jsonsingle"
 	"github.com/Dzarlax-AI/evening-news/go/pipeline"
+	"github.com/Dzarlax-AI/evening-news/go/transport"
 )
 
 const (
@@ -197,6 +201,7 @@ func (s *Server) collectSources(w http.ResponseWriter, r *http.Request) {
 }
 
 func (s *Server) runSourceBatch(ctx context.Context, req SourceCollectRequest) SourceCollectResponse {
+	batchDiagnosticToken := sourceDiagnosticToken(req.RequestID)
 	resp := SourceCollectResponse{ContractVersion: ContractVersion, BuildVersion: s.cfg.BuildVersion, RequestID: req.RequestID, Results: make([]SourceCollectResult, len(req.Sources))}
 	jobs := make([]pipeline.SourceJob, 0, len(req.Sources))
 	jobResultIndexes := make([]int, 0, len(req.Sources))
@@ -221,7 +226,7 @@ func (s *Server) runSourceBatch(ctx context.Context, req SourceCollectRequest) S
 		// source-level lane across Telegram HTTP/fallback or a whole Page Monitor
 		// job would serialize work before it reaches that gate.
 		browserLane := sourceUsesBrowser(desc) && !s.cfg.NativeBrowser
-		job := pipeline.SourceJob{SourceID: desc.SourceID, Budget: budget, Browser: browserLane, Run: s.sourceRunner(desc, result)}
+		job := pipeline.SourceJob{SourceID: desc.SourceID, Budget: budget, Browser: browserLane, Run: s.sourceRunner(desc, result, batchDiagnosticToken)}
 		jobs = append(jobs, job)
 		jobResultIndexes = append(jobResultIndexes, i)
 	}
@@ -288,9 +293,10 @@ func (s *Server) runSourceBatch(ctx context.Context, req SourceCollectRequest) S
 	return boundSourceBatchResponse(resp)
 }
 
-func (s *Server) sourceRunner(desc SourceDescriptor, base SourceCollectResult) func(context.Context) pipeline.SourceJobResult {
+func (s *Server) sourceRunner(desc SourceDescriptor, base SourceCollectResult, batchDiagnosticToken string) func(context.Context) pipeline.SourceJobResult {
 	return func(ctx context.Context) pipeline.SourceJobResult {
 		result := base
+		var pageDiagnostic *transport.PageMonitorDiagnostic
 		switch desc.Type {
 		case "rss":
 			runner, ok := s.runner.(RSSRunner)
@@ -372,6 +378,8 @@ func (s *Server) sourceRunner(desc SourceDescriptor, base SourceCollectResult) f
 				result.Error = &Failure{Code: code, Retryable: false}
 				break
 			}
+			pageDiagnostic = transport.NewPageMonitorDiagnostic(batchDiagnosticToken, desc.SourceID)
+			ctx = transport.WithPageMonitorDiagnostic(ctx, pageDiagnostic)
 			resp := runner.RunPageMonitor(ctx, request)
 			resp.ContractVersion, resp.BuildVersion = ContractVersion, s.cfg.BuildVersion
 			resp.RequestID = request.RequestID
@@ -396,7 +404,98 @@ func (s *Server) sourceRunner(desc SourceDescriptor, base SourceCollectResult) f
 		if estimate, ok := estimateJSONSize(result); !ok || estimate > MaxSourceBatchBytes-1024 {
 			result = minimalSourceResult(result, "resource_limit")
 		}
+		if desc.Type == "custom" {
+			logPageMonitorFailure(pageDiagnostic, result.Outcome, failureCode(result.Error))
+		}
 		return pipeline.SourceJobResult{SourceID: desc.SourceID, Outcome: result.Outcome, Error: failureCode(result.Error), Retryable: failureRetryable(result.Error), Value: result}
+	}
+}
+
+func sourceDiagnosticToken(requestID string) string {
+	sum := sha256.Sum256([]byte(requestID))
+	return hex.EncodeToString(sum[:])
+}
+
+func logPageMonitorFailure(diagnostic *transport.PageMonitorDiagnostic, outcome, errorCode string) {
+	if diagnostic == nil || outcome == "success" || errorCode == "" {
+		return
+	}
+	stage, reason := diagnostic.Details()
+	if !safePageMonitorStage(stage) {
+		stage = "other"
+	}
+	if !safePageMonitorNativeReason(reason) {
+		reason = safePageMonitorReason(errorCode)
+	}
+	fields := ""
+	if diagnostic.SourceID > 0 {
+		fields = " source_id=" + strconv.FormatInt(diagnostic.SourceID, 10)
+	}
+	log.Printf("event=page_monitor_failure event_utc=%s request_token=%s%s stage=%s reason=%s elapsed_ms=%d outcome=%s error_code=%s",
+		time.Now().UTC().Format(time.RFC3339Nano), diagnostic.Token, fields, stage, reason,
+		time.Since(diagnostic.Started).Milliseconds(), safePageMonitorOutcome(outcome), safePageMonitorCode(errorCode))
+}
+
+func safePageMonitorStage(value string) bool {
+	switch value {
+	case "admission", "readiness", "discovery", "websocket", "events", "create_context", "create_target",
+		"attach_target", "configure", "navigate", "dom", "cleanup", "parse", "validation":
+		return true
+	default:
+		return false
+	}
+}
+
+func safePageMonitorNativeReason(value string) bool {
+	switch value {
+	case "context_timeout", "context_cancelled", "event_overflow", "ownership_loss", "unsupported", "browser_busy", "resource_limit",
+		"client_disconnected", "malformed_detach", "owned_detach", "target_crashed", "protocol_error",
+		"transport_error", "operation_failed", "navigation_failed", "evaluation_failed", "navigation_dns",
+		"navigation_connection", "navigation_tls", "navigation_aborted", "navigation_other":
+		return true
+	default:
+		return false
+	}
+}
+
+func safePageMonitorOutcome(value string) string {
+	switch value {
+	case "success", "partial", "failed", "rejected":
+		return value
+	default:
+		return "failed"
+	}
+}
+
+func safePageMonitorCode(value string) string {
+	switch value {
+	case "cancelled", "deadline_exceeded", "event_overflow", "invalid_input", "native_browser_busy",
+		"native_browser_policy_denied", "parse_failed", "public_url_denied", "resource_limit", "transport_failed",
+		"unavailable", "unsupported_selector", "response_too_large", "page_monitor_unavailable", "invalid_runner_response":
+		return value
+	default:
+		return "other"
+	}
+}
+
+func safePageMonitorReason(code string) string {
+	switch code {
+	case "cancelled":
+		return "context_cancelled"
+	case "deadline_exceeded":
+		return "context_timeout"
+	case "event_overflow":
+		return "event_overflow"
+	case "native_browser_busy":
+		return "browser_busy"
+	case "native_browser_policy_denied", "public_url_denied":
+		return "policy_denied"
+	case "resource_limit", "response_too_large":
+		return "resource_limit"
+	case "unavailable", "page_monitor_unavailable":
+		return "unavailable"
+	default:
+		return "operation_failed"
 	}
 }
 
