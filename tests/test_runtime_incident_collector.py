@@ -125,6 +125,8 @@ class RuntimeIncidentCollectorTests(unittest.TestCase):
         self.assertEqual(json_event["commit_ms"], 5)
         self.assertNotIn("msg", json_event)
         self.assertIsNone(collector.parse_log_line('{"event":[],"event_utc":"' + now + '"}'))
+        for reason in ("policy_denied", "unavailable"):
+            self.assertEqual(collector.sanitize_event({"event": "page_monitor_failure", "event_utc": now, "reason": reason})["reason"], reason)
 
     def test_fake_live_runner_captures_stderr_logs_from_two_sources_and_sanitizes_before_bundle(self):
         now = "2026-10-27T10:00:00.123Z"
@@ -172,6 +174,8 @@ case "$1" in
   logs)
     printf '%s\\n' '{"time":"2026-10-27T10:00:00.100Z","event":"page_monitor_failure","event_utc":"2026-10-27T10:00:00.100Z","request_token":[],"source_id":8,"stage":"navigate","reason":"timeout","elapsed_ms":1,"outcome":"failed","error_code":"deadline_exceeded","canary":"BAD_TOKEN_FIELD"}' >&2
     printf '%s\\n' '{"time":"2026-10-27T10:00:00.200Z","event":"worker_heartbeat_failure","event_utc":"2026-10-27T10:00:00.200Z","stage":"commit","reason":"timeout","sqlstate":{},"generation":7,"backend_pid":123,"canary":"BAD_SQLSTATE_FIELD"}'
+    printf '%s\\n' 'event=page_monitor_failure event_utc=2026-10-27T10:00:00.250Z source_id=8 stage=navigate reason=policy_denied elapsed_ms=1 outcome=rejected error_code=public_url_denied'
+    printf '%s\\n' 'event=page_monitor_failure event_utc=2026-10-27T10:00:00.300Z source_id=9 stage=navigate reason=unavailable elapsed_ms=1 outcome=failed error_code=unavailable'
     printf '%s\\n' 'event=page_monitor_failure event_utc=2026-10-27T10:00:00.123Z request_token=aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa source_id=7 stage=navigate reason=context_timeout elapsed_ms=9 outcome=failed error_code=deadline_exceeded url=https://CANARY.invalid html=CANARY_HTML'
     printf '%s\\n' '{"time":"2026-10-27T10:00:00.456Z","level":"ERROR","msg":"heartbeat failed JSON_CANARY","event":"worker_heartbeat_failure","event_utc":"2026-10-27T10:00:00.456Z","stage":"commit","reason":"timeout","generation":7,"backend_pid":123,"sqlstate":"08006","mutex_wait_ms":2,"begin_ms":3,"update_ms":4,"commit_ms":5,"error":"CANARY_ERROR"}' >&2
     ;;
@@ -188,6 +192,8 @@ esac
         self.assertIn("event=worker_heartbeat_failure", result.stdout)
         self.assertIn("event=page_monitor_failure", result.stdout)
         self.assertIn("reason=context_timeout", result.stdout)
+        self.assertIn("reason=policy_denied", result.stdout)
+        self.assertIn("reason=unavailable", result.stdout)
         self.assertIn("log_cursor_background=", result.stdout)
         self.assertIn("log_cursor_extractor=", result.stdout)
         live_snapshot, _ = collector.parse_live_output(result.stdout)
@@ -355,6 +361,7 @@ esac
         token1, token2 = "a" * 64, "b" * 64
         event1 = collector.sanitize_event({"event": "page_monitor_failure", "event_utc": now, "request_token": token1, "source_id": 1, "stage": "navigate", "reason": "timeout", "elapsed_ms": 1, "outcome": "failed", "error_code": "deadline_exceeded"})
         event2 = collector.sanitize_event({"event": "page_monitor_failure", "event_utc": now, "request_token": token2, "source_id": 2, "stage": "navigate", "reason": "timeout", "elapsed_ms": 1, "outcome": "failed", "error_code": "deadline_exceeded"})
+        event3 = collector.sanitize_event({"event": "page_monitor_failure", "event_utc": now, "request_token": "c" * 64, "source_id": 3, "stage": "navigate", "reason": "timeout", "elapsed_ms": 1, "outcome": "failed", "error_code": "deadline_exceeded"})
         calls, ticks, sleeps = [], [0.0], []
 
         def monotonic():
@@ -364,19 +371,30 @@ esac
 
         def poll(*_args, timeout, log_cursors=None):
             calls.append(timeout)
-            container_id = "a" * 32 if len(calls) == 1 else "b" * 32
-            snapshot = collector.sanitize_snapshot({"captured_at": now, "worker": {"generation": 1, "pid": 2, "heartbeat_at": now}, "pg_stat_activity": [], "pg_metrics": {"wal_bytes": 1, "checkpoints_timed": 1, "checkpoints_requested": 1, "checkpoint_write_time_ms": 1, "checkpoint_sync_time_ms": 1, "buffers_checkpoint": 1, "buffers_clean": 1}, "host": {"memory_total_bytes": 1, "memory_available_bytes": 1, "swap_total_bytes": 0, "swap_free_bytes": 0, "memory_psi": {"some_avg10": 0, "full_avg10": 0}}, "containers": {"background": {"container_id": container_id, "started_at": now, "restart_count": 0, "oom_count": 0, "oom_killed": False, "working_set_bytes": 1, "file_bytes": 1, "cpu_periods": 5, "cpu_throttled_periods": 3, "cpu_throttled_usec": 100 if len(calls) == 1 else 1}, "extractor": {}, "postgres": {}}})
-            return snapshot, [event1] if len(calls) == 1 else [event1, event2]
+            container_id = "a" * 32 if len(calls) <= 2 else "b" * 32
+            throttled_usec = 100 if len(calls) == 1 else 110 if len(calls) == 2 else 1
+            snapshot = collector.sanitize_snapshot({"captured_at": now, "worker": {"generation": 1, "pid": 2, "heartbeat_at": now}, "pg_stat_activity": [], "pg_metrics": {"wal_bytes": 1, "checkpoints_timed": 1, "checkpoints_requested": 1, "checkpoint_write_time_ms": 1, "checkpoint_sync_time_ms": 1, "buffers_checkpoint": 1, "buffers_clean": 1}, "host": {"memory_total_bytes": 1, "memory_available_bytes": 1, "swap_total_bytes": 0, "swap_free_bytes": 0, "memory_psi": {"some_avg10": 0, "full_avg10": 0}}, "containers": {"background": {"container_id": container_id, "started_at": now, "restart_count": 0, "oom_count": 0, "oom_killed": False, "working_set_bytes": 1, "file_bytes": 1, "cpu_periods": 5, "cpu_throttled_periods": 3, "cpu_throttled_usec": throttled_usec}, "extractor": {}, "postgres": {}}})
+            if len(calls) == 1:
+                return snapshot, [event1]
+            if len(calls) == 2:
+                return snapshot, [event1, event2]
+            return snapshot, [event1, event2, event3]
 
         with tempfile.TemporaryDirectory() as temporary, patch.object(collector.time, "monotonic", side_effect=monotonic), patch.object(collector.time, "sleep", side_effect=sleeps.append), patch.object(collector, "live_poll", side_effect=poll):
-            count, _ = collector.collect_live(Path(temporary), "host", "background", "extractor", "db", "user", "aistack", "news", 1, 3, collector.MAX_OUTPUT_BYTES)
+            count, _ = collector.collect_live(Path(temporary), "host", "background", "extractor", "db", "user", "aistack", "news", 2, 3, collector.MAX_OUTPUT_BYTES)
             files = sorted(Path(temporary).glob("incident-*/bundle-*.json"))
             second = json.loads(files[1].read_text(encoding="utf-8")) if len(files) > 1 else None
-        self.assertEqual(count, 2)
-        self.assertEqual(len(calls), 2)
-        self.assertTrue(all(0 < timeout <= 1 for timeout in calls))
-        self.assertTrue(all(0 <= delay <= 1 for delay in sleeps))
-        self.assertIsNone(second["current_snapshot"]["containers"]["background"]["cpu_throttled_usec_delta"])
+            third = json.loads(files[2].read_text(encoding="utf-8")) if len(files) > 2 else None
+            first = json.loads(files[0].read_text(encoding="utf-8")) if files else None
+        self.assertEqual(count, 3)
+        self.assertEqual(len(calls), 3)
+        self.assertTrue(all(0 < timeout <= 2 for timeout in calls))
+        self.assertTrue(all(0 <= delay <= 2 for delay in sleeps))
+        self.assertIn("container_background_cpu_delta", first["current_snapshot"]["missing"])
+        self.assertEqual(second["current_snapshot"]["containers"]["background"]["cpu_throttled_usec_delta"], 10)
+        self.assertNotIn("container_background_cpu_delta", second["current_snapshot"]["missing"])
+        self.assertIn("container_background_cpu_delta", third["current_snapshot"]["missing"])
+        self.assertIsNone(third["current_snapshot"]["containers"]["background"]["cpu_throttled_usec_delta"])
 
 
 if __name__ == "__main__":

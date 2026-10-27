@@ -24,7 +24,7 @@ POLL_SECONDS = 1.0
 MAX_INPUT_LINE = 256 * 1024
 MAX_EVENT_FINGERPRINTS = 256
 SAFE_STAGES = {"admission", "readiness", "discovery", "websocket", "events", "create_context", "create_target", "attach_target", "configure", "navigate", "dom", "cleanup", "parse", "validation"}
-SAFE_REASONS = {"context_timeout", "context_cancelled", "event_overflow", "ownership_loss", "unsupported", "client_disconnected", "malformed_detach", "owned_detach", "target_crashed", "protocol_error", "transport_error", "operation_failed", "navigation_failed", "evaluation_failed", "navigation_dns", "navigation_connection", "navigation_tls", "navigation_aborted", "navigation_other", "browser_busy", "resource_limit", "sqlstate", "timeout", "canceled", "transaction_closed", "connection_closed", "other", "lease_mismatch"}
+SAFE_REASONS = {"context_timeout", "context_cancelled", "event_overflow", "ownership_loss", "unsupported", "client_disconnected", "malformed_detach", "owned_detach", "target_crashed", "protocol_error", "transport_error", "operation_failed", "navigation_failed", "evaluation_failed", "navigation_dns", "navigation_connection", "navigation_tls", "navigation_aborted", "navigation_other", "browser_busy", "resource_limit", "sqlstate", "timeout", "canceled", "transaction_closed", "connection_closed", "other", "lease_mismatch", "policy_denied", "unavailable"}
 SAFE_CODES = {"cancelled", "deadline_exceeded", "event_overflow", "invalid_input", "native_browser_busy", "native_browser_policy_denied", "parse_failed", "public_url_denied", "resource_limit", "transport_failed", "unavailable", "unsupported_selector", "response_too_large", "page_monitor_unavailable", "invalid_runner_response", "other"}
 EVENTS = {"worker_heartbeat_failure", "page_monitor_failure"}
 
@@ -373,7 +373,7 @@ MAX_BYTES = 262144
 MAX_LINES = 64
 MAX_LINE_BYTES = 8192
 EVENTS = {"worker_heartbeat_failure", "page_monitor_failure"}
-REASONS = "context_timeout|context_cancelled|event_overflow|ownership_loss|unsupported|protocol_error|transport_error|operation_failed|navigation_failed|evaluation_failed|navigation_dns|navigation_connection|navigation_tls|navigation_aborted|navigation_other|browser_busy|resource_limit|sqlstate|timeout|canceled|cancelled|transaction_closed|connection_closed|other|lease_mismatch|malformed_detach|owned_detach|target_crashed|client_disconnected".split("|")
+REASONS = "context_timeout|context_cancelled|event_overflow|ownership_loss|unsupported|protocol_error|transport_error|operation_failed|navigation_failed|evaluation_failed|navigation_dns|navigation_connection|navigation_tls|navigation_aborted|navigation_other|browser_busy|resource_limit|sqlstate|timeout|canceled|cancelled|transaction_closed|connection_closed|other|lease_mismatch|malformed_detach|owned_detach|target_crashed|client_disconnected|policy_denied|unavailable".split("|")
 CODES = "cancelled|deadline_exceeded|event_overflow|invalid_input|native_browser_busy|native_browser_policy_denied|parse_failed|public_url_denied|resource_limit|transport_failed|unavailable|unsupported_selector|response_too_large|page_monitor_unavailable|invalid_runner_response|other".split("|")
 STAGES = "admission|readiness|discovery|websocket|events|create_context|create_target|attach_target|configure|navigate|dom|cleanup|parse|validation".split("|")
 
@@ -660,6 +660,11 @@ def collect_live(output: Path, host: str, background: str, extractor: str, db: s
                 old = old_container.get(field) if same_container else None
                 new = current.get(field)
                 current[delta] = max(0, new - old) if isinstance(new, int) and isinstance(old, int) and new >= old else None
+            missing_delta = "container_" + name + "_cpu_delta"
+            if isinstance(current["cpu_throttled_usec_delta"], int) and isinstance(current["cpu_throttled_periods_delta"], int):
+                snapshot["missing"] = [item for item in snapshot["missing"] if item != missing_delta]
+            elif missing_delta not in snapshot["missing"]:
+                snapshot["missing"].append(missing_delta)
         previous = snapshot
         ring.append(snapshot)
         for event in events:
