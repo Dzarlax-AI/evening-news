@@ -48,6 +48,58 @@ EXECUTION_DB_PASSWORD = "fixture-execution-only"
 SCHEDULER_SCHEMA = "scheduler_fixture"
 WORKER_DRAIN_SECONDS = 8
 
+_RFC3339_MICRO = re.compile(
+    r"^(\d{4}-\d{2}-\d{2}T\d{2}:\d{2}:\d{2})(?:\.(\d+))?(Z|[+-]\d{2}:\d{2})$"
+)
+
+
+def parse_rfc3339_db_instant(value):
+    """Parse an offset-aware RFC3339 instant representable at DB microprecision."""
+    if not isinstance(value, str) or len(value) > 40:
+        return None
+    match = _RFC3339_MICRO.fullmatch(value)
+    if match is None:
+        return None
+    fraction = match.group(2) or ""
+    # The database stores microseconds. Extra digits are safe only when they
+    # carry no precision beyond the value the database could have persisted.
+    if len(fraction) > 6 and any(digit != "0" for digit in fraction[6:]):
+        return None
+    normalized = match.group(1)
+    if fraction:
+        normalized += "." + fraction[:6].ljust(6, "0")
+    normalized += "+00:00" if match.group(3) == "Z" else match.group(3)
+    try:
+        parsed = datetime.fromisoformat(normalized)
+    except ValueError:
+        return None
+    if parsed.tzinfo is None or parsed.utcoffset() is None:
+        return None
+    return parsed.astimezone(timezone.utc)
+
+
+def same_db_instant(expected, actual):
+    expected_instant = parse_rfc3339_db_instant(expected)
+    actual_instant = parse_rfc3339_db_instant(actual)
+    return expected_instant is not None and expected_instant == actual_instant
+
+
+def safe_utc_timestamp_diagnostic(value):
+    instant = parse_rfc3339_db_instant(value)
+    if instant is None:
+        return None
+    return instant.isoformat(timespec="microseconds").replace("+00:00", "Z")
+
+
+def paused_import_timestamp_diagnostic(expected, actual):
+    return {
+        "expected_utc": safe_utc_timestamp_diagnostic(expected),
+        "actual_utc": safe_utc_timestamp_diagnostic(actual),
+        "expected_valid": parse_rfc3339_db_instant(expected) is not None,
+        "actual_valid": parse_rfc3339_db_instant(actual) is not None,
+        "same_db_microsecond_instant": same_db_instant(expected, actual),
+    }
+
 
 def parse_docker_top_pid_args(output: str) -> list[tuple[int, str]]:
     """Parse Docker Desktop/Linux `docker top -eo pid,args`, ignoring headers."""
@@ -1155,9 +1207,12 @@ class ConsolidatedBackgroundGate(GoWebGate):
             "expected_control_revision": control["revision"], "items": [schedule],
         })
         get_status, fetched = self.scheduler_request("GET", "/v1/schedules/fixture:consolidated-due")
+        returned_due = fetched.get("next_due_at") if isinstance(fetched, dict) else None
+        timestamp_diagnostic = paused_import_timestamp_diagnostic(due, returned_due)
+        self.report["paused_import_timestamp_diagnostics"] = timestamp_diagnostic
         self.check("paused_import_preserves_due_timestamp_and_is_idempotent", imported == 200
                    and replay_status == 200 and len(replay.get("unchanged", [])) == 1
-                   and get_status == 200 and fetched.get("next_due_at") == due)
+                   and get_status == 200 and timestamp_diagnostic["same_db_microsecond_instant"])
         resumed, resume_body = self.scheduler_request("PUT", "/v1/control", {
             "expected_revision": control["revision"], "paused": False,
         })

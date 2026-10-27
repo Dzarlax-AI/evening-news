@@ -32,6 +32,44 @@ def test_cli_has_four_explicit_images_and_output_dir():
     assert args.collector_image == "collector:test"
 
 
+def test_paused_import_timestamp_matches_db_microprecision_without_tolerance():
+    module = load_gate_module()
+    expected = "2030-01-02T03:04:05.123450Z"
+    assert module.same_db_instant(expected, "2030-01-02T03:04:05.12345Z")
+    assert module.same_db_instant(expected, "2030-01-02T05:04:05.123450+02:00")
+    assert module.safe_utc_timestamp_diagnostic("2030-01-02T03:04:05.12345Z") == expected
+    for different in (
+        "2030-01-02T03:04:05.123451Z",
+        "2030-01-02T03:04:05.1234501Z",
+        "2030-01-02T03:04:05.12345",
+        "not-a-timestamp",
+        "2030-02-30T03:04:05Z",
+        None,
+    ):
+        assert not module.same_db_instant(expected, different)
+    for invalid in (
+        "2030-01-02T03:04:05.1234501Z",
+        "2030-01-02T03:04:05.12345",
+        "not-a-timestamp",
+        "2030-02-30T03:04:05Z",
+        None,
+    ):
+        assert module.safe_utc_timestamp_diagnostic(invalid) is None
+
+
+def test_paused_import_timestamp_diagnostics_are_safe_and_exact():
+    module = load_gate_module()
+    diagnostic = module.paused_import_timestamp_diagnostic(
+        "2030-01-02T03:04:05.123450Z", "2030-01-02T03:04:05.123451Z",
+    )
+    assert diagnostic == {
+        "expected_utc": "2030-01-02T03:04:05.123450Z",
+        "actual_utc": "2030-01-02T03:04:05.123451Z",
+        "expected_valid": True, "actual_valid": True,
+        "same_db_microsecond_instant": False,
+    }
+
+
 def test_fixture_environment_uses_only_scoped_database_urls_and_background_endpoints(tmp_path):
     module = load_gate_module()
     images = dict(module.DEFAULT_IMAGES)
