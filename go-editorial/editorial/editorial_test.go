@@ -48,32 +48,27 @@ func syntheticSnapshot(n int) Snapshot {
 }
 
 func syntheticDraft(s Snapshot) modelDraft {
-	d := modelDraft{}
+	d := modelDraft{ArticleStories: make(map[string]modelArticleStory, len(s.Articles))}
 	for i, a := range s.Articles {
+		d.ArticleStories[a.ID] = articleStoryFor(a)
 		if len(s.Articles) >= 8 && i == 1 {
 			continue
 		}
 		if i == 0 || i == 2 {
-			story := modelMainStory{Title: a.Title, Summary: a.Content, PrimaryArticleID: a.ID, ArticleIDs: []string{a.ID}, Evidence: []evidenceReference{referenceFor(a)}}
+			story := modelMainStory{Title: a.Title, Summary: a.Content, PrimaryArticleID: a.ID, ArticleIDs: []string{a.ID}}
 			if len(s.Articles) >= 8 && i == 0 {
 				other := s.Articles[1]
 				story.ArticleIDs = append(story.ArticleIDs, other.ID)
-				story.Evidence = append(story.Evidence, referenceFor(other))
 			}
 			d.MainStories = append(d.MainStories, story)
-		} else {
-			reference := referenceFor(a)
-			d.BriefStories = append(d.BriefStories, modelBriefStory{
-				Title: a.Title, Summary: a.Content, ArticleID: reference.ArticleID, SpanID: reference.SpanID,
-			})
 		}
 	}
 	return d
 }
 
-func referenceFor(a Article) evidenceReference {
+func articleStoryFor(a Article) modelArticleStory {
 	spans := splitSourceSpans(a.ID, preferredEvidenceText(a))
-	return evidenceReference{ArticleID: a.ID, SpanID: spans[0].ID}
+	return modelArticleStory{Title: a.Title, Summary: preferredEvidenceText(a), SpanID: spans[0].ID}
 }
 
 func syntheticStories(t *testing.T, s Snapshot) []Story {
@@ -83,7 +78,7 @@ func syntheticStories(t *testing.T, s Snapshot) []Story {
 		t.Fatal(err)
 	}
 	draft := syntheticDraft(s)
-	stories, err := resolveModelStories(draft.MainStories, draft.BriefStories, spans)
+	stories, err := resolveModelStories(s, draft.MainStories, draft.ArticleStories, spans)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -165,7 +160,10 @@ func TestGenerateWithFakeProviderAndRenderSafeLinks(t *testing.T) {
 func TestGenerateRejectsFabricatedEvidenceAndIncompleteCoverage(t *testing.T) {
 	s := syntheticSnapshot(8)
 	d := syntheticDraft(s)
-	d.MainStories[0].Evidence[0].SpanID = "fabricated-span-id"
+	firstID := s.Articles[0].ID
+	firstRecord := d.ArticleStories[firstID]
+	firstRecord.SpanID = "fabricated-span-id"
+	d.ArticleStories[firstID] = firstRecord
 	server := fakeGemini(t, d, 0)
 	_, err := Generate(context.Background(), s, "ru", ProviderConfig{APIKey: "fake-key", Model: "fake-model", Endpoint: server.URL, Client: server.Client()})
 	server.Close()
@@ -173,7 +171,7 @@ func TestGenerateRejectsFabricatedEvidenceAndIncompleteCoverage(t *testing.T) {
 		t.Fatalf("expected bounded validation failure, got %v", err)
 	}
 	d = syntheticDraft(s)
-	d.BriefStories = d.BriefStories[:len(d.BriefStories)-1]
+	delete(d.ArticleStories, s.Articles[len(s.Articles)-1].ID)
 	server = fakeGemini(t, d, 0)
 	defer server.Close()
 	_, err = Generate(context.Background(), s, "ru", ProviderConfig{APIKey: "fake-key", Model: "fake-model", Endpoint: server.URL, Client: server.Client()})
@@ -225,7 +223,7 @@ func TestEvidenceSpansCoverExactSourceTextAndPreferContentOverSummary(t *testing
 }
 
 func TestModelDraftRejectsFreeformEvidenceQuote(t *testing.T) {
-	response := `{"main_stories":[],"brief_stories":[{"title":"Заголовок","summary":"Пересказ","article_id":"1001","span_id":"span-1001-hash-0001","quote":"парафраз"}],"excluded":[]}`
+	response := `{"main_stories":[],"article_stories":{"1001":{"title":"Заголовок","summary":"Пересказ","span_id":"span-1001-hash-0001","quote":"парафраз"}}}`
 	var draft modelDraft
 	dec := json.NewDecoder(strings.NewReader(response))
 	dec.DisallowUnknownFields()
@@ -234,43 +232,71 @@ func TestModelDraftRejectsFreeformEvidenceQuote(t *testing.T) {
 	}
 }
 
-func TestModelDraftCannotRepresentBundledBriefArticles(t *testing.T) {
-	legacyBundle := `{"main_stories":[],"brief_stories":[{"title":"Дайджест","summary":"Общие новости","article_ids":["1001","1002"],"evidence":[{"article_id":"1001","span_id":"a"},{"article_id":"1002","span_id":"b"}]}],"excluded":[]}`
+func TestModelDraftRequiresPerArticleRecordsAndRejectsListBasedBriefOutput(t *testing.T) {
+	s := syntheticSnapshot(3)
+	schema := geminiSchema(s)
+	properties := schema["properties"].(map[string]any)
+	articleSchema := properties["article_stories"].(map[string]any)
+	articleProperties := articleSchema["properties"].(map[string]any)
+	if len(articleProperties) != len(s.Articles) {
+		t.Fatalf("article schema has %d keys, expected %d", len(articleProperties), len(s.Articles))
+	}
+	required := articleSchema["required"].([]string)
+	if len(required) != len(s.Articles) {
+		t.Fatalf("required article key list has %d keys, expected %d", len(required), len(s.Articles))
+	}
+	requiredSet := make(map[string]bool, len(required))
+	for _, id := range required {
+		requiredSet[id] = true
+	}
+	for _, article := range s.Articles {
+		if _, ok := articleProperties[article.ID]; !ok {
+			t.Fatalf("schema missing article ID %s", article.ID)
+		}
+		if !requiredSet[article.ID] {
+			t.Fatalf("schema does not require article ID %s", article.ID)
+		}
+	}
+	if _, hasExcluded := properties["excluded"]; hasExcluded {
+		t.Fatal("generation schema still permits article exclusions")
+	}
+	if _, hasBriefArray := properties["brief_stories"]; hasBriefArray {
+		t.Fatal("model schema still permits omission-prone brief story arrays")
+	}
+	legacyBundle := `{"main_stories":[],"brief_stories":[{"title":"Дайджест","summary":"Общие новости","article_ids":["1001","1002"],"evidence":[{"article_id":"1001","span_id":"a"},{"article_id":"1002","span_id":"b"}]}]}`
 	var draft modelDraft
 	dec := json.NewDecoder(strings.NewReader(legacyBundle))
 	dec.DisallowUnknownFields()
 	if err := dec.Decode(&draft); err == nil {
-		t.Fatal("bundled brief output fit the scalar brief schema")
-	}
-	briefProperties := geminiSchema()["properties"].(map[string]any)["brief_stories"].(map[string]any)["items"].(map[string]any)["properties"].(map[string]any)
-	if _, hasArticleIDs := briefProperties["article_ids"]; hasArticleIDs {
-		t.Fatal("brief schema still permits an article_ids array")
-	}
-	if _, hasEvidence := briefProperties["evidence"]; hasEvidence {
-		t.Fatal("brief schema still permits grouped evidence arrays")
+		t.Fatal("old list-based brief output was accepted")
 	}
 }
 
-func TestEvidenceSpanResolverRejectsUnknownCrossArticleAndDuplicateReferences(t *testing.T) {
+func TestArticleStoryMapRejectsMissingUnknownAndCrossArticleSpanKeys(t *testing.T) {
 	s := syntheticSnapshot(2)
 	_, spanByID, err := buildPrompt(s)
 	if err != nil {
 		t.Fatal(err)
 	}
 	draft := syntheticDraft(s)
-	draft.MainStories[0].Evidence[0].SpanID = "unknown-span"
-	if _, err := resolveModelStories(draft.MainStories, draft.BriefStories, spanByID); err == nil {
+	draft.ArticleStories[s.Articles[0].ID] = modelArticleStory{Title: s.Articles[0].Title, Summary: "Кратко", SpanID: "unknown-span"}
+	if _, err := resolveModelStories(s, draft.MainStories, draft.ArticleStories, spanByID); err == nil {
 		t.Fatal("unknown source span accepted")
 	}
 	draft = syntheticDraft(s)
-	draft.MainStories[0].Evidence[0].SpanID = referenceFor(s.Articles[1]).SpanID
-	if _, err := resolveModelStories(draft.MainStories, draft.BriefStories, spanByID); err == nil {
+	draft.ArticleStories[s.Articles[0].ID] = modelArticleStory{Title: s.Articles[0].Title, Summary: "Кратко", SpanID: articleStoryFor(s.Articles[1]).SpanID}
+	if _, err := resolveModelStories(s, draft.MainStories, draft.ArticleStories, spanByID); err == nil {
 		t.Fatal("cross-article source span accepted")
 	}
 	draft = syntheticDraft(s)
-	draft.MainStories[0].Evidence = append(draft.MainStories[0].Evidence, draft.MainStories[0].Evidence[0])
-	if _, err := resolveModelStories(draft.MainStories, draft.BriefStories, spanByID); err == nil {
-		t.Fatal("duplicate source span reference accepted")
+	delete(draft.ArticleStories, s.Articles[1].ID)
+	if _, err := resolveModelStories(s, draft.MainStories, draft.ArticleStories, spanByID); err == nil {
+		t.Fatal("missing required article record accepted")
+	}
+	draft = syntheticDraft(s)
+	draft.ArticleStories["999999"] = modelArticleStory{Title: "Other", Summary: "Other", SpanID: "foreign"}
+	if _, err := resolveModelStories(s, draft.MainStories, draft.ArticleStories, spanByID); err == nil {
+		t.Fatal("unknown article record key accepted")
 	}
 }
 
@@ -290,7 +316,7 @@ func TestBriefStoriesMustBeSingleArticleButMainStoriesMayGroup(t *testing.T) {
 	}
 }
 
-func TestGenerateRejectsExclusionsForCallerSelectedArticlesIncludingLongContent(t *testing.T) {
+func TestGenerateRequiresRecordForLongCallerSelectedArticle(t *testing.T) {
 	s := syntheticSnapshot(8)
 	longContent := strings.Repeat("Полный исходный материал с подробностями и точными фактами. ", 150)
 	s.Articles[7].Content = longContent
@@ -303,23 +329,22 @@ func TestGenerateRejectsExclusionsForCallerSelectedArticlesIncludingLongContent(
 		joined.WriteString(span.Text)
 	}
 	if joined.String() != longContent || !strings.Contains(prompt, "Во входном снимке ровно 8 материалов.") ||
-		!strings.Contains(prompt, "excluded всегда должен быть пустым массивом []") {
-		t.Fatal("generation prompt omitted eligible long content or mandatory inclusion rule")
+		!strings.Contains(prompt, "article_stories") {
+		t.Fatal("generation prompt omitted eligible long content or mandatory article records")
 	}
 	if len(spans) == 0 {
 		t.Fatal("long article produced no source spans")
 	}
 
 	draft := syntheticDraft(s)
-	draft.BriefStories = draft.BriefStories[:len(draft.BriefStories)-1]
-	draft.Excluded = []Exclusion{{ArticleID: s.Articles[7].ID, Reason: "insufficient_content"}}
+	delete(draft.ArticleStories, s.Articles[7].ID)
 	server := fakeGemini(t, draft, 0)
 	defer server.Close()
 	_, err = Generate(context.Background(), s, RussianLocale, ProviderConfig{
 		APIKey: "fake-key", Model: "fake-model", Endpoint: server.URL, Client: server.Client(),
 	})
 	if err == nil || err.Error() != "provider_invalid_editorial_edition" {
-		t.Fatalf("provider exclusion of a caller-selected article was accepted: %v", err)
+		t.Fatalf("provider omission of a caller-selected article was accepted: %v", err)
 	}
 }
 

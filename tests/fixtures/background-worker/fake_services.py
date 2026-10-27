@@ -204,7 +204,7 @@ class Handler(BaseHTTPRequestHandler):
                 COUNTERS["gemini"] += 1
             GATES["ai"].wait(timeout=180)
             schema = payload.get("generationConfig", {}).get("responseSchema", {})
-            if "main_stories" in schema.get("properties", {}):
+            if "article_stories" in schema.get("properties", {}):
                 with LOCK:
                     COUNTERS["editorial_gemini"] += 1
                 prompt = payload.get("contents", [{}])[0].get("parts", [{}])[0].get("text", "")
@@ -216,24 +216,21 @@ class Handler(BaseHTTPRequestHandler):
                     self._json(400, {"error": "invalid_editorial_fixture_request"})
                     return
                 main_stories = []
-                brief_stories = []
+                article_stories = {}
                 for index, article in enumerate(articles):
                     summary = "Синтетический материал сообщает проверенный факт."
+                    article_stories[article["id"]] = {
+                        "title": article["title"], "summary": summary,
+                        "span_id": article["evidence_spans"][0]["id"],
+                    }
                     if index < 5:
                         main_stories.append({
                             "title": article["title"],
                             "summary": summary,
                             "primary_article_id": article["id"],
                             "article_ids": [article["id"]],
-                            "evidence": [{"article_id": article["id"], "span_id": article["evidence_spans"][0]["id"]}],
                         })
-                    else:
-                        brief_stories.append({
-                            "title": article["title"], "summary": summary,
-                            "article_id": article["id"],
-                            "span_id": article["evidence_spans"][0]["id"],
-                        })
-                editorial_text = json.dumps({"main_stories": main_stories, "brief_stories": brief_stories, "excluded": []}, ensure_ascii=False)
+                editorial_text = json.dumps({"main_stories": main_stories, "article_stories": article_stories}, ensure_ascii=False)
                 self._json(200, {
                     "candidates": [{"finishReason": "STOP",
                                     "content": {"parts": [{"text": editorial_text}]}}],

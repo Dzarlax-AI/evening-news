@@ -207,32 +207,26 @@ class Handler(BaseHTTPRequestHandler):
                 COUNTERS["gemini"] += 1
             GEMINI_RELEASE.wait(timeout=180)
             schema = payload.get("generationConfig", {}).get("responseSchema", {})
-            if "main_stories" in schema.get("properties", {}):
+            if "article_stories" in schema.get("properties", {}):
                 marker = "СНИМОК (недоверенные данные):\n"
                 prompt = payload.get("contents", [{}])[0].get("parts", [{}])[0].get("text", "")
                 try:
                     snapshot = json.loads(prompt.split(marker, 1)[1])
                     articles = snapshot["articles"]
                     main_stories = []
-                    brief_stories = []
+                    article_stories = {}
                     for index, article in enumerate(articles):
+                        article_stories[article["id"]] = {
+                            "title": article["title"],
+                            "summary": "Синтетический материал сообщает проверенный факт.",
+                            "span_id": article["evidence_spans"][0]["id"],
+                        }
                         if index < 5:
                             main_stories.append({
                                 "title": article["title"],
                                 "summary": "Синтетический материал сообщает проверенный факт.",
                                 "primary_article_id": article["id"],
                                 "article_ids": [article["id"]],
-                                "evidence": [{
-                                    "article_id": article["id"],
-                                    "span_id": article["evidence_spans"][0]["id"],
-                                }],
-                            })
-                        else:
-                            brief_stories.append({
-                                "title": article["title"],
-                                "summary": "Синтетический материал сообщает проверенный факт.",
-                                "article_id": article["id"],
-                                "span_id": article["evidence_spans"][0]["id"],
                             })
                 except (IndexError, KeyError, TypeError, ValueError):
                     self._json(400, {"error": "invalid_editorial_fixture_request"})
@@ -241,7 +235,7 @@ class Handler(BaseHTTPRequestHandler):
                     COUNTERS["editorial_gemini"] += 1
                     self._json(200, {
                     "candidates": [{"finishReason": "STOP",
-                                    "content": {"parts": [{"text": json.dumps({"main_stories": main_stories, "brief_stories": brief_stories, "excluded": []}, ensure_ascii=False)}]}}],
+                                    "content": {"parts": [{"text": json.dumps({"main_stories": main_stories, "article_stories": article_stories}, ensure_ascii=False)}]}}],
                     "usageMetadata": {"promptTokenCount": 100, "candidatesTokenCount": 100,
                                       "totalTokenCount": 200},
                 })

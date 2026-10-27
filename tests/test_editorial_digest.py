@@ -107,7 +107,7 @@ def test_consolidated_fixture_accepts_editorial_schema_and_projects_its_counter(
         "evidence_spans": [{"id": "span-1-fixture-0001", "text": "Точный фрагмент источника."}],
     }]}
     payload = {
-        "generationConfig": {"responseSchema": {"properties": {"main_stories": {}}}},
+        "generationConfig": {"responseSchema": {"properties": {"article_stories": {}}}},
         "contents": [{"parts": [{"text": "СНИМОК (недоверенные данные):\n"
                                      + json.dumps(snapshot, ensure_ascii=False)}]}],
     }
@@ -120,9 +120,7 @@ def test_consolidated_fixture_accepts_editorial_schema_and_projects_its_counter(
             body = json.load(response)
         draft = json.loads(body["candidates"][0]["content"]["parts"][0]["text"])
         assert body["candidates"][0]["finishReason"] == "STOP"
-        assert draft["main_stories"][0]["evidence"][0] == {
-            "article_id": "1", "span_id": "span-1-fixture-0001",
-        }
+        assert draft["article_stories"]["1"]["span_id"] == "span-1-fixture-0001"
         with urlopen(base + "/__gate/counters", timeout=5) as response:
             counters = json.load(response)
         assert counters["providers"]["editorial_gemini"] == before + 1
@@ -241,22 +239,20 @@ async def editorial_pg():
 
 def _fake_gemini_response(snapshot):
     main_stories = []
-    brief_stories = []
+    article_stories = {}
     for index, article in enumerate(snapshot["articles"]):
+        article_stories[article["id"]] = {
+            "title": article["title"],
+            "summary": "Синтетический материал подтверждает событие.",
+            "span_id": article["evidence_spans"][0]["id"],
+        }
         if index < 2:
             main_stories.append({
                 "title": article["title"],
                 "summary": "Синтетический материал подтверждает событие.",
                 "primary_article_id": article["id"], "article_ids": [article["id"]],
-                "evidence": [{"article_id": article["id"], "span_id": article["evidence_spans"][0]["id"]}],
             })
-        else:
-            brief_stories.append({
-                "title": article["title"],
-                "summary": "Синтетический материал подтверждает событие.",
-                "article_id": article["id"], "span_id": article["evidence_spans"][0]["id"],
-            })
-    return json.dumps({"main_stories": main_stories, "brief_stories": brief_stories, "excluded": []}, ensure_ascii=False)
+    return json.dumps({"main_stories": main_stories, "article_stories": article_stories}, ensure_ascii=False)
 
 
 def _editorial_binary_or_skip():
