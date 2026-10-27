@@ -575,12 +575,110 @@ class ConsolidatedBackgroundGate(GoWebGate):
 
     def wait_job_http(self, job_id, timeout=240):
         job = super().wait_job_http(job_id, timeout)
-        self.report.setdefault("job_diagnostics", {})[job_id] = {
-            "status": job.get("status"),
-            "error_code": job.get("error_code") if isinstance(job.get("error_code"), str) else None,
-            "error_type": job.get("error_type") if isinstance(job.get("error_type"), str) else None,
+        diagnostic = {
+            "status": self._safe_state(job.get("status"), {"queued", "running", "succeeded", "failed", "interrupted", "delivery_unknown"}),
+            "error_code": self._safe_code(job.get("error_code")),
+            "error_type": self._safe_code(job.get("error_type")),
         }
+        if diagnostic["status"] in {"failed", "interrupted", "delivery_unknown"}:
+            diagnostic["failure_diagnostics"] = self.capture_execution_failure_diagnostics(job_id)
+        self.report.setdefault("job_diagnostics", {})[job_id] = diagnostic
         return job
+
+    @staticmethod
+    def _safe_code(value):
+        return value if isinstance(value, str) and re.fullmatch(r"[a-z0-9_]{1,64}", value) else None
+
+    @staticmethod
+    def _safe_state(value, allowed):
+        return value if isinstance(value, str) and value in allowed else None
+
+    def _json_probe(self, sql):
+        try:
+            value = json.loads(self.pg_value(sql))
+        except (GateFailure, ValueError, TypeError, json.JSONDecodeError):
+            return None
+        return value
+
+    def _safe_run_metadata(self, table, job_id, states):
+        if table not in {"background_job_executions", "article_ingestion_runs", "article_processing_runs"}:
+            return []
+        rows = self._json_probe(
+			"SELECT COALESCE(json_agg(json_build_object("
+            "'attempt_generation',attempt_generation,'worker_generation',worker_generation,'state',state,"
+            "'error_code',error_code,'started',started_at IS NOT NULL,'finished',finished_at IS NOT NULL,"
+            "'duration_seconds',CASE WHEN started_at IS NOT NULL AND finished_at IS NOT NULL "
+            "THEN EXTRACT(EPOCH FROM finished_at-started_at) END) ORDER BY attempt_generation),'[]'::json)::text "
+            f"FROM {table} WHERE job_id='{job_id}'"
+        )
+        if not isinstance(rows, list):
+            return {"available": False}
+        safe = []
+        for row in rows[:20]:
+            if not isinstance(row, dict):
+                continue
+            item = {
+                "attempt_generation": row.get("attempt_generation") if type(row.get("attempt_generation")) is int and row["attempt_generation"] >= 0 else None,
+                "worker_generation": row.get("worker_generation") if type(row.get("worker_generation")) is int and row["worker_generation"] > 0 else None,
+                "state": self._safe_state(row.get("state"), states),
+                "error_code": self._safe_code(row.get("error_code")),
+                "started": row.get("started") if type(row.get("started")) is bool else None,
+                "finished": row.get("finished") if type(row.get("finished")) is bool else None,
+            }
+            duration = row.get("duration_seconds")
+            if type(duration) in {int, float} and 0 <= duration <= 86400:
+                item["duration_seconds"] = round(float(duration), 3)
+            safe.append(item)
+        return safe
+
+    def _safe_execution_log_phases(self):
+        result = self.docker("logs", "--since", "5m", self.prefix + "-background", check=False)
+        phases = []
+        pattern = re.compile(
+            r"execution operation failed phase=([a-z_]{1,48}) reason_code=([a-z_]{1,64})(?: sqlstate=([0-9A-Z]{5}))?"
+        )
+        for line in ((result.stdout or "") + "\n" + (result.stderr or "")).splitlines():
+            match = pattern.search(line)
+            if not match:
+                continue
+            item = {"phase": match.group(1), "reason_code": match.group(2)}
+            if match.group(3):
+                item["sqlstate"] = match.group(3)
+            phases.append(item)
+        return phases[-50:]
+
+    def capture_execution_failure_diagnostics(self, job_id):
+        # The UUID and table names are constrained before they are interpolated
+        # into fixture-only SELECTs. Only finite metadata leaves the test
+        # environment; SQL, payloads, result content, and driver text are never
+        # copied into the report.
+        if not isinstance(job_id, str) or re.fullmatch(
+                r"[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}", job_id) is None:
+            return {"available": False}
+        row = self._json_probe(
+            "SELECT json_build_object('kind',kind,'state',state,'owner_generation',owner_generation,"
+            "'attempt_generation',attempt_generation,'error_code',error_code)::text "
+            f"FROM background_jobs WHERE id='{job_id}'"
+        )
+        job = None
+        if isinstance(row, dict):
+            job = {
+                "kind": self._safe_state(row.get("kind"), {"news_processing", "news_digest", "telegram_digest", "backup", "reprocess_failed", "article_reprocess", "summaries_generate", "source_test"}),
+                "state": self._safe_state(row.get("state"), {"queued", "running", "succeeded", "failed", "interrupted", "delivery_unknown"}),
+                "owner_generation": row.get("owner_generation") if type(row.get("owner_generation")) is int and row["owner_generation"] > 0 else None,
+                "attempt_generation": row.get("attempt_generation") if type(row.get("attempt_generation")) is int and row["attempt_generation"] >= 0 else None,
+                "error_code": self._safe_code(row.get("error_code")),
+            }
+        return {
+            "job": job if job is not None else {"available": False},
+            "execution_attempts": self._safe_run_metadata("background_job_executions", job_id,
+                                                           {"accepted", "running", "succeeded", "failed", "interrupted", "delivery_unknown"}),
+            "ingestion_runs": self._safe_run_metadata("article_ingestion_runs", job_id,
+                                                        {"running", "succeeded", "failed", "cancelled", "interrupted"}),
+            "processing_runs": self._safe_run_metadata("article_processing_runs", job_id,
+                                                         {"running", "succeeded", "failed", "cancelled", "interrupted"}),
+            "execution_log_phases": self._safe_execution_log_phases(),
+        }
 
     def pg_value(self, sql):
         result = self.docker("exec", self.prefix + "-postgres", "psql", "-U", "gate_user", "-d", "gate_db",

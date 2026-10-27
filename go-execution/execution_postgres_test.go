@@ -149,6 +149,27 @@ func TestPostgresAcceptFenceContextCancelAndDuplicate(t *testing.T) {
 	if accepted.Code != 202 {
 		t.Fatalf("accept status=%d body=%s", accepted.Code, accepted.Body.String())
 	}
+	var firstAcceptance struct {
+		AcceptedAt string `json:"accepted_at"`
+	}
+	if err = json.Unmarshal(accepted.Body.Bytes(), &firstAcceptance); err != nil || firstAcceptance.AcceptedAt == "" {
+		t.Fatalf("first acceptance omitted persisted accepted_at: body=%s err=%v", accepted.Body.String(), err)
+	}
+	duplicateAcceptance := request("POST", "/internal/v1/job-executions", body)
+	var duplicateWire struct {
+		AcceptedAt string `json:"accepted_at"`
+		Duplicate  bool   `json:"duplicate"`
+	}
+	if duplicateAcceptance.Code != 202 || json.Unmarshal(duplicateAcceptance.Body.Bytes(), &duplicateWire) != nil || !duplicateWire.Duplicate || duplicateWire.AcceptedAt != firstAcceptance.AcceptedAt {
+		t.Fatalf("duplicate acceptance timestamp differs: first=%q duplicate=%s", firstAcceptance.AcceptedAt, duplicateAcceptance.Body.String())
+	}
+	firstReceiptRead := request("GET", fmt.Sprintf("/internal/v1/job-executions/%s/1", job), "")
+	var receiptWire struct {
+		AcceptedAt string `json:"accepted_at"`
+	}
+	if firstReceiptRead.Code != 200 || json.Unmarshal(firstReceiptRead.Body.Bytes(), &receiptWire) != nil || receiptWire.AcceptedAt != firstAcceptance.AcceptedAt {
+		t.Fatalf("GET receipt timestamp differs: first=%q read=%s", firstAcceptance.AcceptedAt, firstReceiptRead.Body.String())
+	}
 	select {
 	case <-started:
 	case <-time.After(5 * time.Second):

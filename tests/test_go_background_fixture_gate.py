@@ -185,6 +185,96 @@ def test_migration_failure_diagnostics_are_precleanup_and_sanitized(monkeypatch,
     assert "postgresql://[redacted]" in diagnostic["log_excerpt"][0]
 
 
+def test_failed_execution_diagnostics_keep_only_safe_job_and_run_metadata(monkeypatch, tmp_path):
+    module = load_gate_module()
+    gate = module.ConsolidatedBackgroundGate(dict(module.DEFAULT_IMAGES), tmp_path)
+    job_id = "11111111-2222-4333-8444-555555555555"
+    queries = []
+
+    def fake_pg_value(sql):
+        queries.append(sql)
+        if "FROM background_jobs" in sql:
+            return '{"kind":"article_reprocess","state":"failed","owner_generation":5,"attempt_generation":2,"error_code":"worker_error"}'
+        if "FROM background_job_executions" in sql:
+            return '[{"attempt_generation":1,"worker_generation":4,"state":"interrupted","error_code":"worker_interrupted","started":true,"finished":true,"duration_seconds":8.5}]'
+        if "FROM article_ingestion_runs" in sql:
+            return "[]"
+        if "FROM article_processing_runs" in sql:
+            return '[{"attempt_generation":2,"worker_generation":5,"state":"succeeded","error_code":null,"started":true,"finished":true,"duration_seconds":0.25}]'
+        raise AssertionError(sql)
+
+    class Result:
+        returncode = 0
+        stdout = (
+            '2026-10-27 WARN execution operation failed phase=result_projection '
+            'reason_code=result_rejected sqlstate=22023 private=payload-secret SQL=SELECT-secret\n'
+            '2026-10-27 WARN worker heartbeat failed error=database-url-secret\n'
+        )
+        stderr = ""
+
+    monkeypatch.setattr(gate, "pg_value", fake_pg_value)
+    monkeypatch.setattr(gate, "docker", lambda *args, **kwargs: Result())
+    diagnostic = gate.capture_execution_failure_diagnostics(job_id)
+    assert diagnostic["job"] == {
+        "kind": "article_reprocess", "state": "failed", "owner_generation": 5,
+        "attempt_generation": 2, "error_code": "worker_error",
+    }
+    assert diagnostic["execution_attempts"] == [{
+        "attempt_generation": 1, "worker_generation": 4, "state": "interrupted",
+        "error_code": "worker_interrupted", "started": True, "finished": True,
+        "duration_seconds": 8.5,
+    }]
+    assert diagnostic["ingestion_runs"] == []
+    assert diagnostic["processing_runs"][0]["state"] == "succeeded"
+    assert diagnostic["execution_log_phases"] == [{
+        "phase": "result_projection", "reason_code": "result_rejected", "sqlstate": "22023",
+    }]
+    encoded = repr(diagnostic)
+    for secret in ("payload-secret", "SELECT-secret", "database-url-secret", "fixture-only"):
+        assert secret not in encoded
+    assert all("SELECT" in sql and "FROM " in sql for sql in queries)
+
+
+def test_execution_failure_diagnostics_reject_invalid_ids_and_untrusted_codes(monkeypatch, tmp_path):
+    module = load_gate_module()
+    gate = module.ConsolidatedBackgroundGate(dict(module.DEFAULT_IMAGES), tmp_path)
+    monkeypatch.setattr(gate, "pg_value", lambda _sql: '{"kind":"article_reprocess","state":"failed","owner_generation":-1,"attempt_generation":2,"error_code":"secret from database"}')
+
+    class Result:
+        returncode = 0
+        stdout = 'execution operation failed phase=bad phase reason_code=secret value\n'
+        stderr = ""
+
+    monkeypatch.setattr(gate, "docker", lambda *args, **kwargs: Result())
+    invalid_id = gate.capture_execution_failure_diagnostics("not-a-uuid")
+    assert invalid_id == {"available": False}
+    safe_id = gate.capture_execution_failure_diagnostics("11111111-2222-4333-8444-555555555555")
+    assert safe_id["job"] == {
+        "kind": "article_reprocess", "state": "failed", "owner_generation": None,
+        "attempt_generation": 2, "error_code": None,
+    }
+    assert safe_id["execution_log_phases"] == []
+    assert "secret from database" not in repr(safe_id)
+
+
+def test_terminal_failed_job_attaches_safe_failure_metadata(monkeypatch, tmp_path):
+    module = load_gate_module()
+    gate = module.ConsolidatedBackgroundGate(dict(module.DEFAULT_IMAGES), tmp_path)
+    monkeypatch.setattr(module.GoWebGate, "wait_job_http", lambda *_args, **_kwargs: {
+        "status": "failed", "error_code": "worker_error", "error_type": "database-url-secret",
+    })
+    monkeypatch.setattr(gate, "capture_execution_failure_diagnostics", lambda _job_id: {
+        "execution_log_phases": [{"phase": "pipeline_execute", "reason_code": "handler_failed"}],
+    })
+    result = gate.wait_job_http("11111111-2222-4333-8444-555555555555")
+    assert result["status"] == "failed"
+    job_diagnostic = gate.report["job_diagnostics"]["11111111-2222-4333-8444-555555555555"]
+    assert job_diagnostic["error_code"] == "worker_error"
+    assert job_diagnostic["error_type"] is None
+    assert job_diagnostic["failure_diagnostics"]["execution_log_phases"][0]["reason_code"] == "handler_failed"
+    assert "database-url-secret" not in repr(gate.report)
+
+
 def test_active_sigterm_article_is_fresh_synthetic_and_requires_ai(monkeypatch, tmp_path):
     module = load_gate_module()
     gate = module.ConsolidatedBackgroundGate(dict(module.DEFAULT_IMAGES), tmp_path)

@@ -78,7 +78,8 @@ func (s *Server) acceptAttempt(ctx context.Context, e Envelope, digest string) (
 	if !e.Deadline.After(now) || e.Deadline.After(now.Add(MaxDeadline)) {
 		return receipt, false, ErrDeadline
 	}
-	_, err = tx.Exec(qctx, `INSERT INTO background_job_executions(job_id,attempt_generation,envelope_sha256,executor_instance_id,owner_id,worker_generation,deadline_at,state,accepted_at) VALUES($1,$2,$3,$4,$5,$6,$7,'accepted',clock_timestamp() AT TIME ZONE 'UTC')`, e.JobID, e.Attempt, digest, s.instance, e.OwnerID, generation, e.Deadline.UTC())
+	var acceptedAt string
+	err = tx.QueryRow(qctx, `INSERT INTO background_job_executions(job_id,attempt_generation,envelope_sha256,executor_instance_id,owner_id,worker_generation,deadline_at,state,accepted_at) VALUES($1,$2,$3,$4,$5,$6,$7,'accepted',clock_timestamp() AT TIME ZONE 'UTC') RETURNING to_char(accepted_at,'YYYY-MM-DD"T"HH24:MI:SS.US')`, e.JobID, e.Attempt, digest, s.instance, e.OwnerID, generation, e.Deadline.UTC()).Scan(&acceptedAt)
 	if err != nil {
 		return receipt, false, err
 	}
@@ -86,7 +87,7 @@ func (s *Server) acceptAttempt(ctx context.Context, e Envelope, digest string) (
 		return receipt, false, err
 	}
 	ownerID, generationCopy, deadlineCopy := e.OwnerID.String(), generation, e.DeadlineRaw
-	receipt = Receipt{JobID: e.JobID.String(), Attempt: e.Attempt, OwnerID: &ownerID, Generation: &generationCopy, DeadlineAt: &deadlineCopy, Instance: s.instance.String(), State: "accepted", Digest: digest, Kind: kind, Payload: payload}
+	receipt = Receipt{JobID: e.JobID.String(), Attempt: e.Attempt, OwnerID: &ownerID, Generation: &generationCopy, DeadlineAt: &deadlineCopy, Instance: s.instance.String(), State: "accepted", AcceptedAt: acceptedAt, Digest: digest, Kind: kind, Payload: payload}
 	return receipt, true, nil
 }
 
