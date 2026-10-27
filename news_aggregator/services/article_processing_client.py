@@ -50,7 +50,7 @@ class ArticleProcessingClient:
             "attempt_generation": active.attempt_generation,
             "owner_id": str(lease.owner_id),
             "generation": lease.generation,
-            "backend_pid": lease.backend_pid,
+            "backend_pid": lease.worker_backend_pid,
             "executor_instance_id": str(active.executor_instance_id),
             "deadline_at": deadline.isoformat().replace("+00:00", "Z"),
         }

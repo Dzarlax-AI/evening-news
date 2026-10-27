@@ -6,19 +6,20 @@ import pytest
 from sqlalchemy.orm import Session
 
 from news_aggregator.models import Article, ArticleCategory, Category
+from news_aggregator.services.domain_operations import _group_articles_by_category
 from .processing_test_helpers import AsyncSessionAdapter, isolated_publication_database
 
 
 @pytest.fixture
 def isolated():
-    orchestrator, engine = isolated_publication_database()
-    yield orchestrator, engine
+    queue, engine = isolated_publication_database()
+    yield queue, engine
     engine.dispose()
 
 
 @pytest.mark.asyncio
 async def test_digest_excludes_incomplete_outcomes(isolated):
-    orchestrator, engine = isolated
+    queue, engine = isolated
     with Session(engine) as db:
         category = Category(name='Tech', display_name='Tech')
         db.add(category)
@@ -34,6 +35,5 @@ async def test_digest_excludes_incomplete_outcomes(isolated):
             summary='An ad summary.', content='A promotion.', processing_state='rejected',
             ad_processed=True, is_advertisement=True))
         db.commit()
-    grouped = await orchestrator.db_queue_manager.execute_read(
-        lambda db: orchestrator._group_articles_by_category(db, datetime.utcnow().date()))
+    grouped = await queue.execute_read(lambda db: _group_articles_by_category(db))
     assert [item.id for item in grouped['Tech']] == [1]

@@ -32,7 +32,7 @@ from news_aggregator.services.background_jobs import (
     finish_job,
     validate_payload,
 )
-from news_aggregator.services.background_execution import _bounded_result
+from tests.frozen_execution_contract import bounded_result as _bounded_result
 
 
 def _test_url():
@@ -357,59 +357,6 @@ async def test_recovering_scheduled_digest_clears_running_schedule_atomically(pg
         assert recovered_schedule.last_status == "delivery_unknown"
         assert recovered_schedule.last_error == "External delivery outcome is unknown"
         assert recovered_schedule.next_run == future_due
-    await second.release()
-
-
-@pytest.mark.asyncio
-async def test_recovered_scheduled_processing_finishes_schedule_successfully(pg_jobs):
-    from news_aggregator.services.background_execution import DurableBackgroundWorker
-
-    engine, factory = pg_jobs
-    first, second = BackgroundWorkerLease(engine), BackgroundWorkerLease(engine)
-    assert await first.acquire()
-    async with factory() as session:
-        schedule = ScheduleSettings(
-            task_name="news_processing", enabled=True, is_running=True,
-            next_run=datetime(2026, 10, 24, 7, 0), last_status="running",
-        )
-        session.add(schedule)
-        await session.flush()
-        job = await enqueue_job_in_session(session, "news_processing", {
-            "schedule_id": schedule.id,
-            "scheduled_for": "2026-10-23T07:00:00",
-        }, "schedule:processing:crash", coalesce_active=False)
-        await session.commit()
-    async with factory() as session:
-        claimed = await claim_next_job(session, first)
-        await session.commit()
-        assert claimed.id == job.id
-    connection = first.connection
-    await connection.invalidate()
-    await connection.close()
-    first.connection = first.owner_id = first.generation = None
-    assert await second.acquire()
-    async with factory() as session:
-        assert await second.recover_jobs(session) == {"interrupted": 1, "delivery_unknown": 0, "recovery_exhausted": 0}
-        await session.commit()
-    async with factory() as session:
-        recovering_schedule = await session.get(ScheduleSettings, schedule.id)
-        assert recovering_schedule.is_running is True
-        resumed = await claim_next_job(session, second)
-        await session.commit()
-        assert resumed.id == job.id
-    worker = DurableBackgroundWorker(db_engine=engine, session_factory=factory)
-    worker.lease = second
-    result = {"status": "success", "duration_seconds": 1.0}
-    async with factory() as session:
-        await finish_job(session, second, job.id, "succeeded",
-                         attempt_generation=resumed.attempt_generation, result=result)
-        await worker._finish_schedule_in_session(session, resumed, "succeeded", result)
-        await session.commit()
-    async with factory() as session:
-        finished_schedule = await session.get(ScheduleSettings, schedule.id)
-        assert finished_schedule.is_running is False
-        assert finished_schedule.last_status == "success"
-        assert finished_schedule.last_success_at is not None
     await second.release()
 
 

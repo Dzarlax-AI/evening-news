@@ -19,7 +19,7 @@ graph:
 | Bake target | Local fixture tag | Registry repository | Runtime contents |
 |---|---|---|---|
 | `web` | `evening-news-web:consolidation-fixture` | `ghcr.io/dzarlax-ai/rss-web` | Go web binary, templates, API contracts, web static files, CA certificates |
-| `background` | `evening-news-background:consolidation-fixture` | `ghcr.io/dzarlax-ai/rss-background` | One Go background process hosting scheduler, worker, ingestion, and processing components; CA certificates and timezone data |
+| `background` | `evening-news-background:consolidation-fixture` | `ghcr.io/dzarlax-ai/rss-background` | One Go background process hosting scheduler, worker, ingestion, article processing, and execution components; CA certificates and timezone data |
 | `executor` | `evening-news-executor:consolidation-fixture` | `ghcr.io/dzarlax-ai/rss-summarizer` | Python domain runtime, migrations, runtime dependencies, and PostgreSQL backup client |
 
 Each image has its own runtime boundary and registry digest. They share a build
@@ -81,25 +81,35 @@ the background and executor health checks. This avoids an executor/background
 startup cycle while allowing the scheduler's persisted outbox to retry dispatch
 until web is ready.
 
-The private scheduler, ingestion, processing, and health listeners use ports
-`8080`, `8093`, `8094`, and `8095` on the background service. Compose does not
+The private scheduler, ingestion, processing, health, and execution listeners use ports
+`8080`, `8093`, `8094`, `8095`, and `8101` on the background service. Compose does not
 publish these ports on the host. The worker drain defaults to 20 seconds, the
 background shutdown bound to 60 seconds, and Compose allows 75 seconds before
 forcing the background container to stop.
 
-Set `WORKER_DATABASE_URL`, `INGESTION_DATABASE_URL`, and
+Set `WORKER_DATABASE_URL`, `EXECUTION_DATABASE_URL`, `INGESTION_DATABASE_URL`, and
 `PROCESSING_DATABASE_URL` to connection strings for the exact provisioned
-least-privilege News roles. The Compose example neither creates these roles nor
-falls back to one shared `DATABASE_URL`. `SCHEDULER_DATABASE_URL` must use the
+least-privilege News roles. The execution pool is separate from the worker and
+defaults to two pool connections plus its dedicated advisory-guard session. The
+Compose example neither creates these roles nor falls back to one shared
+`DATABASE_URL`. `SCHEDULER_DATABASE_URL` must use the
 existing scheduler database role. The Python executor retains its existing
 News `DATABASE_URL`.
+
+`JOB_EXECUTOR_URL` points the worker to the embedded Go execution API on
+`http://background:8101`. `DOMAIN_SERVICE_URL` points Go orchestration to the
+authenticated Python domain API on `http://executor:8100`. Ingestion uses the
+separate `SELECTOR_SERVICE_URL` for selector-learning callbacks. Python keeps
+`ARTICLE_AI_URL` on the executor; these service URLs do not move provider keys
+into the Go background process.
 
 The local example is intentionally HTTP-only and does not include production
 egress or a shared browser service. It has the core app roles, extractor, and
 two local database containers, plus a temporary migration command. Production
 uses external PostgreSQL placement and browser integration together with the
 separate egress container; its five News-owned containers include one
-background process hosting scheduler, worker, ingestion, and processing.
+background process hosting scheduler, worker, ingestion, article processing,
+and execution.
 
 ## CI and explicit publication
 

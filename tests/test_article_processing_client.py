@@ -75,7 +75,7 @@ def active_fence():
     return SimpleNamespace(
         active=True, job_id=uuid.uuid4(), attempt_generation=3,
         executor_instance_id=uuid.uuid4(),
-        lease=SimpleNamespace(owner_id=uuid.uuid4(), generation=7, backend_pid=2345,
+        lease=SimpleNamespace(owner_id=uuid.uuid4(), generation=7, worker_backend_pid=2345,
                               deadline_at=datetime.now(timezone.utc) + timedelta(minutes=2)),
     )
 

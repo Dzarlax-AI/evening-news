@@ -25,6 +25,7 @@ flowchart LR
     subgraph Background["Background runtime — one Go process"]
       Scheduler["Schedule dispatch component"]
       Worker["Queue worker component"]
+      Execution["Execution receipts and orchestration"]
       Ingestion["Collection and ingestion component"]
       Processing["Article processing component"]
     end
@@ -42,9 +43,10 @@ flowchart LR
     Web <--> NewsDB
     Web --> Jobs
     Worker --> Jobs
-    Worker -->|authenticated fixed job operations| Domain
-    Domain -->|source collection commands| Ingestion
-    Domain -->|article processing commands| Processing
+    Worker -->|authenticated job execution API| Execution
+    Execution -->|fenced fixed domain operations| Domain
+    Execution -->|source collection commands| Ingestion
+    Execution -->|article processing commands| Processing
     Ingestion --> Sources
     Ingestion <--> NewsDB
     Sources --> Extract
@@ -63,7 +65,7 @@ flowchart LR
     Migrate -->|successful completion required| NewsDB
 ```
 
-The Go web service replaces the former Python web application. It serves the public reader, admin pages, health endpoints, and public and management APIs. The private Python executor remains responsible for fixed job operations that use Python domain code, AI prompts and provider calls, summaries, and Telegram delivery. One Go background runtime hosts the queue worker, scheduler, ingestion, and processing components. Those components retain separate configuration, database pools, HTTP boundaries, and recovery behavior inside the process. The extractor remains a separate Go service.
+The Go web service replaces the former Python web application. It serves the public reader, admin pages, health endpoints, and public and management APIs. The private Python executor remains responsible for fixed domain operations that use Python code, AI prompts and provider calls, summaries, and Telegram delivery. One Go background runtime hosts the queue worker, scheduler, ingestion, article processing, and execution components. The execution component owns durable job receipts, worker and execution fencing, and orchestration; it calls the Python executor for typed domain operations. Each background component keeps its own configuration and database boundary inside the process. The extractor remains a separate Go service.
 
 The one-shot `migrate` service runs `python -m news_aggregator.migrate` before schema-dependent services start. The Go web service does not apply migrations. `WEB_BACKEND_URL` names only the private executor origin, such as `http://executor:8100`; the Go client appends its fixed operation paths. `WEB_BACKEND_TOKEN` is a separate service credential shared only by the Go web process and private executor. Provider credentials such as `GEMINI_API_KEY` and `TELEGRAM_TOKEN` belong to the executor and are not required by the Go web service.
 
@@ -87,7 +89,7 @@ Copy `.env.example` to `.env` and replace its development placeholders. It lists
 cp .env.example .env
 ```
 
-Provider keys are passed to the Python executor because it owns provider operations. The local Compose file maps `WEB_DATABASE_URL` to the web service's `DATABASE_URL` and `EXECUTOR_DATABASE_URL` to the executor and migration service's `DATABASE_URL`. The background components keep their separate database variables. The Go web service receives its database URL, admin/JWT settings, `WEB_BACKEND_URL` and `WEB_BACKEND_TOKEN`, scheduler client settings, and HTTP trust configuration; it does not receive AI or Telegram provider keys.
+Provider keys are passed to the Python executor because it owns provider operations. The local Compose file maps `WEB_DATABASE_URL` to the web service's `DATABASE_URL` and `EXECUTOR_DATABASE_URL` to the executor and migration service's `DATABASE_URL`. The background components use separate worker, execution, scheduler, ingestion, and processing database variables. The Go web service receives its database URL, admin/JWT settings, `WEB_BACKEND_URL` and `WEB_BACKEND_TOKEN`, scheduler client settings, and HTTP trust configuration; it does not receive AI or Telegram provider keys.
 
 Complete the migration and runtime-role provisioning sequence in [the News deployment guide](deploy/news/README.md#fresh-local-compose-database-setup) before starting the full stack. Then start the remaining services:
 
@@ -117,12 +119,13 @@ PostgreSQL integration tests require `TEST_DATABASE_URL` to point to a dedicated
 
 ## Configuration and documentation
 
-The Compose example is the source of truth for the complete local service configuration. The Go web environment includes `DATABASE_URL`, `ADMIN_USERNAME`, `ADMIN_PASSWORD`, `JWT_SECRET`, `WEB_BACKEND_URL`, `WEB_BACKEND_TOKEN`, scheduler receiver settings, and HTTP trust settings. `WEB_BACKEND_URL` must be a fixed executor origin; the client does not accept arbitrary backend paths or URLs. The background runtime receives four component-specific database URLs; do not point them all at one privileged account. Production environment preparation and explicit per-service mappings are documented in [the News deployment guide](deploy/news/README.md).
+The Compose example is the source of truth for the complete local service configuration. The Go web environment includes `DATABASE_URL`, `ADMIN_USERNAME`, `ADMIN_PASSWORD`, `JWT_SECRET`, `WEB_BACKEND_URL`, `WEB_BACKEND_TOKEN`, scheduler receiver settings, and HTTP trust settings. `WEB_BACKEND_URL` must be a fixed executor origin; the client does not accept arbitrary backend paths or URLs. The background runtime receives five component-specific database URLs; provision the execution role explicitly and do not fall back to the worker DSN. Production environment preparation and explicit per-service mappings are documented in [the News deployment guide](deploy/news/README.md).
 
 English technical guides:
 
 - [Web/API components](docs/web-api-components.md)
 - [Core image build and release](docs/core-image-build-and-release.md)
+- [Execution and orchestration contract](docs/execution-and-orchestration-contract.md)
 - [Go web route coverage](docs/web-api-route-coverage.md)
 - [Article ingestion](docs/go-article-ingestion.md)
 - [Article processing](docs/go-article-processing.md)

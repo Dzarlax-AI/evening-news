@@ -10,7 +10,8 @@ from types import SimpleNamespace
 import pytest
 from fastapi import HTTPException
 
-from news_aggregator.executor import InvalidEnvelope, _auth, _parse_envelope
+from news_aggregator.executor import _auth
+from tests.frozen_execution_contract import InvalidEnvelope, parse_envelope
 
 
 def _body(**overrides):
@@ -28,14 +29,14 @@ def _body(**overrides):
 
 def test_envelope_is_strict_and_hashes_immutable_values():
     body = _body()
-    parsed, digest = _parse_envelope(json.dumps(body).encode())
+    parsed, digest = parse_envelope(json.dumps(body).encode())
     assert parsed["job_id"] == body["job_id"]
     assert parsed["attempt_generation"] == 4
     assert len(digest) == 64
-    assert _parse_envelope(json.dumps(body, sort_keys=True).encode())[1] == digest
+    assert parse_envelope(json.dumps(body, sort_keys=True).encode())[1] == digest
 
     changed = {**body, "generation": 3}
-    assert _parse_envelope(json.dumps(changed).encode())[1] != digest
+    assert parse_envelope(json.dumps(changed).encode())[1] != digest
 
 
 @pytest.mark.parametrize("raw", [
@@ -45,14 +46,14 @@ def test_envelope_is_strict_and_hashes_immutable_values():
 ])
 def test_envelope_rejects_duplicate_extra_and_boolean_integer_fields(raw):
     with pytest.raises(InvalidEnvelope):
-        _parse_envelope(raw)
+        parse_envelope(raw)
 
 
 def test_envelope_rejects_naive_deadline_and_oversized_body():
     with pytest.raises(InvalidEnvelope):
-        _parse_envelope(json.dumps(_body(deadline_at="2026-10-24T10:00:00")).encode())
+        parse_envelope(json.dumps(_body(deadline_at="2026-10-24T10:00:00")).encode())
     with pytest.raises(InvalidEnvelope):
-        _parse_envelope(b" " * 8193)
+        parse_envelope(b" " * 8193)
 
 
 def test_auth_requires_exact_bearer_token(monkeypatch):
@@ -82,9 +83,56 @@ def test_executor_readiness_requires_ai_credential_without_calling_provider(monk
     assert error.value.status_code == 401
 
 
+@pytest.mark.parametrize("url", [
+    None,
+    "",
+    "ftp://background:8101",
+    "http://user:secret@background:8101",
+    "http://background:8101/path",
+    "http://background:8101?",
+    "http://background:8101#",
+    "http://background:8101 bad",
+    "http://background:70000",
+    "http:///missing-host",
+])
+def test_executor_readiness_rejects_missing_or_invalid_execution_origin(monkeypatch, url):
+    from news_aggregator import executor as executor_module
+
+    settings = executor_module.settings
+    monkeypatch.setattr(settings, "job_executor_token",
+                        SimpleNamespace(get_secret_value=lambda: "fixture-token-123456"))
+    monkeypatch.setattr(settings, "gemini_api_key", "fixture-gemini-key")
+    monkeypatch.setattr(settings, "execution_service_url", url)
+    monkeypatch.setattr(type(settings), "validate_runtime_services", lambda self: True)
+
+    with pytest.raises(RuntimeError, match="EXECUTION_SERVICE_URL"):
+        executor_module._validate_executor_runtime()
+
+
+@pytest.mark.parametrize("url", [
+    "http://background:8101",
+    "https://background.internal:8101/",
+])
+def test_executor_readiness_accepts_http_origin_without_probing_go(monkeypatch, url):
+    from news_aggregator import executor as executor_module
+
+    settings = executor_module.settings
+    runtime_validation = []
+    monkeypatch.setattr(settings, "job_executor_token",
+                        SimpleNamespace(get_secret_value=lambda: "fixture-token-123456"))
+    monkeypatch.setattr(settings, "gemini_api_key", "fixture-gemini-key")
+    monkeypatch.setattr(settings, "execution_service_url", url)
+    monkeypatch.setattr(type(settings), "validate_runtime_services",
+                        lambda self: runtime_validation.append("validated"))
+
+    assert executor_module._validate_executor_runtime() is None
+    assert runtime_validation == ["validated"]
+
+
 @pytest.mark.asyncio
 async def test_executor_shutdown_drains_tasks_before_services_and_database(monkeypatch):
     from news_aggregator import executor as executor_module
+    from news_aggregator.services import domain_operations
 
     events = []
     started = asyncio.Event()
@@ -98,25 +146,20 @@ async def test_executor_shutdown_drains_tasks_before_services_and_database(monke
             events.append("task-cleanup")
             raise
 
-    class Orchestrator:
-        async def stop(self):
-            events.append("orchestrator-stop")
-
     class Engine:
         async def dispose(self):
             events.append("engine-dispose")
 
     task = asyncio.create_task(active_work())
     key = (uuid.uuid4(), 3)
-    monkeypatch.setattr(executor_module, "_ACTIVE", {key: task})
-    monkeypatch.setattr(executor_module.executor, "orchestrator", Orchestrator())
+    monkeypatch.setattr(domain_operations, "_ACTIVE", {key: task})
     monkeypatch.setattr(executor_module, "engine", Engine())
     await started.wait()
 
     await executor_module._shutdown_executor(drain_seconds=1)
 
     assert task.done()
-    assert events == ["task-cleanup", "orchestrator-stop", "engine-dispose"]
+    assert events == ["task-cleanup", "engine-dispose"]
 
 
 @pytest.mark.asyncio
@@ -141,7 +184,7 @@ async def test_executor_database_guard_rejects_second_instance(executor_pg, monk
 async def test_executor_guard_connection_loss_revokes_active_work(executor_pg, monkeypatch):
     from sqlalchemy import text
     from news_aggregator import executor as executor_module
-    from news_aggregator.services.job_fence import JobExecutionFence
+    from news_aggregator.services import domain_operations
 
     engine, _, _ = executor_pg
     monkeypatch.setattr(executor_module, "engine", engine)
@@ -149,16 +192,13 @@ async def test_executor_guard_connection_loss_revokes_active_work(executor_pg, m
     monkeypatch.setattr(executor_module, "_EXECUTOR_GUARD_BACKEND_PID", None)
     monkeypatch.setattr(executor_module, "_EXECUTOR_GUARD_HEALTHY", False)
     monkeypatch.setattr(executor_module, "_EXECUTOR_SERVER", None)
-    monkeypatch.setattr(executor_module, "_ACTIVE", {})
-    monkeypatch.setattr(executor_module, "_ACTIVE_FENCES", {})
+    monkeypatch.setattr(domain_operations, "_ACTIVE", {})
     await executor_module._acquire_executor_guard()
     server = SimpleNamespace(should_exit=False)
     monkeypatch.setattr(executor_module, "_EXECUTOR_SERVER", server)
     task = asyncio.create_task(asyncio.sleep(60))
     key = (uuid.uuid4(), 1)
-    fence = JobExecutionFence(lease=object(), job_id=key[0], attempt_generation=1)
-    executor_module._ACTIVE[key] = task
-    executor_module._ACTIVE_FENCES[key] = fence
+    domain_operations._ACTIVE[key] = task
     try:
         async with engine.begin() as connection:
             terminated = await connection.scalar(text("SELECT pg_terminate_backend(:pid)"),
@@ -168,14 +208,13 @@ async def test_executor_guard_connection_loss_revokes_active_work(executor_pg, m
         # direct Uvicorn server argument; it must still stop the process.
         assert not await executor_module._check_executor_guard()
         assert server.should_exit
-        assert not fence.active
         assert task.cancelled()
         assert not await executor_module._check_executor_guard(server)
         assert server.should_exit
     finally:
         await executor_module._release_executor_guard()
         monkeypatch.setattr(executor_module, "_EXECUTOR_SERVER", None)
-    assert executor_module._ACTIVE == {}
+    assert domain_operations._ACTIVE == {}
 
 
 @pytest.mark.asyncio
@@ -248,7 +287,7 @@ async def _return(value):
 @pytest.mark.asyncio
 async def test_cancelled_guard_probe_revokes_executor_and_stops_server(monkeypatch):
     from news_aggregator import executor as executor_module
-    from news_aggregator.services.job_fence import JobExecutionFence
+    from news_aggregator.services import domain_operations
 
     class HangingConnection:
         def __init__(self):
@@ -270,13 +309,11 @@ async def test_cancelled_guard_probe_revokes_executor_and_stops_server(monkeypat
     server = SimpleNamespace(should_exit=False)
     task = asyncio.create_task(asyncio.sleep(60))
     key = (uuid.uuid4(), 1)
-    fence = JobExecutionFence(lease=object(), job_id=key[0], attempt_generation=1)
     monkeypatch.setattr(executor_module, "_EXECUTOR_GUARD_CONNECTION", connection)
     monkeypatch.setattr(executor_module, "_EXECUTOR_GUARD_BACKEND_PID", 321)
     monkeypatch.setattr(executor_module, "_EXECUTOR_GUARD_HEALTHY", True)
     monkeypatch.setattr(executor_module, "_EXECUTOR_SERVER", server)
-    monkeypatch.setattr(executor_module, "_ACTIVE", {key: task})
-    monkeypatch.setattr(executor_module, "_ACTIVE_FENCES", {key: fence})
+    monkeypatch.setattr(domain_operations, "_ACTIVE", {key: task})
 
     probe = asyncio.create_task(executor_module._check_executor_guard())
     await connection.started.wait()
@@ -285,4 +322,4 @@ async def test_cancelled_guard_probe_revokes_executor_and_stops_server(monkeypat
         await probe
     assert connection.invalidated and connection.closed
     assert server.should_exit
-    assert not fence.active and task.cancelled()
+    assert task.cancelled()

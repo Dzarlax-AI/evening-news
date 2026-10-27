@@ -1,6 +1,7 @@
 """Database-backed tests for the actual article ingestion migration fence."""
 
 import asyncio
+import json
 import os
 import uuid
 from datetime import datetime, timedelta, timezone
@@ -20,8 +21,10 @@ from news_aggregator.migrations.article_ingestion import ArticleIngestionMigrati
 from news_aggregator.migrations.background_jobs import BackgroundJobsMigration
 from news_aggregator.migrations.job_executor import JobExecutorMigration
 from news_aggregator.models import ArticleIngestionRun, SourceCollectionState
-from news_aggregator.executor import ArticleIngestionCallbackFence, RemoteJobFence, _source_fingerprint
+from news_aggregator.executor import ArticleIngestionCallbackFence, _source_fingerprint
 from news_aggregator.services.job_fence import JobExecutionFence, current_job_fence
+from news_aggregator.services.background_jobs import validate_payload
+from news_aggregator.services.domain_fence import ExecutionContext, RemoteDomainFence, parse_envelope
 from news_aggregator.services import extraction_memory as memory_module
 from news_aggregator.services.extraction_memory import ExtractionMemoryEntry, ExtractionMemoryService
 from news_aggregator.sources.ai_page_analyzer import PageAnalysis
@@ -103,10 +106,14 @@ async def _seed_fence(conn, kind="news_processing", payload="{}", ttl_seconds=90
     await conn.execute(text(
         "SELECT pg_advisory_lock(hashtext(current_database()),hashtext(current_schema()))"
     ))
+    await conn.execute(text(
+        "SELECT pg_advisory_lock(hashtext(current_database()),hashtext(current_schema()) # 1162757938)"
+    ))
     return {
         "run": uuid.uuid4(), "job": job, "attempt": attempt, "hash": "b" * 64,
         "owner": owner, "generation": generation, "pid": pid,
-        "executor": executor, "deadline": deadline,
+        "executor": executor, "deadline": deadline, "kind": kind,
+        "payload": json.loads(payload),
     }
 
 
@@ -115,6 +122,24 @@ async def _call_fence(conn, data):
         SELECT * FROM fence_article_ingestion_attempt(
           :run,:job,:attempt,:hash,:owner,:generation,:pid,:executor,:deadline)
     """), data)
+
+
+def _callback_domain_fence(params):
+    envelope = {
+        "version": 1, "job_id": str(params["job"]), "attempt_generation": params["attempt"],
+        "owner_id": str(params["owner"]), "generation": params["generation"],
+        "backend_pid": params["pid"], "executor_instance_id": str(params["executor"]),
+        "deadline_at": params["deadline"].replace(tzinfo=timezone.utc).isoformat().replace("+00:00", "Z"),
+    }
+    context = ExecutionContext(
+        envelope=parse_envelope(envelope), executor_backend_pid=params["pid"],
+        kind=params["kind"], payload=validate_payload(params["kind"], params["payload"]),
+    )
+    parent = RemoteDomainFence(context)
+    active = JobExecutionFence(
+        parent, params["job"], params["attempt"], executor_instance_id=params["executor"],
+    )
+    return parent, active
 
 
 async def _prepare_callback_memory(engine):
@@ -148,12 +173,7 @@ async def _prepare_callback_memory(engine):
         """))).mappings().one()
     fingerprint = _source_fingerprint(7, source["name"], source["source_type"], source["url"],
                                       source["enabled"], source["config_text"])
-    parent = RemoteJobFence(
-        job_id=params["job"], owner_id=params["owner"], generation=params["generation"],
-        attempt_generation=params["attempt"], backend_pid=params["pid"], deadline_at=params["deadline"],
-    )
-    context = JobExecutionFence(parent, params["job"], params["attempt"],
-                                executor_instance_id=params["executor"])
+    parent, context = _callback_domain_fence(params)
     callback_fence = ArticleIngestionCallbackFence(
         parent, run_id=run_id, executor_instance_id=params["executor"], context=context,
         source_id=7, source_fingerprint=fingerprint,
@@ -254,13 +274,7 @@ async def test_cancelled_ingestion_callback_cannot_publish_page_patterns(ingesti
             await conn.execute(text("UPDATE article_ingestion_runs SET state='cancelled' WHERE id=:run"),
                                {"run": run_id})
 
-        parent = RemoteJobFence(
-            job_id=params["job"], owner_id=params["owner"], generation=params["generation"],
-            attempt_generation=params["attempt"], backend_pid=params["pid"],
-            deadline_at=params["deadline"],
-        )
-        context = JobExecutionFence(parent, params["job"], params["attempt"],
-                                    executor_instance_id=params["executor"])
+        parent, context = _callback_domain_fence(params)
         callback_fence = ArticleIngestionCallbackFence(
             parent, run_id=run_id, executor_instance_id=params["executor"], context=context,
             source_id=7, source_fingerprint=fingerprint,

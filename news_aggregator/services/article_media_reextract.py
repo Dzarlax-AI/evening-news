@@ -58,19 +58,22 @@ async def _fetch_post_media(article_url: str, source_url: str):
     return MediaExtractor().extract_media_files(message) or []
 
 
-async def reextract_article_media(article_id: int) -> bool:
+async def reextract_article_media(article_id: int, *, fence=None) -> bool:
     """Refresh stored Telegram media without scraping or parsing channel HTML."""
     async with AsyncSessionLocal() as session:
+        if fence is not None:
+            await fence.validate(session)
         article = await session.scalar(select(Article).where(Article.id == article_id))
         if article is None:
             raise ValueError("article no longer exists")
         source = await session.get(Source, article.source_id)
         if source is None or source.source_type != "telegram":
+            await session.rollback()
             return False
         article_url = article.url
         source_url = source.url
         source_id = source.id
-        await session.commit()
+        await session.rollback()
 
     media = await _fetch_post_media(article_url, source_url)
     if media is None:
@@ -78,6 +81,8 @@ async def reextract_article_media(article_id: int) -> bool:
     image_url = next((item.get("url") for item in media
                       if isinstance(item, dict) and item.get("type") == "image"), None)
     async with AsyncSessionLocal() as session:
+        if fence is not None:
+            await fence.validate(session)
         current = await session.scalar(select(Article).where(
             Article.id == article_id, Article.source_id == source_id, Article.url == article_url))
         if current is None:

@@ -28,6 +28,7 @@ CHECKS = {
     ),
     "executor": (
         "test -s /app/news_aggregator/executor.py && command -v pg_dump >/dev/null "
+        "&& python -c 'from pathlib import Path; source=Path(\"/app/news_aggregator/executor.py\").read_text(); assert \"class PythonJobExecutor\" not in source' "
         "&& python -c 'import importlib.util,asyncpg,sqlalchemy; assert importlib.util.find_spec(\"pytest\") is None and all(importlib.util.find_spec(name) is None for name in (\"magic\",\"psutil\",\"chardet\",\"dateutil\"))' "
         "&& ! dpkg-query -W -f='${Status}' libmagic1 libmagic1t64 2>/dev/null | grep -q 'install ok installed' "
         "&& test ! -d /app/scripts && test ! -d /app/web "

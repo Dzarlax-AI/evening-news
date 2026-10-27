@@ -83,7 +83,7 @@ def active_fence():
         attempt_generation=attempt,
         executor_instance_id=uuid.uuid4(),
         lease=SimpleNamespace(
-            owner_id=uuid.uuid4(), generation=8, backend_pid=1234,
+            owner_id=uuid.uuid4(), generation=8, worker_backend_pid=1234,
             deadline_at=datetime.now(timezone.utc) + timedelta(minutes=2),
         ),
     )

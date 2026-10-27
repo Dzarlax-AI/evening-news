@@ -50,23 +50,25 @@ async def test_process_monitor_reports_remote_browser_state_as_unknown():
 
 @pytest.mark.asyncio
 async def test_operational_alert_falls_back_to_environment_when_db_is_down():
-    from news_aggregator.orchestrator import NewsOrchestrator
-
-    orchestrator = NewsOrchestrator.__new__(NewsOrchestrator)
-    orchestrator.db_queue_manager = MagicMock()
-    orchestrator.db_queue_manager.execute_read = AsyncMock(
-        side_effect=RuntimeError("database unavailable")
-    )
+    from news_aggregator.services import domain_terminal
     fallback_service = MagicMock()
     fallback_service.send_alert = AsyncMock(return_value=True)
 
-    with patch(
-        "news_aggregator.orchestrator.get_telegram_service",
-        return_value=fallback_service,
+    class FailedSession:
+        async def __aenter__(self):
+            raise RuntimeError("database unavailable")
+
+        async def __aexit__(self, *_args):
+            return None
+
+    domain_terminal._ALERTS = None
+    domain_terminal._ALERT_ACTIVE.clear()
+    domain_terminal._EVENT_LOCKS.clear()
+    from news_aggregator.services import telegram_service
+    with patch.object(domain_terminal, "AsyncSessionLocal", FailedSession), patch.object(
+        telegram_service, "get_telegram_service", return_value=fallback_service,
     ):
-        result = await NewsOrchestrator.send_operational_alert(
-            orchestrator, "Database error", "queue unavailable"
-        )
+        result = await domain_terminal._alert_sender("Database error", "queue unavailable")
 
     assert result is True
     fallback_service.send_alert.assert_awaited_once_with(

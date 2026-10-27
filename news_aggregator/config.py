@@ -90,6 +90,7 @@ class Settings(BaseSettings):
     job_executor_token: Optional[SecretStr] = Field(default=None, repr=False, alias="JOB_EXECUTOR_TOKEN")
     job_executor_host: str = Field(default="127.0.0.1", alias="JOB_EXECUTOR_HOST")
     job_executor_port: int = Field(default=8100, ge=1, le=65535, alias="JOB_EXECUTOR_PORT")
+    execution_service_url: str = Field(default="http://background:8101", alias="EXECUTION_SERVICE_URL")
     job_executor_request_timeout_seconds: float = Field(
         default=5.0, gt=0, le=30, allow_inf_nan=False, alias="JOB_EXECUTOR_REQUEST_TIMEOUT_SECONDS"
     )

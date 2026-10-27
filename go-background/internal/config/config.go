@@ -4,11 +4,13 @@ import (
 	"errors"
 	"fmt"
 	"net"
+	neturl "net/url"
 	"regexp"
 	"strconv"
 	"strings"
 	"time"
 
+	execution "github.com/Dzarlax-AI/evening-news/go-execution"
 	ingestion "github.com/Dzarlax-AI/evening-news/go-ingestion/runner"
 	processing "github.com/Dzarlax-AI/evening-news/go-processing/runner"
 	scheduler "github.com/Dzarlax-AI/evening-news/go-scheduler/runner"
@@ -19,17 +21,20 @@ var ErrInvalidConfig = errors.New("background configuration is invalid")
 var configKeyPattern = regexp.MustCompile(`[A-Z][A-Z0-9_]{2,}`)
 
 type Config struct {
-	Worker          worker.Config
-	Scheduler       scheduler.Config
-	Ingestion       ingestion.Config
-	Processing      processing.Config
-	HealthAddr      string
-	BuildID         string
-	ShutdownTimeout time.Duration
-	BackoffMin      time.Duration
-	BackoffMax      time.Duration
-	ProbeInterval   time.Duration
-	ProbeTimeout    time.Duration
+	Worker              worker.Config
+	Scheduler           scheduler.Config
+	Ingestion           ingestion.Config
+	Processing          processing.Config
+	Execution           execution.Config
+	ExecutionListenAddr string
+	DomainServiceURL    string
+	HealthAddr          string
+	BuildID             string
+	ShutdownTimeout     time.Duration
+	BackoffMin          time.Duration
+	BackoffMax          time.Duration
+	ProbeInterval       time.Duration
+	ProbeTimeout        time.Duration
 }
 
 // Load merges the existing component contracts without mutating process
@@ -66,6 +71,24 @@ func Load(getenv func(string) string, buildID string) (Config, error) {
 		{"scheduler", func(env func(string) string) error { x, e := scheduler.LoadConfig(env); c.Scheduler = x; return e }},
 		{"ingestion", func(env func(string) string) error { x, e := ingestion.LoadConfig(env); c.Ingestion = x; return e }},
 		{"processing", func(env func(string) string) error { x, e := processing.LoadConfig(env); c.Processing = x; return e }},
+	}
+	c.Execution = execution.Config{
+		DatabaseURL: strings.TrimSpace(getenv("EXECUTION_DATABASE_URL")),
+		Schema:      strings.TrimSpace(getenv("EXECUTION_DB_SCHEMA")),
+		Token:       strings.TrimSpace(getenv("JOB_EXECUTOR_TOKEN")),
+		MaxConns:    2,
+	}
+	c.ExecutionListenAddr = value(getenv, "JOB_EXECUTOR_LISTEN", ":8101")
+	c.DomainServiceURL = value(getenv, "DOMAIN_SERVICE_URL", "http://executor:8100")
+	if raw := strings.TrimSpace(getenv("EXECUTION_MAX_CONNECTIONS")); raw != "" {
+		n, e := strconv.Atoi(raw)
+		if e != nil || n < 1 || n > 2 {
+			return Config{}, fmt.Errorf("%w: EXECUTION_MAX_CONNECTIONS must be 1 or 2", ErrInvalidConfig)
+		}
+		c.Execution.MaxConns = int32(n)
+	}
+	if c.Execution.DatabaseURL == "" || len(c.Execution.Token) < 16 || !validURL(c.DomainServiceURL) {
+		return Config{}, fmt.Errorf("%w: execution database, token, or domain URL is invalid", ErrInvalidConfig)
 	}
 	for _, item := range lookups {
 		if err := item.load(scoped(getenv, item.name)); err != nil {
@@ -120,7 +143,7 @@ func scoped(getenv func(string) string, component string) func(string) string {
 }
 
 func validateAddresses(c Config) error {
-	addrs := []struct{ name, addr string }{{"scheduler", c.Scheduler.ListenAddr}, {"ingestion", c.Ingestion.ListenAddr}, {"processing", c.Processing.ListenAddr}, {"health", c.HealthAddr}}
+	addrs := []struct{ name, addr string }{{"scheduler", c.Scheduler.ListenAddr}, {"ingestion", c.Ingestion.ListenAddr}, {"processing", c.Processing.ListenAddr}, {"execution", c.ExecutionListenAddr}, {"health", c.HealthAddr}}
 	seen := map[string]string{}
 	for _, item := range addrs {
 		_, port, err := net.SplitHostPort(item.addr)
@@ -137,6 +160,11 @@ func validateAddresses(c Config) error {
 		seen[port] = item.name
 	}
 	return nil
+}
+
+func validURL(raw string) bool {
+	u, err := neturl.Parse(raw)
+	return err == nil && (u.Scheme == "http" || u.Scheme == "https") && u.Host != ""
 }
 
 func value(getenv func(string) string, key, fallback string) string {

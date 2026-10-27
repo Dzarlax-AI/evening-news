@@ -43,8 +43,62 @@ WORKER_DB_USER = "fixture_worker_runtime"
 WORKER_DB_PASSWORD = "fixture-worker-only"
 SCHEDULER_DB_USER = "fixture_scheduler_runtime"
 SCHEDULER_DB_PASSWORD = "fixture-scheduler-db-only"
+EXECUTION_DB_USER = "fixture_execution_runtime"
+EXECUTION_DB_PASSWORD = "fixture-execution-only"
 SCHEDULER_SCHEMA = "scheduler_fixture"
 WORKER_DRAIN_SECONDS = 8
+
+_RFC3339_MICRO = re.compile(
+    r"^(\d{4}-\d{2}-\d{2}T\d{2}:\d{2}:\d{2})(?:\.(\d+))?(Z|[+-]\d{2}:\d{2})$"
+)
+
+
+def parse_rfc3339_db_instant(value):
+    """Parse an offset-aware RFC3339 instant representable at DB microprecision."""
+    if not isinstance(value, str) or len(value) > 40:
+        return None
+    match = _RFC3339_MICRO.fullmatch(value)
+    if match is None:
+        return None
+    fraction = match.group(2) or ""
+    # The database stores microseconds. Extra digits are safe only when they
+    # carry no precision beyond the value the database could have persisted.
+    if len(fraction) > 6 and any(digit != "0" for digit in fraction[6:]):
+        return None
+    normalized = match.group(1)
+    if fraction:
+        normalized += "." + fraction[:6].ljust(6, "0")
+    normalized += "+00:00" if match.group(3) == "Z" else match.group(3)
+    try:
+        parsed = datetime.fromisoformat(normalized)
+    except ValueError:
+        return None
+    if parsed.tzinfo is None or parsed.utcoffset() is None:
+        return None
+    return parsed.astimezone(timezone.utc)
+
+
+def same_db_instant(expected, actual):
+    expected_instant = parse_rfc3339_db_instant(expected)
+    actual_instant = parse_rfc3339_db_instant(actual)
+    return expected_instant is not None and expected_instant == actual_instant
+
+
+def safe_utc_timestamp_diagnostic(value):
+    instant = parse_rfc3339_db_instant(value)
+    if instant is None:
+        return None
+    return instant.isoformat(timespec="microseconds").replace("+00:00", "Z")
+
+
+def paused_import_timestamp_diagnostic(expected, actual):
+    return {
+        "expected_utc": safe_utc_timestamp_diagnostic(expected),
+        "actual_utc": safe_utc_timestamp_diagnostic(actual),
+        "expected_valid": parse_rfc3339_db_instant(expected) is not None,
+        "actual_valid": parse_rfc3339_db_instant(actual) is not None,
+        "same_db_microsecond_instant": same_db_instant(expected, actual),
+    }
 
 
 def parse_docker_top_pid_args(output: str) -> list[tuple[int, str]]:
@@ -89,6 +143,7 @@ class ConsolidatedBackgroundGate(GoWebGate):
             env["SCHEDULER_API_URL"] = "http://background:8080"
             env["SCHEDULER_API_TOKEN"] = SCHEDULER_TOKEN
         elif role == "executor":
+            env["EXECUTION_SERVICE_URL"] = "http://background:8101"
             env["SCHEDULER_API_URL"] = "http://background:8080"
             env["SCHEDULER_API_TOKEN"] = SCHEDULER_TOKEN
             env["ARTICLE_INGESTION_URL"] = "http://background:8093"
@@ -191,13 +246,22 @@ class ConsolidatedBackgroundGate(GoWebGate):
         sql = f"""
         CREATE ROLE {WORKER_DB_USER} LOGIN PASSWORD '{WORKER_DB_PASSWORD}';
         CREATE ROLE {SCHEDULER_DB_USER} LOGIN PASSWORD '{SCHEDULER_DB_PASSWORD}';
+        CREATE ROLE {EXECUTION_DB_USER} LOGIN PASSWORD '{EXECUTION_DB_PASSWORD}';
         GRANT CONNECT ON DATABASE gate_db TO {WORKER_DB_USER};
+        GRANT CONNECT ON DATABASE gate_db TO {EXECUTION_DB_USER};
         GRANT USAGE ON SCHEMA public TO {WORKER_DB_USER};
+        GRANT USAGE ON SCHEMA public TO {EXECUTION_DB_USER};
         GRANT SELECT, INSERT, UPDATE, DELETE ON TABLE
             public.background_jobs, public.background_worker_status, public.background_job_executions
             TO {WORKER_DB_USER};
         GRANT USAGE, SELECT, UPDATE ON SEQUENCE public.background_jobs_queue_position_seq
             TO {WORKER_DB_USER};
+        GRANT SELECT, UPDATE ON TABLE public.background_jobs, public.background_worker_status
+            TO {EXECUTION_DB_USER};
+        GRANT SELECT, INSERT, UPDATE ON TABLE public.background_job_executions
+            TO {EXECUTION_DB_USER};
+        GRANT SELECT, UPDATE ON TABLE public.schedule_settings, public.articles
+            TO {EXECUTION_DB_USER};
         """
         result = self.docker("exec", self.prefix + "-postgres", "psql", "-v", "ON_ERROR_STOP=1",
                              "-U", "gate_user", "-d", "gate_db", "-c", sql, check=False)
@@ -208,12 +272,16 @@ class ConsolidatedBackgroundGate(GoWebGate):
                                  f"CREATE DATABASE gate_scheduler OWNER {SCHEDULER_DB_USER}", check=False)
         if created_db.returncode:
             raise GateFailure("consolidated_fixture_scheduler_database_not_created")
-        self.report["database_roles_provisioned"] = sorted((WORKER_DB_USER, SCHEDULER_DB_USER,
+        self.report["database_roles_provisioned"] = sorted((WORKER_DB_USER, EXECUTION_DB_USER, SCHEDULER_DB_USER,
                                                              "news_ingestion_runtime", "news_processing_runtime"))
 
     def background_environment(self):
         return {
             "WORKER_DATABASE_URL": f"postgres://{WORKER_DB_USER}:{WORKER_DB_PASSWORD}@postgres:5432/gate_db?sslmode=disable",
+            "EXECUTION_DATABASE_URL": f"postgres://{EXECUTION_DB_USER}:{EXECUTION_DB_PASSWORD}@postgres:5432/gate_db?sslmode=disable",
+            "EXECUTION_MAX_CONNECTIONS": "2",
+            "DOMAIN_SERVICE_URL": "http://executor:8100",
+            "JOB_EXECUTOR_LISTEN": ":8101",
             "SCHEDULER_DATABASE_URL": f"postgres://{SCHEDULER_DB_USER}:{SCHEDULER_DB_PASSWORD}@postgres:5432/gate_scheduler?sslmode=disable",
             "INGESTION_DATABASE_URL": f"postgres://news_ingestion_runtime:{DB_PASSWORD}@postgres:5432/gate_db?search_path=public&sslmode=disable",
             "PROCESSING_DATABASE_URL": f"postgres://news_processing_runtime:{DB_PASSWORD}@postgres:5432/gate_db?search_path=public&sslmode=disable",
@@ -232,8 +300,9 @@ class ConsolidatedBackgroundGate(GoWebGate):
             "EXTRACTION_SERVICE_URL": "http://collector:8080",
             "EXTRACTION_SERVICE_TOKEN": self.collector_token,
             "EXTRACTION_SERVICE_NATIVE_BROWSER": "false",
-            "JOB_EXECUTOR_URL": "http://executor:8100",
+            "JOB_EXECUTOR_URL": "http://background:8101",
             "JOB_EXECUTOR_TOKEN": self.executor_token,
+            "SELECTOR_SERVICE_URL": "http://executor:8100",
             "ARTICLE_PROCESSING_LISTEN": ":8094",
             "ARTICLE_PROCESSING_TOKEN": ARTICLE_PROCESSING_TOKEN,
             "ARTICLE_PROCESSING_DB_MAX_CONNS": "3",
@@ -483,6 +552,18 @@ class ConsolidatedBackgroundGate(GoWebGate):
                                     f"label={self.owner_label}={self.owner}").stdout.splitlines()))
         self.check("background_health_ready", self.health_request("/readyz")[0] == 200)
         self.check("background_health_liveness", self.health_request("/healthz")[0] == 200)
+        missing_token_status, _ = self.execution_status(authenticated=False)
+        status, body = self.execution_status(authenticated=True)
+        exact_fields = isinstance(body, dict) and set(body) == {
+            "executor_instance_id", "active_executions", "ready"
+        }
+        self.check("execution_status_requires_auth", missing_token_status == 401)
+        self.check("execution_status_strict_ready_contract", status == 200 and exact_fields
+                   and body.get("ready") is True
+                   and isinstance(body.get("active_executions"), int)
+                   and not isinstance(body.get("active_executions"), bool)
+                   and body.get("active_executions") >= 0
+                   and isinstance(body.get("executor_instance_id"), str))
         self.check("container_identity_and_pid_captured", self.report["background_process"]["host_pid"] is not None)
         return bg_id, self.report["background_process"]["host_pid"]
 
@@ -499,6 +580,29 @@ class ConsolidatedBackgroundGate(GoWebGate):
         result = self.docker("exec", probe_container, "python", "-c", code, check=False)
         status = int(result.stdout.strip()) if result.returncode == 0 and result.stdout.strip().isdigit() else 0
         return status, {}
+
+    def execution_status(self, *, authenticated):
+        url = "http://background:8101/internal/v1/status"
+        headers = {"Authorization": "Bearer " + self.executor_token} if authenticated else {}
+        script = (
+            "import json,urllib.request,urllib.error\n"
+            "u=" + repr(url) + "\n"
+            "h=" + repr(headers) + "\n"
+            "q=urllib.request.Request(u,headers=h)\n"
+            "try:\n r=urllib.request.urlopen(q,timeout=3); s=r.status; b=r.read()\n"
+            "except urllib.error.HTTPError as e:\n s=e.code; b=e.read()\n"
+            "try: body=json.loads(b) if b else None\n"
+            "except Exception: body=None\n"
+            "print(json.dumps({'status':s,'body':body}))\n"
+        )
+        result = self.docker("exec", self.prefix + "-executor", "python", "-c", script, check=False)
+        if result.returncode:
+            return 0, None
+        try:
+            response = json.loads(result.stdout.strip().splitlines()[-1])
+            return int(response.get("status", 0)), response.get("body")
+        except (ValueError, TypeError, IndexError, json.JSONDecodeError):
+            return 0, None
 
     def control_fake_services(self, **changes):
         url = "http://fixture-services:8090/__gate/control"
@@ -523,12 +627,110 @@ class ConsolidatedBackgroundGate(GoWebGate):
 
     def wait_job_http(self, job_id, timeout=240):
         job = super().wait_job_http(job_id, timeout)
-        self.report.setdefault("job_diagnostics", {})[job_id] = {
-            "status": job.get("status"),
-            "error_code": job.get("error_code") if isinstance(job.get("error_code"), str) else None,
-            "error_type": job.get("error_type") if isinstance(job.get("error_type"), str) else None,
+        diagnostic = {
+            "status": self._safe_state(job.get("status"), {"queued", "running", "succeeded", "failed", "interrupted", "delivery_unknown"}),
+            "error_code": self._safe_code(job.get("error_code")),
+            "error_type": self._safe_code(job.get("error_type")),
         }
+        if diagnostic["status"] in {"failed", "interrupted", "delivery_unknown"}:
+            diagnostic["failure_diagnostics"] = self.capture_execution_failure_diagnostics(job_id)
+        self.report.setdefault("job_diagnostics", {})[job_id] = diagnostic
         return job
+
+    @staticmethod
+    def _safe_code(value):
+        return value if isinstance(value, str) and re.fullmatch(r"[a-z0-9_]{1,64}", value) else None
+
+    @staticmethod
+    def _safe_state(value, allowed):
+        return value if isinstance(value, str) and value in allowed else None
+
+    def _json_probe(self, sql):
+        try:
+            value = json.loads(self.pg_value(sql))
+        except (GateFailure, ValueError, TypeError, json.JSONDecodeError):
+            return None
+        return value
+
+    def _safe_run_metadata(self, table, job_id, states):
+        if table not in {"background_job_executions", "article_ingestion_runs", "article_processing_runs"}:
+            return []
+        rows = self._json_probe(
+			"SELECT COALESCE(json_agg(json_build_object("
+            "'attempt_generation',attempt_generation,'worker_generation',worker_generation,'state',state,"
+            "'error_code',error_code,'started',started_at IS NOT NULL,'finished',finished_at IS NOT NULL,"
+            "'duration_seconds',CASE WHEN started_at IS NOT NULL AND finished_at IS NOT NULL "
+            "THEN EXTRACT(EPOCH FROM finished_at-started_at) END) ORDER BY attempt_generation),'[]'::json)::text "
+            f"FROM {table} WHERE job_id='{job_id}'"
+        )
+        if not isinstance(rows, list):
+            return {"available": False}
+        safe = []
+        for row in rows[:20]:
+            if not isinstance(row, dict):
+                continue
+            item = {
+                "attempt_generation": row.get("attempt_generation") if type(row.get("attempt_generation")) is int and row["attempt_generation"] >= 0 else None,
+                "worker_generation": row.get("worker_generation") if type(row.get("worker_generation")) is int and row["worker_generation"] > 0 else None,
+                "state": self._safe_state(row.get("state"), states),
+                "error_code": self._safe_code(row.get("error_code")),
+                "started": row.get("started") if type(row.get("started")) is bool else None,
+                "finished": row.get("finished") if type(row.get("finished")) is bool else None,
+            }
+            duration = row.get("duration_seconds")
+            if type(duration) in {int, float} and 0 <= duration <= 86400:
+                item["duration_seconds"] = round(float(duration), 3)
+            safe.append(item)
+        return safe
+
+    def _safe_execution_log_phases(self):
+        result = self.docker("logs", "--since", "5m", self.prefix + "-background", check=False)
+        phases = []
+        pattern = re.compile(
+            r"execution operation failed phase=([a-z_]{1,48}) reason_code=([a-z_]{1,64})(?: sqlstate=([0-9A-Z]{5}))?"
+        )
+        for line in ((result.stdout or "") + "\n" + (result.stderr or "")).splitlines():
+            match = pattern.search(line)
+            if not match:
+                continue
+            item = {"phase": match.group(1), "reason_code": match.group(2)}
+            if match.group(3):
+                item["sqlstate"] = match.group(3)
+            phases.append(item)
+        return phases[-50:]
+
+    def capture_execution_failure_diagnostics(self, job_id):
+        # The UUID and table names are constrained before they are interpolated
+        # into fixture-only SELECTs. Only finite metadata leaves the test
+        # environment; SQL, payloads, result content, and driver text are never
+        # copied into the report.
+        if not isinstance(job_id, str) or re.fullmatch(
+                r"[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}", job_id) is None:
+            return {"available": False}
+        row = self._json_probe(
+            "SELECT json_build_object('kind',kind,'state',state,'owner_generation',owner_generation,"
+            "'attempt_generation',attempt_generation,'error_code',error_code)::text "
+            f"FROM background_jobs WHERE id='{job_id}'"
+        )
+        job = None
+        if isinstance(row, dict):
+            job = {
+                "kind": self._safe_state(row.get("kind"), {"news_processing", "news_digest", "telegram_digest", "backup", "reprocess_failed", "article_reprocess", "summaries_generate", "source_test"}),
+                "state": self._safe_state(row.get("state"), {"queued", "running", "succeeded", "failed", "interrupted", "delivery_unknown"}),
+                "owner_generation": row.get("owner_generation") if type(row.get("owner_generation")) is int and row["owner_generation"] > 0 else None,
+                "attempt_generation": row.get("attempt_generation") if type(row.get("attempt_generation")) is int and row["attempt_generation"] >= 0 else None,
+                "error_code": self._safe_code(row.get("error_code")),
+            }
+        return {
+            "job": job if job is not None else {"available": False},
+            "execution_attempts": self._safe_run_metadata("background_job_executions", job_id,
+                                                           {"accepted", "running", "succeeded", "failed", "interrupted", "delivery_unknown"}),
+            "ingestion_runs": self._safe_run_metadata("article_ingestion_runs", job_id,
+                                                        {"running", "succeeded", "failed", "cancelled", "interrupted"}),
+            "processing_runs": self._safe_run_metadata("article_processing_runs", job_id,
+                                                         {"running", "succeeded", "failed", "cancelled", "interrupted"}),
+            "execution_log_phases": self._safe_execution_log_phases(),
+        }
 
     def pg_value(self, sql):
         result = self.docker("exec", self.prefix + "-postgres", "psql", "-U", "gate_user", "-d", "gate_db",
@@ -609,32 +811,45 @@ class ConsolidatedBackgroundGate(GoWebGate):
                 job_status = job.get("status")
                 error_code = job.get("error_code") if isinstance(job.get("error_code"), str) else None
                 error_type = job.get("error_type") if isinstance(job.get("error_type"), str) else None
+        article_id_value = None
+        if type(article_id) is int:
+            article_id_value = article_id
+        elif isinstance(article_id, str) and re.fullmatch(r"[0-9]{1,19}", article_id):
+            try:
+                article_id_value = int(article_id)
+            except ValueError:
+                article_id_value = None
+        if article_id_value is not None and not 0 < article_id_value <= 9223372036854775807:
+            article_id_value = None
         article_state = None
         article_error_code = None
-        if isinstance(article_id, int) and article_id > 0:
+        if article_id_value is not None:
             value = self.pg_value(
                 "SELECT processing_state || '|' || processed::text || '|' || summary_processed::text || '|' || "
                 "category_processed::text || '|' || ad_processed::text FROM articles WHERE id="
-                + str(article_id)
+                + str(article_id_value)
             )
             if re.fullmatch(r"[a-z_]{1,32}\|(?:true|false)\|(?:true|false)\|(?:true|false)\|(?:true|false)", value):
                 article_state = value
             raw_error_code = self.pg_value(
-                "SELECT COALESCE(last_processing_error,'') FROM articles WHERE id=" + str(article_id)
+                "SELECT COALESCE(last_processing_error,'') FROM articles WHERE id=" + str(article_id_value)
             )
             if re.fullmatch(r"[a-z0-9_]{1,64}", raw_error_code):
                 article_error_code = raw_error_code
-        self.report.setdefault("blocked_ai_wait_diagnostics", {})[phase] = {
+        wait_diagnostic = {
             "job_http_status": http_status,
             "job_status": job_status,
             "job_error_code": error_code,
             "job_error_type": error_type,
             "gemini_count_before": previous_count,
             "gemini_count_current": current.get("providers", {}).get("gemini"),
-            "article_id": article_id,
+            "article_id": article_id_value,
             "article_stage_state": article_state,
             "article_last_processing_error": article_error_code,
         }
+        if job_id and job_status in {"failed", "interrupted", "delivery_unknown"}:
+            wait_diagnostic["failure_diagnostics"] = self.capture_execution_failure_diagnostics(job_id)
+        self.report.setdefault("blocked_ai_wait_diagnostics", {})[phase] = wait_diagnostic
         raise GateFailure("fixture_job_did_not_reach_blocked_fake_ai")
 
     def wait_worker_generation(self, previous, timeout=90):
@@ -784,9 +999,12 @@ class ConsolidatedBackgroundGate(GoWebGate):
         current_id = self.docker("inspect", "--format", "{{.Id}}", self.prefix + "-background").stdout.strip()
         current_pid = self.docker("inspect", "--format", "{{.State.Pid}}", self.prefix + "-background").stdout.strip()
         component_codes = []
-        for port, path in ((8080, "/healthz"), (8093, "/healthz"), (8094, "/healthz"), (8095, "/healthz")):
+        for port, path in ((8080, "/healthz"), (8093, "/healthz"), (8094, "/healthz"),
+                           (8095, "/healthz"), (8101, "/internal/v1/status")):
             url = f"http://background:{port}{path}"
-            code = "import urllib.request;print(urllib.request.urlopen(" + repr(url) + ",timeout=3).status)"
+            headers = "{'Authorization':'Bearer ' + " + repr(self.executor_token) + "} " if port == 8101 else "{} "
+            code = ("import urllib.request;print(urllib.request.urlopen(urllib.request.Request(" + repr(url)
+                    + ",headers=" + headers + "),timeout=3).status)")
             result = self.docker("exec", self.prefix + "-executor", "python", "-c", code, check=False)
             component_codes.append(int(result.stdout.strip()) if result.returncode == 0 and result.stdout.strip().isdigit() else 0)
         self.report["lease_recovery"] = {
@@ -803,7 +1021,7 @@ class ConsolidatedBackgroundGate(GoWebGate):
                    and current_pid == str(background_pid)
                    and old_backend_released and new_backend_pid != old_backend_pid)
         self.check("all_background_listeners_remain_healthy_after_worker_recovery",
-                   component_codes == [200, 200, 200, 200])
+                   component_codes == [200, 200, 200, 200, 200])
         job = self.wait_job_http(job_id, timeout=180)
         self.check("blocked_fixture_job_finishes_after_lease_recovery", job.get("status") == "succeeded")
         self.report["recovery_fault_injection"] = "completed"
@@ -909,6 +1127,43 @@ class ConsolidatedBackgroundGate(GoWebGate):
         self.check("accepted_ambiguous_delivery_resolves_unknown_without_replay",
                    job.get("status") == "delivery_unknown" and after == accepted_count)
 
+    def verify_default_news_digest_authority(self):
+        """Exercise omitted digest flags through the real Go-to-Python authority path."""
+        before = self.fake_counters_http().get("providers", {}).get("telegram")
+        if type(before) is not int or before < 0:
+            raise GateFailure("default_news_digest_telegram_counter_unavailable")
+        idempotency_key = "go-news-digest-default-" + self.run_id
+        queued = self.docker(
+            "exec", self.prefix + "-executor", "python", "/consolidated-fixtures/enqueue_news_digest.py",
+            "{}", idempotency_key, check=False,
+        )
+        try:
+            accepted = json.loads(queued.stdout.strip().splitlines()[-1]) if queued.returncode == 0 else None
+        except (ValueError, IndexError):
+            accepted = None
+        job_id = accepted.get("job_id") if isinstance(accepted, dict) else None
+        if not isinstance(job_id, str) or re.fullmatch(
+                r"[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}", job_id) is None:
+            raise GateFailure("default_news_digest_job_not_accepted")
+
+        job = self.wait_job_http(job_id, timeout=180)
+        raw_parts = self.pg_value(
+            "SELECT COALESCE(result->>'parts_sent','') FROM background_jobs WHERE id='" + job_id + "'::uuid"
+        )
+        parts_sent = int(raw_parts) if raw_parts.isdigit() else None
+        after = self.fake_counters_http().get("providers", {}).get("telegram")
+        self.report["default_news_digest_authority"] = {
+            "status": job.get("status"),
+            "error_code": self._safe_code(job.get("error_code")),
+            "parts_sent": parts_sent,
+            "telegram_count_before": before,
+            "telegram_count_after": after if type(after) is int and after >= 0 else None,
+        }
+        self.check("news_digest_omitted_flags_authority_and_delivery",
+                   job.get("status") == "succeeded" and job.get("error_code") is None
+                   and isinstance(parts_sent, int) and parts_sent > 0
+                   and type(after) is int and after > before)
+
     def verify_bounded_sigterm(self):
         name = self.prefix + "-background"
         container_id = self.docker("inspect", "--format", "{{.Id}}", name).stdout.strip()
@@ -1002,9 +1257,12 @@ class ConsolidatedBackgroundGate(GoWebGate):
             "expected_control_revision": control["revision"], "items": [schedule],
         })
         get_status, fetched = self.scheduler_request("GET", "/v1/schedules/fixture:consolidated-due")
+        returned_due = fetched.get("next_due_at") if isinstance(fetched, dict) else None
+        timestamp_diagnostic = paused_import_timestamp_diagnostic(due, returned_due)
+        self.report["paused_import_timestamp_diagnostics"] = timestamp_diagnostic
         self.check("paused_import_preserves_due_timestamp_and_is_idempotent", imported == 200
                    and replay_status == 200 and len(replay.get("unchanged", [])) == 1
-                   and get_status == 200 and fetched.get("next_due_at") == due)
+                   and get_status == 200 and timestamp_diagnostic["same_db_microsecond_instant"])
         resumed, resume_body = self.scheduler_request("PUT", "/v1/control", {
             "expected_revision": control["revision"], "paused": False,
         })
@@ -1109,7 +1367,7 @@ class ConsolidatedBackgroundGate(GoWebGate):
     def verify_runtime_db_users(self):
         result = self.docker("exec", self.prefix + "-postgres", "psql", "-U", "gate_user", "-d", "gate_db",
                              "-Atc", "SELECT usename,datname,count(*) FROM pg_stat_activity "
-                             "WHERE usename IN ('fixture_worker_runtime','fixture_scheduler_runtime',"
+                             "WHERE usename IN ('fixture_worker_runtime','fixture_execution_runtime','fixture_scheduler_runtime',"
                              "'news_ingestion_runtime','news_processing_runtime') "
                              "GROUP BY usename,datname ORDER BY usename,datname")
         sessions = {}
@@ -1117,25 +1375,27 @@ class ConsolidatedBackgroundGate(GoWebGate):
             fields = line.split("|")
             if len(fields) == 3 and fields[2].isdigit():
                 sessions[fields[0]] = {"database": fields[1], "count": int(fields[2])}
-        runtime_users = {WORKER_DB_USER, SCHEDULER_DB_USER, "news_ingestion_runtime", "news_processing_runtime"}
+        runtime_users = {WORKER_DB_USER, EXECUTION_DB_USER, SCHEDULER_DB_USER, "news_ingestion_runtime", "news_processing_runtime"}
         self.report["runtime_db_users"] = {user: sessions.get(user, {"database": None, "count": 0})
                                             for user in sorted(runtime_users)}
         self.report["runtime_db_pool_caps"] = {
-            WORKER_DB_USER: 4, SCHEDULER_DB_USER: 3,
+            WORKER_DB_USER: 4, EXECUTION_DB_USER: 3, SCHEDULER_DB_USER: 3,
             "news_ingestion_runtime": 3, "news_processing_runtime": 3,
         }
         expected_database = {SCHEDULER_DB_USER: "gate_scheduler"}
         expected_database.update({user: "gate_db" for user in runtime_users if user != SCHEDULER_DB_USER})
-        self.check("four_scoped_component_pools_use_distinct_users_and_databases", all(
+        self.check("five_scoped_component_pools_use_distinct_users_and_databases", all(
             sessions.get(user, {}).get("count", 0) > 0
             and sessions[user].get("database") == expected_database[user]
             for user in runtime_users))
+        self.check("execution_pool_stays_within_two_plus_guard_connections",
+                   sessions.get(EXECUTION_DB_USER, {}).get("count", 0) <= 3)
         raw_env = self.docker("inspect", "--format", "{{json .Config.Env}}", self.prefix + "-background").stdout
         env_names = {entry.split("=", 1)[0] for entry in json.loads(raw_env)}
-        scoped_names = {"WORKER_DATABASE_URL", "SCHEDULER_DATABASE_URL", "INGESTION_DATABASE_URL",
+        scoped_names = {"WORKER_DATABASE_URL", "EXECUTION_DATABASE_URL", "SCHEDULER_DATABASE_URL", "INGESTION_DATABASE_URL",
                         "PROCESSING_DATABASE_URL"}
         self.report["background_database_env_names"] = sorted(scoped_names & env_names)
-        self.check("background_uses_four_scoped_dsn_keys_without_generic_fallback",
+        self.check("background_uses_five_scoped_dsn_keys_without_generic_fallback",
                    scoped_names.issubset(env_names) and "DATABASE_URL" not in env_names)
         article_privileges = self.pg_value(
             "SELECT (has_table_privilege('" + WORKER_DB_USER + "','public.articles','SELECT') OR "
@@ -1158,6 +1418,7 @@ class ConsolidatedBackgroundGate(GoWebGate):
         self.check("background_container_pid_stable_before_worker_only_recovery",
                    pre_recovery_identity["container_id"] == bg_id and pre_recovery_identity["pid"] == str(bg_pid))
         self.capture_consolidated_resources("load_after_web_pipeline")
+        self.verify_default_news_digest_authority()
         self.verify_ambiguous_delivery_recovery()
         self.verify_lease_loss_recovery(bg_id, bg_pid)
         self.capture_consolidated_resources("after_worker_recovery")

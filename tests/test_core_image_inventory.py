@@ -9,6 +9,10 @@ from scripts.check_core_image_inventory import CHECKS, IMAGES, InventoryError, c
 
 
 class CoreImageInventoryTests(unittest.TestCase):
+    def test_executor_image_guard_rejects_removed_python_job_runner(self):
+        self.assertIn("class PythonJobExecutor", CHECKS["executor"])
+        self.assertNotIn("class PythonJobExecutor", (Path(__file__).resolve().parents[1] / "news_aggregator/executor.py").read_text())
+
     def test_inventory_checks_each_role_specific_local_target(self):
         calls = []
 

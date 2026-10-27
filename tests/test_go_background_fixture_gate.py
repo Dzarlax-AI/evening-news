@@ -32,14 +32,57 @@ def test_cli_has_four_explicit_images_and_output_dir():
     assert args.collector_image == "collector:test"
 
 
+def test_paused_import_timestamp_matches_db_microprecision_without_tolerance():
+    module = load_gate_module()
+    expected = "2030-01-02T03:04:05.123450Z"
+    assert module.same_db_instant(expected, "2030-01-02T03:04:05.12345Z")
+    assert module.same_db_instant(expected, "2030-01-02T05:04:05.123450+02:00")
+    assert module.safe_utc_timestamp_diagnostic("2030-01-02T03:04:05.12345Z") == expected
+    for different in (
+        "2030-01-02T03:04:05.123451Z",
+        "2030-01-02T03:04:05.1234501Z",
+        "2030-01-02T03:04:05.12345",
+        "not-a-timestamp",
+        "2030-02-30T03:04:05Z",
+        None,
+    ):
+        assert not module.same_db_instant(expected, different)
+    for invalid in (
+        "2030-01-02T03:04:05.1234501Z",
+        "2030-01-02T03:04:05.12345",
+        "not-a-timestamp",
+        "2030-02-30T03:04:05Z",
+        None,
+    ):
+        assert module.safe_utc_timestamp_diagnostic(invalid) is None
+
+
+def test_paused_import_timestamp_diagnostics_are_safe_and_exact():
+    module = load_gate_module()
+    diagnostic = module.paused_import_timestamp_diagnostic(
+        "2030-01-02T03:04:05.123450Z", "2030-01-02T03:04:05.123451Z",
+    )
+    assert diagnostic == {
+        "expected_utc": "2030-01-02T03:04:05.123450Z",
+        "actual_utc": "2030-01-02T03:04:05.123451Z",
+        "expected_valid": True, "actual_valid": True,
+        "same_db_microsecond_instant": False,
+    }
+
+
 def test_fixture_environment_uses_only_scoped_database_urls_and_background_endpoints(tmp_path):
     module = load_gate_module()
     images = dict(module.DEFAULT_IMAGES)
     gate = module.ConsolidatedBackgroundGate(images, tmp_path)
     env = gate.background_environment()
-    assert set(("WORKER_DATABASE_URL", "SCHEDULER_DATABASE_URL", "INGESTION_DATABASE_URL",
+    assert set(("WORKER_DATABASE_URL", "EXECUTION_DATABASE_URL", "SCHEDULER_DATABASE_URL", "INGESTION_DATABASE_URL",
                 "PROCESSING_DATABASE_URL")).issubset(env)
     assert "DATABASE_URL" not in env
+    assert env["JOB_EXECUTOR_URL"] == "http://background:8101"
+    assert env["DOMAIN_SERVICE_URL"] == "http://executor:8100"
+    assert env["EXECUTION_MAX_CONNECTIONS"] == "2"
+    assert env["SELECTOR_SERVICE_URL"] == "http://executor:8100"
+    assert env["EXECUTION_DATABASE_URL"].startswith("postgres://fixture_execution_runtime:")
     assert env["SCHEDULER_LISTEN_ADDR"] == ":8080"
     assert env["ARTICLE_INGESTION_LISTEN"] == ":8093"
     assert env["ARTICLE_PROCESSING_LISTEN"] == ":8094"
@@ -51,6 +94,60 @@ def test_fixture_environment_uses_only_scoped_database_urls_and_background_endpo
     assert executor_env["ARTICLE_PROCESSING_URL"] == "http://background:8094"
     assert executor_env["ARTICLE_PROCESSING_TOKEN"] == env["ARTICLE_PROCESSING_TOKEN"]
     assert executor_env["ARTICLE_AI_TOKEN"] == env["ARTICLE_AI_TOKEN"]
+    assert executor_env["EXECUTION_SERVICE_URL"] == "http://background:8101"
+
+
+def test_gate_checks_authenticated_go_execution_status():
+    source = SCRIPT.read_text()
+    assert '"http://background:8101/internal/v1/status"' in source
+    assert "missing_token_status == 401" in source
+    assert '"executor_instance_id", "active_executions", "ready"' in source
+    assert "component_codes == [200, 200, 200, 200, 200]" in source
+
+
+def test_default_news_digest_gate_uses_python_queue_producer_and_precedes_ambiguous_send():
+    source = SCRIPT.read_text()
+    fixture_producer = (ROOT / "tests/fixtures/go-background/enqueue_news_digest.py").read_text()
+    run_body = source[source.index("    def run(self):"):]
+    assert "enqueue_job_in_session(session, \"news_digest\", payload, key" in fixture_producer
+    assert '"{}", idempotency_key' in source
+    assert '"news_digest_omitted_flags_authority_and_delivery"' in source
+    assert run_body.index("self.verify_default_news_digest_authority()") < run_body.index("self.verify_ambiguous_delivery_recovery()")
+    assert 'result->>\'parts_sent\'' in source
+
+
+def test_blocked_ai_failure_captures_safe_attempt_diagnostics_and_parses_article_id(monkeypatch, tmp_path):
+    module = load_gate_module()
+    gate = module.ConsolidatedBackgroundGate(dict(module.DEFAULT_IMAGES), tmp_path)
+    gate.access_token = "fixture-token"
+    monkeypatch.setattr(gate, "fake_counters_http", lambda: {"providers": {"gemini": 15}})
+    monkeypatch.setattr(gate, "request", lambda *args, **kwargs: (
+        200, {"status": "failed", "error_code": "worker_error", "error_type": None}
+    ))
+    article_queries = []
+
+    def pg_value(query):
+        article_queries.append(query)
+        return "pending|false|false|false|false" if "processing_state" in query else ""
+
+    monkeypatch.setattr(gate, "pg_value", pg_value)
+    monkeypatch.setattr(gate, "capture_execution_failure_diagnostics", lambda job_id: {
+        "execution_attempts": [{"attempt_generation": 2, "state": "failed", "error_code": "worker_error"}],
+        "execution_log_phases": [{"phase": "pipeline_execute", "reason_code": "handler_failed"}],
+    })
+    try:
+        gate.wait_gemini_call(15, timeout=0, job_id="11111111-1111-4111-8111-111111111111",
+                              phase="worker_reprocess", article_id="5")
+    except module.GateFailure as exc:
+        assert str(exc) == "fixture_job_did_not_reach_blocked_fake_ai"
+    else:
+        raise AssertionError("blocked AI wait unexpectedly succeeded")
+
+    diagnostic = gate.report["blocked_ai_wait_diagnostics"]["worker_reprocess"]
+    assert diagnostic["article_id"] == 5
+    assert diagnostic["article_stage_state"] == "pending|false|false|false|false"
+    assert diagnostic["failure_diagnostics"]["execution_attempts"][0]["error_code"] == "worker_error"
+    assert len(article_queries) == 2
 
 
 def test_scheduler_probe_command_is_valid_python_and_targets_internal_runtime(monkeypatch, tmp_path):
@@ -169,6 +266,96 @@ def test_migration_failure_diagnostics_are_precleanup_and_sanitized(monkeypatch,
     assert diagnostic["postgres_ready_at_failure_capture"] is True
     assert "fixture-only-password" not in repr(diagnostic)
     assert "postgresql://[redacted]" in diagnostic["log_excerpt"][0]
+
+
+def test_failed_execution_diagnostics_keep_only_safe_job_and_run_metadata(monkeypatch, tmp_path):
+    module = load_gate_module()
+    gate = module.ConsolidatedBackgroundGate(dict(module.DEFAULT_IMAGES), tmp_path)
+    job_id = "11111111-2222-4333-8444-555555555555"
+    queries = []
+
+    def fake_pg_value(sql):
+        queries.append(sql)
+        if "FROM background_jobs" in sql:
+            return '{"kind":"article_reprocess","state":"failed","owner_generation":5,"attempt_generation":2,"error_code":"worker_error"}'
+        if "FROM background_job_executions" in sql:
+            return '[{"attempt_generation":1,"worker_generation":4,"state":"interrupted","error_code":"worker_interrupted","started":true,"finished":true,"duration_seconds":8.5}]'
+        if "FROM article_ingestion_runs" in sql:
+            return "[]"
+        if "FROM article_processing_runs" in sql:
+            return '[{"attempt_generation":2,"worker_generation":5,"state":"succeeded","error_code":null,"started":true,"finished":true,"duration_seconds":0.25}]'
+        raise AssertionError(sql)
+
+    class Result:
+        returncode = 0
+        stdout = (
+            '2026-10-27 WARN execution operation failed phase=result_projection '
+            'reason_code=result_rejected sqlstate=22023 private=payload-secret SQL=SELECT-secret\n'
+            '2026-10-27 WARN worker heartbeat failed error=database-url-secret\n'
+        )
+        stderr = ""
+
+    monkeypatch.setattr(gate, "pg_value", fake_pg_value)
+    monkeypatch.setattr(gate, "docker", lambda *args, **kwargs: Result())
+    diagnostic = gate.capture_execution_failure_diagnostics(job_id)
+    assert diagnostic["job"] == {
+        "kind": "article_reprocess", "state": "failed", "owner_generation": 5,
+        "attempt_generation": 2, "error_code": "worker_error",
+    }
+    assert diagnostic["execution_attempts"] == [{
+        "attempt_generation": 1, "worker_generation": 4, "state": "interrupted",
+        "error_code": "worker_interrupted", "started": True, "finished": True,
+        "duration_seconds": 8.5,
+    }]
+    assert diagnostic["ingestion_runs"] == []
+    assert diagnostic["processing_runs"][0]["state"] == "succeeded"
+    assert diagnostic["execution_log_phases"] == [{
+        "phase": "result_projection", "reason_code": "result_rejected", "sqlstate": "22023",
+    }]
+    encoded = repr(diagnostic)
+    for secret in ("payload-secret", "SELECT-secret", "database-url-secret", "fixture-only"):
+        assert secret not in encoded
+    assert all("SELECT" in sql and "FROM " in sql for sql in queries)
+
+
+def test_execution_failure_diagnostics_reject_invalid_ids_and_untrusted_codes(monkeypatch, tmp_path):
+    module = load_gate_module()
+    gate = module.ConsolidatedBackgroundGate(dict(module.DEFAULT_IMAGES), tmp_path)
+    monkeypatch.setattr(gate, "pg_value", lambda _sql: '{"kind":"article_reprocess","state":"failed","owner_generation":-1,"attempt_generation":2,"error_code":"secret from database"}')
+
+    class Result:
+        returncode = 0
+        stdout = 'execution operation failed phase=bad phase reason_code=secret value\n'
+        stderr = ""
+
+    monkeypatch.setattr(gate, "docker", lambda *args, **kwargs: Result())
+    invalid_id = gate.capture_execution_failure_diagnostics("not-a-uuid")
+    assert invalid_id == {"available": False}
+    safe_id = gate.capture_execution_failure_diagnostics("11111111-2222-4333-8444-555555555555")
+    assert safe_id["job"] == {
+        "kind": "article_reprocess", "state": "failed", "owner_generation": None,
+        "attempt_generation": 2, "error_code": None,
+    }
+    assert safe_id["execution_log_phases"] == []
+    assert "secret from database" not in repr(safe_id)
+
+
+def test_terminal_failed_job_attaches_safe_failure_metadata(monkeypatch, tmp_path):
+    module = load_gate_module()
+    gate = module.ConsolidatedBackgroundGate(dict(module.DEFAULT_IMAGES), tmp_path)
+    monkeypatch.setattr(module.GoWebGate, "wait_job_http", lambda *_args, **_kwargs: {
+        "status": "failed", "error_code": "worker_error", "error_type": "database-url-secret",
+    })
+    monkeypatch.setattr(gate, "capture_execution_failure_diagnostics", lambda _job_id: {
+        "execution_log_phases": [{"phase": "pipeline_execute", "reason_code": "handler_failed"}],
+    })
+    result = gate.wait_job_http("11111111-2222-4333-8444-555555555555")
+    assert result["status"] == "failed"
+    job_diagnostic = gate.report["job_diagnostics"]["11111111-2222-4333-8444-555555555555"]
+    assert job_diagnostic["error_code"] == "worker_error"
+    assert job_diagnostic["error_type"] is None
+    assert job_diagnostic["failure_diagnostics"]["execution_log_phases"][0]["reason_code"] == "handler_failed"
+    assert "database-url-secret" not in repr(gate.report)
 
 
 def test_active_sigterm_article_is_fresh_synthetic_and_requires_ai(monkeypatch, tmp_path):

@@ -10,6 +10,7 @@ on:
       - 'docker-compose.dev.yml'
       - 'Makefile'
       - 'go-background/**'
+      - 'go-execution/**'
       - 'go/**'
       - 'go-ingestion/**'
       - 'go-processing/**'
@@ -41,6 +42,7 @@ on:
       - 'docker-compose.dev.yml'
       - 'Makefile'
       - 'go-background/**'
+      - 'go-execution/**'
       - 'go/**'
       - 'go-ingestion/**'
       - 'go-processing/**'
@@ -120,7 +122,7 @@ jobs:
       fail-fast: false
       matrix:
         postgres: ['16', '17']
-        module: [go-worker, go-scheduler, go-ingestion, go-processing, go-background]
+        module: [go-worker, go-scheduler, go-ingestion, go-processing, go-execution, go-background]
     services:
       postgres:
         image: postgres:${{ matrix.postgres }}-alpine
