@@ -261,7 +261,23 @@ func (w *Worker) heartbeatLoop(ctx context.Context, cancelRun context.CancelFunc
 			err := w.store.Heartbeat(heartbeatCtx)
 			cancel()
 			if err != nil {
-				w.logger.Error("worker heartbeat failed; lease released", "error", err)
+				var heartbeatErr *store.HeartbeatError
+				if errors.As(err, &heartbeatErr) {
+					w.logger.Error("worker heartbeat failed; lease released",
+						"event", "worker_heartbeat_failure",
+						"event_utc", time.Now().UTC().Format(time.RFC3339Nano),
+						"stage", heartbeatErr.Stage,
+						"reason", heartbeatErr.Reason,
+						"sqlstate", heartbeatErr.SQLState,
+						"backend_pid", heartbeatErr.BackendPID,
+						"generation", heartbeatErr.Generation,
+						"mutex_wait_ms", heartbeatErr.MutexWait.Milliseconds(),
+						"begin_ms", heartbeatErr.BeginDuration.Milliseconds(),
+						"update_ms", heartbeatErr.UpdateDuration.Milliseconds(),
+						"commit_ms", heartbeatErr.CommitDuration.Milliseconds())
+				} else {
+					w.logger.Error("worker heartbeat failed; lease released", "event", "worker_heartbeat_failure", "event_utc", time.Now().UTC().Format(time.RFC3339Nano), "stage", "unknown", "reason", "other")
+				}
 				close(lost)
 				cancelRun()
 				return

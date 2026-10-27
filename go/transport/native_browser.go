@@ -223,6 +223,10 @@ func (w *NativeBrowser) Ready() bool {
 
 func nativeDiagnosticReason(err error) string {
 	switch {
+	case errors.Is(err, ErrNativeBusy):
+		return "browser_busy"
+	case NativeResourceLimitReason(err) != "":
+		return "resource_limit"
 	case errors.Is(err, errNativeClientDisconnected):
 		return "client_disconnected"
 	case errors.Is(err, errNativeMalformedDetach):
@@ -241,6 +245,10 @@ func nativeDiagnosticReason(err error) string {
 		return "ownership_loss"
 	case errors.Is(err, ErrNativeUnsupported):
 		return "unsupported"
+	case err != nil && err.Error() == "native_browser_navigation_failed":
+		return "navigation_failed"
+	case err != nil && err.Error() == "native_browser_evaluation_failed":
+		return "evaluation_failed"
 	case errors.Is(err, io.EOF):
 		return "transport_error"
 	default:
@@ -259,6 +267,22 @@ func nativeDiagnosticReason(err error) string {
 	}
 }
 
+func nativeNavigationReason(errorText string) string {
+	upper := strings.ToUpper(errorText)
+	switch {
+	case strings.Contains(upper, "ERR_NAME_NOT_RESOLVED"), strings.Contains(upper, "ERR_NAME_RESOLUTION_FAILED"), strings.Contains(upper, "ERR_DNS"):
+		return "navigation_dns"
+	case strings.Contains(upper, "ERR_CERT"), strings.Contains(upper, "ERR_SSL"), strings.Contains(upper, "ERR_TLS"):
+		return "navigation_tls"
+	case strings.Contains(upper, "ERR_ABORTED"):
+		return "navigation_aborted"
+	case strings.Contains(upper, "ERR_CONNECTION"), strings.Contains(upper, "ERR_TIMED_OUT"), strings.Contains(upper, "ERR_ADDRESS_UNREACHABLE"):
+		return "navigation_connection"
+	default:
+		return "navigation_other"
+	}
+}
+
 func nativeCrashRecoveryAllowed(crashed bool, err error, connected bool, cleanupErr error) bool {
 	return crashed && err == ErrNativeTargetCrashed && connected && cleanupErr == nil
 }
@@ -271,6 +295,22 @@ func (w *NativeBrowser) reportDiagnostic(stage string, err error) {
 	if w.cfg.Diagnostic != nil && err != nil {
 		w.cfg.Diagnostic(stage, nativeDiagnosticReason(err))
 	}
+}
+
+func (w *NativeBrowser) reportRequestDiagnostic(ctx context.Context, stage string, err error) {
+	if err == nil {
+		return
+	}
+	RecordPageMonitorDiagnostic(ctx, stage, nativeScopedDiagnosticReason(err))
+	w.reportDiagnostic(stage, err)
+}
+
+func nativeScopedDiagnosticReason(err error) string {
+	reason := nativeDiagnosticReason(err)
+	if strings.HasPrefix(reason, "protocol_error_") {
+		return "protocol_error"
+	}
+	return reason
 }
 
 const nativeBrowserSetupAttempts = 3
@@ -597,7 +637,7 @@ func (w *NativeBrowser) open(ctx context.Context) (res *nativeResources, err err
 	ws, err := nativeBrowserEndpoint(ctx, w.cfg.Endpoint)
 	if err != nil {
 		w.unavailable()
-		w.reportDiagnostic("discovery", err)
+		w.reportRequestDiagnostic(ctx, "discovery", err)
 		return nil, errors.Join(ErrNativeNotReady, err)
 	}
 	w.mu.Lock()
@@ -605,16 +645,16 @@ func (w *NativeBrowser) open(ctx context.Context) (res *nativeResources, err err
 	w.mu.Unlock()
 	if changed {
 		w.taint()
-		w.reportDiagnostic("discovery", ErrNativeOwnershipLost)
+		w.reportRequestDiagnostic(ctx, "discovery", ErrNativeOwnershipLost)
 		return nil, ErrNativeOwnershipLost
 	}
 	client, err := dialNativeBrowser(ctx, ws)
 	if err != nil {
 		w.unavailable()
-		w.reportDiagnostic("websocket", err)
+		w.reportRequestDiagnostic(ctx, "websocket", err)
 		return nil, errors.Join(ErrNativeNotReady, err)
 	}
-	res = &nativeResources{client: client, generation: ws, diagnostic: w.reportDiagnostic}
+	res = &nativeResources{client: client, generation: ws, diagnostic: func(stage string, err error) { w.reportRequestDiagnostic(ctx, stage, err) }}
 	owned := res
 	defer func() {
 		if err != nil {
@@ -629,36 +669,36 @@ func (w *NativeBrowser) open(ctx context.Context) (res *nativeResources, err err
 		ID string `json:"browserContextId"`
 	}
 	if err = client.callAllocation(setup, "", "Target.createBrowserContext", map[string]any{"disposeOnDetach": true, "proxyServer": w.cfg.ProxyURL, "proxyBypassList": "<-loopback>"}, &created); err != nil {
-		w.reportDiagnostic("create_context", err)
+		w.reportRequestDiagnostic(ctx, "create_context", err)
 		return nil, errors.Join(ErrNativeOwnershipLost, err)
 	}
 	res.contextID = created.ID
 	if created.ID == "" {
-		w.reportDiagnostic("create_context", ErrNativeOwnershipLost)
+		w.reportRequestDiagnostic(ctx, "create_context", ErrNativeOwnershipLost)
 		return nil, ErrNativeOwnershipLost
 	}
 	var target struct {
 		ID string `json:"targetId"`
 	}
 	if err = client.callAllocation(setup, "", "Target.createTarget", map[string]any{"url": "about:blank", "browserContextId": res.contextID, "background": true}, &target); err != nil {
-		w.reportDiagnostic("create_target", err)
+		w.reportRequestDiagnostic(ctx, "create_target", err)
 		return nil, errors.Join(ErrNativeOwnershipLost, err)
 	}
 	res.targetID = target.ID
 	if target.ID == "" {
-		w.reportDiagnostic("create_target", ErrNativeOwnershipLost)
+		w.reportRequestDiagnostic(ctx, "create_target", ErrNativeOwnershipLost)
 		return nil, ErrNativeOwnershipLost
 	}
 	var attached struct {
 		ID string `json:"sessionId"`
 	}
 	if err = client.callAllocation(setup, "", "Target.attachToTarget", map[string]any{"targetId": res.targetID, "flatten": true}, &attached); err != nil {
-		w.reportDiagnostic("attach_target", err)
+		w.reportRequestDiagnostic(ctx, "attach_target", err)
 		return nil, errors.Join(ErrNativeOwnershipLost, err)
 	}
 	res.sessionID = attached.ID
 	if attached.ID == "" {
-		w.reportDiagnostic("attach_target", ErrNativeOwnershipLost)
+		w.reportRequestDiagnostic(ctx, "attach_target", ErrNativeOwnershipLost)
 		return nil, ErrNativeOwnershipLost
 	}
 	return res, nil
@@ -911,8 +951,12 @@ func (w *NativeBrowser) Fetch(ctx context.Context, raw string, opts NativeBrowse
 	if timeout < 0 || timeout > 30*time.Second || opts.MinSettle < 0 || opts.MinSettle > 5*time.Second || len(opts.ReadySelector) > 2048 {
 		return doc, errors.New("native_browser_invalid_options")
 	}
+	requestCtx := ctx
 	ctx, done, err := w.begin(ctx, false)
 	if err != nil {
+		if _, scoped := requestCtx.Value(pageMonitorDiagnosticKey{}).(*PageMonitorDiagnostic); scoped {
+			RecordPageMonitorDiagnostic(requestCtx, "admission", nativeDiagnosticReason(err))
+		}
 		return doc, err
 	}
 	defer done()
@@ -924,12 +968,16 @@ func (w *NativeBrowser) Fetch(ctx context.Context, raw string, opts NativeBrowse
 	}
 	var targetCrashed atomic.Bool
 	diagnosticStage := "configure"
+	diagnosticReason := ""
 	defer func() {
 		connected, cleanupErr := res.cleanupWithConnectionState(targetCrashed.Load())
 		if cleanupErr != nil {
 			w.taint()
 			doc = RenderedDocument{}
 			err = errors.Join(err, ErrNativeOwnershipLost, cleanupErr)
+			if _, scoped := ctx.Value(pageMonitorDiagnosticKey{}).(*PageMonitorDiagnostic); scoped {
+				RecordPageMonitorDiagnostic(ctx, "cleanup", "ownership_loss")
+			}
 			return
 		}
 		if targetCrashed.Load() {
@@ -1270,6 +1318,15 @@ func (w *NativeBrowser) Fetch(ctx context.Context, raw string, opts NativeBrowse
 			!errors.Is(cause, context.DeadlineExceeded) && !errors.Is(cause, context.Canceled) {
 			stage = "events"
 		}
+		if err != nil {
+			reason := diagnosticReason
+			if reason == "" {
+				reason = nativeScopedDiagnosticReason(err)
+			}
+			if _, scoped := ctx.Value(pageMonitorDiagnosticKey{}).(*PageMonitorDiagnostic); scoped {
+				RecordPageMonitorDiagnostic(ctx, stage, reason)
+			}
+		}
 		w.reportDiagnostic(stage, err)
 	}()
 	var navigation struct {
@@ -1287,6 +1344,7 @@ func (w *NativeBrowser) Fetch(ctx context.Context, raw string, opts NativeBrowse
 		if cause := context.Cause(work); cause != nil {
 			return doc, cause
 		}
+		diagnosticReason = nativeNavigationReason(navigation.Error)
 		return doc, errors.New("native_browser_navigation_failed")
 	}
 	if navigation.FrameID != "" {
@@ -1326,6 +1384,7 @@ func (w *NativeBrowser) Fetch(ctx context.Context, raw string, opts NativeBrowse
 			return doc, browserClientCause(work, client, err)
 		}
 		if len(evaluated.Exception) > 0 {
+			diagnosticReason = "evaluation_failed"
 			return doc, errors.New("native_browser_evaluation_failed")
 		}
 		value := evaluated.Result.Value

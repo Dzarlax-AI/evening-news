@@ -28,6 +28,8 @@ type HeartbeatError struct {
 	Stage          string
 	Reason         string
 	SQLState       string
+	BackendPID     int32
+	Generation     int64
 	MutexWait      time.Duration
 	BeginDuration  time.Duration
 	UpdateDuration time.Duration
@@ -38,9 +40,9 @@ func (e *HeartbeatError) Error() string {
 	if e == nil {
 		return ErrLeaseLost.Error()
 	}
-	diagnostic := fmt.Sprintf("%s (heartbeat stage=%s reason=%s mutex_wait_ms=%d begin_ms=%d update_ms=%d commit_ms=%d",
+	diagnostic := fmt.Sprintf("%s (heartbeat stage=%s reason=%s mutex_wait_ms=%d begin_ms=%d update_ms=%d commit_ms=%d backend_pid=%d generation=%d",
 		ErrLeaseLost, e.Stage, e.Reason, e.MutexWait.Milliseconds(), e.BeginDuration.Milliseconds(),
-		e.UpdateDuration.Milliseconds(), e.CommitDuration.Milliseconds())
+		e.UpdateDuration.Milliseconds(), e.CommitDuration.Milliseconds(), e.BackendPID, e.Generation)
 	if e.SQLState != "" {
 		diagnostic += fmt.Sprintf(" sqlstate=%s", e.SQLState)
 	}
@@ -282,8 +284,9 @@ func (s *Store) Heartbeat(ctx context.Context) error {
 	}
 	if command.RowsAffected() != 1 {
 		rollbackTx(tx)
+		identity := s.heartbeatIdentityLocked()
 		s.invalidateLeaseLocked()
-		return &HeartbeatError{Stage: "update", Reason: "lease_mismatch", MutexWait: mutexWait,
+		return &HeartbeatError{Stage: "update", Reason: "lease_mismatch", BackendPID: identity.BackendPID, Generation: identity.Generation, MutexWait: mutexWait,
 			BeginDuration: beginDuration, UpdateDuration: updateDuration}
 	}
 	commitStarted := time.Now()
@@ -297,13 +300,20 @@ func (s *Store) Heartbeat(ctx context.Context) error {
 }
 
 func (s *Store) failHeartbeatLocked(stage string, err error, mutexWait, beginDuration, updateDuration, commitDuration time.Duration) error {
+	identity := s.heartbeatIdentityLocked()
 	s.invalidateLeaseLocked()
 	diagnostic := heartbeatError(stage, err)
+	diagnostic.BackendPID = identity.BackendPID
+	diagnostic.Generation = identity.Generation
 	diagnostic.MutexWait = mutexWait
 	diagnostic.BeginDuration = beginDuration
 	diagnostic.UpdateDuration = updateDuration
 	diagnostic.CommitDuration = commitDuration
 	return diagnostic
+}
+
+func (s *Store) heartbeatIdentityLocked() LeaseInfo {
+	return LeaseInfo{BackendPID: s.backendPID, Generation: s.generation}
 }
 
 func heartbeatError(stage string, err error) *HeartbeatError {

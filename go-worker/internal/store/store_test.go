@@ -445,7 +445,8 @@ func TestAcquireRejectsCompetingStartup(t *testing.T) {
 func TestHeartbeatLockContentionReportsBoundedTimeoutAndReleasesLease(t *testing.T) {
 	owner, ctx, cleanup := testStore(t)
 	defer cleanup()
-	if _, err := owner.Acquire(ctx); err != nil {
+	info, err := owner.Acquire(ctx)
+	if err != nil {
 		t.Fatal(err)
 	}
 
@@ -473,6 +474,9 @@ func TestHeartbeatLockContentionReportsBoundedTimeoutAndReleasesLease(t *testing
 	var diagnostic *HeartbeatError
 	if !errors.As(err, &diagnostic) || diagnostic.Stage != "update" || diagnostic.Reason != "timeout" || diagnostic.SQLState != "" {
 		t.Fatalf("heartbeat diagnostic = %#v, want update/timeout without SQLSTATE", diagnostic)
+	}
+	if diagnostic.BackendPID != info.BackendPID || diagnostic.Generation != info.Generation {
+		t.Fatalf("heartbeat lease identity = pid=%d generation=%d, want pid=%d generation=%d", diagnostic.BackendPID, diagnostic.Generation, info.BackendPID, info.Generation)
 	}
 	if diagnostic.MutexWait < 0 || diagnostic.BeginDuration < 0 || diagnostic.UpdateDuration <= 0 || diagnostic.CommitDuration != 0 {
 		t.Fatalf("heartbeat phase durations = %#v, want measured update wait and unstarted commit", diagnostic)
@@ -660,6 +664,9 @@ func TestHeartbeatCommittedUpdateWithLostReplyFencesOldWriter(t *testing.T) {
 	if !errors.Is(err, ErrLeaseLost) || !errors.As(err, &diagnostic) || diagnostic.Stage != "commit" {
 		t.Fatalf("Heartbeat after dropped COMMIT reply = %v, want fail-closed commit diagnostic", err)
 	}
+	if diagnostic.BackendPID != info.BackendPID || diagnostic.Generation != info.Generation {
+		t.Fatalf("lost-reply heartbeat identity = pid=%d generation=%d, want pid=%d generation=%d", diagnostic.BackendPID, diagnostic.Generation, info.BackendPID, info.Generation)
+	}
 	if diagnostic.CommitDuration < 0 {
 		t.Fatalf("commit duration = %s, want nonnegative measured duration", diagnostic.CommitDuration)
 	}
@@ -671,6 +678,9 @@ func TestHeartbeatCommittedUpdateWithLostReplyFencesOldWriter(t *testing.T) {
 	}
 	if newInfo.Generation <= info.Generation {
 		t.Fatalf("replacement generation %d did not advance past %d", newInfo.Generation, info.Generation)
+	}
+	if diagnostic.Generation == newInfo.Generation {
+		t.Fatalf("failed heartbeat reported replacement generation %d", diagnostic.Generation)
 	}
 	if err := owner.Finish(ctx, job, "failed", map[string]any{"status": "incomplete"}, nil); !errors.Is(err, ErrLeaseLost) {
 		t.Fatalf("old writer Finish after lost COMMIT reply = %v, want ErrLeaseLost", err)

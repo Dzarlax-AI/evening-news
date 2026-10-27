@@ -1,6 +1,7 @@
 package worker
 
 import (
+	"bytes"
 	"context"
 	"encoding/json"
 	"errors"
@@ -8,6 +9,7 @@ import (
 	"log/slog"
 	"net/http"
 	"net/http/httptest"
+	"strings"
 	"sync"
 	"sync/atomic"
 	"testing"
@@ -84,6 +86,71 @@ func TestAcceptAndWaitResolvesLostAcceptanceAckWithoutDuplicatePost(t *testing.T
 	}
 	if postCount != 1 {
 		t.Fatalf("accept POST count = %d, want 1 after lost ACK", postCount)
+	}
+}
+
+func TestHeartbeatLoopEmitsSafeStructuredFailureEvent(t *testing.T) {
+	var output bytes.Buffer
+	logger := slog.New(slog.NewTextHandler(&output, nil))
+	queue := &fakeQueueStore{heartbeatErr: &store.HeartbeatError{
+		Stage: "commit", Reason: "timeout", SQLState: "57014", BackendPID: 321, Generation: 9,
+		MutexWait: 2 * time.Millisecond, BeginDuration: 3 * time.Millisecond,
+		UpdateDuration: 4 * time.Millisecond, CommitDuration: 5 * time.Millisecond,
+	}}
+	worker := &Worker{config: config.Config{HeartbeatInterval: time.Millisecond, RequestTimeout: time.Second}, store: queue, logger: logger}
+	ctx, cancel := context.WithCancel(context.Background())
+	lost := make(chan struct{})
+	worker.heartbeatLoop(ctx, cancel, lost)
+	<-lost
+	cancel()
+	line := output.String()
+	for _, field := range []string{"event=worker_heartbeat_failure", "event_utc=", "stage=commit", "reason=timeout", "sqlstate=57014", "backend_pid=321", "generation=9", "mutex_wait_ms=2", "begin_ms=3", "update_ms=4", "commit_ms=5"} {
+		if !strings.Contains(line, field) {
+			t.Errorf("heartbeat log missing %q: %s", field, line)
+		}
+	}
+	if strings.Contains(line, "UPDATE background_worker_status") || strings.Contains(line, "postgres://") {
+		t.Fatalf("heartbeat log leaked driver details: %s", line)
+	}
+}
+
+func TestHeartbeatLoopEmitsJSONFailureEvent(t *testing.T) {
+	var output bytes.Buffer
+	logger := slog.New(slog.NewJSONHandler(&output, nil))
+	queue := &fakeQueueStore{heartbeatErr: &store.HeartbeatError{
+		Stage: "commit", Reason: "timeout", SQLState: "57014", BackendPID: 654, Generation: 12,
+		MutexWait: 12 * time.Millisecond, BeginDuration: 23 * time.Millisecond,
+		UpdateDuration: 34 * time.Millisecond, CommitDuration: 45 * time.Millisecond,
+	}}
+	worker := &Worker{config: config.Config{HeartbeatInterval: time.Millisecond, RequestTimeout: time.Second}, store: queue, logger: logger}
+	ctx, cancel := context.WithCancel(context.Background())
+	lost := make(chan struct{})
+	worker.heartbeatLoop(ctx, cancel, lost)
+	<-lost
+	cancel()
+
+	var record map[string]any
+	if err := json.Unmarshal(output.Bytes(), &record); err != nil {
+		t.Fatalf("heartbeat JSON log is invalid: %v: %s", err, output.String())
+	}
+	for key, want := range map[string]any{
+		"event": "worker_heartbeat_failure", "stage": "commit", "reason": "timeout", "sqlstate": "57014",
+		"backend_pid": float64(654), "generation": float64(12), "mutex_wait_ms": float64(12),
+		"begin_ms": float64(23), "update_ms": float64(34), "commit_ms": float64(45),
+	} {
+		if got := record[key]; got != want {
+			t.Errorf("heartbeat JSON field %q = %#v, want %#v; record=%s", key, got, want, output.String())
+		}
+	}
+	if raw, ok := record["event_utc"].(string); !ok {
+		t.Errorf("event_utc has type %T, want UTC timestamp string", record["event_utc"])
+	} else if parsed, err := time.Parse(time.RFC3339Nano, raw); err != nil || parsed.Location() != time.UTC {
+		t.Errorf("event_utc = %q, want RFC3339 UTC time: %v", raw, err)
+	}
+	for _, forbidden := range []string{"postgres://", "UPDATE background_worker_status", "CANARY", "secret-dsn"} {
+		if strings.Contains(output.String(), forbidden) {
+			t.Errorf("heartbeat JSON log leaked %q: %s", forbidden, output.String())
+		}
 	}
 }
 

@@ -29,6 +29,8 @@ type nativeFixture struct {
 	childStatus                                                                                                        int
 	downloadFrame                                                                                                      string
 	navigateDownload                                                                                                   bool
+	navigationError                                                                                                    string
+	evaluationException                                                                                                bool
 	requestBurst                                                                                                       int
 	pausedBurst                                                                                                        int
 	runtimePausedBurst                                                                                                 int
@@ -52,6 +54,8 @@ type nativeFixture struct {
 	authSource, authOrigin                                                                                             string
 	empty, dropReply, failCleanup, failStopLoading, failContextReceipt, failTargetReceipt, disconnect                  bool
 	discoveryUnavailable                                                                                               bool
+	failCreateContext, failCreateTarget, failAttach                                                                    bool
+	failNavigate, failEvaluate                                                                                         bool
 	discoveryID                                                                                                        string
 	discoveryDelay                                                                                                     time.Duration
 	contextsDelay                                                                                                      time.Duration
@@ -149,14 +153,17 @@ func newNativeFixture(t *testing.T) *nativeFixture {
 				}
 				f.contexts[contextID] = true
 				result["browserContextId"] = contextID
+				protocolErr = f.failCreateContext
 				if f.dropReply {
 					reply = false
 				}
 			case "Target.createTarget":
 				f.targets[targetID] = true
 				result["targetId"] = targetID
+				protocolErr = f.failCreateTarget
 			case "Target.attachToTarget":
 				result["sessionId"] = sessionID
+				protocolErr = f.failAttach
 			case "Page.getFrameTree":
 				result["frameTree"] = map[string]any{"frame": map[string]string{"id": "main-frame"}}
 			case "Target.disposeBrowserContext":
@@ -201,6 +208,7 @@ func newNativeFixture(t *testing.T) *nativeFixture {
 				}
 				result["targetInfos"] = infos
 			case "Page.navigate":
+				protocolErr = f.failNavigate
 				responseDelay = f.navigateDelay
 				select {
 				case f.navigateStarts <- struct{}{}:
@@ -210,6 +218,8 @@ func newNativeFixture(t *testing.T) *nativeFixture {
 				if f.navigateDownload {
 					result["isDownload"] = true
 					result["errorText"] = "net::ERR_ABORTED"
+				} else if f.navigationError != "" {
+					result["errorText"] = f.navigationError
 				}
 				select {
 				case <-f.navigated:
@@ -356,6 +366,7 @@ func newNativeFixture(t *testing.T) *nativeFixture {
 			case "Fetch.failRequest":
 				responseDelay = f.policyRPCDelay
 			case "Runtime.evaluate":
+				protocolErr = f.failEvaluate
 				if f.disconnect {
 					f.mu.Unlock()
 					return
@@ -426,6 +437,9 @@ func newNativeFixture(t *testing.T) *nativeFixture {
 					value = map[string]any{"ready": true, "tooLarge": true}
 				}
 				result["result"] = map[string]any{"value": value}
+				if f.evaluationException {
+					result["exceptionDetails"] = map[string]any{"text": "JS_CANARY", "exception": map[string]any{"description": "EXCEPTION_CANARY"}}
+				}
 				authBurst, f.authEventBurst = f.authEventBurst, 0
 			case "Fetch.fulfillRequest", "Network.setUserAgentOverride", "Emulation.setDeviceMetricsOverride", "Browser.close":
 				t.Errorf("native path changed browser identity/body or closed browser: %s", msg.Method)
@@ -1876,6 +1890,88 @@ func TestNativeDiagnosticReportsOnlyFiniteDiscoveryFailure(t *testing.T) {
 		if strings.Contains(reason, " ") || strings.Contains(reason, "https") || reason == "" {
 			t.Fatalf("unsafe diagnostic reason %q", reason)
 		}
+	}
+}
+
+func TestNativePageMonitorDiagnosticsClassifyNavigationAndPreservePrimaryFailure(t *testing.T) {
+	cases := []struct {
+		name, errorText, wantReason string
+		cleanup                     bool
+	}{
+		{name: "dns", errorText: "net::ERR_NAME_NOT_RESOLVED https://DNS_CANARY/path", wantReason: "navigation_dns"},
+		{name: "connection", errorText: "net::ERR_CONNECTION_REFUSED https://CONNECTION_CANARY/path", wantReason: "navigation_connection"},
+		{name: "tls", errorText: "net::ERR_CERT_AUTHORITY_INVALID https://TLS_CANARY/path", wantReason: "navigation_tls"},
+		{name: "aborted", errorText: "net::ERR_ABORTED https://ABORT_CANARY/path", wantReason: "navigation_aborted"},
+		{name: "unknown", errorText: "browser supplied arbitrary detail https://UNKNOWN_CANARY/path", wantReason: "navigation_other"},
+		{name: "navigation remains primary after cleanup failure", errorText: "net::ERR_NAME_NOT_RESOLVED https://CLEANUP_CANARY/path", wantReason: "navigation_dns", cleanup: true},
+	}
+	for _, test := range cases {
+		t.Run(test.name, func(t *testing.T) {
+			f := newNativeFixture(t)
+			f.navigationError = test.errorText
+			w := f.worker(t)
+			if err := w.Probe(context.Background()); err != nil {
+				t.Fatal(err)
+			}
+			f.mu.Lock()
+			f.failCleanup = test.cleanup
+			f.mu.Unlock()
+			diagnostic := NewPageMonitorDiagnostic(strings.Repeat("a", 64), 42)
+			ctx := WithPageMonitorDiagnostic(context.Background(), diagnostic)
+			_, err := w.Fetch(ctx, "https://origin.example/", NativeBrowserOptions{})
+			if err == nil || errors.Is(err, ErrNativeUnsupported) {
+				t.Fatalf("Fetch error = %v, want navigation failure", err)
+			}
+			if strings.Contains(err.Error(), "CANARY") || strings.Contains(err.Error(), "arbitrary detail") {
+				t.Fatalf("navigation error leaked browser text: %v", err)
+			}
+			if test.cleanup && (!errors.Is(err, ErrNativeOwnershipLost) || w.Ready()) {
+				t.Fatalf("cleanup failure changed fencing outcome: err=%v ready=%v", err, w.Ready())
+			}
+			stage, reason := diagnostic.Details()
+			if stage != "navigate" || reason != test.wantReason {
+				t.Fatalf("scoped diagnostic = %s/%s, want navigate/%s", stage, reason, test.wantReason)
+			}
+		})
+	}
+}
+
+func TestNativePageMonitorDiagnosticsIncludeEvaluationAndEarlySetupFailures(t *testing.T) {
+	cases := []struct {
+		name, stage, reason string
+		configure           func(*nativeFixture)
+	}{
+		{name: "evaluation exception", stage: "dom", reason: "evaluation_failed", configure: func(f *nativeFixture) { f.evaluationException = true }},
+		{name: "navigation protocol error", stage: "navigate", reason: "protocol_error", configure: func(f *nativeFixture) { f.failNavigate = true }},
+		{name: "evaluation protocol error", stage: "dom", reason: "protocol_error", configure: func(f *nativeFixture) { f.failEvaluate = true }},
+		{name: "context setup", stage: "create_context", reason: "protocol_error", configure: func(f *nativeFixture) { f.failCreateContext = true }},
+		{name: "target setup", stage: "create_target", reason: "protocol_error", configure: func(f *nativeFixture) { f.failCreateTarget = true }},
+		{name: "attach setup", stage: "attach_target", reason: "protocol_error", configure: func(f *nativeFixture) { f.failAttach = true }},
+	}
+	for _, test := range cases {
+		t.Run(test.name, func(t *testing.T) {
+			f := newNativeFixture(t)
+			w := f.worker(t)
+			if err := w.Probe(context.Background()); err != nil {
+				t.Fatal(err)
+			}
+			f.mu.Lock()
+			test.configure(f)
+			f.mu.Unlock()
+			diagnostic := NewPageMonitorDiagnostic(strings.Repeat("b", 64), 83)
+			ctx := WithPageMonitorDiagnostic(context.Background(), diagnostic)
+			_, err := w.Fetch(ctx, "https://origin.example/", NativeBrowserOptions{})
+			if err == nil {
+				t.Fatal("Fetch unexpectedly succeeded")
+			}
+			if strings.Contains(err.Error(), "CANARY") || strings.Contains(err.Error(), "EXCEPTION") || strings.Contains(err.Error(), "JS_CANARY") {
+				t.Fatalf("native error leaked browser payload: %v", err)
+			}
+			stage, reason := diagnostic.Details()
+			if stage != test.stage || reason != test.reason {
+				t.Fatalf("scoped diagnostic = %s/%s, want %s/%s", stage, reason, test.stage, test.reason)
+			}
+		})
 	}
 }
 
