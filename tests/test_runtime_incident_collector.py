@@ -73,6 +73,15 @@ class RuntimeIncidentCollectorTests(unittest.TestCase):
         self.assertIsNone(snapshot["pg_stat_activity"][0]["pid"])
         self.assertIsNone(collector.sanitize_event({"event": ["malicious"]}))
 
+    def test_database_activity_missing_is_distinct_from_observed_empty(self):
+        raw, _ = collector.parse_live_output("database_error=database_unavailable")
+        failed = collector.sanitize_snapshot(raw)
+        self.assertIn("pg_stat_activity", failed["missing"])
+        raw, _ = collector.parse_live_output('db_json=' + json.dumps({"captured_at": "2026-10-27T10:00:00Z", "pg_stat_activity": []}))
+        observed_empty = collector.sanitize_snapshot(raw)
+        self.assertNotIn("pg_stat_activity", observed_empty["missing"])
+        self.assertEqual(observed_empty["pg_stat_activity"], [])
+
     def test_limits_stop_without_overwriting_existing_output(self):
         with tempfile.TemporaryDirectory() as temporary:
             directory = Path(temporary) / "output"
@@ -351,6 +360,7 @@ esac
             second_snapshot, second_events = collector.live_poll("host", "background", "extractor", "db", "user", "aistack", "news", timeout=12, log_cursors=cursor_state)
         self.assertEqual(cursor_state["background"], "2026-10-27T10:00:13Z")
         self.assertIn("timeout", first_snapshot["collection_errors"])
+        self.assertIn("pg_stat_activity", first_snapshot["missing"])
         self.assertEqual(first_events[0]["event_utc"], "2026-10-27T10:00:12.000Z")
         self.assertEqual(second_events[0]["event_utc"], "2026-10-27T10:00:12.000Z")
         self.assertIn("LOG_CURSOR_BACKGROUND='2026-10-27T10:00:00Z'", calls[1])

@@ -536,7 +536,7 @@ def safe_pg_identifier(value: str, label: str) -> str:
 
 
 def parse_live_output(output: str, log_cursors: dict[str, str] | None = None) -> tuple[dict[str, Any], list[dict[str, Any]]]:
-    raw: dict[str, Any] = {"pg_stat_activity": [], "pg_metrics": {}, "host": {"memory_psi": {}}, "containers": {}, "collection_errors": []}
+    raw: dict[str, Any] = {"pg_stat_activity": None, "pg_metrics": {}, "host": {"memory_psi": {}}, "containers": {}, "collection_errors": []}
     events = []
     for line in output[:1024 * 1024].splitlines()[:1024]:
         if line.startswith("log="):
