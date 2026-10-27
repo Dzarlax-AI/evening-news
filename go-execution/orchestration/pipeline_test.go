@@ -6,6 +6,7 @@ import (
 	"encoding/hex"
 	"encoding/json"
 	"fmt"
+	"math"
 	"net/http"
 	"net/http/httptest"
 	"os"
@@ -325,6 +326,11 @@ func TestPipelineAllJobKindsAndOrdering(t *testing.T) {
 					t.Fatalf("article outcomes missing: %s", got.Value)
 				}
 			}
+			if tc.kind == "telegram_digest" || (tc.kind == "news_digest" && tc.payload == `{"run_processing":false}`) {
+				if output["parts_sent"] != float64(2) {
+					t.Fatalf("digest parts_sent missing or incorrect: %s", got.Value)
+				}
+			}
 			if tc.kind == "source_test" && (output["connection_ok"] != false || output["status"] != "warning") {
 				t.Fatalf("source test result not safely projected: %s", got.Value)
 			}
@@ -339,6 +345,30 @@ func TestPipelineAllJobKindsAndOrdering(t *testing.T) {
 				}
 			}
 		})
+	}
+}
+
+func TestSafeMetricAcceptsBoundedNativeNumbersAndRejectsInvalidValues(t *testing.T) {
+	valid := []struct {
+		value any
+		want  float64
+	}{
+		{int(2), 2}, {int8(3), 3}, {int16(4), 4}, {int32(5), 5}, {int64(6), 6},
+		{uint(7), 7}, {uint8(8), 8}, {uint16(9), 9}, {uint32(10), 10}, {uint64(11), 11},
+		{uintptr(12), 12}, {float32(1.25), 1.25}, {float64(2.5), 2.5}, {json.Number("3.75"), 3.75},
+		{uint64(2_000_000_000), 1_000_000_000},
+	}
+	for _, tc := range valid {
+		got, ok := safeMetric(tc.value)
+		if !ok || got != tc.want {
+			t.Errorf("safeMetric(%T(%v))=(%v,%v) want (%v,true)", tc.value, tc.value, got, ok, tc.want)
+		}
+	}
+	invalid := []any{true, "2", int(-1), float64(-1), math.NaN(), math.Inf(1), json.Number("not-a-number")}
+	for _, value := range invalid {
+		if got, ok := safeMetric(value); ok {
+			t.Errorf("safeMetric(%T(%v))=(%v,true), want rejection", value, value, got)
+		}
 	}
 }
 

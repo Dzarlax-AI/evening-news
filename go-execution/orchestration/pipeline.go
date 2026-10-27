@@ -389,8 +389,41 @@ func hasAnyNonCompleted(v any) bool {
 	return false
 }
 func safeMetric(v any) (float64, bool) {
-	n, ok := v.(float64)
-	if !ok {
+	var n float64
+	switch x := v.(type) {
+	case float64:
+		n = x
+	case float32:
+		n = float64(x)
+	case int:
+		n = float64(x)
+	case int8:
+		n = float64(x)
+	case int16:
+		n = float64(x)
+	case int32:
+		n = float64(x)
+	case int64:
+		n = float64(x)
+	case uint:
+		n = float64(x)
+	case uint8:
+		n = float64(x)
+	case uint16:
+		n = float64(x)
+	case uint32:
+		n = float64(x)
+	case uint64:
+		n = float64(x)
+	case uintptr:
+		n = float64(x)
+	case json.Number:
+		parsed, err := x.Float64()
+		if err != nil {
+			return 0, false
+		}
+		n = parsed
+	default:
 		return 0, false
 	}
 	if math.IsNaN(n) || math.IsInf(n, 0) || n < 0 {
