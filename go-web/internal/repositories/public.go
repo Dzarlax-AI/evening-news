@@ -91,6 +91,21 @@ type EditorialDigestEdition struct {
 	Snapshot     EditorialDigestSnapshot `json:"snapshot"`
 }
 
+// EditorialDigestStatus exposes only ready-edition metadata to the admin
+// summaries screen. The edition JSON and source snapshot remain private to the
+// public renderer.
+type EditorialDigestStatus struct {
+	Date         string `json:"date"`
+	Locale       string `json:"locale"`
+	Ready        bool   `json:"ready"`
+	EditionID    string `json:"edition_id,omitempty"`
+	PreviewURL   string `json:"preview_url,omitempty"`
+	MainCount    int    `json:"main_count"`
+	BriefCount   int    `json:"brief_count"`
+	StoryCount   int    `json:"story_count"`
+	ArticleCount int    `json:"article_count"`
+}
+
 type EditorialDigestContent struct {
 	Version            string                   `json:"version"`
 	Locale             string                   `json:"locale"`

@@ -35,6 +35,10 @@ async def test_digest_excludes_incomplete_outcomes(isolated):
         db.add(Article(id=6, title='Publication fixture confirmed ad', url='https://example.test/6',
             summary='An ad summary.', content='A promotion.', processing_state='rejected',
             source_id=source.id, ad_processed=True, is_advertisement=True))
+        db.add(Article(id=7, title='Publication fixture without category', url='https://example.test/7',
+            summary='A completed but uncategorized article.', content='No category mapping.',
+            source_id=source.id, fetched_at=datetime.now(), processing_state='completed',
+            ad_processed=True, is_advertisement=False))
         db.commit()
 
     async def snapshot_articles(db):

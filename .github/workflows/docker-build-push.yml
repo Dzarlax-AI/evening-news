@@ -123,6 +123,7 @@ jobs:
           BROWSER_WS_ENDPOINT: ''
           SCHEDULER_ENABLED: 'false'
           NEWS_EDITORIAL_BINARY: ${{ runner.temp }}/news-editorial
+          NEWS_EDITORIAL_INTEGRATION_REQUIRED: '1'
         run: python -m pytest tests/ -q
 
   go-core-tests:

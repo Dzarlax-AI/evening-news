@@ -11,6 +11,7 @@ import (
 	"strconv"
 	"strings"
 	"time"
+	"unicode/utf8"
 )
 
 var (
@@ -122,7 +123,7 @@ func ValidateEdition(s Snapshot, locale string, e Edition) error {
 		}
 		for _, ev := range story.Evidence {
 			a, ok := articles[ev.ArticleID]
-			if !ok || !contains(story.ArticleIDs, ev.ArticleID) || strings.TrimSpace(ev.Quote) == "" || len(ev.Quote) > MaxEvidence {
+			if !ok || !contains(story.ArticleIDs, ev.ArticleID) || strings.TrimSpace(ev.Quote) == "" || utf8.RuneCountInString(ev.Quote) > MaxEvidence {
 				return fmt.Errorf("%w: invalid evidence reference", ErrInvalidEdition)
 			}
 			if !strings.Contains(preferredEvidenceText(a), ev.Quote) {

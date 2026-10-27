@@ -7,7 +7,6 @@ import (
 	"errors"
 	"fmt"
 	"io"
-	"net"
 	"net/http"
 	"net/url"
 	"strings"
@@ -178,7 +177,7 @@ func geminiSchema() map[string]any {
 func providerEndpoint(cfg ProviderConfig) (string, error) {
 	if cfg.Endpoint != "" {
 		u, err := url.Parse(cfg.Endpoint)
-		if err != nil || (u.Scheme != "http" && u.Scheme != "https") || u.Host == "" || u.User != nil || (u.Scheme == "http" && !isLoopbackHost(u.Hostname())) {
+		if err != nil || (u.Scheme != "http" && u.Scheme != "https") || u.Host == "" || u.User != nil || u.RawQuery != "" || u.Fragment != "" {
 			return "", ErrInvalidInput
 		}
 		return cfg.Endpoint, nil
@@ -217,14 +216,6 @@ type geminiResponse struct {
 		CandidatesTokenCount int `json:"candidatesTokenCount"`
 		TotalTokenCount      int `json:"totalTokenCount"`
 	} `json:"usageMetadata"`
-}
-
-func isLoopbackHost(host string) bool {
-	if strings.EqualFold(host, "localhost") {
-		return true
-	}
-	ip := net.ParseIP(host)
-	return ip != nil && ip.IsLoopback()
 }
 
 func ensureEOF(dec *json.Decoder) error {

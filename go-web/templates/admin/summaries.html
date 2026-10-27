@@ -9,11 +9,20 @@
         <select id="category-filter" class="sum-select" onchange="loadSummaries()">
             <option value="">Все категории</option>
         </select>
-        <input type="date" id="date-filter" class="sum-select" onchange="loadSummaries()">
-        <button class="btn btn--secondary" type="button" id="generate-summaries-button" onclick="generateDailySummaries()">Сформировать сводки</button>
+        <input type="date" id="date-filter" class="sum-select" onchange="loadSummaries(); loadEditorialStatus()">
+        <button class="btn btn--secondary" type="button" id="generate-summaries-button" onclick="generateDailySummaries()">Сформировать сегодняшний выпуск</button>
     </div>
 </div>
-<p class="sum-help">После завершения генерации откройте выпуск за нужную дату прямо из списка.</p>
+<p class="sum-help">Генерация запускает существующую задачу для текущей даты. Проверяйте готовый выпуск по выбранной дате.</p>
+
+<section class="sum-editorial-status" data-state="loading" aria-labelledby="editorial-status-heading">
+    <div>
+        <h2 id="editorial-status-heading">Редакционный выпуск</h2>
+        <p id="editorial-status-message" role="status" aria-live="polite">Проверяем выпуск за сегодня…</p>
+    </div>
+    <a id="editorial-preview-link" class="sum-preview-link" href="#" hidden>Открыть готовый выпуск</a>
+</section>
+<p id="editorial-generation-state" class="sum-generation-state" role="status" aria-live="polite"></p>
 
 <div id="summaries-container">
     <div style="text-align:center;padding:3rem;color:var(--text-muted);">Загрузка...</div>
@@ -45,10 +54,19 @@
 .sum-date-heading { display:flex; justify-content:space-between; align-items:baseline; gap:1rem; }
 .sum-preview-link { color:var(--text-color); font-size:.8rem; font-weight:500; text-transform:none; letter-spacing:0; text-decoration:underline; text-underline-offset:.2em; white-space:nowrap; }
 .sum-preview-link:hover { color:var(--primary-color); }
+.sum-editorial-status { display:flex; justify-content:space-between; align-items:center; gap:1rem; margin:0 0 1.25rem; padding:1rem 1.1rem; border:1px solid var(--border,#ddd); border-radius:8px; background:var(--surface,#fff); }
+.sum-editorial-status h2 { margin:0 0 .3rem; color:var(--text-color); font-family:var(--font-serif,Georgia,serif); font-size:1.1rem; font-weight:500; }
+.sum-editorial-status p,.sum-generation-state { margin:0; color:var(--text-muted); font-size:.85rem; line-height:1.5; }
+.sum-editorial-status[data-state="ready"] { border-color:var(--good,#16803c); }
+.sum-editorial-status[data-state="error"] { border-color:var(--danger,#b91c1c); }
+.sum-generation-state[data-state="failed"] { color:var(--danger,#b91c1c); }
+.sum-generation-state[data-state="ready"] { color:var(--good,#16803c); }
+.sum-preview-link[hidden] { display:none; }
 @media (max-width:680px) {
     .sum-select { min-height:40px; }
     #generate-summaries-button { min-height:40px; }
     .sum-date-heading { align-items:flex-start; flex-direction:column; gap:.35rem; }
+    .sum-editorial-status { align-items:flex-start; flex-direction:column; }
 }
 </style>
 
@@ -60,6 +78,7 @@ const catColors = {};
 document.addEventListener('DOMContentLoaded', async () => {
     await loadCategories();
     await loadSummaries();
+    await loadEditorialStatus();
 });
 
 async function loadCategories() {
@@ -111,10 +130,62 @@ async function loadSummaries(reset = true) {
 
 function loadMore() { loadSummaries(false); }
 
+let editorialStatusRequest = 0;
+function currentLocalDate() {
+    const now = new Date();
+    const pad = value => String(value).padStart(2, '0');
+    return `${now.getFullYear()}-${pad(now.getMonth() + 1)}-${pad(now.getDate())}`;
+}
+
+async function loadEditorialStatus(dateOverride = '') {
+    const date = dateOverride || document.getElementById('date-filter').value || currentLocalDate();
+    const requestID = ++editorialStatusRequest;
+    const section = document.querySelector('.sum-editorial-status');
+    const message = document.getElementById('editorial-status-message');
+    const link = document.getElementById('editorial-preview-link');
+    section.dataset.state = 'loading';
+    message.textContent = `Проверяем выпуск за ${formatDate(date)}…`;
+    link.hidden = true;
+    link.removeAttribute('href');
+
+    try {
+        const response = await fetch(`/api/v1/summaries/editorial-status?date=${encodeURIComponent(date)}&locale=ru`, {credentials: 'same-origin'});
+        const data = await readApiResponse(response);
+        if (!response.ok) throw new Error(data.detail || `HTTP ${response.status}`);
+        if (requestID !== editorialStatusRequest) return null;
+        if (!data.ready) {
+            section.dataset.state = 'missing';
+            message.textContent = `Готового редакционного выпуска за ${formatDate(date)} пока нет.`;
+            return data;
+        }
+        if (data.date !== date || data.locale !== 'ru' || !/^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i.test(data.edition_id || '') || !data.preview_url) {
+            throw new Error('Некорректные метаданные готового выпуска');
+        }
+        section.dataset.state = 'ready';
+        message.textContent = `Готово: ${russianCount(data.main_count || 0, 'главный сюжет', 'главных сюжета', 'главных сюжетов')} · ${russianCount(data.brief_count || 0, 'короткий', 'коротких', 'коротких')} · ${russianCount(data.article_count || 0, 'материал', 'материала', 'материалов')}`;
+        link.href = data.preview_url;
+        link.hidden = false;
+        return data;
+    } catch (error) {
+        if (requestID !== editorialStatusRequest) return null;
+        section.dataset.state = 'error';
+        message.textContent = 'Не удалось проверить редакционный выпуск. Попробуйте ещё раз.';
+        return null;
+    }
+}
+
+function russianCount(count, one, few, many) {
+    const value = Number(count) || 0;
+    const mod100 = value % 100;
+    const last = value % 10;
+    const form = mod100 >= 11 && mod100 <= 14 ? many : last === 1 ? one : last >= 2 && last <= 4 ? few : many;
+    return `${value} ${form}`;
+}
+
 function render() {
     const container = document.getElementById('summaries-container');
     if (!allSummaries.length) {
-        container.innerHTML = '<div style="text-align:center;padding:3rem;color:var(--text-muted);">Сводки не найдены</div>';
+        container.innerHTML = '<div style="text-align:center;padding:2rem;color:var(--text-muted);">Архивных тематических сводок нет. Готовые редакционные выпуски проверяйте по выбранной дате выше.</div>';
         return;
     }
 
@@ -160,19 +231,53 @@ function render() {
 
 async function generateDailySummaries() {
     const button = document.getElementById('generate-summaries-button');
+    const generationState = document.getElementById('editorial-generation-state');
+    const today = currentLocalDate();
     button.disabled = true;
+    generationState.dataset.state = 'pending';
+    generationState.textContent = 'Задача генерации для сегодняшней даты запускается…';
     try {
-        const response = await apiRequest('/api/v1/summaries/generate', {
+        const response = await window.NewsAggregator.apiRequest('/api/v1/summaries/generate', {
             method: 'POST',
-            onJobUpdate: job => showNotification(
-                job.status === 'queued' ? 'Генерация поставлена в очередь' : 'Сводки генерируются', 'info'
-            )
+            onJobUpdate: job => {
+                if (job.status === 'queued' || job.status === 'interrupted') {
+                    generationState.dataset.state = 'pending';
+                    generationState.textContent = 'Задача генерации поставлена в очередь.';
+                } else if (job.status === 'running') {
+                    generationState.dataset.state = 'pending';
+                    generationState.textContent = 'Задача генерации выполняется…';
+                } else if (job.status === 'failed' || job.status === 'delivery_unknown') {
+                    generationState.dataset.state = 'failed';
+                    generationState.textContent = 'Генерация не завершилась успешно. Готовый выпуск не подтверждён.';
+                }
+            }
         });
-        if (!response.success) throw new Error(response.error || 'Не удалось поставить генерацию в очередь');
-        showNotification('Генерация сводок завершена', 'success');
+        if (response.status === 'queued' || response.status === 'running' || response.left_while_running) {
+            generationState.dataset.state = 'pending';
+            generationState.textContent = 'Задача ещё выполняется. Готовый выпуск появится после её завершения.';
+            return;
+        }
+        if (!response.success) {
+            generationState.dataset.state = 'failed';
+            generationState.textContent = 'Генерация не завершилась успешно. Готовый выпуск не подтверждён.';
+            window.NewsAggregator.showNotification(response.message || 'Не удалось завершить генерацию сводок', 'error');
+            return;
+        }
+        document.getElementById('date-filter').value = today;
         await loadSummaries();
+        const status = await loadEditorialStatus(today);
+        if (status && status.ready) {
+            generationState.dataset.state = 'ready';
+            generationState.textContent = 'Выпуск готов на сайте и доступен по закреплённой ссылке выше.';
+            window.NewsAggregator.showNotification('Редакционный выпуск готов', 'success');
+        } else {
+            generationState.dataset.state = 'pending';
+            generationState.textContent = 'Задача завершилась, но готовый редакционный выпуск пока не найден.';
+        }
     } catch (error) {
-        showNotification(error.message || 'Ошибка генерации сводок', 'error');
+        generationState.dataset.state = 'failed';
+        generationState.textContent = 'Генерация не завершилась успешно. Готовый выпуск не подтверждён.';
+        window.NewsAggregator.showNotification(error.message || 'Ошибка генерации сводок', 'error');
     } finally {
         button.disabled = false;
     }
@@ -198,6 +303,11 @@ function formatDate(dateStr) {
         const d = new Date(dateStr + 'T00:00:00');
         return d.toLocaleDateString('ru-RU', { day: 'numeric', month: 'long', year: 'numeric' });
     } catch(e) { return dateStr; }
+}
+
+async function readApiResponse(response) {
+    if (window.NewsAggregator && window.NewsAggregator.readApiResponse) return window.NewsAggregator.readApiResponse(response);
+    return response.json();
 }
 
 function esc(s) { return (s||'').replace(/&/g,'&amp;').replace(/</g,'&lt;').replace(/>/g,'&gt;').replace(/"/g,'&quot;'); }

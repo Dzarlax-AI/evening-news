@@ -740,3 +740,35 @@ func (p *Postgres) EditorialDigest(ctx context.Context, date time.Time, editionI
 	}
 	return &edition, nil
 }
+
+// EditorialDigestStatus looks up only ready-edition metadata for the admin
+// reader. It does not consult or mutate legacy daily_summaries rows.
+func (p *Postgres) EditorialDigestStatus(ctx context.Context, date time.Time, locale string) (EditorialDigestStatus, error) {
+	status := EditorialDigestStatus{Date: date.Format("2006-01-02"), Locale: locale}
+	var tableName *string
+	if err := p.pool.QueryRow(ctx, `SELECT to_regclass('editorial_digest_editions')::text`).Scan(&tableName); err != nil {
+		return status, err
+	}
+	if tableName == nil {
+		return status, nil
+	}
+	err := p.pool.QueryRow(ctx, `
+		SELECT e.id::text,
+			COUNT(story.value) FILTER (WHERE story.value->>'kind'='main')::integer,
+			COUNT(story.value) FILTER (WHERE story.value->>'kind'='brief')::integer,
+			COUNT(story.value)::integer,
+			jsonb_array_length(CASE WHEN jsonb_typeof(e.snapshot->'articles')='array' THEN e.snapshot->'articles' ELSE '[]'::jsonb END)::integer
+		FROM editorial_digest_editions e
+		LEFT JOIN LATERAL jsonb_array_elements(CASE WHEN jsonb_typeof(e.edition->'stories')='array' THEN e.edition->'stories' ELSE '[]'::jsonb END) AS story(value) ON TRUE
+		WHERE e.edition_date=$1 AND e.locale=$2
+		GROUP BY e.id,e.created_at,e.snapshot
+		ORDER BY e.created_at DESC,e.id DESC LIMIT 1`, status.Date, locale).Scan(&status.EditionID, &status.MainCount, &status.BriefCount, &status.StoryCount, &status.ArticleCount)
+	if errors.Is(err, pgx.ErrNoRows) {
+		return status, nil
+	}
+	if err != nil {
+		return status, err
+	}
+	status.Ready = true
+	return status, nil
+}

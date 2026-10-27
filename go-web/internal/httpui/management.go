@@ -17,6 +17,7 @@ import (
 	"github.com/Dzarlax-AI/evening-news/go-web/internal/auth"
 	"github.com/Dzarlax-AI/evening-news/go-web/internal/jobs"
 	"github.com/Dzarlax-AI/evening-news/go-web/internal/management"
+	"github.com/Dzarlax-AI/evening-news/go-web/internal/repositories"
 )
 
 type ManagementConfig struct {
@@ -27,6 +28,7 @@ type ManagementConfig struct {
 	WorkerMode                bool
 	DispatchMode              string
 	ScheduledJobsReceiptLimit int
+	EditorialDigestStatus     func(context.Context, time.Time, string) (repositories.EditorialDigestStatus, error)
 }
 type managementHandler struct{ cfg ManagementConfig }
 
@@ -65,6 +67,7 @@ func RegisterManagement(mux *http.ServeMux, cfg ManagementConfig) {
 	admin("GET /api/v1/process/status", h.processStatus)
 	admin("POST /api/v1/process/retry", h.processRetry)
 	admin("GET /api/v1/summaries/daily", h.dailySummaries)
+	admin("GET /api/v1/summaries/editorial-status", h.editorialDigestStatus)
 	admin("GET /api/v1/summaries/categories", h.summaryCategories)
 	admin("GET /api/v1/summaries/{summaryID}", h.summary)
 	admin("POST /api/v1/summaries/generate", h.generateSummaries)
@@ -424,6 +427,57 @@ func (h *managementHandler) dailySummaries(w http.ResponseWriter, r *http.Reques
 	}
 	h.run(w, r, http.StatusOK, func(ctx context.Context) (any, error) { return h.cfg.Service.DailySummaries(ctx, q) })
 }
+
+func (h *managementHandler) editorialDigestStatus(w http.ResponseWriter, r *http.Request) {
+	query := r.URL.Query()
+	dateValues, dateSupplied := query["date"]
+	if !dateSupplied || len(dateValues) != 1 {
+		writeInputError(w, "query", "date", "date_parsing", "Input should be a valid date in YYYY-MM-DD format", nil)
+		return
+	}
+	date, err := time.Parse("2006-01-02", dateValues[0])
+	if err != nil || date.Format("2006-01-02") != dateValues[0] {
+		writeInputError(w, "query", "date", "date_parsing", "Input should be a valid date in YYYY-MM-DD format", dateValues[0])
+		return
+	}
+	locale := "ru"
+	if localeValues, supplied := query["locale"]; supplied {
+		if len(localeValues) != 1 || localeValues[0] != "ru" {
+			writeInputError(w, "query", "locale", "value_error", "Only the ru locale is supported", nil)
+			return
+		}
+		locale = localeValues[0]
+	}
+	if h.cfg.EditorialDigestStatus == nil {
+		writeProblem(w, http.StatusServiceUnavailable, "Editorial digest status unavailable")
+		return
+	}
+	ctx, cancel := context.WithTimeout(r.Context(), 5*time.Second)
+	defer cancel()
+	status, err := h.cfg.EditorialDigestStatus(ctx, date, locale)
+	if err != nil {
+		writeProblem(w, http.StatusServiceUnavailable, "Editorial digest status unavailable")
+		return
+	}
+	if status.Ready {
+		if status.Date != date.Format("2006-01-02") || status.Locale != locale || !validUUID(status.EditionID) {
+			writeProblem(w, http.StatusServiceUnavailable, "Editorial digest status unavailable")
+			return
+		}
+		status.PreviewURL = fmt.Sprintf("/digest/%s?locale=%s&edition=%s", status.Date, status.Locale, status.EditionID)
+	} else {
+		status.Date = date.Format("2006-01-02")
+		status.Locale = locale
+		status.EditionID = ""
+		status.PreviewURL = ""
+		status.MainCount = 0
+		status.BriefCount = 0
+		status.StoryCount = 0
+		status.ArticleCount = 0
+	}
+	writeJSON(w, http.StatusOK, status)
+}
+
 func (h *managementHandler) summaryCategories(w http.ResponseWriter, r *http.Request) {
 	h.run(w, r, http.StatusOK, func(ctx context.Context) (any, error) { return h.cfg.Service.SummaryCategories(ctx) })
 }

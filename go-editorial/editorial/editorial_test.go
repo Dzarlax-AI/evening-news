@@ -171,6 +171,24 @@ func TestGenerateRejectsIncompleteProviderAndDoesNotFollowRedirects(t *testing.T
 	}
 }
 
+func TestProviderEndpointAllowsConfiguredHTTPServiceNameAndRejectsMalformedURLs(t *testing.T) {
+	cfg := ProviderConfig{Endpoint: "http://fake:8090/v1/models/fixture-model:generateContent"}
+	got, err := providerEndpoint(cfg)
+	if err != nil || got != cfg.Endpoint {
+		t.Fatalf("trusted configured HTTP service endpoint rejected: %q %v", got, err)
+	}
+	for _, endpoint := range []string{
+		"ftp://fake:8090/v1/models/fixture-model:generateContent",
+		"http://user:secret@fake:8090/v1/models/fixture-model:generateContent",
+		"http://fake:8090/v1/models/fixture-model:generateContent?key=embedded",
+		"http://fake:8090/v1/models/fixture-model:generateContent#redirect",
+	} {
+		if _, err := providerEndpoint(ProviderConfig{Endpoint: endpoint}); err == nil {
+			t.Errorf("expected invalid configured endpoint to fail: %s", endpoint)
+		}
+	}
+}
+
 func TestRenderLargeIssueSplitsOnlyAtStoryBoundaries(t *testing.T) {
 	s := syntheticSnapshot(42)
 	d := syntheticDraft(s)
@@ -383,6 +401,42 @@ func TestContractRequestExampleIsParseable(t *testing.T) {
 	if rendered.RichHTML != response.Rendered.RichHTML || strings.Join(rendered.PlainParts, "\n--PART--\n") != strings.Join(response.Rendered.PlainParts, "\n--PART--\n") || rendered.PreviewText != response.Rendered.PreviewText {
 		t.Fatal("response example render is stale")
 	}
+}
+
+func TestEvidenceLimitCountsUnicodeCharactersAndRequiresExactSourceText(t *testing.T) {
+	for _, size := range []int{251, 300, MaxEvidence} {
+		t.Run(fmt.Sprintf("accept_%d_cyrillic_characters", size), func(t *testing.T) {
+			s := syntheticSnapshot(1)
+			quote := strings.Repeat("я", size)
+			s.Articles[0].Content = quote
+			story := Story{
+				Kind: "main", Title: "Проверка цитаты", Summary: "Короткий пересказ.",
+				PrimaryArticleID: s.Articles[0].ID, ArticleIDs: []string{s.Articles[0].ID},
+				Evidence: []Evidence{{ArticleID: s.Articles[0].ID, Quote: quote}},
+			}
+			e, err := FinalizeEdition(s, RussianLocale, []Story{story}, nil)
+			if err != nil {
+				t.Fatalf("expected exact %d-character Cyrillic evidence to pass: %v", size, err)
+			}
+			if err := ValidateEdition(s, RussianLocale, e); err != nil {
+				t.Fatalf("finalized evidence no longer validates: %v", err)
+			}
+		})
+	}
+
+	t.Run("reject_501_cyrillic_characters", func(t *testing.T) {
+		s := syntheticSnapshot(1)
+		quote := strings.Repeat("я", MaxEvidence+1)
+		s.Articles[0].Content = quote
+		story := Story{
+			Kind: "main", Title: "Проверка цитаты", Summary: "Короткий пересказ.",
+			PrimaryArticleID: s.Articles[0].ID, ArticleIDs: []string{s.Articles[0].ID},
+			Evidence: []Evidence{{ArticleID: s.Articles[0].ID, Quote: quote}},
+		}
+		if _, err := FinalizeEdition(s, RussianLocale, []Story{story}, nil); err == nil {
+			t.Fatal("expected evidence over 500 Unicode characters to fail")
+		}
+	})
 }
 
 func TestRenderHasDateAndSnapshotCountsInEveryFormat(t *testing.T) {

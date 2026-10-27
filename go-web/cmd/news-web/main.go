@@ -72,6 +72,7 @@ func run() error {
 		WorkerMode:                cfg.BackgroundExecutionMode == "worker",
 		DispatchMode:              cfg.ScheduleDispatchMode,
 		ScheduledJobsReceiptLimit: cfg.ScheduledJobsReceiptLimit,
+		EditorialDigestStatus:     db.EditorialDigestStatus,
 	})
 	httpui.RegisterBackend(mux, authService, privateOps)
 	schedules.NewHandlerFromEnv(repositories.NewScheduleJobsSnapshot(db.Pool())).Register(mux, authService)

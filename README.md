@@ -114,7 +114,10 @@ docker compose -f docker-compose.example.yml -f docker-compose.dev.yml up --buil
 Run the Python domain/executor suite and Go checks from the repository root:
 
 ```sh
-TEST_DATABASE_URL=postgresql+asyncpg://fixture_admin:fixture-only@127.0.0.1:5432/webtests python -m pytest tests -q
+(cd go-editorial && go build -o /tmp/news-editorial ./cmd/news-editorial)
+TEST_DATABASE_URL=postgresql+asyncpg://fixture_admin:fixture-only@127.0.0.1:5432/webtests \
+  NEWS_EDITORIAL_BINARY=/tmp/news-editorial NEWS_EDITORIAL_INTEGRATION_REQUIRED=1 \
+  python -m pytest tests -q
 cd go-web
 TEST_DATABASE_URL=postgres://fixture_admin:fixture-only@127.0.0.1:5432/webtests go test -race -count=1 ./...
 go vet ./...

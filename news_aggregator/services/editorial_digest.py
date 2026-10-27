@@ -3,7 +3,6 @@
 from __future__ import annotations
 
 import asyncio
-import ipaddress
 import json
 import os
 import re
@@ -135,12 +134,7 @@ def _gemini_endpoint(base_url: str, model: str) -> str:
     except (ValueError, AttributeError):
         raise EditorialOperationError("editorial_provider_unavailable") from None
     hostname = parsed.hostname or ""
-    loopback = False
-    try:
-        loopback = ipaddress.ip_address(hostname).is_loopback
-    except ValueError:
-        loopback = hostname.casefold() == "localhost"
-    if (parsed.scheme not in ({"https", "http"} if loopback else {"https"}) or not hostname
+    if (parsed.scheme not in {"https", "http"} or not hostname
             or parsed.username or parsed.password or parsed.query or parsed.fragment):
         raise EditorialOperationError("editorial_provider_unavailable")
     path = parsed.path.rstrip("/")
@@ -316,7 +310,7 @@ async def _fetch_snapshot_rows(session, edition_date: date):
         )
         .select_from(Article)
         .outerjoin(Source, Source.id == Article.source_id)
-        .outerjoin(ranked_categories, and_(
+        .join(ranked_categories, and_(
             ranked_categories.c.article_id == Article.id,
             ranked_categories.c.category_rank == 1,
         ))

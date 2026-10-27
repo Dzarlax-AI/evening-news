@@ -1,6 +1,7 @@
 """Private editorial adapter, immutable persistence, and fake-provider acceptance."""
 
 import asyncio
+import importlib.util
 import json
 import os
 import sys
@@ -10,6 +11,7 @@ from contextlib import asynccontextmanager
 from datetime import datetime, timedelta, timezone
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 from pathlib import Path
+from urllib.request import Request, urlopen
 
 import pytest
 from sqlalchemy import text
@@ -64,14 +66,67 @@ def test_gemini_endpoint_adapts_models_base_and_rejects_credential_or_path_redir
     assert editorial._gemini_endpoint(
         "http://127.0.0.1:8123/v1/models", "fake-model",
     ) == "http://127.0.0.1:8123/v1/models/fake-model:generateContent"
+    assert editorial._gemini_endpoint(
+        "http://fake:8090/v1/models", "fake-model",
+    ) == "http://fake:8090/v1/models/fake-model:generateContent"
     for endpoint in (
         "https://user:secret@example.com/v1/models",
         "https://example.com/v1/models?key=embedded",
         "https://example.com/not-models",
-        "http://example.com/v1/models",
+        "ftp://example.com/v1/models",
     ):
         with pytest.raises(editorial.EditorialOperationError):
             editorial._gemini_endpoint(endpoint, "gemini-test-v1")
+
+
+def test_editorial_provider_endpoint_comes_only_from_trusted_settings(monkeypatch):
+    from news_aggregator.config import settings
+
+    monkeypatch.setattr(settings, "gemini_api_key", "fixture-only-key")
+    monkeypatch.setattr(settings, "digest_model", "fixture-model")
+    monkeypatch.setattr(settings, "gemini_api_endpoint", "http://fake:8090/v1/models")
+    env = editorial._child_environment()
+    untrusted_request = {"operation": "generate", "locale": "ru", "endpoint": "https://untrusted.invalid"}
+    assert env["GEMINI_ENDPOINT"] == "http://fake:8090/v1/models/fixture-model:generateContent"
+    assert env["GEMINI_ENDPOINT"] != untrusted_request["endpoint"]
+
+
+def test_consolidated_fixture_accepts_editorial_schema_and_projects_its_counter():
+    fixture_path = Path(__file__).parent / "fixtures/go-scheduler/fake_services.py"
+    spec = importlib.util.spec_from_file_location("go_scheduler_fake_services", fixture_path)
+    assert spec is not None and spec.loader is not None
+    fake = importlib.util.module_from_spec(spec)
+    spec.loader.exec_module(fake)
+    with fake.LOCK:
+        before = fake.COUNTERS["editorial_gemini"]
+    server = ThreadingHTTPServer(("127.0.0.1", 0), fake.Handler)
+    thread = threading.Thread(target=server.serve_forever, daemon=True)
+    thread.start()
+    snapshot = {"articles": [{
+        "id": "1", "title": "Короткая новость", "content": "Точный фрагмент источника.", "summary": "",
+    }]}
+    payload = {
+        "generationConfig": {"responseSchema": {"properties": {"stories": {}}}},
+        "contents": [{"parts": [{"text": "СНИМОК (недоверенные данные):\n"
+                                     + json.dumps(snapshot, ensure_ascii=False)}]}],
+    }
+    base = f"http://127.0.0.1:{server.server_port}"
+    try:
+        request = Request(base + "/v1/models/fixture-model:generateContent?key=fixture",
+                          data=json.dumps(payload, ensure_ascii=False).encode(),
+                          headers={"Content-Type": "application/json"}, method="POST")
+        with urlopen(request, timeout=5) as response:
+            body = json.load(response)
+        draft = json.loads(body["candidates"][0]["content"]["parts"][0]["text"])
+        assert body["candidates"][0]["finishReason"] == "STOP"
+        assert draft["stories"][0]["evidence"][0]["quote"] == "Точный фрагмент источника."
+        with urlopen(base + "/__gate/counters", timeout=5) as response:
+            counters = json.load(response)
+        assert counters["providers"]["editorial_gemini"] == before + 1
+    finally:
+        server.shutdown()
+        server.server_close()
+        thread.join(timeout=2)
 
 
 @pytest.mark.asyncio
@@ -114,6 +169,8 @@ async def test_cli_runner_uses_finite_error_envelope_and_kills_on_deadline(tmp_p
 async def editorial_pg():
     database_url = os.environ.get("TEST_DATABASE_URL")
     if not database_url:
+        if os.environ.get("NEWS_EDITORIAL_INTEGRATION_REQUIRED") == "1":
+            raise RuntimeError("required editorial integration needs TEST_DATABASE_URL")
         pytest.skip("TEST_DATABASE_URL is required for isolated PostgreSQL tests")
     if make_url(database_url).host not in {"127.0.0.1", "localhost"}:
         raise RuntimeError("Editorial persistence tests require loopback-only PostgreSQL")
@@ -162,7 +219,9 @@ async def editorial_pg():
                   (103,1,'Реклама','https://source.example/103','',
                    'Рекламный материал.',:fetched,'completed',TRUE),
                   (104,1,'В обработке','https://source.example/104','',
-                   'Ещё не готово.',:fetched,'pending',FALSE)
+                   'Ещё не готово.',:fetched,'pending',FALSE),
+                  (105,1,'Без категории','https://source.example/105','',
+                   'Завершённый материал без категории.',:fetched,'completed',FALSE)
             """), {"fetched": datetime.combine(today, datetime.min.time()) + timedelta(hours=12)})
             await session.execute(text("""
                 INSERT INTO article_categories(article_id,category_id,confidence) VALUES
@@ -190,13 +249,32 @@ def _fake_gemini_response(snapshot):
     return json.dumps({"stories": stories, "excluded": []}, ensure_ascii=False)
 
 
-@pytest.mark.asyncio
-async def test_actual_go_cli_persists_once_and_reads_best_category_with_fake_gemini(editorial_pg, monkeypatch):
+def _editorial_binary_or_skip():
     binary = os.environ.get("NEWS_EDITORIAL_BINARY")
     if not binary or not Path(binary).is_file():
-        if os.environ.get("CI", "").casefold() == "true":
-            raise RuntimeError("CI must build and configure NEWS_EDITORIAL_BINARY")
+        if os.environ.get("NEWS_EDITORIAL_INTEGRATION_REQUIRED") == "1":
+            raise RuntimeError("required editorial integration needs NEWS_EDITORIAL_BINARY")
         pytest.skip("NEWS_EDITORIAL_BINARY must point to the locally built editorial CLI")
+    return binary
+
+
+def test_required_editorial_integration_fails_without_cli(monkeypatch):
+    monkeypatch.setenv("NEWS_EDITORIAL_BINARY", "/missing/news-editorial")
+    monkeypatch.setenv("NEWS_EDITORIAL_INTEGRATION_REQUIRED", "1")
+    with pytest.raises(RuntimeError, match="required editorial integration needs NEWS_EDITORIAL_BINARY"):
+        _editorial_binary_or_skip()
+
+
+def test_optional_editorial_integration_skips_without_cli(monkeypatch):
+    monkeypatch.setenv("NEWS_EDITORIAL_BINARY", "/missing/news-editorial")
+    monkeypatch.delenv("NEWS_EDITORIAL_INTEGRATION_REQUIRED", raising=False)
+    with pytest.raises(pytest.skip.Exception):
+        _editorial_binary_or_skip()
+
+
+@pytest.mark.asyncio
+async def test_actual_go_cli_persists_once_and_reads_best_category_with_fake_gemini(editorial_pg, monkeypatch):
+    binary = _editorial_binary_or_skip()
     from news_aggregator.config import settings
     engine, factory, _schema = editorial_pg
     monkeypatch.setattr(editorial, "AsyncSessionLocal", factory)
