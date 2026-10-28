@@ -76,17 +76,18 @@ func assertBoundedParserAllocation[T any](t *testing.T, parse func() T) T {
 func BenchmarkHTMLParserRepeatedTextIgnoredEndTags(b *testing.B) {
 	for _, repetitions := range []int{512, 2048, 8192} {
 		input := strings.Repeat("x</ignored>", repetitions)
+		documentInput := "<article>" + input + "</article>"
 		b.Run("document/"+strconv.Itoa(repetitions), func(b *testing.B) {
 			b.ReportAllocs()
 			b.SetBytes(int64(len(input)))
-			for i := 0; i < b.N; i++ {
-				_ = parse("<article>" + input + "</article>")
+			for b.Loop() {
+				_ = parse(documentInput)
 			}
 		})
 		b.Run("rss-fragment/"+strconv.Itoa(repetitions), func(b *testing.B) {
 			b.ReportAllocs()
 			b.SetBytes(int64(len(input)))
-			for i := 0; i < b.N; i++ {
+			for b.Loop() {
 				_ = sanitizeRSSHTML(input, "https://publisher.example/story")
 			}
 		})
