@@ -246,7 +246,8 @@ async def test_article_ai_callback_fences_claim_and_caches_provider_replay(monke
     assert first == replay
     assert first["result"]["summary"] == "Synthetic summary"
     ai.analyze_article_complete.assert_awaited_once_with(
-        "Synthetic story", "Synthetic body", "https://example.test/story", original_context=None)
+        "Synthetic story", "Synthetic body", "https://example.test/story", original_context=None,
+        deadline=deadline)
 
 
 def test_article_ai_auth_uses_its_separate_token(monkeypatch):

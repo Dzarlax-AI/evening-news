@@ -30,7 +30,7 @@ flowchart LR
       Processing["Article processing component"]
     end
     Domain["Private News operations<br/>(Python executor process)"]
-    AI["AI analysis and prompts<br/>(private executor domain code)"]
+    AI["Article analysis and prompts<br/>(native component in private domain runtime)"]
     Editorial["Editorial generation and rendering<br/>(Go CLI in private domain runtime)"]
     Delivery["Edition persistence and Telegram delivery<br/>(private executor domain code)"]
     Sources["RSS, Telegram, and Page Monitor adapters<br/>(Go collection code)"]
@@ -67,13 +67,15 @@ flowchart LR
     Migrate -->|successful completion required| NewsDB
 ```
 
-The Go web service replaces the former Python web application. It serves the public reader, admin pages, health endpoints, and public and management APIs. The private Python executor remains responsible for fixed domain operations that use Python code, AI prompts and provider calls, summaries, and Telegram delivery. One Go background runtime hosts the queue worker, scheduler, ingestion, article processing, and execution components. The execution component owns durable job receipts, worker and execution fencing, and orchestration; it calls the Python executor for typed domain operations. Each background component keeps its own configuration and database boundary inside the process. The extractor remains a separate Go service.
+The Go web service replaces the former Python web application. It serves the public reader, admin pages, health endpoints, and public and management APIs. The private domain runtime hosts native article-analysis and editorial components. Its Python adapter retains fixed operation boundaries, metadata and usage persistence, selector callbacks, maintenance and Telegram delivery. One Go background runtime hosts the queue worker, scheduler, ingestion, article processing, and execution components. The execution component owns durable job receipts, worker and execution fencing, and orchestration; it calls the private domain runtime for typed domain operations. Each background component keeps its own configuration and database boundary inside the process. The extractor remains a separate Go service.
 
 Article summarization and categorization run together in `AIClient.analyze_article_complete` and use `SUMMARIZATION_MODEL`. Editorial digest generation uses `DIGEST_MODEL`; both default to `gemini-3.5-flash-lite`. `CATEGORIZATION_MODEL` remains a compatibility setting and does not independently select the model for combined article analysis.
 
 The one-shot `migrate` service runs `python -m news_aggregator.migrate` before schema-dependent services start. The Go web service does not apply migrations. `WEB_BACKEND_URL` names only the private executor origin, such as `http://executor:8100`; the Go client appends its fixed operation paths. `WEB_BACKEND_TOKEN` is a separate service credential shared only by the Go web process and private executor. Provider credentials such as `GEMINI_API_KEY` and `TELEGRAM_TOKEN` belong to the executor and are not required by the Go web service.
 
 ## Editorial digests
+
+Article analysis uses a bounded native component in the same private domain runtime. Its callback contract, provider admission and usage accounting stay compatible; the Gemini key stays with that runtime. See [article analysis contracts and migration boundary](docs/article-analysis.md).
 
 The Russian editorial format presents main stories first, then short stories grouped by category. The `go-editorial` engine runs as a bounded CLI inside the private domain runtime; it adds no container. Stored editions preserve their article snapshot and source links. Headlines open a news page on this site, while source labels open the original publication. Serbian output and website localization are a later stage, with a separate Serbian Telegram channel. See [editorial digest contracts and boundaries](docs/editorial-digests.md).
 

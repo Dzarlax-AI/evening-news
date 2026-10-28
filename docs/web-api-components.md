@@ -14,7 +14,7 @@ been published or rolled out.
 | Schedule dispatch | Go `background` process | Scheduler API and dispatch component; scheduler state remains in its separate PostgreSQL database |
 | Collection and ingestion | Go `background` process | Ingestion listener, RSS/Atom, public Telegram and Page Monitor adapters, source progress, and fenced article persistence |
 | Article processing | Go `background` process | Processing listener, article selection, state transitions, retries, and article/category persistence; AI analysis calls the private executor |
-| Python domain operations | Private Python `executor` process | Existing Python job/domain functions, AI prompts and provider calls, summaries, Telegram delivery and diagnostics, and private backup operations |
+| Private domain operations | Existing `executor` runtime with a Python adapter and native components | Fixed operation and claim boundaries, native article-analysis and editorial engines, metadata and usage persistence, Telegram delivery, diagnostics, and backup operations |
 | Extraction | Separate Go `extractor` process | Bounded HTTP extraction. The example Compose profile uses HTTP-only extraction. |
 | Schema bootstrap | One-shot `migrate` command using the executor image | Existing database initialization, versioned migrations, and required schema checks before schema consumers start |
 

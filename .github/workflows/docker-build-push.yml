@@ -12,6 +12,7 @@ on:
       - 'go-background/**'
       - 'go-execution/**'
       - 'go-editorial/**'
+      - 'go-domain/**'
       - 'go/**'
       - 'go-ingestion/**'
       - 'go-processing/**'
@@ -45,6 +46,7 @@ on:
       - 'go-background/**'
       - 'go-execution/**'
       - 'go-editorial/**'
+      - 'go-domain/**'
       - 'go/**'
       - 'go-ingestion/**'
       - 'go-processing/**'
@@ -111,6 +113,9 @@ jobs:
       - name: Build private editorial CLI for fake-provider integration tests
         working-directory: go-editorial
         run: go build -o "$RUNNER_TEMP/news-editorial" ./cmd/news-editorial
+      - name: Build private article analysis CLI for fake-provider integration tests
+        working-directory: go-domain
+        run: go build -o "$RUNNER_TEMP/news-article-analysis" ./cmd/news-article-analysis
       - name: Run complete Python suite
         env:
           CI: 'true'
@@ -124,6 +129,8 @@ jobs:
           SCHEDULER_ENABLED: 'false'
           NEWS_EDITORIAL_BINARY: ${{ runner.temp }}/news-editorial
           NEWS_EDITORIAL_INTEGRATION_REQUIRED: '1'
+          NEWS_ARTICLE_ANALYSIS_BINARY: ${{ runner.temp }}/news-article-analysis
+          NEWS_ARTICLE_ANALYSIS_INTEGRATION_REQUIRED: '1'
         run: python -m pytest tests/ -q
 
   go-core-tests:
@@ -133,7 +140,7 @@ jobs:
       fail-fast: false
       matrix:
         postgres: ['16', '17']
-        module: [go-worker, go-scheduler, go-ingestion, go-processing, go-execution, go-background, go-editorial]
+        module: [go-worker, go-scheduler, go-ingestion, go-processing, go-execution, go-background, go-editorial, go-domain]
     services:
       postgres:
         image: postgres:${{ matrix.postgres }}-alpine

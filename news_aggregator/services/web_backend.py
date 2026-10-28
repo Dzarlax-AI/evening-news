@@ -137,6 +137,8 @@ async def invalidate_category_cache() -> None:
     from .category_cache import get_category_cache
     cache = get_category_cache()
     await cache.invalidate()
+    from .article_analysis import invalidate_category_metadata_cache
+    await invalidate_category_metadata_cache()
 
 
 async def analyze_categories(db, request: CategoryAnalysisRequest) -> dict:
