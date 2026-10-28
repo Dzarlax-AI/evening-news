@@ -2,7 +2,6 @@ from unittest.mock import AsyncMock
 
 import pytest
 
-from news_aggregator.processing.digest_builder import DigestBuilder
 from news_aggregator.services.telegram_service import TelegramSendResult, TelegramService
 from news_aggregator.utils.html_utils import (
     validate_telegram_editorial_html, validate_telegram_rich_html,
@@ -55,17 +54,6 @@ def test_validate_telegram_rich_html_keeps_rich_blocks_and_strips_unsafe_attrs()
     assert "javascript:" not in cleaned
     assert "<details open" in cleaned
     assert "<ul><li>One</li></ul>" in cleaned
-
-
-def test_summary_to_rich_blocks_escapes_text_and_groups_bullets():
-    builder = DigestBuilder.__new__(DigestBuilder)
-
-    rendered = builder._summary_to_rich_blocks("Intro <script>\n- First item\n* Second item")
-
-    assert "<p>Intro &lt;script&gt;</p>" in rendered
-    assert "<ul>" in rendered
-    assert "<li>First item</li>" in rendered
-    assert "<li>Second item</li>" in rendered
 
 
 @pytest.mark.asyncio

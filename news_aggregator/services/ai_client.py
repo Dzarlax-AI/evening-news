@@ -184,75 +184,6 @@ class AIClient:
             logger.warning(f"  ⚠️ Error extracting full article link: {e}")
             return None
     
-    async def generate_digest(self, result_data: dict, message_part: Optional[int] = None) -> Optional[str]:
-        """
-        Generate final digest using Constructor KM API with 4.1 (full model).
-        
-        Args:
-            result_data: Dictionary with categories and their news items
-            message_part: Part number for splitting (1, 2, or None for single message)
-            
-        Returns:
-            Final digest text or None if failed
-        """
-        if not result_data:
-            return None
-        
-        try:
-            # Calculate totals
-            total_news = sum(len(articles) for articles in result_data.values())
-            categories = len(result_data)
-            
-            # Header and limits depend on message part
-            if message_part == 1:
-                header_text = "Сводка новостей (часть 1)"
-            elif message_part == 2:
-                header_text = "Сводка новостей (часть 2)" 
-            else:
-                header_text = "Сводка новостей"
-            
-            # Character limits for each part
-            if message_part:
-                char_limit = 3400  # For split messages
-                detail_level = "СЖАТО"
-            else:
-                char_limit = 2600  # For single messages
-                detail_level = "СЖАТО"
-            
-            # Prepare news content
-            news_content = ""
-            for category, articles in result_data.items():
-                news_content += f"\n{category}:\n"
-                for article in articles:
-                    title = article.get('title', article.get('canonical_title', ''))
-                    summary = article.get('summary', article.get('canonical_summary', ''))
-                    news_content += f"- {title}\n"
-                    if summary:
-                        news_content += f"  {summary[:200]}...\n"
-            
-            from .prompts import NewsPrompts
-            prompt = NewsPrompts.news_digest(
-                total_news=total_news, 
-                categories=categories, 
-                news_content=news_content,
-                char_limit=char_limit, 
-                detail_level=detail_level, 
-                header_text=header_text
-            )
-
-            if response_data and 'choices' in response_data and response_data['choices']:
-                digest = (response_data['choices'][0]['message']['content'] or "").strip()
-                return digest
-            else:
-                logger.warning(f"  ⚠️ No choices in digest API response")
-                return None
-        
-        except APIError:
-            raise
-        except Exception as e:
-            logger.warning(f"  ⚠️ Error generating digest: {e}")
-            raise APIError(f"Failed to generate digest: {e}")
-    
     @retry(
         stop=stop_after_attempt(3),
         wait=wait_exponential(multiplier=1, min=2, max=10),
@@ -321,50 +252,6 @@ class AIClient:
     # _parse_advertising_response() and _default_ad_response() were removed as
     # they are now handled by analyze_article_complete() unified processing.
     
-    def _clean_summary_text(self, raw_summary: str) -> str:
-        """Clean AI-generated summary from service text and prompt repetition."""
-        if not raw_summary:
-            return ""
-        
-        import re
-        
-        # Remove common service phrases that AI sometimes includes
-        service_phrases = [
-            r'^Краткое содержание статьи на русском языке с основными тезисами:\s*',
-            r'^Краткое содержание статьи на русском языке:\s*',
-            r'^Краткое содержание:\s*',
-            r'^Основные тезисы статьи:\s*',
-            r'^Основные тезисы:\s*',
-            r'^Суммаризация статьи:\s*',
-            r'^Пересказ статьи:\s*',
-            r'^Содержание статьи:\s*',
-            r'^Вот краткое содержание:\s*',
-            r'^Вот основные тезисы:\s*',
-            r'^Статья содержит следующие основные моменты:\s*',
-            r'^Статья рассказывает о следующем:\s*'
-        ]
-        
-        cleaned_summary = raw_summary
-        
-        # Remove service phrases from the beginning
-        for phrase_pattern in service_phrases:
-            cleaned_summary = re.sub(phrase_pattern, '', cleaned_summary, flags=re.IGNORECASE | re.MULTILINE)
-        
-        # Remove leading/trailing whitespace and newlines
-        cleaned_summary = cleaned_summary.strip()
-        
-        # Remove empty bullet points or dashes at the beginning
-        cleaned_summary = re.sub(r'^[-•·*]\s*', '', cleaned_summary, flags=re.MULTILINE)
-        cleaned_summary = re.sub(r'^\d+\.\s*$', '', cleaned_summary, flags=re.MULTILINE)
-        
-        # Clean up multiple newlines
-        cleaned_summary = re.sub(r'\n\s*\n', '\n\n', cleaned_summary)
-        
-        # Remove trailing periods/colons if they look like service text endings
-        cleaned_summary = re.sub(r':\s*$', '', cleaned_summary)
-        
-        return cleaned_summary.strip()
-
     # Note: _summarize_content() method removed - all summarization now uses 
     # analyze_article_complete() which provides better quality results
 

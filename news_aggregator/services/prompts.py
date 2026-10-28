@@ -11,45 +11,6 @@ from typing import Optional
 class NewsPrompts:
     """Collection of all AI prompts for news processing."""
 
-    # =============================================================================
-    # CATEGORY SUMMARY GENERATION (only needed for individual categories)
-    # =============================================================================
-    
-    @staticmethod
-    def category_summary(category: str, articles_text: str) -> str:
-        """
-        Category-specific summary generation for daily digest.
-        
-        Used by: Orchestrator._generate_and_save_daily_summaries()
-        
-        NOTE: This summary will be combined with other categories in Telegram digest
-        without additional AI processing - see Orchestrator._create_combined_digest()
-        """
-        return f"""Ты - новостной аналитик. Создай обзор ВСЕХ новостей категории {category} за день.
-
-🎯 ЗАДАЧА: Обозреть ВСЕ значимые новости категории {category} в едином связном тексте
-📏 ЛИМИТ: Максимум 850 символов (для объединения с другими категориями в телеграм)
-📝 КОНТЕКСТ: Эта сводка будет частью общего дайджеста с другими категориями
-
-ТРЕБОВАНИЯ:
-- Единый связный текст, охватывающий ВСЕ важные новости дня
-- Логическая структура: от главных событий к менее значимым
-- Связки между событиями через контекст и причинно-следственные связи
-- Живой журналистский язык с профессиональными переходами
-- Используй: "На фоне этого", "В то же время", "Кроме того", "По данным"
-
-🚫 НЕ ИСПОЛЬЗУЙ:
-- Списки и перечисления (•, -, 1., 2.)
-- Отдельные абзацы для каждой новости
-- Фразы типа "в категории произошло", "среди новостей дня"
-
-НОВОСТИ ЗА ДЕНЬ:
-{articles_text}
-
-Создай целостный обзор всех новостей категории {category} одним связным текстом:"""
-    
-    # Note: deprecated_telegram_digest() removed - TelegramAI.generate_daily_digest() 
-    # was replaced by Orchestrator._create_combined_digest() which combines pre-generated summaries
 
 
 class PromptBuilder:
@@ -59,17 +20,6 @@ class PromptBuilder:
     def get_valid_categories() -> set:
         """Get list of valid news categories."""
         return {"Business", "Tech", "Science", "Nature", "Serbia", "Marketing", "Other"}
-    
-    @staticmethod
-    def format_articles_for_summary(articles: list) -> str:
-        """Format articles list for summary generation."""
-        articles_text = ""
-        for article in articles:
-            articles_text += f"Заголовок: {article['headline']}\n"
-            if article.get('description'):
-                articles_text += f"Описание: {article['description'][:300]}...\n"
-            articles_text += "---\n"
-        return articles_text
     
     # =============================================================================
     # CONTENT EXTRACTION PROMPTS
