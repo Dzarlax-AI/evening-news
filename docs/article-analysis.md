@@ -1,91 +1,84 @@
-# Article analysis component
+# Article analysis boundary
 
 Article analysis owns the Gemini request, article prompt and response schema,
 provider response parsing, and normalization of titles, summaries, categories,
-advertisement fields, and publication-date metadata. It is separate from article
-extraction, durable processing, editorial edition generation, and delivery.
+advertisement fields, and publication-date metadata. It remains separate from
+article extraction, durable processing, editorial edition generation, and
+delivery.
 
-The implementation lives in `go-domain/analysis` and the bounded
-`news-article-analysis` command. The command runs inside the existing private
-domain runtime. It adds no container, registry repository, public endpoint, or
-database role. Moving the implementation does not move the Gemini credential to
-the background runtime.
+The implementation lives in `go-domain/analysis`. The long-lived
+`news-ai-runtime` child runs inside the existing private Python domain container
+and communicates over its authenticated Unix socket. Python retains the
+versioned article callback, media and delivery prompts, selector callbacks,
+and PID 1. Durable article processing remains in Go. There is no new container,
+port, database role, or public endpoint. The standalone `news-article-analysis` command remains a
+pure analysis diagnostic path; production article requests use the runtime
+socket and do not spawn that command per article.
 
-## Boundary and compatibility
+## Compatibility
 
-The authenticated `/internal/v1/article-ai` callback and its operation envelope
+The authenticated `/internal/v1/article-ai` callback and operation envelope
 remain version 1. Run identity, article attempt, input fingerprint, claim checks,
-and checks before and after computation remain at that boundary. The
-`extraction_context` and `extraction_feedback` operations retain their existing
-selector-learning behavior.
+and checks before and after computation remain at that boundary.
+`extraction_context` and `extraction_feedback` retain their selector-learning
+behavior.
 
-The Python adapter temporarily owns metadata reads, the shared provider admission
-state, and usage persistence. It passes bounded structured category metadata to
-the native component and records returned token usage through the existing
-accounting path. No provider request runs inside a database write transaction.
-This is a migration step, not complete removal of the Python domain runtime.
+The runtime loads category names/display names ordered by name, mapping examples
+ordered by fixed category and descending usage count, and the first local
+category. It caches the values for five minutes. Missing nullable `is_local`
+values are false. A failed metadata query uses the legacy static categories.
+The runtime also owns Gemini transport for the remaining `AIClient` raw and
+structured prompts, a shared sliding-window permit gate for legacy HTTP POSTs,
+the AI breaker, and best-effort `ai_usage_tracking` inserts. Native provider
+calls and Python `AsyncHTTPClient.post` attempts share one gate; native calls do
+not acquire an extra permit. Telegram POST attempts use that same gate.
 
 The callback consumes the same normalized analysis fields as before. Dynamic
 category labels, local-category rules, mapping examples, scientific title-only
-fallback, original source context, Unicode truncation, partial results and
+fallback, original source context, Unicode truncation, partial results, and
 confidence defaults remain part of compatibility. The current language policy
-is Russian. Serbian content, website localization and a separate channel belong
-to a later stage.
+is Russian. Serbian content, website localization, and a separate channel are
+later work.
 
-## Command protocol
+## Retry and errors
 
-The command reads one bounded JSON request on stdin and writes one versioned JSON
-response on stdout. Input contains the article fields, category metadata,
-local-category settings, model, configured provider endpoint, and configured
-text limit. The endpoint and model come from trusted runtime configuration, not
-from the article URL. The article URL is prompt context; the command does not
-fetch that page.
+The runtime preserves the previous shared provider admission and breaker state
+across article requests. Provider requests retry up to three times only for
+pre-response transport errors or timeouts, with four-second waits; each actual
+attempt obtains one permit. Provider statuses, response-body/decode failures,
+and unknown outcomes do not receive a runtime transport retry. Existing
+task-specific Python retries still see known provider statuses and Retry-After.
+Local RPC errors, invalid envelopes, and child disconnects remain finite and
+status-less, so they cannot be mistaken for retryable provider failures or a
+terminal provider 400. Unknown local outcomes are never resent automatically.
 
-Successful responses contain `version`, `ok`, `result`, and optional `usage`.
-Usage includes the model and prompt, completion, cached and total token counts.
-An explicit zero total is preserved; a missing or null total uses the existing
-fallback sum. Provider error responses contain finite error codes, optional HTTP
-status and Retry-After, and whether a pre-response transport failure permits the
-existing immediate transport retry.
+Provider calls run outside Python and Go database transactions. Usage records
+are queued best effort after a completed provider result. An ambiguous database
+commit is not retried, and tracking failure does not replay the provider call or
+change its result. An explicit zero token total stays zero in the provider
+response; a missing or null total normalizes to prompt plus completion plus
+cached tokens. If the normalized total is zero, accounting uses prompt plus
+completion while the response retains zero.
 
-The API key is supplied through the narrow child environment. It is never a CLI
-argument or a JSON response field. The adapter bounds stdin, stdout, stderr and
-process lifetime, and kills and reaps the child on cancellation or timeout.
-Untrusted provider bodies and article contents must not appear in diagnostics.
+## Runtime and validation
 
-## Retry ownership
+Python starts one runtime child before the executor serves requests. It creates
+an owner-only temporary directory and socket, passes a fresh bearer token only
+through the child environment, and never restarts a child that exits. Child
+exit revokes active work and makes the executor unavailable. Shutdown cancels
+active operations, stops the runtime and drains its bounded usage queue, then
+releases the Python singleton database guard and pool.
 
-The existing shared rate limiter and circuit breaker remain outside the
-one-shot process. A new process must not reset admission or breaker state for
-every article. The actual previous HTTP client policy allows up to three
-attempts for transport errors or timeouts before response headers. Its backoff
-and rate admission apply to each such attempt.
+The native database pool is fixed at two connections and is reserved from the
+existing `DB_POOL_SIZE + DB_MAX_OVERFLOW` budget. Python retains at least two
+connections for the singleton guard and normal operations; startup rejects a
+total budget below four rather than increasing it. Offline Python database
+commands use the same conservative split and leave the native reservation
+unused.
 
-Provider status errors, body-read or decoding failures, and an unknown child
-outcome do not acquire an additional immediate retry. HTTP status and Retry-After
-reach the existing durable article-processing policy. A provider failure is not
-converted to a successful fabricated summary. Usage is recorded once, not once
-per wrapper retry.
-
-## Build and validation
-
-The core Docker build adds the command only to the private `executor` target.
-The web and background inventories reject that payload. Core toolchains remain
-Go 1.25.6-compatible; the independent extractor has its own toolchain and release.
-
-```sh
-go -C go-domain test -race ./...
-go -C go-domain vet ./...
-go -C go-domain build -o /tmp/news-article-analysis ./cmd/news-article-analysis
-```
-
-Python integration tests use `NEWS_ARTICLE_ANALYSIS_BINARY` to select the local
-executable. CI sets `NEWS_ARTICLE_ANALYSIS_INTEGRATION_REQUIRED=1` so missing
-integration tooling cannot silently skip acceptance. Tests use a loopback fake
-Gemini and synthetic fixtures, including frozen legacy prompt, schema and
-normalization results under `tests/fixtures/article-analysis-v1/`.
-
-The complete release gate still checks role-specific image contents and the
-consolidated synthetic application path. A real-provider trial or a production
-rollout requires its own approved scope; local parity is not evidence of a
-production deployment.
+`docs/ai-runtime.md` defines the exact Unix-socket JSON protocol and process
+configuration. CI builds `news-ai-runtime` and requires its fake-provider,
+isolated-PostgreSQL integration tests with `NEWS_AI_RUNTIME_INTEGRATION_REQUIRED=1`.
+The integration uses a loopback `TEST_DATABASE_URL` and a temporary schema.
+Local fixture tests do not contact Gemini or Telegram. Go module tests use Go
+1.25.6; the independent extractor toolchain is unchanged.

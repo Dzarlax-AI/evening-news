@@ -1,0 +1,657 @@
+[
+  {
+    "name": "text_first_part",
+    "mode": "text",
+    "provider_response": {
+      "candidates": [
+        {
+          "content": {
+            "parts": [
+              {
+                "text": "  Synthetic plain text.  "
+              },
+              {
+                "text": "ignored second part"
+              }
+            ]
+          }
+        }
+      ],
+      "usageMetadata": {
+        "promptTokenCount": 9,
+        "candidatesTokenCount": 3,
+        "cachedContentTokenCount": 2,
+        "totalTokenCount": 14
+      }
+    },
+    "expected_result": {
+      "choices": [
+        {
+          "message": {
+            "content": "Synthetic plain text."
+          }
+        }
+      ],
+      "usage": {
+        "prompt_tokens": 9,
+        "completion_tokens": 3,
+        "cached_tokens": 2,
+        "total_tokens": 14
+      }
+    },
+    "request": {
+      "prompt": "Synthetic transport parity prompt.",
+      "model": "gemini-3-fixture",
+      "analysis_type": "selector_discovery",
+      "domain": "fixture.invalid",
+      "temperature": 0.2,
+      "max_tokens": 123
+    },
+    "expected_request": {
+      "url": "https://fixture.invalid/v1beta/models/gemini-3-fixture:generateContent",
+      "json": {
+        "contents": [
+          {
+            "role": "user",
+            "parts": [
+              {
+                "text": "Synthetic transport parity prompt."
+              }
+            ]
+          }
+        ],
+        "generationConfig": {
+          "temperature": 0.2,
+          "maxOutputTokens": 123
+        }
+      },
+      "timeout": 30
+    },
+    "expected_usage_events": 1
+  },
+  {
+    "name": "text_empty_parts",
+    "mode": "text",
+    "provider_response": {
+      "candidates": [
+        {
+          "content": {
+            "parts": []
+          }
+        }
+      ],
+      "usageMetadata": {
+        "promptTokenCount": 9,
+        "candidatesTokenCount": 3,
+        "cachedContentTokenCount": 2,
+        "totalTokenCount": 14
+      }
+    },
+    "expected_result": {
+      "choices": [
+        {
+          "message": {
+            "content": ""
+          }
+        }
+      ],
+      "usage": {
+        "prompt_tokens": 9,
+        "completion_tokens": 3,
+        "cached_tokens": 2,
+        "total_tokens": 14
+      }
+    },
+    "request": {
+      "prompt": "Synthetic transport parity prompt.",
+      "model": "gemini-3-fixture",
+      "analysis_type": "selector_discovery",
+      "domain": "fixture.invalid",
+      "temperature": 0.2,
+      "max_tokens": 123
+    },
+    "expected_request": {
+      "url": "https://fixture.invalid/v1beta/models/gemini-3-fixture:generateContent",
+      "json": {
+        "contents": [
+          {
+            "role": "user",
+            "parts": [
+              {
+                "text": "Synthetic transport parity prompt."
+              }
+            ]
+          }
+        ],
+        "generationConfig": {
+          "temperature": 0.2,
+          "maxOutputTokens": 123
+        }
+      },
+      "timeout": 30
+    },
+    "expected_usage_events": 1
+  },
+  {
+    "name": "text_missing_total",
+    "mode": "text",
+    "provider_response": {
+      "candidates": [
+        {
+          "content": {
+            "parts": [
+              {
+                "text": "Synthetic"
+              },
+              {
+                "text": "ignored second part"
+              }
+            ]
+          }
+        }
+      ],
+      "usageMetadata": {
+        "promptTokenCount": 9,
+        "candidatesTokenCount": 3,
+        "cachedContentTokenCount": 2
+      }
+    },
+    "expected_result": {
+      "choices": [
+        {
+          "message": {
+            "content": "Synthetic"
+          }
+        }
+      ],
+      "usage": {
+        "prompt_tokens": 9,
+        "completion_tokens": 3,
+        "cached_tokens": 2,
+        "total_tokens": 14
+      }
+    },
+    "request": {
+      "prompt": "Synthetic transport parity prompt.",
+      "model": "gemini-3-fixture",
+      "analysis_type": "selector_discovery",
+      "domain": "fixture.invalid",
+      "temperature": 0.2,
+      "max_tokens": 123
+    },
+    "expected_request": {
+      "url": "https://fixture.invalid/v1beta/models/gemini-3-fixture:generateContent",
+      "json": {
+        "contents": [
+          {
+            "role": "user",
+            "parts": [
+              {
+                "text": "Synthetic transport parity prompt."
+              }
+            ]
+          }
+        ],
+        "generationConfig": {
+          "temperature": 0.2,
+          "maxOutputTokens": 123
+        }
+      },
+      "timeout": 30
+    },
+    "expected_usage_events": 1
+  },
+  {
+    "name": "text_explicit_zero",
+    "mode": "text",
+    "provider_response": {
+      "candidates": [
+        {
+          "content": {
+            "parts": [
+              {
+                "text": "Synthetic"
+              },
+              {
+                "text": "ignored second part"
+              }
+            ]
+          }
+        }
+      ],
+      "usageMetadata": {
+        "promptTokenCount": 9,
+        "candidatesTokenCount": 3,
+        "cachedContentTokenCount": 2,
+        "totalTokenCount": 0
+      }
+    },
+    "expected_result": {
+      "choices": [
+        {
+          "message": {
+            "content": "Synthetic"
+          }
+        }
+      ],
+      "usage": {
+        "prompt_tokens": 9,
+        "completion_tokens": 3,
+        "cached_tokens": 2,
+        "total_tokens": 0
+      }
+    },
+    "request": {
+      "prompt": "Synthetic transport parity prompt.",
+      "model": "gemini-3-fixture",
+      "analysis_type": "selector_discovery",
+      "domain": "fixture.invalid",
+      "temperature": 0.2,
+      "max_tokens": 123
+    },
+    "expected_request": {
+      "url": "https://fixture.invalid/v1beta/models/gemini-3-fixture:generateContent",
+      "json": {
+        "contents": [
+          {
+            "role": "user",
+            "parts": [
+              {
+                "text": "Synthetic transport parity prompt."
+              }
+            ]
+          }
+        ],
+        "generationConfig": {
+          "temperature": 0.2,
+          "maxOutputTokens": 123
+        }
+      },
+      "timeout": 30
+    },
+    "expected_usage_events": 1
+  },
+  {
+    "name": "structured_object",
+    "mode": "structured",
+    "provider_response": {
+      "candidates": [
+        {
+          "content": {
+            "parts": [
+              {
+                "text": "{\"selector\":\".story\",\"confidence\":0.8}"
+              },
+              {
+                "text": "ignored second part"
+              }
+            ]
+          }
+        }
+      ],
+      "usageMetadata": {
+        "promptTokenCount": 9,
+        "candidatesTokenCount": 3,
+        "cachedContentTokenCount": 2,
+        "totalTokenCount": 14
+      }
+    },
+    "expected_result": {
+      "result": {
+        "selector": ".story",
+        "confidence": 0.8
+      },
+      "usage": {
+        "prompt_tokens": 9,
+        "completion_tokens": 3,
+        "cached_tokens": 2,
+        "total_tokens": 14
+      }
+    },
+    "request": {
+      "prompt": "Synthetic transport parity prompt.",
+      "model": "gemini-3-fixture",
+      "analysis_type": "selector_discovery",
+      "domain": "fixture.invalid",
+      "schema": {
+        "type": "object",
+        "properties": {
+          "selector": {
+            "type": "string"
+          }
+        }
+      }
+    },
+    "expected_request": {
+      "url": "https://fixture.invalid/v1beta/models/gemini-3-fixture:generateContent",
+      "json": {
+        "contents": [
+          {
+            "role": "user",
+            "parts": [
+              {
+                "text": "Synthetic transport parity prompt."
+              }
+            ]
+          }
+        ],
+        "generationConfig": {
+          "temperature": 0.1,
+          "maxOutputTokens": 2000,
+          "responseMimeType": "application/json",
+          "responseJsonSchema": {
+            "type": "object",
+            "properties": {
+              "selector": {
+                "type": "string"
+              }
+            }
+          }
+        }
+      },
+      "timeout": 40
+    },
+    "expected_usage_events": 1
+  },
+  {
+    "name": "structured_array",
+    "mode": "structured",
+    "provider_response": {
+      "candidates": [
+        {
+          "content": {
+            "parts": [
+              {
+                "text": "[\"synthetic\"]"
+              },
+              {
+                "text": "ignored second part"
+              }
+            ]
+          }
+        }
+      ],
+      "usageMetadata": {
+        "promptTokenCount": 9,
+        "candidatesTokenCount": 3,
+        "cachedContentTokenCount": 2,
+        "totalTokenCount": 14
+      }
+    },
+    "expected_result": {
+      "result": [
+        "synthetic"
+      ],
+      "usage": {
+        "prompt_tokens": 9,
+        "completion_tokens": 3,
+        "cached_tokens": 2,
+        "total_tokens": 14
+      }
+    },
+    "request": {
+      "prompt": "Synthetic transport parity prompt.",
+      "model": "gemini-3-fixture",
+      "analysis_type": "selector_discovery",
+      "domain": "fixture.invalid",
+      "schema": {
+        "type": "object",
+        "properties": {
+          "selector": {
+            "type": "string"
+          }
+        }
+      }
+    },
+    "expected_request": {
+      "url": "https://fixture.invalid/v1beta/models/gemini-3-fixture:generateContent",
+      "json": {
+        "contents": [
+          {
+            "role": "user",
+            "parts": [
+              {
+                "text": "Synthetic transport parity prompt."
+              }
+            ]
+          }
+        ],
+        "generationConfig": {
+          "temperature": 0.1,
+          "maxOutputTokens": 2000,
+          "responseMimeType": "application/json",
+          "responseJsonSchema": {
+            "type": "object",
+            "properties": {
+              "selector": {
+                "type": "string"
+              }
+            }
+          }
+        }
+      },
+      "timeout": 40
+    },
+    "expected_usage_events": 1
+  },
+  {
+    "name": "structured_markdown",
+    "mode": "structured",
+    "provider_response": {
+      "candidates": [
+        {
+          "content": {
+            "parts": [
+              {
+                "text": "```json\n{\"selector\":\".story\"}\n```"
+              },
+              {
+                "text": "ignored second part"
+              }
+            ]
+          }
+        }
+      ],
+      "usageMetadata": {
+        "promptTokenCount": 9,
+        "candidatesTokenCount": 3,
+        "cachedContentTokenCount": 2,
+        "totalTokenCount": 14
+      }
+    },
+    "expected_result": {
+      "result": {
+        "selector": ".story"
+      },
+      "usage": {
+        "prompt_tokens": 9,
+        "completion_tokens": 3,
+        "cached_tokens": 2,
+        "total_tokens": 14
+      }
+    },
+    "request": {
+      "prompt": "Synthetic transport parity prompt.",
+      "model": "gemini-3-fixture",
+      "analysis_type": "selector_discovery",
+      "domain": "fixture.invalid",
+      "schema": {
+        "type": "object",
+        "properties": {
+          "selector": {
+            "type": "string"
+          }
+        }
+      }
+    },
+    "expected_request": {
+      "url": "https://fixture.invalid/v1beta/models/gemini-3-fixture:generateContent",
+      "json": {
+        "contents": [
+          {
+            "role": "user",
+            "parts": [
+              {
+                "text": "Synthetic transport parity prompt."
+              }
+            ]
+          }
+        ],
+        "generationConfig": {
+          "temperature": 0.1,
+          "maxOutputTokens": 2000,
+          "responseMimeType": "application/json",
+          "responseJsonSchema": {
+            "type": "object",
+            "properties": {
+              "selector": {
+                "type": "string"
+              }
+            }
+          }
+        }
+      },
+      "timeout": 40
+    },
+    "expected_usage_events": 1
+  },
+  {
+    "name": "text_http429",
+    "mode": "text",
+    "status": 429,
+    "headers": {
+      "Retry-After": "7"
+    },
+    "provider_response": {},
+    "expected_error": {
+      "type": "APIError",
+      "status_code": 429,
+      "retry_after_seconds": 7.0
+    },
+    "request": {
+      "prompt": "Synthetic transport parity prompt.",
+      "model": "gemini-3-fixture",
+      "analysis_type": "selector_discovery",
+      "domain": "fixture.invalid",
+      "temperature": 0.2,
+      "max_tokens": 123
+    },
+    "expected_request": {
+      "url": "https://fixture.invalid/v1beta/models/gemini-3-fixture:generateContent",
+      "json": {
+        "contents": [
+          {
+            "role": "user",
+            "parts": [
+              {
+                "text": "Synthetic transport parity prompt."
+              }
+            ]
+          }
+        ],
+        "generationConfig": {
+          "temperature": 0.2,
+          "maxOutputTokens": 123
+        }
+      },
+      "timeout": 30
+    },
+    "expected_usage_events": 0
+  },
+  {
+    "name": "structured_http500",
+    "mode": "structured",
+    "status": 500,
+    "provider_response": {},
+    "expected_error": {
+      "type": "APIError",
+      "status_code": 500,
+      "retry_after_seconds": null
+    },
+    "request": {
+      "prompt": "Synthetic transport parity prompt.",
+      "model": "gemini-3-fixture",
+      "analysis_type": "selector_discovery",
+      "domain": "fixture.invalid",
+      "schema": {
+        "type": "object",
+        "properties": {
+          "selector": {
+            "type": "string"
+          }
+        }
+      }
+    },
+    "expected_request": {
+      "url": "https://fixture.invalid/v1beta/models/gemini-3-fixture:generateContent",
+      "json": {
+        "contents": [
+          {
+            "role": "user",
+            "parts": [
+              {
+                "text": "Synthetic transport parity prompt."
+              }
+            ]
+          }
+        ],
+        "generationConfig": {
+          "temperature": 0.1,
+          "maxOutputTokens": 2000,
+          "responseMimeType": "application/json",
+          "responseJsonSchema": {
+            "type": "object",
+            "properties": {
+              "selector": {
+                "type": "string"
+              }
+            }
+          }
+        }
+      },
+      "timeout": 40
+    },
+    "expected_usage_events": 0
+  },
+  {
+    "name": "text_empty_candidates",
+    "mode": "text",
+    "provider_response": {
+      "candidates": []
+    },
+    "expected_error": {
+      "type": "APIError",
+      "status_code": 200,
+      "retry_after_seconds": null
+    },
+    "request": {
+      "prompt": "Synthetic transport parity prompt.",
+      "model": "gemini-3-fixture",
+      "analysis_type": "selector_discovery",
+      "domain": "fixture.invalid",
+      "temperature": 0.2,
+      "max_tokens": 123
+    },
+    "expected_request": {
+      "url": "https://fixture.invalid/v1beta/models/gemini-3-fixture:generateContent",
+      "json": {
+        "contents": [
+          {
+            "role": "user",
+            "parts": [
+              {
+                "text": "Synthetic transport parity prompt."
+              }
+            ]
+          }
+        ],
+        "generationConfig": {
+          "temperature": 0.2,
+          "maxOutputTokens": 123
+        }
+      },
+      "timeout": 30
+    },
+    "expected_usage_events": 0
+  }
+]

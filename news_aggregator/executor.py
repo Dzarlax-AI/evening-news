@@ -1175,6 +1175,14 @@ async def _execution_context(fence):
 async def get_status(request: Request):
     _auth(request)
     await _require_executor_guard()
+    from .services.ai_runtime import get_ai_runtime
+    runtime = get_ai_runtime()
+    try:
+        status = await runtime.status()
+        if not runtime.ready or status.get("ready") is not True or status.get("protocol_version") != 1:
+            raise RuntimeError("runtime_not_ready")
+    except Exception as exc:
+        raise HTTPException(status_code=503, detail="Executor runtime is unavailable") from exc
     try:
         _validate_executor_runtime()
         async with AsyncSessionLocal() as session:
@@ -1406,17 +1414,29 @@ async def ingestion_selector_callback(request: Request):
 
 
 async def _serve():
-    _validate_executor_runtime()
+    global _EXECUTOR_SERVER
+    try:
+        _validate_executor_runtime()
+    except BaseException:
+        await _shield_startup_cleanup(engine.dispose())
+        raise
     try:
         await _acquire_executor_guard()
-    except Exception:
-        await engine.dispose()
+    except BaseException:
+        await _shield_startup_cleanup(engine.dispose())
         raise
+    from .services.ai_runtime import get_ai_runtime
+    runtime = get_ai_runtime()
     config = uvicorn.Config(app, host=settings.job_executor_host, port=settings.job_executor_port,
                             log_level=settings.log_level.lower(), access_log=False)
     server = uvicorn.Server(config)
-    global _EXECUTOR_SERVER
     _EXECUTOR_SERVER = server
+    try:
+        await runtime.start(on_child_exit=lambda: _revoke_executor_work(_EXECUTOR_SERVER))
+    except BaseException:
+        _EXECUTOR_SERVER = None
+        await _shield_startup_cleanup(_cleanup_failed_executor_start(runtime))
+        raise
     loop = asyncio.get_running_loop()
     for sig in (signal.SIGINT, signal.SIGTERM):
         try:
@@ -1436,14 +1456,47 @@ async def _serve():
         _EXECUTOR_SERVER = None
 
 
+async def _cleanup_failed_executor_start(runtime) -> None:
+    try:
+        await runtime.stop(timeout=8)
+    except Exception:
+        logger.error("native AI runtime startup cleanup failed")
+    try:
+        await _release_executor_guard()
+    except Exception:
+        logger.error("executor database guard startup cleanup failed")
+    try:
+        await engine.dispose()
+    except Exception:
+        logger.error("executor database pool startup cleanup failed")
+
+
+async def _shield_startup_cleanup(awaitable) -> None:
+    """Finish bounded startup cleanup even when _serve was cancelled."""
+    cleanup = asyncio.create_task(awaitable)
+    try:
+        await asyncio.shield(cleanup)
+    except asyncio.CancelledError:
+        # A repeated cancellation must not strand a singleton guard or child.
+        await cleanup
+
+
 async def _shutdown_executor(*, drain_seconds=None):
     """Cancel leaf work before releasing the Python database singleton guard."""
     timeout = (settings.worker_shutdown_drain_seconds if drain_seconds is None
                else max(0, float(drain_seconds)))
     from .services.domain_operations import cancel_active_operations
-    await cancel_active_operations(timeout=timeout)
-    await _release_executor_guard()
-    await engine.dispose()
+    from .services.ai_runtime import get_ai_runtime
+    try:
+        await cancel_active_operations(timeout=timeout)
+    finally:
+        try:
+            await get_ai_runtime().stop(timeout=min(max(timeout, 1), 8))
+        finally:
+            try:
+                await _release_executor_guard()
+            finally:
+                await engine.dispose()
 
 
 def main():

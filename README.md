@@ -67,7 +67,7 @@ flowchart LR
     Migrate -->|successful completion required| NewsDB
 ```
 
-The Go web service replaces the former Python web application. It serves the public reader, admin pages, health endpoints, and public and management APIs. The private domain runtime hosts native article-analysis and editorial components. Its Python adapter retains fixed operation boundaries, metadata and usage persistence, selector callbacks, maintenance and Telegram delivery. One Go background runtime hosts the queue worker, scheduler, ingestion, article processing, and execution components. The execution component owns durable job receipts, worker and execution fencing, and orchestration; it calls the private domain runtime for typed domain operations. Each background component keeps its own configuration and database boundary inside the process. The extractor remains a separate Go service.
+The Go web service replaces the former Python web application. It serves the public reader, admin pages, health endpoints, and public and management APIs. The private domain runtime contains the Python executor and one long-lived native Go AI child, communicating over an authenticated Unix socket. Python retains callback validation, editorial snapshot preparation, media and delivery prompts, selector callbacks, maintenance, Telegram delivery, and PID 1; the native child owns category metadata caching, article analysis, Gemini raw and structured transport, shared POST admission and breaker state, and best-effort usage accounting. One Go background runtime hosts the queue worker, scheduler, ingestion, article processing, and execution components. The execution component owns durable job receipts, worker and execution fencing, and orchestration; it calls the private domain runtime for typed domain operations. Each background component keeps its own configuration and database boundary inside the process. The extractor remains a separate Go service.
 
 Article summarization and categorization run together in `AIClient.analyze_article_complete` and use `SUMMARIZATION_MODEL`. Editorial digest generation uses `DIGEST_MODEL`; both default to `gemini-3.5-flash-lite`. `CATEGORIZATION_MODEL` remains a compatibility setting and does not independently select the model for combined article analysis.
 
@@ -75,7 +75,7 @@ The one-shot `migrate` service runs `python -m news_aggregator.migrate` before s
 
 ## Editorial digests
 
-Article analysis uses a bounded native component in the same private domain runtime. Its callback contract, provider admission and usage accounting stay compatible; the Gemini key stays with that runtime. See [article analysis contracts and migration boundary](docs/article-analysis.md).
+Article analysis and the legacy `AIClient` Gemini prompts use the same long-lived native runtime and shared POST gate inside the private domain container. The Gemini key stays with that runtime. See the [AI runtime protocol](docs/ai-runtime.md) and [article analysis boundary](docs/article-analysis.md).
 
 The Russian editorial format presents main stories first, then short stories grouped by category. The `go-editorial` engine runs as a bounded CLI inside the private domain runtime; it adds no container. Stored editions preserve their article snapshot and source links. Headlines open a news page on this site, while source labels open the original publication. Serbian output and website localization are a later stage, with a separate Serbian Telegram channel. See [editorial digest contracts and boundaries](docs/editorial-digests.md).
 
@@ -99,7 +99,7 @@ Copy `.env.example` to `.env` and replace its development placeholders. It lists
 cp .env.example .env
 ```
 
-Provider keys are passed to the Python executor because it owns provider operations. The local Compose file maps `WEB_DATABASE_URL` to the web service's `DATABASE_URL` and `EXECUTOR_DATABASE_URL` to the executor and migration service's `DATABASE_URL`. The background components use separate worker, execution, scheduler, ingestion, and processing database variables. The Go web service receives its database URL, admin/JWT settings, `WEB_BACKEND_URL` and `WEB_BACKEND_TOKEN`, scheduler client settings, and HTTP trust configuration; it does not receive AI or Telegram provider keys.
+Provider keys are configured on the executor role and passed through a narrow child environment to its native AI runtime. Python starts and supervises that process; the child owns Gemini transport and never exposes a TCP listener. The local Compose file maps `WEB_DATABASE_URL` to the web service's `DATABASE_URL` and `EXECUTOR_DATABASE_URL` to the executor and migration service's `DATABASE_URL`. The background components use separate worker, execution, scheduler, ingestion, and processing database variables. The Go web service receives its database URL, admin/JWT settings, `WEB_BACKEND_URL` and `WEB_BACKEND_TOKEN`, scheduler client settings, and HTTP trust configuration; it does not receive AI or Telegram provider keys.
 
 Complete the migration and runtime-role provisioning sequence in [the News deployment guide](deploy/news/README.md#fresh-local-compose-database-setup) before starting the full stack. Then start the remaining services:
 

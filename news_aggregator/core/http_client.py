@@ -2,8 +2,6 @@
 
 import asyncio
 import hashlib
-import time
-from collections import deque
 from typing import Dict, Optional, Any
 from contextlib import asynccontextmanager
 
@@ -11,31 +9,7 @@ import aiohttp
 from aiohttp import ClientTimeout, ClientError
 from tenacity import retry, stop_after_attempt, wait_exponential, retry_if_exception_type
 
-from ..config import settings
 from .resource_limits import read_page_text
-
-
-class RateLimiter:
-    """Rate limiter for API calls."""
-    
-    def __init__(self, max_calls: int, time_window: float = 1.0):
-        self.max_calls = max_calls
-        self.time_window = time_window
-        self.calls: deque = deque()
-        self.lock = asyncio.Lock()
-
-    async def acquire(self):
-        """Acquire permission to make a call."""
-        async with self.lock:
-            while True:
-                now = time.monotonic()
-                while self.calls and now - self.calls[0] >= self.time_window:
-                    self.calls.popleft()
-                if len(self.calls) < self.max_calls:
-                    self.calls.append(now)
-                    return
-                # Recursively acquiring this non-reentrant lock would deadlock.
-                await asyncio.sleep(max(0.0, self.time_window - (now - self.calls[0])))
 
 
 class AsyncHTTPClient:
@@ -43,8 +17,6 @@ class AsyncHTTPClient:
     
     def __init__(self):
         self.session: Optional[aiohttp.ClientSession] = None
-        self.rate_limiter = RateLimiter(max_calls=settings.api_rate_limit, time_window=1.0)
-        
         # Connection configuration  
         self.timeout = ClientTimeout(total=60, connect=15, sock_read=30)
         self.connector = aiohttp.TCPConnector(
@@ -106,8 +78,10 @@ class AsyncHTTPClient:
         if not self.session or self.session.closed:
             await self.start()
         
-        # Apply rate limiting for POST requests (usually API calls)
-        await self.rate_limiter.acquire()
+        # The native runtime owns one process-wide sliding window shared by
+        # native Gemini calls and all legacy POST consumers, including Telegram.
+        from ..services.ai_runtime import get_ai_runtime
+        await get_ai_runtime().permit(timeout=60)
         
         return await self.session.post(url, data=data, json=json, headers=headers, **kwargs)
     

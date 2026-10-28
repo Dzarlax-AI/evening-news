@@ -48,6 +48,13 @@ func ErrorResponse(err error) Response {
 	return Response{Version: 1, OK: false, Error: &Error{Code: "analysis_failed"}}
 }
 
+// RetryableTransport reports whether an error happened before a provider response
+// and is safe for the runtime's bounded transport retry policy.
+func RetryableTransport(err error) bool {
+	var analysisErr *AnalysisError
+	return errors.As(err, &analysisErr) && analysisErr.Detail.RetryableTransport
+}
+
 func validateRequest(r Request) error {
 	if r.Version != 1 || r.MaxTextChars < 1 || r.MaxTextChars > maxGeminiRequest ||
 		r.Model == "" || len(r.Model) > 128 || len(r.Endpoint) > 2048 ||

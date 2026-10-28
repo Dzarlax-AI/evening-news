@@ -21,6 +21,9 @@ on:
       - 'go-web/**'
       - 'news_aggregator/**'
       - 'docs/core-image-build-and-release.md'
+      - 'docs/ai-runtime.md'
+      - 'docs/article-analysis.md'
+      - 'docs/DOCKER_README.md'
       - 'docs/web-api-components.md'
       - 'README.md'
       - '.env.example'
@@ -55,6 +58,9 @@ on:
       - 'go-web/**'
       - 'news_aggregator/**'
       - 'docs/core-image-build-and-release.md'
+      - 'docs/ai-runtime.md'
+      - 'docs/article-analysis.md'
+      - 'docs/DOCKER_README.md'
       - 'docs/web-api-components.md'
       - 'README.md'
       - '.env.example'
@@ -104,7 +110,9 @@ jobs:
       - uses: actions/setup-go@v5
         with:
           go-version-file: go-editorial/go.mod
-          cache-dependency-path: go-editorial/go.*
+          cache-dependency-path: |
+            go-editorial/go.*
+            go-domain/go.*
       - uses: actions/setup-node@v4
         with:
           node-version: '22'
@@ -113,9 +121,9 @@ jobs:
       - name: Build private editorial CLI for fake-provider integration tests
         working-directory: go-editorial
         run: go build -o "$RUNNER_TEMP/news-editorial" ./cmd/news-editorial
-      - name: Build private article analysis CLI for fake-provider integration tests
+      - name: Build private native AI runtime for fake-provider integration tests
         working-directory: go-domain
-        run: go build -o "$RUNNER_TEMP/news-article-analysis" ./cmd/news-article-analysis
+        run: go build -o "$RUNNER_TEMP/news-ai-runtime" ./cmd/news-ai-runtime
       - name: Run complete Python suite
         env:
           CI: 'true'
@@ -129,8 +137,8 @@ jobs:
           SCHEDULER_ENABLED: 'false'
           NEWS_EDITORIAL_BINARY: ${{ runner.temp }}/news-editorial
           NEWS_EDITORIAL_INTEGRATION_REQUIRED: '1'
-          NEWS_ARTICLE_ANALYSIS_BINARY: ${{ runner.temp }}/news-article-analysis
-          NEWS_ARTICLE_ANALYSIS_INTEGRATION_REQUIRED: '1'
+          NEWS_AI_RUNTIME_BINARY: ${{ runner.temp }}/news-ai-runtime
+          NEWS_AI_RUNTIME_INTEGRATION_REQUIRED: '1'
         run: python -m pytest tests/ -q
 
   go-core-tests:

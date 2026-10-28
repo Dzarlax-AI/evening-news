@@ -163,6 +163,51 @@ async def test_executor_shutdown_drains_tasks_before_services_and_database(monke
 
 
 @pytest.mark.asyncio
+async def test_cancelled_runtime_start_releases_child_guard_and_engine(monkeypatch):
+    from news_aggregator import executor as executor_module
+    from news_aggregator.services import ai_runtime as runtime_module
+
+    events = []
+    starting = asyncio.Event()
+
+    class Runtime:
+        async def start(self, **_kwargs):
+            events.append("runtime-start")
+            starting.set()
+            await asyncio.Event().wait()
+
+        async def stop(self, **_kwargs):
+            events.append("runtime-stop")
+
+    class Engine:
+        async def dispose(self):
+            events.append("engine-dispose")
+
+    runtime = Runtime()
+    monkeypatch.setattr(executor_module, "engine", Engine())
+    monkeypatch.setattr(executor_module, "_validate_executor_runtime", lambda: None)
+
+    async def acquire_guard():
+        events.append("guard-acquire")
+
+    async def release_guard():
+        events.append("guard-release")
+
+    monkeypatch.setattr(executor_module, "_acquire_executor_guard", acquire_guard)
+    monkeypatch.setattr(executor_module, "_release_executor_guard", release_guard)
+    monkeypatch.setattr(runtime_module, "get_ai_runtime", lambda: runtime)
+
+    task = asyncio.create_task(executor_module._serve())
+    await starting.wait()
+    task.cancel()
+    with pytest.raises(asyncio.CancelledError):
+        await task
+
+    assert events == ["guard-acquire", "runtime-start", "runtime-stop",
+                      "guard-release", "engine-dispose"]
+
+
+@pytest.mark.asyncio
 async def test_executor_database_guard_rejects_second_instance(executor_pg, monkeypatch):
     from news_aggregator import executor as executor_module
 

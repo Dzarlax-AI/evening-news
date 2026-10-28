@@ -1,0 +1,103 @@
+{
+  "rates": {
+    "input_per_1m": 0.5,
+    "output_per_1m": 1.5,
+    "cached_per_1m": 0.1
+  },
+  "cases": [
+    {
+      "name": "normal",
+      "usage": {
+        "prompt_tokens": 9,
+        "completion_tokens": 3,
+        "cached_tokens": 2,
+        "total_tokens": 14
+      },
+      "expected_insert": {
+        "domain": "fixture.invalid",
+        "analysis_type": "synthetic_analysis",
+        "tokens_used": 14,
+        "cost": 9.2e-06,
+        "result": {
+          "prompt_tokens": 9,
+          "completion_tokens": 3,
+          "cached_tokens": 2
+        }
+      }
+    },
+    {
+      "name": "zero_uses_legacy_accounting_fallback",
+      "usage": {
+        "prompt_tokens": 9,
+        "completion_tokens": 3,
+        "cached_tokens": 2,
+        "total_tokens": 0
+      },
+      "expected_insert": {
+        "domain": "fixture.invalid",
+        "analysis_type": "synthetic_analysis",
+        "tokens_used": 12,
+        "cost": 9.2e-06,
+        "result": {
+          "prompt_tokens": 9,
+          "completion_tokens": 3,
+          "cached_tokens": 2
+        }
+      }
+    },
+    {
+      "name": "missing_total_accounting",
+      "usage": {
+        "prompt_tokens": 9,
+        "completion_tokens": 3,
+        "cached_tokens": 2
+      },
+      "expected_insert": {
+        "domain": "fixture.invalid",
+        "analysis_type": "synthetic_analysis",
+        "tokens_used": 12,
+        "cost": 9.2e-06,
+        "result": {
+          "prompt_tokens": 9,
+          "completion_tokens": 3,
+          "cached_tokens": 2
+        }
+      }
+    },
+    {
+      "name": "empty_usage",
+      "usage": {},
+      "expected_insert": {
+        "domain": "fixture.invalid",
+        "analysis_type": "synthetic_analysis",
+        "tokens_used": 0,
+        "cost": 0.0,
+        "result": {
+          "prompt_tokens": 0,
+          "completion_tokens": 0,
+          "cached_tokens": 0
+        }
+      }
+    },
+    {
+      "name": "null_total",
+      "usage": {
+        "prompt_tokens": 9,
+        "completion_tokens": 3,
+        "cached_tokens": 2,
+        "total_tokens": null
+      },
+      "expected_insert": {
+        "domain": "fixture.invalid",
+        "analysis_type": "synthetic_analysis",
+        "tokens_used": 12,
+        "cost": 9.2e-06,
+        "result": {
+          "prompt_tokens": 9,
+          "completion_tokens": 3,
+          "cached_tokens": 2
+        }
+      }
+    }
+  ]
+}

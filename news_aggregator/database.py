@@ -8,6 +8,22 @@ from sqlalchemy import text
 from .config import settings
 
 
+def split_db_pool_budget(pool_size: int, max_overflow: int, *, native_reserve: int = 2,
+                         minimum_python: int = 2) -> tuple[int, int]:
+    """Reserve the native runtime's fixed pool from the existing total budget."""
+    if (type(pool_size) is not int or pool_size <= 0
+            or any(type(value) is not int or value < 0 for value in
+                   (max_overflow, native_reserve, minimum_python))):
+        raise ValueError("database pool budget must contain non-negative integers")
+    total = pool_size + max_overflow
+    remaining = total - native_reserve
+    if remaining < minimum_python:
+        raise ValueError("database pool budget cannot reserve native and executor connections")
+    python_pool_size = min(pool_size, remaining)
+    python_overflow = remaining - python_pool_size
+    return python_pool_size, python_overflow
+
+
 class FencedAsyncSession(AsyncSession):
     """Keep the worker lease and job attempt locked through every commit."""
 
@@ -26,13 +42,16 @@ class FencedAsyncSession(AsyncSession):
 
 # Create async engine with enhanced connection pool settings
 db_url = settings.database_url
+python_pool_size, python_max_overflow = split_db_pool_budget(
+    settings.db_pool_size, settings.db_max_overflow
+)
 
 engine = create_async_engine(
     db_url,
     echo=False,  # Disabled SQL logging for cleaner logs
     future=True,
-    pool_size=settings.db_pool_size,
-    max_overflow=settings.db_max_overflow,
+    pool_size=python_pool_size,
+    max_overflow=python_max_overflow,
     pool_timeout=settings.db_pool_timeout,
     pool_pre_ping=settings.db_pool_pre_ping,
     pool_recycle=settings.db_pool_recycle,
