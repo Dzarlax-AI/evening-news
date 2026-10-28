@@ -750,13 +750,15 @@ class ConsolidatedBackgroundGate(GoWebGate):
             raise GateFailure("fixture_reprocess_job_not_accepted")
         return job_id
 
-    def create_fresh_sigterm_article(self):
-        if not re.fullmatch(r"[0-9a-f]{12}", self.run_id):
+    def create_fresh_fixture_article(self, scenario):
+        if scenario not in {"active_sigterm", "worker_lease_recovery"} or not re.fullmatch(r"[0-9a-f]{12}", self.run_id):
             raise GateFailure("fixture_run_id_invalid_for_article_seed")
         source_id = self.pg_value("SELECT id FROM sources WHERE name='Go Web Gate RSS 1'")
         if not source_id.isdigit():
-            raise GateFailure("fresh_sigterm_fixture_source_missing")
-        marker = self.run_id
+            raise GateFailure("fresh_ai_fixture_source_missing")
+        marker = self.run_id if scenario == "active_sigterm" else hashlib.sha256(
+            (self.run_id + scenario).encode("ascii")
+        ).hexdigest()[:12]
         title = f"Synthetic active SIGTERM fixture {marker}"
         url = f"https://rss.fixture.test/active-sigterm/{marker}"
         content = ("This is a synthetic fixture article created only for the disposable active shutdown test. "
@@ -776,20 +778,24 @@ class ConsolidatedBackgroundGate(GoWebGate):
         )
         article_id = self.pg_value(sql)
         if not article_id.isdigit():
-            raise GateFailure("fresh_sigterm_fixture_article_not_created")
+            raise GateFailure("fresh_ai_fixture_article_not_created")
         stage_state = self.pg_value(
             "SELECT processing_state || '|' || processed::text || '|' || summary_processed::text || '|' || "
             "category_processed::text || '|' || ad_processed::text FROM articles WHERE id=" + article_id
         )
         expected = "pending|false|false|false|false"
-        self.check("active_sigterm_fixture_article_requires_ai", stage_state == expected)
-        self.report["active_sigterm_fixture_article"] = {
+        scenario_label = "active_sigterm" if scenario == "active_sigterm" else "lease_recovery"
+        self.check(f"{scenario_label}_fixture_article_requires_ai", stage_state == expected)
+        self.report[f"{scenario_label}_fixture_article"] = {
             "article_id": int(article_id),
             "source_id": int(source_id),
             "synthetic_unique_content_hash": content_hash,
             "stage_state": stage_state,
         }
         return int(article_id)
+
+    def create_fresh_sigterm_article(self):
+        return self.create_fresh_fixture_article("active_sigterm")
 
     def wait_gemini_call(self, previous_count, timeout=90, job_id=None, phase="unspecified", article_id=None):
         deadline = time.monotonic() + timeout
@@ -846,9 +852,11 @@ class ConsolidatedBackgroundGate(GoWebGate):
             "article_id": article_id_value,
             "article_stage_state": article_state,
             "article_last_processing_error": article_error_code,
+            "worker_lease": self.worker_lease_snapshot(),
+            "worker_dispatch": self.worker_dispatch_snapshot(),
         }
-        if job_id and job_status in {"failed", "interrupted", "delivery_unknown"}:
-            wait_diagnostic["failure_diagnostics"] = self.capture_execution_failure_diagnostics(job_id)
+        if job_id:
+            wait_diagnostic["job_execution_diagnostics"] = self.capture_execution_failure_diagnostics(job_id)
         self.report.setdefault("blocked_ai_wait_diagnostics", {})[phase] = wait_diagnostic
         raise GateFailure("fixture_job_did_not_reach_blocked_fake_ai")
 
@@ -890,6 +898,24 @@ class ConsolidatedBackgroundGate(GoWebGate):
         except (ValueError, TypeError):
             return {"generation": None, "status": None, "owner_present": None,
                     "heartbeat_age_seconds": None}
+
+    def worker_dispatch_snapshot(self):
+        value = self.pg_value(
+            "SELECT (SELECT count(*) FROM background_jobs WHERE state='queued')::text || '|' || "
+            "(SELECT count(*) FROM background_jobs WHERE state='running')::text || '|' || "
+            "(SELECT count(*) FROM background_job_executions WHERE state IN ('accepted','running'))::text"
+        )
+        try:
+            queued_jobs, running_jobs, active_attempts = (int(part) for part in value.split("|", 2))
+            if min(queued_jobs, running_jobs, active_attempts) < 0:
+                raise ValueError
+            return {
+                "queued_jobs": queued_jobs,
+                "running_jobs": running_jobs,
+                "active_execution_attempts": active_attempts,
+            }
+        except (ValueError, TypeError):
+            return {"queued_jobs": None, "running_jobs": None, "active_execution_attempts": None}
 
     def observe_worker_during_row_lock(self, holder, timeout=26):
         started = time.monotonic()
@@ -953,8 +979,9 @@ class ConsolidatedBackgroundGate(GoWebGate):
     def verify_lease_loss_recovery(self, background_id, background_pid):
         baseline = self.fake_counters_http().get("providers", {}).get("gemini", 0)
         self.control_fake_services(gemini_mode="block")
-        article_id = self.pg_value("SELECT id FROM articles WHERE processed=true ORDER BY id LIMIT 1")
-        job_id = self.enqueue_article_reprocess(article_id, "lease-recovery-fixture-" + self.run_id)
+        article_id = self.create_fresh_fixture_article("worker_lease_recovery")
+        job_id = self.enqueue_article_reprocess(article_id, "lease-recovery-fixture-" + self.run_id,
+                                                force=False)
         self.wait_gemini_call(baseline, job_id=job_id, phase="worker_reprocess", article_id=article_id)
         before_lease = self.pg_value("SELECT generation::text || '|' || lock_backend_pid::text "
                                      "FROM background_worker_status WHERE id=1")

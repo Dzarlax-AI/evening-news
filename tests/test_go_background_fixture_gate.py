@@ -116,24 +116,31 @@ def test_default_news_digest_gate_uses_python_queue_producer_and_precedes_ambigu
     assert 'result->>\'parts_sent\'' in source
 
 
-def test_blocked_ai_failure_captures_safe_attempt_diagnostics_and_parses_article_id(monkeypatch, tmp_path):
+def test_blocked_ai_timeout_captures_queued_job_and_worker_dispatch_diagnostics(monkeypatch, tmp_path):
     module = load_gate_module()
     gate = module.ConsolidatedBackgroundGate(dict(module.DEFAULT_IMAGES), tmp_path)
     gate.access_token = "fixture-token"
     monkeypatch.setattr(gate, "fake_counters_http", lambda: {"providers": {"gemini": 15}})
     monkeypatch.setattr(gate, "request", lambda *args, **kwargs: (
-        200, {"status": "failed", "error_code": "worker_error", "error_type": None}
+        200, {"status": "queued", "error_code": None, "error_type": None}
     ))
     article_queries = []
 
     def pg_value(query):
         article_queries.append(query)
-        return "pending|false|false|false|false" if "processing_state" in query else ""
+        if "processing_state" in query:
+            return "pending|false|false|false|false"
+        if "background_worker_status" in query:
+            return "8|running|true|0.2"
+        if "background_job_executions WHERE state IN" in query:
+            return "4|1|0"
+        return ""
 
     monkeypatch.setattr(gate, "pg_value", pg_value)
     monkeypatch.setattr(gate, "capture_execution_failure_diagnostics", lambda job_id: {
-        "execution_attempts": [{"attempt_generation": 2, "state": "failed", "error_code": "worker_error"}],
-        "execution_log_phases": [{"phase": "pipeline_execute", "reason_code": "handler_failed"}],
+        "job": {"state": "queued", "attempt_generation": 0},
+        "execution_attempts": [],
+        "execution_log_phases": [],
     })
     try:
         gate.wait_gemini_call(15, timeout=0, job_id="11111111-1111-4111-8111-111111111111",
@@ -146,8 +153,15 @@ def test_blocked_ai_failure_captures_safe_attempt_diagnostics_and_parses_article
     diagnostic = gate.report["blocked_ai_wait_diagnostics"]["worker_reprocess"]
     assert diagnostic["article_id"] == 5
     assert diagnostic["article_stage_state"] == "pending|false|false|false|false"
-    assert diagnostic["failure_diagnostics"]["execution_attempts"][0]["error_code"] == "worker_error"
-    assert len(article_queries) == 2
+    assert diagnostic["job_execution_diagnostics"]["job"]["state"] == "queued"
+    assert diagnostic["job_execution_diagnostics"]["execution_attempts"] == []
+    assert diagnostic["worker_lease"] == {
+        "generation": 8, "status": "running", "owner_present": True, "heartbeat_age_seconds": 0.2,
+    }
+    assert diagnostic["worker_dispatch"] == {
+        "queued_jobs": 4, "running_jobs": 1, "active_execution_attempts": 0,
+    }
+    assert len(article_queries) == 4
 
 
 def test_scheduler_probe_command_is_valid_python_and_targets_internal_runtime(monkeypatch, tmp_path):
@@ -382,6 +396,33 @@ def test_active_sigterm_article_is_fresh_synthetic_and_requires_ai(monkeypatch, 
     assert gate.report["active_sigterm_fixture_article"]["stage_state"] == "pending|false|false|false|false"
     assert "force=False" in SCRIPT.read_text()
     assert '"article_last_processing_error": article_error_code' in SCRIPT.read_text()
+
+
+def test_lease_recovery_article_is_fresh_synthetic_and_requires_ai(monkeypatch, tmp_path):
+    module = load_gate_module()
+    gate = module.ConsolidatedBackgroundGate(dict(module.DEFAULT_IMAGES), tmp_path)
+    gate.run_id = "abcdef123456"
+    statements = []
+
+    def fake_pg_value(sql):
+        statements.append(sql)
+        if sql.startswith("SELECT id FROM sources"):
+            return "7"
+        if sql.startswith("INSERT INTO articles"):
+            return "43"
+        return "pending|false|false|false|false"
+
+    monkeypatch.setattr(gate, "pg_value", fake_pg_value)
+    article_id = gate.create_fresh_fixture_article("worker_lease_recovery")
+    insert = next(sql for sql in statements if sql.startswith("INSERT INTO articles"))
+    assert article_id == 43
+    assert "Synthetic active SIGTERM fixture" in insert
+    assert "rss.fixture.test/active-sigterm/" in insert
+    assert "abcdef123456" not in insert
+    assert "'pending',0," in insert
+    assert gate.report["checks"]["lease_recovery_fixture_article_requires_ai"] is True
+    assert gate.report["lease_recovery_fixture_article"]["stage_state"] == "pending|false|false|false|false"
+    assert "force=False" in SCRIPT.read_text()
 
 
 def test_active_sigterm_origin_serves_only_valid_synthetic_markers():
