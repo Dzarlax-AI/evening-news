@@ -160,8 +160,54 @@ def test_blocked_ai_timeout_captures_queued_job_and_worker_dispatch_diagnostics(
     }
     assert diagnostic["worker_dispatch"] == {
         "queued_jobs": 4, "running_jobs": 1, "active_execution_attempts": 0,
+        "active_jobs": None,
     }
-    assert len(article_queries) == 4
+    assert len(article_queries) == 5
+
+
+def test_worker_dispatch_snapshot_limits_active_job_fields_to_safe_metadata(monkeypatch, tmp_path):
+    module = load_gate_module()
+    gate = module.ConsolidatedBackgroundGate(dict(module.DEFAULT_IMAGES), tmp_path)
+    monkeypatch.setattr(gate, "pg_value", lambda _query: "2|1|1")
+    monkeypatch.setattr(gate, "_json_probe", lambda _query: [
+        {"kind": "news_processing", "state": "running", "scheduled": True,
+         "payload": {"secret": "must not be copied"}},
+        {"kind": "unexpected", "state": "running", "scheduled": False},
+    ])
+
+    snapshot = gate.worker_dispatch_snapshot()
+    assert snapshot == {
+        "queued_jobs": 2, "running_jobs": 1, "active_execution_attempts": 1,
+        "active_jobs": [{"kind": "news_processing", "state": "running", "scheduled": True}],
+    }
+    assert "secret" not in repr(snapshot)
+
+
+def test_worker_queue_idle_rejects_active_or_unknown_work(monkeypatch, tmp_path):
+    module = load_gate_module()
+    gate = module.ConsolidatedBackgroundGate(dict(module.DEFAULT_IMAGES), tmp_path)
+    monkeypatch.setattr(gate, "worker_lease_snapshot", lambda: {"generation": 2})
+    for counts in ((1, 0, 0), (0, 1, 0), (0, 0, 1), (None, None, None)):
+        snapshot = dict(zip(("queued_jobs", "running_jobs", "active_execution_attempts"), counts))
+        monkeypatch.setattr(gate, "worker_dispatch_snapshot", lambda: snapshot)
+        try:
+            gate.wait_worker_queue_idle(timeout=0)
+        except module.GateFailure as exc:
+            assert str(exc) == "fixture_worker_queue_did_not_drain"
+        else:
+            raise AssertionError("active or unavailable queue was treated as idle")
+        assert gate.report["worker_queue_quiescence"]["idle"] is False
+
+
+def test_worker_queue_idle_accepts_only_drained_work(monkeypatch, tmp_path):
+    module = load_gate_module()
+    gate = module.ConsolidatedBackgroundGate(dict(module.DEFAULT_IMAGES), tmp_path)
+    monkeypatch.setattr(gate, "worker_lease_snapshot", lambda: {"generation": 2})
+    monkeypatch.setattr(gate, "worker_dispatch_snapshot", lambda: {
+        "queued_jobs": 0, "running_jobs": 0, "active_execution_attempts": 0,
+    })
+    gate.wait_worker_queue_idle(timeout=0)
+    assert gate.report["worker_queue_quiescence"]["idle"] is True
 
 
 def test_scheduler_probe_command_is_valid_python_and_targets_internal_runtime(monkeypatch, tmp_path):

@@ -913,9 +913,63 @@ class ConsolidatedBackgroundGate(GoWebGate):
                 "queued_jobs": queued_jobs,
                 "running_jobs": running_jobs,
                 "active_execution_attempts": active_attempts,
+                "active_jobs": self._active_job_snapshot(),
             }
         except (ValueError, TypeError):
-            return {"queued_jobs": None, "running_jobs": None, "active_execution_attempts": None}
+            return {"queued_jobs": None, "running_jobs": None, "active_execution_attempts": None,
+                    "active_jobs": self._active_job_snapshot()}
+
+    def _active_job_snapshot(self):
+        rows = self._json_probe(
+            "SELECT COALESCE(json_agg(json_build_object('kind',kind,'state',state,'scheduled',scheduled) "
+            "ORDER BY state,kind),'[]'::json)::text FROM ("
+            "SELECT kind,state,(schedule_key IS NOT NULL) AS scheduled FROM background_jobs "
+            "WHERE state IN ('queued','running') ORDER BY queue_position LIMIT 10) active"
+        )
+        if not isinstance(rows, list):
+            return None
+        safe = []
+        for row in rows:
+            if not isinstance(row, dict):
+                continue
+            kind = self._safe_state(row.get("kind"), {"news_processing", "news_digest", "telegram_digest",
+                                                      "backup", "reprocess_failed", "article_reprocess",
+                                                      "summaries_generate", "source_test"})
+            state = self._safe_state(row.get("state"), {"queued", "running"})
+            scheduled = row.get("scheduled") if type(row.get("scheduled")) is bool else None
+            if kind and state:
+                safe.append({"kind": kind, "state": state, "scheduled": scheduled})
+        return safe
+
+    def wait_worker_queue_idle(self, timeout=60):
+        deadline = time.monotonic() + timeout
+        while True:
+            snapshot = self.worker_dispatch_snapshot()
+            if (snapshot["queued_jobs"] == 0 and snapshot["running_jobs"] == 0
+                    and snapshot["active_execution_attempts"] == 0):
+                self.report["worker_queue_quiescence"] = {
+                    "idle": True, "worker_lease": self.worker_lease_snapshot(), **snapshot,
+                }
+                return
+            if time.monotonic() >= deadline:
+                self.report["worker_queue_quiescence"] = {
+                    "idle": False, "worker_lease": self.worker_lease_snapshot(), **snapshot,
+                }
+                raise GateFailure("fixture_worker_queue_did_not_drain")
+            time.sleep(0.25)
+
+    def pause_fixture_scheduler(self):
+        status, runtime = self.scheduler_request("GET", "/v1/status")
+        revision = runtime.get("control_revision") if status == 200 and isinstance(runtime, dict) else None
+        if type(revision) is not int:
+            raise GateFailure("fixture_scheduler_control_revision_unavailable")
+        pause_status, paused = self.scheduler_request("PUT", "/v1/control", {
+            "expected_revision": revision, "paused": True,
+        })
+        if (pause_status != 200 or not isinstance(paused, dict) or paused.get("paused") is not True
+                or paused.get("revision") != revision + 1):
+            raise GateFailure("fixture_scheduler_could_not_quiesce")
+        self.report["checks"]["fixture_scheduler_paused_before_fault_injection"] = True
 
     def observe_worker_during_row_lock(self, holder, timeout=26):
         started = time.monotonic()
@@ -977,6 +1031,7 @@ class ConsolidatedBackgroundGate(GoWebGate):
         }
 
     def verify_lease_loss_recovery(self, background_id, background_pid):
+        self.wait_worker_queue_idle(timeout=60)
         baseline = self.fake_counters_http().get("providers", {}).get("gemini", 0)
         self.control_fake_services(gemini_mode="block")
         article_id = self.create_fresh_fixture_article("worker_lease_recovery")
@@ -1297,7 +1352,9 @@ class ConsolidatedBackgroundGate(GoWebGate):
                    and control.get("revision") == current_revision + 1)
         if paused != 200:
             raise GateFailure("embedded_scheduler_pause_failed")
-        due = (datetime.now(timezone.utc) + timedelta(seconds=30)).isoformat(timespec="microseconds").replace("+00:00", "Z")
+        # This schedule covers timestamp preservation only. A future day keeps
+        # it from generating unrelated worker load during later fault tests.
+        due = (datetime.now(timezone.utc) + timedelta(days=1)).isoformat(timespec="microseconds").replace("+00:00", "Z")
         schedule = {"schedule_key": "fixture:consolidated-due", "enabled": True,
                     "calendar": {"type": "interval", "timezone": "UTC", "interval_minutes": 1440},
                     "target_alias": "news-worker", "operation": "news_processing", "payload": {},
@@ -1359,8 +1416,11 @@ class ConsolidatedBackgroundGate(GoWebGate):
             if occurrence and occurrence.get("status") in {"accepted", "blocked"}:
                 break
             time.sleep(0.5)
+        accepted_job_id = occurrence.get("job_id") if isinstance(occurrence, dict) else None
         accepted = bool(occurrence and occurrence.get("status") == "accepted"
-                        and occurrence.get("job_id") and occurrence.get("attempts", 0) >= 1)
+                        and isinstance(accepted_job_id, str)
+                        and re.fullmatch(r"[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}", accepted_job_id)
+                        and occurrence.get("attempts", 0) >= 1)
         if not accepted:
             schedule_status, schedule = self.scheduler_request(
                 "GET", "/v1/schedules/fixture:consolidated-dispatch")
@@ -1397,10 +1457,12 @@ class ConsolidatedBackgroundGate(GoWebGate):
             "schedule_key": occurrence.get("schedule_key"), "status": occurrence.get("status"),
             "attempts": occurrence.get("attempts"), "has_job_id": bool(occurrence.get("job_id")),
         }
+        scheduled_jobs = [("fixture:consolidated-dispatch", accepted_job_id)]
         _, all_occurrences = self.scheduler_request("GET", "/v1/occurrences?limit=100")
         retained = next((item for item in (all_occurrences or {}).get("occurrences", [])
                          if item.get("schedule_key") == "fixture:web-unavailable"), None)
         occurrence_id = retained.get("occurrence_id") if retained else None
+        retained_job_id = retained.get("job_id") if retained else None
         receipt_count = "0"
         if isinstance(occurrence_id, str) and re.fullmatch(
                 r"[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}", occurrence_id):
@@ -1415,6 +1477,25 @@ class ConsolidatedBackgroundGate(GoWebGate):
         }
         self.check("web_unavailable_outbox_delivered_once_after_web_start",
                    retained is not None and retained.get("status") == "accepted" and receipt_count == "1")
+        if (retained is not None and retained.get("status") == "accepted"
+                and (not isinstance(retained_job_id, str) or re.fullmatch(
+                    r"[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}",
+                    retained_job_id) is None)):
+            raise GateFailure("fixture_pre_web_scheduled_job_id_missing")
+        if isinstance(retained_job_id, str):
+            scheduled_jobs.append(("fixture:web-unavailable", retained_job_id))
+        self.pause_fixture_scheduler()
+        completed = []
+        for schedule_key, job_id in scheduled_jobs:
+            job = self.wait_job_http(job_id, timeout=180)
+            completed.append({"schedule_key": schedule_key,
+                              "status": self._safe_state(job.get("status"), {
+                                  "queued", "running", "succeeded", "failed", "interrupted",
+                                  "delivery_unknown",
+                              })})
+            if job.get("status") != "succeeded":
+                raise GateFailure("fixture_scheduled_job_did_not_finish")
+        self.report["scheduler_fixture_jobs"] = completed
 
     def verify_runtime_db_users(self):
         result = self.docker("exec", self.prefix + "-postgres", "psql", "-U", "gate_user", "-d", "gate_db",
