@@ -220,7 +220,7 @@ class Handler(BaseHTTPRequestHandler):
                 for index, article in enumerate(articles):
                     summary = "Синтетический материал сообщает проверенный факт."
                     article_stories[article["id"]] = {
-                        "title": article["title"], "summary": summary,
+                        "brief_summary": "Синтетический материал сообщает проверенный факт.",
                         "span_id": article["evidence_spans"][0]["id"],
                     }
                     if index < 5:

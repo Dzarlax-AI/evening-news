@@ -7,8 +7,8 @@
     "cutoff_utc": "2026-10-27T18:00:00Z",
     "site_base_url": "https://news.example",
     "edition_url": "https://news.example/digest/2026-10-27?edition=fixture",
-    "source_snapshot_hash": "2478e742951f18c4be302ccc5cf8e5921f9bcefa5c742cbef3fc4627da7fd75a",
-    "content_hash": "67e685b341d5ff053dac5d9ea7841d3d60fbbb85dbb5e28e611133b613572afa",
+    "source_snapshot_hash": "e8286b0376402b1c2f0bed512e96f844a7cd30d8207016c096d07ec3e372bfce",
+    "content_hash": "a4170109c210407d6938f61d6e678a81688a02f765ac329a22539a02ae768a37",
     "stories": [
       {
         "id": "main-e2ba68b20bc2aa9a",
@@ -142,5 +142,5 @@
     "candidates_token_count": 123,
     "total_token_count": 444
   },
-  "result_hash": "67e685b341d5ff053dac5d9ea7841d3d60fbbb85dbb5e28e611133b613572afa"
+  "result_hash": "a4170109c210407d6938f61d6e678a81688a02f765ac329a22539a02ae768a37"
 }

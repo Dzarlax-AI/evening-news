@@ -36,7 +36,7 @@ func syntheticSnapshot(n int) Snapshot {
 		if n >= 40 {
 			title = strings.Repeat("Новость ", 18) + fmt.Sprintf("номер %d", i)
 		}
-		s.Articles = append(s.Articles, Article{ID: fmt.Sprint(1000 + i), Title: title, Summary: "", Content: content, SourceName: source, URL: fmt.Sprintf("https://source.example/story/%d?a=1&b=2", i), CategoryID: category, CategoryName: "Технологии"})
+		s.Articles = append(s.Articles, Article{ID: fmt.Sprint(1000 + i), Title: title, Summary: content, Content: content, SourceName: source, URL: fmt.Sprintf("https://source.example/story/%d?a=1&b=2", i), CategoryID: category, CategoryName: "Технологии"})
 	}
 	if n >= 8 {
 		s.Articles[0].Title = "Город начал строительство моста"
@@ -55,7 +55,7 @@ func syntheticDraft(s Snapshot) modelDraft {
 			continue
 		}
 		if i == 0 || i == 2 {
-			story := modelMainStory{Title: a.Title, Summary: a.Content, PrimaryArticleID: a.ID, ArticleIDs: []string{a.ID}}
+			story := modelMainStory{Title: a.Title, Summary: a.Summary, PrimaryArticleID: a.ID, ArticleIDs: []string{a.ID}}
 			if len(s.Articles) >= 8 && i == 0 {
 				other := s.Articles[1]
 				story.ArticleIDs = append(story.ArticleIDs, other.ID)
@@ -67,8 +67,8 @@ func syntheticDraft(s Snapshot) modelDraft {
 }
 
 func articleStoryFor(a Article) modelArticleStory {
-	spans := splitSourceSpans(a.ID, preferredEvidenceText(a))
-	return modelArticleStory{Title: a.Title, Summary: preferredEvidenceText(a), SpanID: spans[0].ID}
+	spans := splitSourceSpans(a.ID, a.Summary)
+	return modelArticleStory{BriefSummary: a.Summary, SpanID: spans[0].ID}
 }
 
 func syntheticStories(t *testing.T, s Snapshot) []Story {
@@ -134,7 +134,7 @@ func TestGenerateWithFakeProviderAndRenderSafeLinks(t *testing.T) {
 	for _, story := range g.Edition.Stories {
 		for _, evidence := range story.Evidence {
 			article := articles[evidence.ArticleID]
-			if !strings.Contains(preferredEvidenceText(article), evidence.Quote) || utf8.RuneCountInString(evidence.Quote) > MaxEvidence {
+			if evidence.Basis != "summary" || !strings.Contains(article.Summary, evidence.Quote) || utf8.RuneCountInString(evidence.Quote) > MaxEvidence {
 				t.Fatalf("resolved evidence is not an exact bounded source span for article %s", evidence.ArticleID)
 			}
 		}
@@ -222,50 +222,50 @@ func TestGenerateRejectsFabricatedEvidenceAndIncompleteCoverage(t *testing.T) {
 	}
 }
 
-func TestEvidenceSpansCoverExactSourceTextAndPreferContentOverSummary(t *testing.T) {
+func TestEvidenceSpansUseSavedSummariesAndExcludeArticleContent(t *testing.T) {
 	s := syntheticSnapshot(2)
 	s.Articles[0].Content = strings.Repeat("English text starts here. Русский фрагмент следует. ", 24) + "Конец."
-	s.Articles[0].Summary = "Не использовать: пересказ отличающийся от текста."
+	s.Articles[0].Summary = "Saved summary marker 1; saved summary marker 2."
 	s.Articles[1].Content = "  \n"
 	s.Articles[1].Summary = "Summary fallback — точный источник."
 	prompt, spanByID, err := buildPrompt(s)
 	if err != nil {
 		t.Fatal(err)
 	}
-	if strings.Contains(prompt, s.Articles[0].Summary) || !strings.Contains(prompt, s.Articles[1].Summary) {
-		t.Fatal("prompt included alternate summary or omitted summary fallback")
+	if !strings.Contains(prompt, s.Articles[0].Summary) || !strings.Contains(prompt, s.Articles[1].Summary) || strings.Contains(prompt, "English text starts here") {
+		t.Fatal("prompt did not use only saved summaries")
 	}
 	if !strings.Contains(prompt, `"evidence_spans"`) || !strings.Contains(prompt, "span_id") {
 		t.Fatal("prompt does not expose application-generated evidence span references")
 	}
 	for _, article := range s.Articles {
-		spans := splitSourceSpans(article.ID, preferredEvidenceText(article))
+		spans := splitSourceSpans(article.ID, article.Summary)
 		var joined strings.Builder
 		for _, span := range spans {
 			if utf8.RuneCountInString(span.Text) > MaxEvidence {
 				t.Fatalf("span %s exceeds %d Unicode characters", span.ID, MaxEvidence)
 			}
-			if spanByID[span.ID].ArticleID != article.ID || !strings.Contains(preferredEvidenceText(article), span.Text) {
+			if spanByID[span.ID].ArticleID != article.ID || !strings.Contains(article.Summary, span.Text) {
 				t.Fatalf("span %s is not bound to its source article", span.ID)
 			}
 			joined.WriteString(span.Text)
 		}
-		if joined.String() != preferredEvidenceText(article) {
+		if joined.String() != article.Summary {
 			t.Fatalf("span splitting dropped, changed, or reordered source text for article %s", article.ID)
 		}
-		if spans[0].ID != splitSourceSpans(article.ID, preferredEvidenceText(article))[0].ID {
+		if spans[0].ID != splitSourceSpans(article.ID, article.Summary)[0].ID {
 			t.Fatalf("span IDs are not deterministic for article %s", article.ID)
 		}
 	}
 	changed := s.Articles[0]
-	changed.Content += " changed"
-	if splitSourceSpans(changed.ID, preferredEvidenceText(changed))[0].ID == splitSourceSpans(s.Articles[0].ID, preferredEvidenceText(s.Articles[0]))[0].ID {
-		t.Fatal("span ID did not change when bound source content changed")
+	changed.Summary += " changed"
+	if splitSourceSpans(changed.ID, changed.Summary)[0].ID == splitSourceSpans(s.Articles[0].ID, s.Articles[0].Summary)[0].ID {
+		t.Fatal("span ID did not change when bound summary changed")
 	}
 }
 
 func TestModelDraftRejectsFreeformEvidenceQuote(t *testing.T) {
-	response := `{"main_stories":[],"article_stories":{"1001":{"title":"Заголовок","summary":"Пересказ","span_id":"span-1001-hash-0001","quote":"парафраз"}}}`
+	response := `{"main_stories":[],"article_stories":{"1001":{"span_id":"span-1001-hash-0001","quote":"парафраз"}}}`
 	var draft modelDraft
 	dec := json.NewDecoder(strings.NewReader(response))
 	dec.DisallowUnknownFields()
@@ -298,6 +298,10 @@ func TestModelDraftRequiresPerArticleRecordsAndSupportsBriefGroups(t *testing.T)
 		if !requiredSet[article.ID] {
 			t.Fatalf("schema does not require article ID %s", article.ID)
 		}
+		fields := articleProperties[article.ID].(map[string]any)["properties"].(map[string]any)
+		if len(fields) != 2 || fields["span_id"] == nil || fields["brief_summary"] == nil || fields["title"] != nil || fields["summary"] != nil {
+			t.Fatalf("article story schema should contain only brief_summary and span_id: %#v", fields)
+		}
 	}
 	if _, hasExcluded := properties["excluded"]; hasExcluded {
 		t.Fatal("generation schema still permits article exclusions")
@@ -318,6 +322,108 @@ func TestModelDraftRequiresPerArticleRecordsAndSupportsBriefGroups(t *testing.T)
 	}
 }
 
+func TestPromptUsesOnlySavedSummaryAndIsIndependentOfRawContent(t *testing.T) {
+	s := syntheticSnapshot(1)
+	s.Articles[0].Summary = "Saved summary, with the actual result of 117282 trees."
+	s.Articles[0].Content = "RAW CONTENT MARKER " + strings.Repeat("long article body ", 500)
+	prompt1, _, err := buildPrompt(s)
+	if err != nil {
+		t.Fatal(err)
+	}
+	s.Articles[0].Content = "DIFFERENT RAW CONTENT MARKER " + strings.Repeat("unrelated body ", 1000)
+	prompt2, _, err := buildPrompt(s)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if prompt1 != prompt2 || !strings.Contains(prompt1, s.Articles[0].Summary) || strings.Contains(prompt1, "RAW CONTENT MARKER") || strings.Contains(prompt1, "unrelated body") || strings.Contains(prompt1, "source.example") {
+		t.Fatal("provider input depended on raw content or excluded the exact saved summary")
+	}
+	if strings.Contains(prompt1, `"summary"`) {
+		t.Fatal("saved summary was duplicated as a separate prompt field")
+	}
+}
+
+func TestProviderRequiresEverySavedSummaryBeforeRequest(t *testing.T) {
+	for _, summary := range []string{"", " \n\t "} {
+		t.Run(fmt.Sprintf("summary_%q", summary), func(t *testing.T) {
+			var requests int
+			server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
+				requests++
+				_, _ = w.Write([]byte(`{}`))
+			}))
+			defer server.Close()
+			s := syntheticSnapshot(2)
+			s.Articles[1].Summary = summary
+			_, err := Generate(context.Background(), s, RussianLocale, ProviderConfig{APIKey: "fake-key", Model: "fake-model", Endpoint: server.URL, Client: server.Client()})
+			if err == nil || err.Error() != "provider_summary_missing" || requests != 0 {
+				t.Fatalf("missing summary result err=%v requests=%d", err, requests)
+			}
+		})
+	}
+}
+
+func TestSummaryEvidenceBasisAndLegacyEvidenceCompatibility(t *testing.T) {
+	s := syntheticSnapshot(1)
+	s.Articles[0].Summary = "Saved summary contains 117282 trees."
+	s.Articles[0].Content = "Raw content differs from the saved summary."
+	story := Story{Kind: "brief", Title: s.Articles[0].Title, Summary: s.Articles[0].Summary, PrimaryArticleID: s.Articles[0].ID, ArticleIDs: []string{s.Articles[0].ID}, Evidence: []Evidence{{ArticleID: s.Articles[0].ID, Quote: "117282 trees", Basis: "summary"}}}
+	if _, err := FinalizeEdition(s, RussianLocale, []Story{story}, nil); err != nil {
+		t.Fatalf("exact summary evidence rejected: %v", err)
+	}
+	story.Evidence[0].Quote = "Raw content differs"
+	if _, err := FinalizeEdition(s, RussianLocale, []Story{story}, nil); err == nil {
+		t.Fatal("summary evidence accepted a quote found only in content")
+	}
+	story.Evidence[0] = Evidence{ArticleID: s.Articles[0].ID, Quote: s.Articles[0].Content}
+	if _, err := FinalizeEdition(s, RussianLocale, []Story{story}, nil); err != nil {
+		t.Fatalf("legacy evidence without basis no longer uses preferred source text: %v", err)
+	}
+	story.Evidence[0].Basis = "content"
+	if _, err := FinalizeEdition(s, RussianLocale, []Story{story}, nil); err == nil {
+		t.Fatal("unknown evidence basis accepted")
+	}
+}
+
+func TestSingletonBriefReusesSnapshotTextAndRejectsModelRewrite(t *testing.T) {
+	s := syntheticSnapshot(1)
+	s.Articles[0].Title = "Snapshot title"
+	s.Articles[0].Summary = "В парке продолжалась уборка территории. Работы завершились после нескольких этапов. Вывезли 117 282 тонны мусора."
+	d := syntheticDraft(s)
+	d.MainStories = []modelMainStory{}
+	d.ArticleStories[s.Articles[0].ID] = modelArticleStory{BriefSummary: "В парке вывезли 117 282 тонны мусора.", SpanID: articleStoryFor(s.Articles[0]).SpanID}
+	server := fakeGemini(t, d, 0)
+	g, err := Generate(context.Background(), s, RussianLocale, ProviderConfig{APIKey: "fake-key", Model: "fake-model", Endpoint: server.URL, Client: server.Client()})
+	server.Close()
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(g.Edition.Stories) != 1 || g.Edition.Stories[0].Title != s.Articles[0].Title || g.Edition.Stories[0].Summary != d.ArticleStories[s.Articles[0].ID].BriefSummary || g.Edition.Stories[0].Evidence[0].Basis != "summary" || !strings.Contains(g.Edition.Stories[0].Summary, "117 282") || s.Articles[0].Summary != "В парке продолжалась уборка территории. Работы завершились после нескольких этапов. Вывезли 117 282 тонны мусора." {
+		t.Fatalf("singleton brief did not preserve the title and use a compact summary with summary evidence: %+v", g.Edition.Stories)
+	}
+	// Legacy model-authored singleton rewrites are rejected as unknown article_stories fields.
+	encoded, err := json.Marshal(d)
+	if err != nil {
+		t.Fatal(err)
+	}
+	var payload map[string]json.RawMessage
+	if err := json.Unmarshal(encoded, &payload); err != nil {
+		t.Fatal(err)
+	}
+	var articleRecords map[string]map[string]string
+	if err := json.Unmarshal(payload["article_stories"], &articleRecords); err != nil {
+		t.Fatal(err)
+	}
+	articleRecords[s.Articles[0].ID] = map[string]string{"span_id": d.ArticleStories[s.Articles[0].ID].SpanID, "brief_summary": d.ArticleStories[s.Articles[0].ID].BriefSummary, "title": "rewritten", "summary": "rewritten"}
+	payload["article_stories"], _ = json.Marshal(articleRecords)
+	encoded, _ = json.Marshal(payload)
+	var decoded modelDraft
+	dec := json.NewDecoder(strings.NewReader(string(encoded)))
+	dec.DisallowUnknownFields()
+	if err := dec.Decode(&decoded); err == nil {
+		t.Fatal("model-authored singleton title or duplicate summary field was accepted")
+	}
+}
+
 func TestArticleStoryMapRejectsMissingUnknownAndCrossArticleSpanKeys(t *testing.T) {
 	s := syntheticSnapshot(2)
 	_, spanByID, err := buildPrompt(s)
@@ -325,14 +431,21 @@ func TestArticleStoryMapRejectsMissingUnknownAndCrossArticleSpanKeys(t *testing.
 		t.Fatal(err)
 	}
 	draft := syntheticDraft(s)
-	draft.ArticleStories[s.Articles[0].ID] = modelArticleStory{Title: s.Articles[0].Title, Summary: "Кратко", SpanID: "unknown-span"}
+	draft.ArticleStories[s.Articles[0].ID] = modelArticleStory{SpanID: "unknown-span"}
 	if _, err := resolveModelStories(s, draft.MainStories, draft.BriefStories, draft.ArticleStories, spanByID); err == nil {
 		t.Fatal("unknown source span accepted")
 	}
 	draft = syntheticDraft(s)
-	draft.ArticleStories[s.Articles[0].ID] = modelArticleStory{Title: s.Articles[0].Title, Summary: "Кратко", SpanID: articleStoryFor(s.Articles[1]).SpanID}
+	draft.ArticleStories[s.Articles[0].ID] = modelArticleStory{SpanID: articleStoryFor(s.Articles[1]).SpanID}
 	if _, err := resolveModelStories(s, draft.MainStories, draft.BriefStories, draft.ArticleStories, spanByID); err == nil {
 		t.Fatal("cross-article source span accepted")
+	}
+	draft = syntheticDraft(s)
+	record := draft.ArticleStories[s.Articles[0].ID]
+	record.BriefSummary = " \t "
+	draft.ArticleStories[s.Articles[0].ID] = record
+	if _, err := resolveModelStories(s, draft.MainStories, draft.BriefStories, draft.ArticleStories, spanByID); err == nil {
+		t.Fatal("empty singleton brief summary accepted")
 	}
 	draft = syntheticDraft(s)
 	delete(draft.ArticleStories, s.Articles[1].ID)
@@ -340,7 +453,7 @@ func TestArticleStoryMapRejectsMissingUnknownAndCrossArticleSpanKeys(t *testing.
 		t.Fatal("missing required article record accepted")
 	}
 	draft = syntheticDraft(s)
-	draft.ArticleStories["999999"] = modelArticleStory{Title: "Other", Summary: "Other", SpanID: "foreign"}
+	draft.ArticleStories["999999"] = modelArticleStory{SpanID: "foreign"}
 	if _, err := resolveModelStories(s, draft.MainStories, draft.BriefStories, draft.ArticleStories, spanByID); err == nil {
 		t.Fatal("unknown article record key accepted")
 	}
@@ -474,6 +587,7 @@ func TestRenderLargeIssueSplitsOnlyAtStoryBoundaries(t *testing.T) {
 	s := syntheticSnapshot(42)
 	for i := range s.Articles {
 		s.Articles[i].Content = fmt.Sprintf("Новость %d: %s", i+1, strings.Repeat("событие ", 50))
+		s.Articles[i].Summary = s.Articles[i].Content
 	}
 	stories := syntheticStories(t, s)
 	e, err := FinalizeEdition(s, "ru", stories, nil)

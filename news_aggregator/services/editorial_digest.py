@@ -18,7 +18,7 @@ from ..database import AsyncSessionLocal
 from ..models import Article, ArticleCategory, Category, Source
 
 LOCALE = "ru"
-POLICY_VERSION = "ru-v1"
+POLICY_VERSION = "ru-v2-summaries"
 EDITORIAL_NAMESPACE = uuid.UUID("9e341f33-e4dc-5ee8-9013-817f41e9d442")
 MAX_ARTICLES = 500
 MAX_SNAPSHOT_BYTES = 4 * 1024 * 1024
@@ -27,7 +27,7 @@ MAX_STDOUT_BYTES = 2 * 1024 * 1024
 MAX_STDERR_BYTES = 16 * 1024
 MAX_PROVIDER_SECONDS = 60.0
 SAFE_GO_ERROR_CODES = {
-    "provider_not_configured", "provider_invalid_configuration", "provider_request_too_large",
+    "provider_not_configured", "provider_invalid_configuration", "provider_request_too_large", "provider_summary_missing",
     "provider_cancelled", "provider_timeout", "provider_transport_error",
     "provider_response_read_error", "provider_response_too_large", "provider_invalid_response",
     "provider_empty_response", "provider_incomplete_response", "provider_invalid_editorial_json",
@@ -273,6 +273,8 @@ def _go_error(stdout: bytes) -> EditorialOperationError:
         code = None
     if code not in SAFE_GO_ERROR_CODES:
         return EditorialOperationError("editorial_generation_failed")
+    if code == "provider_summary_missing":
+        return EditorialOperationError("editorial_not_ready")
     if code in {"provider_timeout", "provider_cancelled"}:
         return EditorialOperationError("editorial_provider_timeout")
     if code in {"provider_transport_error", "provider_unavailable", "provider_rate_limited",

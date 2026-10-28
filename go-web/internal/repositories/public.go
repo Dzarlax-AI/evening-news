@@ -132,6 +132,7 @@ type EditorialDigestStory struct {
 type EditorialDigestEvidence struct {
 	ArticleID string `json:"article_id"`
 	Quote     string `json:"quote"`
+	Basis     string `json:"basis,omitempty"`
 }
 
 type EditorialDigestExclude struct {

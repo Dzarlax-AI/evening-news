@@ -217,8 +217,7 @@ class Handler(BaseHTTPRequestHandler):
                     article_stories = {}
                     for index, article in enumerate(articles):
                         article_stories[article["id"]] = {
-                            "title": article["title"],
-                            "summary": "Синтетический материал сообщает проверенный факт.",
+                            "brief_summary": "Синтетический материал сообщает проверенный факт.",
                             "span_id": article["evidence_spans"][0]["id"],
                         }
                         if index < 5:

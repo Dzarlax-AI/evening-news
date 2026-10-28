@@ -27,7 +27,7 @@ from news_aggregator.services import editorial_digest as editorial
 
 def _article(article_id="101", *, content="Источник сообщает точный факт.", category_id="4"):
     return {
-        "id": article_id, "title": "Синтетическая новость", "summary": "",
+        "id": article_id, "title": "Синтетическая новость", "summary": "Готовое саммари: источник сообщает точный факт.",
         "content": content, "source_name": "Синтетический источник",
         "url": "https://source.example/story/101", "category_id": category_id,
         "category_name": "Технологии",
@@ -243,8 +243,7 @@ def _fake_gemini_response(snapshot):
     article_stories = {}
     for index, article in enumerate(snapshot["articles"]):
         article_stories[article["id"]] = {
-            "title": article["title"],
-            "summary": "Синтетический материал подтверждает событие.",
+            "brief_summary": "Синтетический материал подтверждает событие.",
             "span_id": article["evidence_spans"][0]["id"],
         }
         if index < 2:
@@ -263,6 +262,11 @@ def _editorial_binary_or_skip():
             raise RuntimeError("required editorial integration needs NEWS_EDITORIAL_BINARY")
         pytest.skip("NEWS_EDITORIAL_BINARY must point to the locally built editorial CLI")
     return binary
+
+
+def test_missing_summary_is_not_ready_and_not_a_provider_failure():
+    failure = editorial._go_error(b'{"ok":false,"error_code":"provider_summary_missing"}')
+    assert failure.code == "editorial_not_ready"
 
 
 def test_required_editorial_integration_fails_without_cli(monkeypatch):
@@ -352,10 +356,12 @@ async def test_actual_go_cli_persists_once_and_reads_best_category_with_fake_gem
                 for evidence in story["evidence"]
             }
             assert quotes == {
-                "101": "Город сообщил о начале строительства моста через реку.",
-                "102": "Компания объявила о запуске независимого проекта.",
+                "101": "Иной прежний пересказ.",
+                "102": "Другой текст, не являющийся источником.",
             }
-            assert all("пересказ" not in quote and "не являющийся" not in quote for quote in quotes.values())
+            assert all(evidence["basis"] == "summary"
+                       for story in row["edition"]["stories"] for evidence in story["evidence"])
+            assert articles[0]["content"] == "Город сообщил о начале строительства моста через реку."
         async def must_not_regenerate(*_args, **_kwargs):
             raise AssertionError("an immutable replay must not call the CLI")
         monkeypatch.setattr(editorial, "run_editorial_cli", must_not_regenerate)

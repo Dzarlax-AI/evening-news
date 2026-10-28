@@ -82,7 +82,7 @@ func codeFor(err error) string {
 	}
 	code := err.Error()
 	switch code {
-	case "provider_not_configured", "provider_invalid_configuration", "provider_request_too_large", "provider_cancelled", "provider_timeout", "provider_transport_error", "provider_response_read_error", "provider_response_too_large", "provider_invalid_response", "provider_empty_response", "provider_incomplete_response", "provider_invalid_editorial_json", "provider_invalid_editorial_edition", "provider_rejected_credentials", "provider_rate_limited", "provider_unavailable", "provider_rejected_request":
+	case "provider_not_configured", "provider_summary_missing", "provider_invalid_configuration", "provider_request_too_large", "provider_cancelled", "provider_timeout", "provider_transport_error", "provider_response_read_error", "provider_response_too_large", "provider_invalid_response", "provider_empty_response", "provider_incomplete_response", "provider_invalid_editorial_json", "provider_invalid_editorial_edition", "provider_rejected_credentials", "provider_rate_limited", "provider_unavailable", "provider_rejected_request":
 		return code
 	case "render_story_too_large":
 		return code

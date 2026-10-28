@@ -126,7 +126,15 @@ func ValidateEdition(s Snapshot, locale string, e Edition) error {
 			if !ok || !contains(story.ArticleIDs, ev.ArticleID) || strings.TrimSpace(ev.Quote) == "" || utf8.RuneCountInString(ev.Quote) > MaxEvidence {
 				return fmt.Errorf("%w: invalid evidence reference", ErrInvalidEdition)
 			}
-			if !strings.Contains(preferredEvidenceText(a), ev.Quote) {
+			sourceText := preferredEvidenceText(a)
+			switch ev.Basis {
+			case "": // Preserve validation and hashes for editions created before evidence basis was recorded.
+			case "summary":
+				sourceText = a.Summary
+			default:
+				return fmt.Errorf("%w: invalid evidence basis", ErrInvalidEdition)
+			}
+			if !strings.Contains(sourceText, ev.Quote) {
 				return fmt.Errorf("%w: evidence is not an exact source snippet", ErrInvalidEdition)
 			}
 			if evidenceByArticle[ev.ArticleID] {

@@ -39,6 +39,7 @@ type Snapshot struct {
 type Evidence struct {
 	ArticleID string `json:"article_id"`
 	Quote     string `json:"quote"`
+	Basis     string `json:"basis,omitempty"`
 }
 
 type Story struct {
