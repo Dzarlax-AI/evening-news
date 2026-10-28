@@ -1,18 +1,14 @@
 """AI API client for article summarization using Google Gemini."""
 
-import asyncio
-import json
 from typing import Optional, Dict, Any
 
 import logging
 from tenacity import retry, stop_after_attempt, wait_exponential, retry_if_exception, before_sleep_log
 
 from ..config import settings
-from ..core.http_client import get_http_client
 from ..core.cache import cached
 from ..core.exceptions import APIError
 from ..core.resource_limits import ResourceLimitError, enforce_text_limit
-from ..core.circuit_breaker import CircuitBreakerError, ai_service_breaker
 
 logger = logging.getLogger(__name__)
 
@@ -289,326 +285,29 @@ class AIClient:
 
         return await self._make_gemini_request(prompt, model, analysis_type, domain, temperature, max_tokens)
     
-    def _normalize_gemini_usage(self, raw: dict) -> dict:
-        """Normalize Gemini usage metadata to OpenAI-like token keys."""
-        usage_meta = raw.get("usageMetadata") or {}
-        prompt_tokens = usage_meta.get("promptTokenCount", 0)
-        completion_tokens = usage_meta.get("candidatesTokenCount", 0)
-        cached_tokens = usage_meta.get("cachedContentTokenCount", 0)
-        total_tokens = usage_meta.get("totalTokenCount")
-
-        if total_tokens is None:
-            total_tokens = prompt_tokens + completion_tokens + cached_tokens
-
-        return {
-            "prompt_tokens": prompt_tokens,
-            "completion_tokens": completion_tokens,
-            "cached_tokens": cached_tokens,
-            "total_tokens": total_tokens or 0,
-        }
-
     async def _make_gemini_request(self, prompt: str, model: str,
                                    analysis_type: str, domain: str,
                                    temperature: float = 0.1, max_tokens: int = 2000) -> dict:
-        """Make request to Gemini API and adapt response to OpenAI-like structure with circuit breaker protection."""
-        # Check if model is Gemini 3 (contains "gemini-3")
-        is_gemini_3 = "gemini-3" in model.lower()
+        """Generate the legacy OpenAI-like text response through the native runtime."""
+        from .ai_runtime import get_ai_runtime
 
-        # Use v1beta endpoint for Gemini 3, v1 for others
-        if is_gemini_3:
-            endpoint_base = str(self.endpoint).replace("/v1/models", "/v1beta/models")
-            url = f"{endpoint_base}/{model}:generateContent"
-        else:
-            url = f"{self.endpoint}/{model}:generateContent"
+        return await get_ai_runtime().generate(
+            mode="text", prompt=prompt, model=model, schema=None,
+            temperature=temperature, max_tokens=max_tokens,
+            analysis_type=analysis_type, domain=domain, timeout=30,
+        )
 
-        payload = {
-            "contents": [
-                {
-                    "role": "user",
-                    "parts": [
-                        {"text": prompt}
-                    ]
-                }
-            ],
-            "generationConfig": {
-                "temperature": temperature,
-                "maxOutputTokens": max_tokens,
-            }
-        }
-
-        params = {"key": self.api_key}
-
-        logger.info(f"  🌐 Gemini endpoint: {url}")
-        logger.info(f"  🤖 Gemini model: {model}")
-        logger.info(f"  📊 Analysis type: {analysis_type}")
-        logger.info(f"  🏷️ Domain: {domain}")
-        logger.info(f"  📝 Prompt length: {len(prompt)} chars")
-        async def _make_request():
-            async with get_http_client() as client:
-                response = await client.post(url, json=payload, params=params, timeout=30)
-
-                async with response:
-                    if response.status == 200:
-                        raw = await response.json()
-                        logger.info(f"  📄 Gemini raw response keys: {list(raw.keys())}")
-                        candidates = raw.get("candidates") or []
-                        if not candidates:
-                            raise APIError(
-                                "Empty Gemini response",
-                                status_code=200,
-                                response_text=json.dumps(raw)[:500]
-                            )
-
-                        first = candidates[0]
-                        content = first.get("content") or {}
-                        parts = content.get("parts") or []
-                        text = ""
-                        if parts:
-                            text = (parts[0].get("text") or "").strip()
-
-                        usage = self._normalize_gemini_usage(raw)
-
-                        # Adapt to OpenAI-like structure
-                        data = {
-                            "choices": [
-                                {
-                                    "message": {
-                                        "content": text
-                                    }
-                                }
-                            ],
-                            "usage": usage
-                        }
-
-                        self._track_ai_usage(data, analysis_type, domain)
-                        return data
-                    elif response.status == 429:
-                        error = APIError("Rate limit exceeded", status_code=429)
-                        from email.utils import parsedate_to_datetime
-                        from datetime import datetime, timezone
-                        retry_after = response.headers.get('Retry-After')
-                        try:
-                            error.retry_after_seconds = max(0, float(retry_after))
-                        except (TypeError, ValueError):
-                            try:
-                                error.retry_after_seconds = max(0, (parsedate_to_datetime(retry_after) - datetime.now(timezone.utc)).total_seconds())
-                            except (TypeError, ValueError, OverflowError):
-                                pass
-                        raise error
-                    else:
-                        error_text = await response.text()
-                        logger.error(f"  ❌ Gemini API error {response.status}: {error_text[:500]}...")
-                        raise APIError(
-                            f"Gemini API error: {response.status}",
-                            status_code=response.status,
-                            response_text=error_text
-                        )
-
-        try:
-            return await ai_service_breaker.call(_make_request)
-        except CircuitBreakerError as e:
-            logger.error(f"Circuit breaker is OPEN: {e}")
-            raise APIError(f"AI service temporarily unavailable: {e}", status_code=503)
-    
     async def _make_structured_ai_request(self, prompt: str, model: str, schema: dict,
                                           analysis_type: str, domain: str) -> dict:
-        """
-        Make structured AI request using Gemini's native structured output with circuit breaker protection.
+        """Return the legacy structured response shape from the native runtime."""
+        from .ai_runtime import get_ai_runtime
 
-        Args:
-            prompt: Prompt text
-            model: Model to use
-            schema: JSON schema for structured output
-            analysis_type: Type of analysis for tracking
-            domain: Domain being analyzed for tracking
+        return await get_ai_runtime().generate(
+            mode="structured", prompt=prompt, model=model, schema=schema,
+            temperature=0.1, max_tokens=2000, analysis_type=analysis_type,
+            domain=domain, timeout=40,
+        )
 
-        Returns:
-            Dict with 'result' (parsed structured data) and 'usage'
-        """
-        # Check if model is Gemini 3 (contains "gemini-3")
-        is_gemini_3 = "gemini-3" in model.lower()
-
-        # Use v1beta endpoint for Gemini 3, v1 for others
-        # See: https://ai.google.dev/gemini-api/docs/gemini-3
-        if is_gemini_3:
-            # Replace /v1/models with /v1beta/models for Gemini 3
-            endpoint_base = str(self.endpoint).replace("/v1/models", "/v1beta/models")
-            url = f"{endpoint_base}/{model}:generateContent"
-        else:
-            url = f"{self.endpoint}/{model}:generateContent"
-
-        # Build payload - structured output params always go in generationConfig
-        # According to: https://ai.google.dev/gemini-api/docs/structured-output?example=recipe
-        payload = {
-            "contents": [
-                {
-                    "role": "user",
-                    "parts": [
-                        {"text": prompt}
-                    ]
-                }
-            ],
-            "generationConfig": {
-                "temperature": 0.1,
-                "maxOutputTokens": 2000,
-                "responseMimeType": "application/json",
-                "responseJsonSchema": schema
-            }
-        }
-
-        params = {"key": self.api_key}
-
-        logger.info(f"  🌐 Gemini structured endpoint: {url}")
-        logger.info(f"  🤖 Model: {model}")
-        logger.info(f"  📊 Analysis type: {analysis_type}")
-        logger.info(f"  🏷️ Domain: {domain}")
-        logger.info(f"  📋 Using structured output with schema")
-        logger.info(f"  🔍 Is Gemini 3: {is_gemini_3}")
-        logger.info(f"  📝 Payload generationConfig keys: {list(payload['generationConfig'].keys())}")
-        async def _make_request():
-            async with get_http_client() as client:
-                response = await client.post(url, json=payload, params=params, timeout=40)
-
-                async with response:
-                    if response.status == 200:
-                        raw = await response.json()
-
-                        candidates = raw.get("candidates") or []
-                        if not candidates:
-                            raise APIError(
-                                "Empty Gemini response",
-                                status_code=200,
-                                response_text=str(raw)[:500]
-                            )
-
-                        first = candidates[0]
-                        content = first.get("content") or {}
-                        parts = content.get("parts") or []
-
-                        if not parts or "text" not in parts[0]:
-                            raise APIError(
-                                "Gemini structured response missing text",
-                                status_code=200,
-                                response_text=str(raw)[:500]
-                            )
-
-                        # Text should already be valid JSON according to schema
-                        text_response = parts[0]["text"].strip()
-                        try:
-                            structured = json.loads(text_response)
-                        except json.JSONDecodeError as e:
-                            logger.warning(f"  ⚠️ Failed to parse JSON from Gemini structured response: {e}")
-                            logger.info(f"  📄 Response preview: {text_response[:500]}...")
-                            # Fallback: try to extract JSON from markdown if needed
-                            try:
-                                json_str = self._extract_json_from_response(text_response)
-                                structured = json.loads(json_str)
-                                logger.info(f"  ✅ Extracted JSON from markdown code block")
-                            except Exception as e2:
-                                raise APIError(
-                                    f"Failed to parse JSON from Gemini structured response: {e2}",
-                                    status_code=200,
-                                    response_text=text_response[:500]
-                                )
-
-                        usage = self._normalize_gemini_usage(raw)
-
-                        data = {
-                            "result": structured,
-                            "usage": usage
-                        }
-
-                        self._track_ai_usage(data, analysis_type, domain)
-                        return data
-
-                    elif response.status == 429:
-                        error = APIError("Rate limit exceeded", status_code=429)
-                        from email.utils import parsedate_to_datetime
-                        from datetime import datetime, timezone
-                        retry_after = response.headers.get('Retry-After')
-                        try:
-                            error.retry_after_seconds = max(0, float(retry_after))
-                        except (TypeError, ValueError):
-                            try:
-                                error.retry_after_seconds = max(0, (parsedate_to_datetime(retry_after) - datetime.now(timezone.utc)).total_seconds())
-                            except (TypeError, ValueError, OverflowError):
-                                pass
-                        raise error
-                    else:
-                        error_text = await response.text()
-                        logger.error(f"  ❌ Gemini API error {response.status}: {error_text[:500]}...")
-                        raise APIError(
-                            f"Gemini API error: {response.status}",
-                            status_code=response.status,
-                            response_text=error_text
-                        )
-
-        try:
-            return await ai_service_breaker.call(_make_request)
-        except CircuitBreakerError as e:
-            logger.error(f"Circuit breaker is OPEN: {e}")
-            raise APIError(f"AI service temporarily unavailable: {e}", status_code=503)
-
-    def _track_ai_usage(self, response_data: dict, analysis_type: str, domain: str):
-        """Track AI API usage to database (fire-and-forget)."""
-        import asyncio
-
-        async def _do_track():
-            try:
-                # Extract token usage from response
-                usage = response_data.get('usage', {})
-                tokens_used = usage.get('total_tokens')
-                prompt_tokens = usage.get('prompt_tokens', 0)
-                completion_tokens = usage.get('completion_tokens', 0)
-                cached_tokens = usage.get('cached_tokens', 0)
-
-                if not tokens_used:
-                    tokens_used = prompt_tokens + completion_tokens
-
-                # Cost from config (per 1M tokens); defaults to 0 if not configured
-                input_rate = getattr(settings, 'ai_input_cost_per_1m', None) or 0.0
-                output_rate = getattr(settings, 'ai_output_cost_per_1m', None) or 0.0
-                cached_input_rate = getattr(settings, 'ai_cached_input_cost_per_1m', None) or 0.0
-
-                cost = (
-                    (prompt_tokens * input_rate) +
-                    (completion_tokens * output_rate) +
-                    (cached_tokens * cached_input_rate)
-                ) / 1_000_000
-
-                from ..database import AsyncSessionLocal
-                from sqlalchemy import text
-                from datetime import datetime
-
-                async with AsyncSessionLocal() as session:
-                    await session.execute(
-                        text("""
-                            INSERT INTO ai_usage_tracking
-                            (domain, analysis_type, tokens_used, credits_cost, analysis_result, created_at)
-                            VALUES (:domain, :analysis_type, :tokens_used, :cost, :result, :created_at)
-                        """),
-                        {
-                            "domain": domain,
-                            "analysis_type": analysis_type,
-                            "tokens_used": tokens_used,
-                            "cost": cost,
-                            "result": json.dumps(
-                                {
-                                    "prompt_tokens": prompt_tokens,
-                                    "completion_tokens": completion_tokens,
-                                    "cached_tokens": cached_tokens
-                                }
-                            ),
-                            "created_at": datetime.utcnow()
-                        }
-                    )
-                    await session.commit()
-            except Exception as e:
-                # Don't fail the request if tracking fails
-                logger.warning(f"  ⚠️ Failed to track AI usage: {e}")
-        # Fire and forget - don't block the main request
-        asyncio.create_task(_do_track())
-    
     # ============================================================================
     # REMOVED: detect_advertising() - Replaced by unified analysis
     # ============================================================================
@@ -765,7 +464,6 @@ class AIClient:
                         '_insufficient_content': True}
         
         from datetime import datetime, timedelta, timezone
-        from urllib.parse import urlsplit
         from .article_analysis import ArticleAnalysisError, analyze_article
 
         if deadline is None:
@@ -773,14 +471,9 @@ class AIClient:
         try:
             result = await analyze_article(
                 title, content, url, original_context,
-                api_key=self.api_key,
                 model=self.summarization_model,
-                endpoint=str(self.endpoint).rstrip("/"),
                 max_text_chars=settings.extraction_text_max_chars,
                 deadline=deadline,
-                on_usage=lambda usage: self._track_ai_usage(
-                    {"usage": usage}, "combined_analysis", urlsplit(url).netloc or "unknown"
-                ),
             )
             return result
         except ResourceLimitError:
@@ -825,28 +518,6 @@ class AIClient:
             'confidence': 0.1  # Legacy field
         }
 
-    def _extract_json_from_response(self, response: str) -> str:
-        """Extract JSON from AI response, handling markdown code blocks."""
-        if not response:
-            return '{}'
-
-        text = response.strip()
-
-        # Handle markdown code block: ```json ... ``` or ``` ... ```
-        import re
-        code_block_match = re.search(r'```(?:json)?\s*\n?([\s\S]*?)\n?```', text)
-        if code_block_match:
-            text = code_block_match.group(1).strip()
-
-        # Try to find JSON object boundaries if not clean
-        if not text.startswith('{'):
-            # Find first { and last }
-            start_idx = text.find('{')
-            end_idx = text.rfind('}')
-            if start_idx != -1 and end_idx != -1 and end_idx > start_idx:
-                text = text[start_idx:end_idx + 1]
-
-        return text
 
 
 

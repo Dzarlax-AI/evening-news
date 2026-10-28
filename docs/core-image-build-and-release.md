@@ -20,7 +20,7 @@ graph:
 |---|---|---|---|
 | `web` | `evening-news-web:consolidation-fixture` | `ghcr.io/dzarlax-ai/rss-web` | Go web binary, templates, API contracts, web static files, CA certificates |
 | `background` | `evening-news-background:consolidation-fixture` | `ghcr.io/dzarlax-ai/rss-background` | One Go background process hosting scheduler, worker, ingestion, article processing, and execution components; CA certificates and timezone data |
-| `executor` | `evening-news-executor:consolidation-fixture` | `ghcr.io/dzarlax-ai/rss-summarizer` | Python domain runtime, native article-analysis and editorial CLIs, migrations, runtime dependencies, and PostgreSQL backup client |
+| `executor` | `evening-news-executor:consolidation-fixture` | `ghcr.io/dzarlax-ai/rss-summarizer` | Python domain runtime, long-lived native AI runtime and editorial CLI, migrations, runtime dependencies, and PostgreSQL backup client |
 
 Each image has its own runtime boundary and registry digest. They share a build
 graph, not a common final image. The background build embeds the same `REVISION`
@@ -30,7 +30,8 @@ label carries that same source revision.
 The `web` and `background` images do not install Python, provider libraries,
 Go compilers, or PostgreSQL backup tools. The executor target now includes the
 bounded `/usr/local/bin/news-editorial` CLI for digest generation and rendering
-and `/usr/local/bin/news-article-analysis` for article analysis;
+and `/usr/local/bin/news-ai-runtime` for private article and legacy Gemini
+transport;
 this candidate change does not by itself confirm a production rollout. It does
 not include web assets, development scripts, or Go build tools. `requirements.txt` is for
 local tests; runtime builds install only `requirements-runtime.txt`.

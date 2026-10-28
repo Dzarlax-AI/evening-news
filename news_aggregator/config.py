@@ -28,8 +28,8 @@ class Settings(BaseSettings):
     categorization_model: str = Field(default="gemini-3.5-flash-lite", alias="CATEGORIZATION_MODEL")
     digest_model: str = Field(default="gemini-3.5-flash-lite", alias="DIGEST_MODEL")
     editorial_binary: str = Field(default="/usr/local/bin/news-editorial", alias="NEWS_EDITORIAL_BINARY")
-    news_article_analysis_binary: str = Field(
-        default="/usr/local/bin/news-article-analysis", alias="NEWS_ARTICLE_ANALYSIS_BINARY"
+    news_ai_runtime_binary: str = Field(
+        default="/usr/local/bin/news-ai-runtime", alias="NEWS_AI_RUNTIME_BINARY"
     )
 
     # AI usage pricing (per 1M tokens) - optional, configure per provider/model

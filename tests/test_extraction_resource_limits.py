@@ -82,7 +82,26 @@ def test_text_limit_enforced_without_silent_truncation():
 
 
 @pytest.mark.asyncio
-async def test_parallel_requests_do_not_deadlock_at_rate_limit():
-    from news_aggregator.core.http_client import RateLimiter
-    limiter = RateLimiter(max_calls=1, time_window=0.01)
-    await asyncio.wait_for(asyncio.gather(*(limiter.acquire() for _ in range(3))), timeout=1)
+async def test_legacy_post_obtains_a_native_permit_before_network_attempt(monkeypatch):
+    from news_aggregator.core.http_client import AsyncHTTPClient
+    permits = []
+
+    class Runtime:
+        async def permit(self, timeout):
+            permits.append(timeout)
+
+    class Response:
+        pass
+
+    class Session:
+        closed = False
+
+        async def post(self, *args, **kwargs):
+            return Response()
+
+    monkeypatch.setattr("news_aggregator.services.ai_runtime.get_ai_runtime", lambda: Runtime())
+    client = AsyncHTTPClient()
+    client.session = Session()
+    response = await client.post("https://example.test/telegram", json={"text": "fixture"})
+    assert isinstance(response, Response)
+    assert permits == [60]

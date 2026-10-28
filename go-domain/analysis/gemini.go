@@ -22,10 +22,11 @@ const (
 )
 
 type ProviderConfig struct {
-	APIKey   string
-	Model    string
-	Endpoint string
-	Client   *http.Client
+	APIKey        string
+	Model         string
+	Endpoint      string
+	Client        *http.Client
+	BeforeAttempt func(context.Context) error
 }
 
 func Analyze(ctx context.Context, r Request, config ProviderConfig) (map[string]any, *Usage, error) {
@@ -128,6 +129,11 @@ func callGemini(ctx context.Context, prompt string, config ProviderConfig) (gemi
 	}
 	clientCopy := *client
 	clientCopy.CheckRedirect = func(*http.Request, []*http.Request) error { return http.ErrUseLastResponse }
+	if config.BeforeAttempt != nil {
+		if err := config.BeforeAttempt(ctx); err != nil {
+			return empty, err
+		}
+	}
 	resp, err := clientCopy.Do(req)
 	if err != nil {
 		if errors.Is(err, context.Canceled) {
@@ -140,6 +146,7 @@ func callGemini(ctx context.Context, prompt string, config ProviderConfig) (gemi
 	}
 	defer resp.Body.Close()
 	if resp.StatusCode < 200 || resp.StatusCode >= 300 {
+		_, _ = io.Copy(io.Discard, io.LimitReader(resp.Body, 64<<10))
 		var retryAfter *float64
 		if resp.StatusCode == http.StatusTooManyRequests {
 			retryAfter = parseRetryAfter(resp.Header.Get("Retry-After"))

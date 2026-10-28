@@ -14,7 +14,7 @@ been published or rolled out.
 | Schedule dispatch | Go `background` process | Scheduler API and dispatch component; scheduler state remains in its separate PostgreSQL database |
 | Collection and ingestion | Go `background` process | Ingestion listener, RSS/Atom, public Telegram and Page Monitor adapters, source progress, and fenced article persistence |
 | Article processing | Go `background` process | Processing listener, article selection, state transitions, retries, and article/category persistence; AI analysis calls the private executor |
-| Private domain operations | Existing `executor` runtime with a Python adapter and native components | Fixed operation and claim boundaries, native article-analysis and editorial engines, metadata and usage persistence, Telegram delivery, diagnostics, and backup operations |
+| Private domain operations | Existing `executor` runtime with Python PID 1 and one long-lived Go AI child | Fixed operation and claim boundaries, native article-analysis and Gemini transport, shared provider admission and breaker, metadata and best-effort usage persistence, Telegram delivery, diagnostics, and backup operations |
 | Extraction | Separate Go `extractor` process | Bounded HTTP extraction. The example Compose profile uses HTTP-only extraction. |
 | Schema bootstrap | One-shot `migrate` command using the executor image | Existing database initialization, versioned migrations, and required schema checks before schema consumers start |
 
@@ -49,7 +49,9 @@ flowchart LR
     Processing <--> NewsDB
     Processing --> Extract
     Processing -->|private AI callback| Executor
-    Executor --> AI[AI provider]
+    Executor -->|authenticated Unix socket| AIRuntime[Native AI runtime]
+    AIRuntime --> AI[Gemini provider]
+    AIRuntime <--> NewsDB
     Executor --> Telegram[Telegram delivery]
     Executor <--> NewsDB
     Web <--> Scheduler
@@ -97,7 +99,12 @@ executor's `DATABASE_URL` for them. The scheduler URL points to its separate
 database. Keep credentials in an ignored `.env` file or the shell environment;
 do not put DSNs in source control or diagnostics.
 
-The executor retains the News `DATABASE_URL` and provider credentials. The Go
+The executor retains the News `DATABASE_URL` and provider credentials. It starts
+the AI child before becoming ready. The child accepts only authenticated
+Unix-socket requests and is stopped after active executor operations are
+canceled. The native pool reserves two connections from the executor's existing
+pool budget; at least two remain for the Python guard and normal operations.
+The Go
 web gets a separate `WEB_BACKEND_TOKEN` for its fixed executor origin:
 
 | Variable | Purpose |
@@ -122,6 +129,7 @@ python -m pytest tests -q
 for module in go-worker go-scheduler go-ingestion go-processing go-background go-web; do
   (cd "$module" && go test -race -count=1 ./... && go vet ./... && go mod verify)
 done
+(cd go-domain && go test -race -count=1 ./... && go vet ./... && go mod verify)
 ```
 
 PostgreSQL integration tests require dedicated loopback-only databases. Do not

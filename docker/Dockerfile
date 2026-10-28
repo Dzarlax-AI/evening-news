@@ -20,7 +20,7 @@ COPY go-domain/ ./
 ARG TARGETOS
 ARG TARGETARCH
 RUN CGO_ENABLED=0 GOOS=${TARGETOS} GOARCH=${TARGETARCH} \
-    go build -trimpath -ldflags="-s -w" -o /out/news-article-analysis ./cmd/news-article-analysis
+    go build -trimpath -ldflags="-s -w" -o /out/news-ai-runtime ./cmd/news-ai-runtime
 
 FROM ${GO_BUILD_IMAGE} AS go-editorial-build
 WORKDIR /src/go-editorial
@@ -110,7 +110,7 @@ RUN apt-get update \
 WORKDIR /app
 COPY --from=python-dependencies /install/ /usr/local/
 COPY --from=go-editorial-build /out/news-editorial /usr/local/bin/news-editorial
-COPY --from=go-domain-build /out/news-article-analysis /usr/local/bin/news-article-analysis
+COPY --from=go-domain-build /out/news-ai-runtime /usr/local/bin/news-ai-runtime
 COPY db/ ./db/
 COPY news_aggregator/ ./news_aggregator/
 USER 10001:10001
