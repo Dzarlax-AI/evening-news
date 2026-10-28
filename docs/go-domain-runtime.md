@@ -23,7 +23,9 @@ shutdown, the process stops admitting requests, cancels and drains active work,
 then releases resources. See [Go digest delivery](go-digest-delivery.md) for
 delivery receipts and ambiguous outcomes.
 
-This describes an unmerged development candidate. The full Linux image,
-PostgreSQL 16/17 backup/restore, fault and coverage gates are still in progress;
-see [Go tooling coverage](../go-tools/COVERAGE.md). Production remains a
-separate, explicitly authorized rollout.
+The full Linux image, PostgreSQL 16/17 backup/restore, fault and coverage gates
+passed for the migration candidate. The final guard cancellation fix must pass
+the same required CI before release. See
+[Go tooling coverage](../go-tools/COVERAGE.md). Production acceptance is
+recorded separately from synthetic CI; the shared browser has its own unchanged
+runtime and release boundary.

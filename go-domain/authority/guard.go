@@ -3,7 +3,6 @@ package authority
 import (
 	"context"
 	"errors"
-	"sync"
 	"time"
 
 	"github.com/jackc/pgx/v5/pgxpool"
@@ -17,7 +16,7 @@ var ErrGuardUnavailable = errors.New("executor instance is not the database owne
 // A failed probe permanently revokes the guard; the caller must cancel active
 // operations and stop serving. A replacement process must acquire a new guard.
 type Guard struct {
-	mu   sync.Mutex
+	lock chan struct{}
 	conn *pgxpool.Conn
 	pid  int32
 }
@@ -40,21 +39,37 @@ func AcquireGuard(ctx context.Context, pool *pgxpool.Pool) (*Guard, error) {
 		conn.Release()
 		return nil, ErrGuardUnavailable
 	}
-	return &Guard{conn: conn, pid: pid}, nil
+	lock := make(chan struct{}, 1)
+	lock <- struct{}{}
+	return &Guard{lock: lock, conn: conn, pid: pid}, nil
 }
 
-// Check serializes probes on the dedicated session and fails closed.
+// Check serializes probes on the dedicated session and fails closed on an
+// actual probe failure. Request cancellation must not invalidate this session.
 func (g *Guard) Check(ctx context.Context) error {
-	g.mu.Lock()
-	defer g.mu.Unlock()
+	if err := ctx.Err(); err != nil {
+		return err
+	}
+	if g.lock == nil {
+		return ErrGuardUnavailable
+	}
+	select {
+	case <-ctx.Done():
+		return ctx.Err()
+	case <-g.lock:
+	}
+	defer func() { g.lock <- struct{}{} }()
+	if err := ctx.Err(); err != nil {
+		return err
+	}
 	if g.conn == nil {
 		return ErrGuardUnavailable
 	}
-	ctx, cancel := context.WithTimeout(ctx, 2*time.Second)
+	probeCtx, cancel := context.WithTimeout(context.Background(), 2*time.Second)
 	defer cancel()
 	var pid int32
 	var held bool
-	err := g.conn.QueryRow(ctx, `SELECT pg_backend_pid(), EXISTS (
+	err := g.conn.QueryRow(probeCtx, `SELECT pg_backend_pid(), EXISTS (
  SELECT 1 FROM pg_locks WHERE locktype='advisory' AND granted AND pid=pg_backend_pid() AND objsubid=2
  AND classid=(((hashtext(current_database())::bigint + 4294967296) % 4294967296)::oid)
  AND objid=((((hashtext(current_schema()) # $1::integer)::bigint + 4294967296) % 4294967296)::oid)
@@ -66,14 +81,26 @@ func (g *Guard) Check(ctx context.Context) error {
 		discard(conn)
 		return ErrGuardUnavailable
 	}
-	return nil
+	return ctx.Err()
 }
 
-func (g *Guard) BackendPID() int32 { g.mu.Lock(); defer g.mu.Unlock(); return g.pid }
+func (g *Guard) BackendPID() int32 {
+	if g.lock == nil {
+		return 0
+	}
+	<-g.lock
+	defer func() { g.lock <- struct{}{} }()
+	return g.pid
+}
 
 func (g *Guard) Close(ctx context.Context) error {
-	g.mu.Lock()
-	defer g.mu.Unlock()
+	if g.lock == nil {
+		return nil
+	}
+	// Closing must always retire the dedicated session, even if shutdown's
+	// deadline expires while a bounded probe is in progress.
+	<-g.lock
+	defer func() { g.lock <- struct{}{} }()
 	if g.conn == nil {
 		return nil
 	}

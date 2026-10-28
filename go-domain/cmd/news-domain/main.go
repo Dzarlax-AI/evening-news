@@ -294,7 +294,9 @@ loop:
 			break loop
 		case <-ticker.C:
 			if guard.Check(root) != nil {
-				serveErr = errors.New("domain singleton lost")
+				if root.Err() == nil {
+					serveErr = errors.New("domain singleton lost")
+				}
 				break loop
 			}
 		}

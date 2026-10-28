@@ -17,13 +17,13 @@ browser builds retain their own responsibilities and release paths.
 
 ## Current status
 
-This is a migration candidate awaiting exact-head CI and independent review.
-Earlier PG16 and PG17 image jobs passed the implemented synthetic pipeline,
-delivery fault, shutdown and strict backup/restore phases, then stopped at the
-temporary acceptance marker. The current Go-only gate adds final web checks
-and writes a receipt only after all its phases, image identity checks and
-cleanup succeed. Its current-head result has not yet been established. See
-the [tooling coverage map](../go-tools/COVERAGE.md) for scoped evidence.
+The Go-only migration candidate passed the PG16 and PG17 full image gates,
+including pipeline, delivery faults, shutdown, strict backup/restore and final
+web checks. A receipt is written only after every phase, image identity check
+and cleanup succeeds. Every later fix, including the final singleton guard
+cancellation correction, requires fresh exact-revision CI and review before
+release. See the [tooling coverage map](../go-tools/COVERAGE.md) for scoped
+evidence. A passing synthetic fixture does not establish production acceptance.
 
 No image may be released based on a build alone. A release workflow must verify
 all required tests and the full isolated fixture against the exact built image
