@@ -29,6 +29,16 @@ type gate struct {
 	accepted                             map[string]fixturegate.Image
 }
 
+// databaseReady checks the final TCP listener and the executor's actual
+// authenticated network path. The temporary initdb server has no TCP listener.
+func databaseReady(run func([]byte, ...string) (string, error)) bool {
+	if _, err := run(nil, "exec", "-T", "postgres", "pg_isready", "-h", "127.0.0.1", "-U", "gate_user", "-d", "gate_db"); err != nil {
+		return false
+	}
+	result, err := run(nil, "run", "--rm", "--no-deps", "--entrypoint", "/usr/libexec/postgresql17/psql", "executor", "-X", "-w", "-qAt", "-c", "SELECT 1", "postgres://gate_user:fixture-only-password@postgres:5432/gate_db?sslmode=disable&connect_timeout=2")
+	return err == nil && result == "1"
+}
+
 func (g *gate) docker(input []byte, args ...string) (string, error) {
 	ctx, cancel := context.WithTimeout(context.Background(), 120*time.Second)
 	defer cancel()
@@ -174,7 +184,7 @@ func (g *gate) run() (resultErr error) {
 		return e
 	}
 	for i := 0; i < 60; i++ {
-		if _, e := g.docker(nil, "exec", "-T", "postgres", "pg_isready", "-U", "gate_user", "-d", "gate_db"); e == nil {
+		if databaseReady(g.docker) {
 			break
 		}
 		if i == 59 {
