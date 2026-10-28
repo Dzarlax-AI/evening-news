@@ -24,9 +24,10 @@ class Settings(BaseSettings):
     )
     
     # Specific AI models for different tasks
-    summarization_model: str = Field(default="gemini-1.5-flash-latest", alias="SUMMARIZATION_MODEL")
-    categorization_model: str = Field(default="gemini-1.5-flash-latest", alias="CATEGORIZATION_MODEL") 
-    digest_model: str = Field(default="gemini-1.5-pro-latest", alias="DIGEST_MODEL")
+    summarization_model: str = Field(default="gemini-3.5-flash-lite", alias="SUMMARIZATION_MODEL")
+    categorization_model: str = Field(default="gemini-3.5-flash-lite", alias="CATEGORIZATION_MODEL")
+    digest_model: str = Field(default="gemini-3.5-flash-lite", alias="DIGEST_MODEL")
+    editorial_binary: str = Field(default="/usr/local/bin/news-editorial", alias="NEWS_EDITORIAL_BINARY")
 
     # AI usage pricing (per 1M tokens) - optional, configure per provider/model
     ai_input_cost_per_1m: Optional[float] = Field(default=None, alias="AI_INPUT_COST_PER_1M")

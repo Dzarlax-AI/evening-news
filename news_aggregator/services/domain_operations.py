@@ -14,12 +14,10 @@ from dataclasses import dataclass
 from datetime import datetime, timedelta, timezone
 from typing import Any
 
-from sqlalchemy import func, select
+from sqlalchemy import select
 
 from ..config import settings
 from ..database import AsyncSessionLocal
-from ..models import Article, ArticleCategory, Category, DailySummary
-from ..processing.digest_builder import DigestBuilder
 from .domain_fence import (
     DomainAuthorityError, ExecutionContext, GoExecutionAuthorityClient,
     RemoteDomainFence, StaleWorker,
@@ -46,6 +44,8 @@ _HEX_SHA256 = re.compile(r"[0-9a-f]{64}\Z")
 _SAFE_ERROR_CODES = {
     "domain_operation_failed", "stale_fence", "authority_unavailable",
     "external_outcome_unknown", "prepared_digest_missing", "resource_limit",
+    "editorial_not_ready", "editorial_resource_limit", "editorial_provider_timeout",
+    "editorial_provider_unavailable", "editorial_invalid_result", "editorial_generation_failed",
 }
 
 _RECORDS: OrderedDict[tuple, "OperationRecord"] = OrderedDict()
@@ -360,6 +360,10 @@ async def _run_operation(key: tuple, record: OperationRecord):
         )
     except Exception as exc:
         code = "external_outcome_unknown" if record.operation == "digest_publish" else "domain_operation_failed"
+        if record.operation != "digest_publish":
+            from .editorial_digest import EditorialOperationError
+            if isinstance(exc, EditorialOperationError):
+                code = exc.code
         logger.warning("Domain operation failed (operation=%s error_type=%s)", record.operation, type(exc).__name__)
         await _finish_failed(key, code)
     finally:
@@ -476,10 +480,10 @@ async def _dispatch_operation(record, context, fence):
     operation = record.operation
     data = record.input
     if operation == "summary_status":
+        from .editorial_digest import count_ready_editions
         async with AsyncSessionLocal() as session:
             async with fence.transaction_fence(session, fence.job_id, fence.attempt_generation):
-                count = await session.scalar(select(func.count(DailySummary.id)).where(
-                    DailySummary.date == datetime.now(timezone.utc).date()))
+                count = await count_ready_editions(session, datetime.now(timezone.utc).date())
                 await session.rollback()
         return {"summaries_count": int(count or 0)}
     if operation == "summaries_generate":
@@ -515,92 +519,53 @@ async def _dispatch_operation(record, context, fence):
     raise DomainOperationInputError("domain operation is unsupported")
 
 
-async def _group_articles_by_category(session):
-    result = await session.execute(
-        select(Article, Category.name, ArticleCategory.confidence)
-        .join(ArticleCategory, Article.id == ArticleCategory.article_id)
-        .join(Category, Category.id == ArticleCategory.category_id)
-        .where(func.date(Article.fetched_at) == datetime.now(timezone.utc).date())
-        .where(Article.processing_state == "completed")
-        .where(Article.is_advertisement != True)
-        .order_by(Article.fetched_at.desc())
-    )
-    best_by_article = {}
-    for article, category_name, confidence in result.all():
-        current = best_by_article.get(article.id)
-        if current is None or (confidence or 0) > (current["confidence"] or 0):
-            best_by_article[article.id] = {
-                "article": article, "category": category_name or "Other", "confidence": confidence or 0,
-            }
-    grouped = {}
-    for item in best_by_article.values():
-        grouped.setdefault(item["category"], []).append(item["article"])
-    return grouped
-
-
 async def _generate_daily_summaries(record, context, fence):
-    today = datetime.now(timezone.utc).date()
-    async with AsyncSessionLocal() as session:
-        async with fence.transaction_fence(session, fence.job_id, fence.attempt_generation):
-            categories = await _group_articles_by_category(session)
-    if not categories:
-        return {"summaries_generated": 0}
-    await _revalidate_context(record, context)
-    summary_generator = DigestBuilder().summary_generator
-    generated = {}
-    for category, articles in categories.items():
-        if not articles:
-            continue
-        summary_text = await summary_generator.generate_category_summary(category, articles, today)
-        await _revalidate_context(record, context)
-        if summary_text:
-            generated[category] = (summary_text, len(articles))
-    if not generated:
-        return {"summaries_generated": 0}
-    async with AsyncSessionLocal() as session:
-        async with fence.transaction_fence(session, fence.job_id, fence.attempt_generation):
-            for category, (summary_text, count) in generated.items():
-                await summary_generator.save_summary(session, today, category, summary_text, count)
-            await session.commit()
-    return {"summaries_generated": len(generated)}
+    from .editorial_digest import generate_and_persist
+    count = await generate_and_persist(
+        record, context, fence, revalidate=lambda: _revalidate_context(record, context),
+    )
+    return {"summaries_generated": count}
 
 
 async def _prepare_digest(record, fence):
-    from ..config import settings as app_settings
-    builder = DigestBuilder()
+    from .editorial_digest import EditorialOperationError, latest_ready_edition
     today = datetime.now(timezone.utc).date()
-    base_url = (app_settings.site_base_url or "https://news.dzarlax.dev").rstrip("/")
-    digest_url = f"{base_url}/digest/{today.strftime('%Y-%m-%d')}"
     async with AsyncSessionLocal() as session:
         async with fence.transaction_fence(session, fence.job_id, fence.attempt_generation):
-            rich_digest = None
-            if app_settings.telegram_rich_messages_enabled:
-                rich_digest = await builder.create_rich_digest(session, today, digest_url)
-            digest_content = await builder.create_combined_digest(session, today)
-            if digest_content == "SPLIT_NEEDED":
-                digest_parts = await builder.create_digest_parts(session, today)
-                if not digest_parts or digest_parts[0] == "Сводки новостей пока не готовы.":
-                    raise DomainOperationInputError("no valid summaries are ready for the digest")
-                prepared = {"digest_parts": digest_parts, "split": True, "rich_digest": rich_digest,
-                            "digest_url": digest_url}
-            else:
-                if digest_content == "Сводки новостей пока не готовы.":
-                    raise DomainOperationInputError("no valid summaries are ready for the digest")
-                prepared = {"digest_content": digest_content, "split": False,
-                            "rich_digest": rich_digest, "digest_url": digest_url}
+            edition_row = await latest_ready_edition(session, today)
             await session.rollback()
+    if edition_row is None:
+        raise EditorialOperationError("editorial_not_ready")
+    edition = edition_row["edition"]
+    rendered = edition_row["rendered"]
+    if (not isinstance(edition, dict) or not isinstance(rendered, dict)
+            or edition.get("locale") != "ru"
+            or not isinstance(edition.get("edition_url"), str)
+            or not isinstance(rendered.get("rich_html"), str)
+            or not isinstance(rendered.get("plain_parts"), list)
+            or not rendered["plain_parts"]
+            or any(not isinstance(part, str) for part in rendered["plain_parts"])):
+        raise EditorialOperationError("editorial_invalid_result")
+    prepared = {
+        "editorial": True,
+        "edition_id": str(edition_row["id"]),
+        "edition": edition,
+        "rich_html": rendered["rich_html"],
+        "plain_parts": rendered["plain_parts"],
+        "digest_url": edition["edition_url"],
+    }
     try:
         size = len(json.dumps(prepared, ensure_ascii=False, separators=(",", ":")).encode("utf-8"))
-    except (TypeError, ValueError, UnicodeError) as exc:
-        raise DomainOperationInputError("prepared digest is invalid") from exc
+    except (TypeError, ValueError, UnicodeError):
+        raise EditorialOperationError("editorial_invalid_result") from None
     if size > MAX_PREPARED_SINGLE_BYTES:
-        raise RuntimeError("prepared digest exceeds its memory bound")
+        raise EditorialOperationError("editorial_resource_limit")
     token = str(uuid.uuid4())
     deadline = record.deadline
     async with _RECORDS_LOCK:
         _prune_prepared_locked(datetime.now(timezone.utc))
         if len(_PREPARED) >= MAX_PREPARED_DIGESTS or _prepared_total_bytes() + size > MAX_PREPARED_DIGEST_BYTES:
-            raise RuntimeError("prepared digest cache is full")
+            raise EditorialOperationError("editorial_resource_limit")
         _PREPARED[token] = PreparedDigest(
             record.job_id, record.attempt_generation, record.domain_instance_id, deadline, prepared, size,
         )
@@ -631,6 +596,27 @@ async def _publish_digest(record, fence):
     await _revalidate_context(record, fence.context)
     telegram_service = await _telegram_service_with_db_overrides()
     from ..config import settings as app_settings
+    if payload.get("editorial") is True:
+        if app_settings.telegram_rich_messages_enabled:
+            await _revalidate_context(record, fence.context)
+            rich_result = await telegram_service.send_rich_message(payload["rich_html"])
+            if rich_result:
+                return {"success": True, "parts_sent": 1, "parts_total": 1, "rich_message": True}
+            if not _confirmed_telegram_rejection(rich_result):
+                raise DeliveryOutcomeUnknown("rich editorial digest delivery outcome is unknown")
+            logger.warning("Editorial rich digest was rejected; using its bounded Telegram HTML parts")
+        parts = payload["plain_parts"]
+        sent = 0
+        for part in parts:
+            await _revalidate_context(record, fence.context)
+            result = await telegram_service.send_editorial_message(part)
+            if not result and not _confirmed_telegram_rejection(result):
+                raise DeliveryOutcomeUnknown("editorial digest delivery outcome is unknown")
+            if result:
+                sent += 1
+            await _revalidate_context(record, fence.context)
+        return {"success": sent == len(parts), "parts_sent": sent,
+                "parts_total": len(parts), "rich_message": False}
     if app_settings.telegram_rich_messages_enabled and payload.get("rich_digest"):
         await _revalidate_context(record, fence.context)
         rich_result = await telegram_service.send_rich_message(payload["rich_digest"])
@@ -671,7 +657,7 @@ def _confirmed_telegram_rejection(result):
         return True
     description = getattr(result, "description", None)
     return (status_code is None and description in {"empty HTML", "HTML validation failed",
-                                                     "empty message"})
+                                                     "empty message", "editorial message rejected"})
 
 
 async def _telegram_service_with_db_overrides():

@@ -1,7 +1,75 @@
-{{define "content"}}<main class="digest-page"><div class="digest-shell"><header class="digest-header"><p class="digest-kicker">Evening News</p><h1>{{.Title}}</h1><p class="digest-meta">{{digestTotal .Digest.Categories}} новостей{{if .Digest.Summaries}}, {{len .Digest.Summaries}} категорий{{end}}</p></header>
-{{if .Digest.Summaries}}<nav class="digest-toc" aria-label="Категории">{{range $i,$s:=.Digest.Summaries}}<a href="#category-{{$i}}">{{$s.Category}} <span>{{$s.ArticlesCount}}</span></a>{{end}}</nav>{{end}}
-{{range $i,$cat:=.Digest.Categories}}<section class="digest-section" id="category-{{$i}}"><div class="digest-section-header"><h2>{{$cat.Name}}</h2><span>{{len $cat.Articles}} статей</span></div>
-{{range $.Digest.Summaries}}{{if eq .Category $cat.Name}}<div class="digest-summary">{{range paragraphs .Text}}<p>{{.}}</p>{{end}}</div>{{end}}{{end}}
-{{if $cat.Articles}}<div class="digest-articles">{{range $cat.Articles}}<article class="digest-article">{{if .ImageURL}}<a class="digest-article-image" href="{{.URL}}" target="_blank" rel="noopener noreferrer"><img src="{{.ImageURL}}" alt=""></a>{{end}}<div class="digest-article-body"><h3><a href="{{.URL}}" target="_blank" rel="noopener noreferrer">{{.Title}}</a></h3>{{if .Summary}}<p>{{.Summary}}</p>{{end}}<div class="digest-article-meta"><span>{{.SourceName}}</span>{{if .FetchedAt}}<time datetime="{{.FetchedAt.Format "2006-01-02T15:04:05Z07:00"}}">{{.FetchedAt.Format "02.01.2006 15:04"}}</time>{{end}}</div></div></article>{{end}}</div>{{end}}</section>{{end}}</div></main>
-<style>.digest-page{min-height:100vh;padding:32px 20px 64px}.digest-shell{max-width:980px;margin:0 auto}.digest-header{padding:28px 0 20px;border-bottom:1px solid var(--border)}.digest-kicker{margin:0 0 8px;color:var(--text-tertiary);font-size:.75rem;font-weight:700;letter-spacing:.08em;text-transform:uppercase}.digest-header h1{margin:0;font-family:var(--font-serif);font-size:clamp(2rem,5vw,3.4rem);line-height:1.05}.digest-meta{margin:14px 0 0;color:var(--text-secondary)}.digest-toc{display:flex;flex-wrap:wrap;gap:8px;padding:18px 0;border-bottom:1px solid var(--border)}.digest-toc a{display:inline-flex;align-items:center;gap:8px;padding:7px 11px;border:1px solid var(--border);border-radius:var(--radius-sm);color:var(--text-secondary);text-decoration:none;background:var(--surface);font-size:.85rem}.digest-section{padding:28px 0;border-bottom:1px solid var(--border)}.digest-section-header{display:flex;align-items:baseline;justify-content:space-between;gap:16px;margin-bottom:14px}.digest-section-header h2{margin:0;font-family:var(--font-serif);font-size:1.7rem}.digest-section-header span,.digest-article-meta{color:var(--text-tertiary);font-size:.85rem}.digest-summary{margin-bottom:18px;color:var(--text-secondary);font-size:1rem;line-height:1.65}.digest-articles{display:flex;flex-direction:column;gap:12px}.digest-article{display:grid;grid-template-columns:96px 1fr;gap:14px;padding:14px 0}.digest-article-image{display:block;width:96px;height:72px;border-radius:var(--radius-sm);overflow:hidden;background:var(--surface-2)}.digest-article-image img{width:100%;height:100%;object-fit:cover}.digest-article-body h3{margin:0 0 6px;font-family:var(--font-serif);font-size:1.1rem}.digest-article-body h3 a{color:var(--text);text-decoration:none}.digest-article-body p{margin:0 0 8px;color:var(--text-secondary);font-size:.92rem}.digest-article-meta{display:flex;flex-wrap:wrap;gap:10px}@media(max-width:640px){.digest-page{padding:20px 14px 48px}.digest-article{grid-template-columns:64px 1fr}.digest-article-image{width:64px;height:64px}}</style>{{end}}
+{{define "extra-head"}}<link rel="stylesheet" href="/static/css/editorial.css">{{end}}
+{{define "content"}}
+<div class="editorial-page digest-page">
+  <div class="editorial-shell">
+    <a class="editorial-back" href="/">← К ленте</a>
+    {{if .Editorial}}
+    <header class="editorial-masthead">
+      <p class="editorial-eyebrow">Вечерний обзор · {{.Editorial.DateLabel}}</p>
+      <h1>Главное за день</h1>
+      <p class="editorial-deck">Ключевые события и коротко о том, что ещё произошло.</p>
+      <div class="editorial-stats" aria-label="Состав выпуска">
+        <span>{{.Editorial.MainLabel}}</span>
+        <span>{{.Editorial.BriefLabel}}</span>
+        <span>{{.Editorial.ArticleLabel}}</span>
+      </div>
+      <a class="editorial-permalink" href="{{.Editorial.IssueURL}}">Ссылка на этот выпуск</a>
+    </header>
+    <div class="editorial-layout">
+      <div class="editorial-content">
+        {{if .Editorial.Main}}
+        <section class="editorial-section editorial-main-stories" id="main" aria-labelledby="main-heading">
+          <div class="editorial-section-heading"><p class="editorial-section-label">01</p><h2 id="main-heading">Главное</h2></div>
+          {{range .Editorial.Main}}
+          <article class="editorial-story editorial-story-main">
+            <h3><a href="{{.ArticleURL}}">{{.Title}}</a></h3>
+            {{if .Summary}}<p class="editorial-story-summary">{{.Summary}}</p>{{end}}
+            {{if .Sources}}<p class="editorial-sources"><span>По материалам:</span> {{range $i,$source:=.Sources}}{{if $i}}<span aria-hidden="true"> · </span>{{end}}<a href="{{$source.URL}}" target="_blank" rel="noopener noreferrer">{{$source.Name}}</a>{{end}}</p>{{end}}
+          </article>
+          {{end}}
+        </section>
+        {{end}}
+        {{if .Editorial.BriefGroups}}
+        <section class="editorial-section editorial-briefs" id="briefs" aria-labelledby="briefs-heading">
+          <div class="editorial-section-heading"><p class="editorial-section-label">02</p><h2 id="briefs-heading">Ещё коротко</h2></div>
+          {{range .Editorial.BriefGroups}}
+          <section class="editorial-brief-group" id="{{.ID}}" aria-labelledby="heading-{{.ID}}">
+            <h3 id="heading-{{.ID}}">{{.Name}}</h3>
+            <ul class="editorial-brief-list">
+              {{range .Stories}}<li class="editorial-brief">
+                <h4><a href="{{.ArticleURL}}">{{.Title}}</a></h4>
+                {{if .Summary}}<p>{{.Summary}}</p>{{end}}
+                {{if .Sources}}<p class="editorial-sources"><span>Источник:</span> {{range $i,$source:=.Sources}}{{if $i}}<span aria-hidden="true"> · </span>{{end}}<a href="{{$source.URL}}" target="_blank" rel="noopener noreferrer">{{$source.Name}}</a>{{end}}</p>{{end}}
+              </li>{{end}}
+            </ul>
+          </section>
+          {{end}}
+        </section>
+        {{end}}
+      </div>
+      <aside class="editorial-contents" aria-label="Содержание выпуска">
+        <p class="editorial-contents-title">В этом выпуске</p>
+        {{if .Editorial.Main}}<a href="#main">Главное <span>{{.Editorial.MainCount}}</span></a>{{end}}
+        {{if .Editorial.BriefGroups}}<a href="#briefs">Ещё коротко <span>{{.Editorial.BriefCount}}</span></a>{{range .Editorial.BriefGroups}}<a class="editorial-contents-sub" href="#{{.ID}}">{{.Name}}</a>{{end}}{{end}}
+      </aside>
+    </div>
+    {{else}}
+    <header class="editorial-masthead">
+      <p class="editorial-eyebrow">Ежедневный обзор · {{.Legacy.DateLabel}}</p>
+      <h1>Новости за день</h1>
+      <p class="editorial-deck">Архивный выпуск с подборкой материалов по темам.</p>
+      <div class="editorial-stats" aria-label="Состав выпуска"><span>Материалов: {{.Legacy.ArticleCount}}</span><span>Тематических сводок: {{.Legacy.SummaryCount}}</span></div>
+    </header>
+    <nav class="editorial-legacy-nav" aria-label="Темы выпуска">{{range .Legacy.Categories}}<a href="#{{.ID}}">{{.Name}} <span>{{len .Articles}}</span></a>{{end}}</nav>
+    <div class="editorial-legacy-sections">
+      {{range .Legacy.Categories}}<section class="editorial-section editorial-legacy-category" id="{{.ID}}">
+        <div class="editorial-section-heading"><p class="editorial-section-label">Тема</p><h2>{{.Name}}</h2></div>
+        {{if .Summary}}<div class="editorial-legacy-summary">{{range paragraphs .Summary}}<p>{{.}}</p>{{end}}</div>{{end}}
+        {{if .Articles}}<ul class="editorial-brief-list">{{range .Articles}}<li class="editorial-brief"><h3><a href="{{.ArticleURL}}">{{.Title}}</a></h3>{{if .Summary}}<p>{{.Summary}}</p>{{end}}{{if .Source.URL}}<p class="editorial-sources"><span>Источник:</span> <a href="{{.Source.URL}}" target="_blank" rel="noopener noreferrer">{{.Source.Name}}</a></p>{{end}}</li>{{end}}</ul>{{end}}
+      </section>{{end}}
+    </div>
+    {{end}}
+  </div>
+</div>
+{{end}}
 {{template "base" .}}

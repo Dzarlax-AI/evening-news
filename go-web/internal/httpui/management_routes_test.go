@@ -1,13 +1,16 @@
 package httpui
 
 import (
+	"context"
 	"encoding/json"
 	"net/http"
 	"net/http/httptest"
 	"strings"
 	"testing"
+	"time"
 
 	"github.com/Dzarlax-AI/evening-news/go-web/internal/auth"
+	"github.com/Dzarlax-AI/evening-news/go-web/internal/repositories"
 )
 
 func TestManagementRoutesRequireAdmin(t *testing.T) {
@@ -42,6 +45,71 @@ func TestManagementAuthPrecedesQueryParsingAndDatabaseAccess(t *testing.T) {
 	mux.ServeHTTP(response, request)
 	if response.Code != http.StatusUnprocessableEntity {
 		t.Fatalf("authenticated malformed query should be rejected before DB access: %d %s", response.Code, response.Body.String())
+	}
+}
+
+func TestEditorialDigestStatusRequiresAdminAndPinsOnlyReadyEditions(t *testing.T) {
+	a := auth.New(auth.Config{Username: "fixture", Password: "fixture", JWTSecret: "fixture-secret"})
+	token, err := a.Mint("fixture", auth.LevelAdmin)
+	if err != nil {
+		t.Fatal(err)
+	}
+	calls := 0
+	ready := true
+	mux := http.NewServeMux()
+	RegisterManagement(mux, ManagementConfig{
+		Auth: a,
+		EditorialDigestStatus: func(_ context.Context, date time.Time, locale string) (repositories.EditorialDigestStatus, error) {
+			calls++
+			status := repositories.EditorialDigestStatus{Date: date.Format("2006-01-02"), Locale: locale, Ready: ready}
+			if ready {
+				status.EditionID = "8c93bb34-383d-449c-9e85-28aa9121a4fe"
+				status.MainCount, status.BriefCount, status.StoryCount, status.ArticleCount = 1, 40, 41, 42
+			}
+			return status, nil
+		},
+	})
+	call := func(path string, authorized bool) *httptest.ResponseRecorder {
+		r := httptest.NewRequest(http.MethodGet, path, nil)
+		if authorized {
+			r.Header.Set("Authorization", "Bearer "+token)
+		}
+		w := httptest.NewRecorder()
+		mux.ServeHTTP(w, r)
+		return w
+	}
+	if w := call("/api/v1/summaries/editorial-status?date=2026-10-27", false); w.Code != http.StatusUnauthorized || calls != 0 {
+		t.Fatalf("unauthenticated status read reached repository: status=%d calls=%d", w.Code, calls)
+	}
+	for _, path := range []string{
+		"/api/v1/summaries/editorial-status",
+		"/api/v1/summaries/editorial-status?date=2026-02-30",
+		"/api/v1/summaries/editorial-status?date=2026-10-27&date=2026-10-27",
+		"/api/v1/summaries/editorial-status?date=2026-10-27&locale=",
+		"/api/v1/summaries/editorial-status?date=2026-10-27&locale=ru&locale=ru",
+		"/api/v1/summaries/editorial-status?date=2026-10-27&locale=sr",
+	} {
+		if w := call(path, true); w.Code != http.StatusUnprocessableEntity || calls != 0 {
+			t.Errorf("invalid status query %q reached repository: status=%d calls=%d body=%s", path, w.Code, calls, w.Body)
+		}
+	}
+	w := call("/api/v1/summaries/editorial-status?date=2026-10-27&locale=ru", true)
+	var result repositories.EditorialDigestStatus
+	if w.Code != http.StatusOK || json.Unmarshal(w.Body.Bytes(), &result) != nil {
+		t.Fatalf("ready status: %d %s", w.Code, w.Body)
+	}
+	if !result.Ready || result.EditionID != "8c93bb34-383d-449c-9e85-28aa9121a4fe" || result.PreviewURL != "/digest/2026-10-27?locale=ru&edition="+result.EditionID || result.MainCount != 1 || result.BriefCount != 40 || result.ArticleCount != 42 {
+		t.Fatalf("ready edition metadata/link mismatch: %+v", result)
+	}
+	ready = false
+	w = call("/api/v1/summaries/editorial-status?date=2026-10-27", true)
+	result = repositories.EditorialDigestStatus{}
+	if w.Code != http.StatusOK || json.Unmarshal(w.Body.Bytes(), &result) != nil || result.Ready || result.EditionID != "" || result.PreviewURL != "" || result.MainCount != 0 || result.BriefCount != 0 || result.ArticleCount != 0 {
+		t.Fatalf("missing edition was presented as ready: status=%d result=%+v body=%s", w.Code, result, w.Body)
+	}
+	ready = true
+	if w = call("/api/v1/summaries/editorial-status?date=2026-10-27", true); w.Code != http.StatusOK {
+		t.Fatalf("status read after no legacy rows should succeed: %d %s", w.Code, w.Body)
 	}
 }
 

@@ -2,6 +2,7 @@
 
 import re
 from typing import Optional
+from urllib.parse import urlsplit
 from bs4 import BeautifulSoup
 
 
@@ -64,6 +65,35 @@ def validate_telegram_html(html: str) -> Optional[str]:
             return plain_text[:4000] if len(plain_text) > 4000 else plain_text
         except Exception:
             return None
+
+
+def validate_telegram_editorial_html(html: str, max_units: int = 4096) -> Optional[str]:
+    """Validate complete editorial fallback HTML without truncating its links or text."""
+    if not html or not html.strip() or max_units <= 0:
+        return None
+    try:
+        soup = BeautifulSoup(html, "html.parser")
+        for tag in soup.find_all(True):
+            if tag.name not in {"b", "i", "a"}:
+                return None
+            if tag.name in {"b", "i"} and tag.attrs:
+                return None
+            if tag.name == "a":
+                if set(tag.attrs) != {"href"} or not isinstance(tag.get("href"), str):
+                    return None
+                href = tag["href"]
+                parsed = urlsplit(href)
+                if (parsed.scheme not in {"http", "https"} or not parsed.hostname
+                        or parsed.username or parsed.password
+                        or any(ch.isspace() for ch in href)):
+                    return None
+        clean_html = str(soup).strip()
+        visible = soup.get_text()
+        if len(visible.encode("utf-16-le")) // 2 > max_units:
+            return None
+        return clean_html
+    except Exception:
+        return None
 
 
 def validate_telegram_rich_html(html: str) -> Optional[str]:

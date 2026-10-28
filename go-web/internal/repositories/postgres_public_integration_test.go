@@ -4,6 +4,7 @@ import (
 	"context"
 	"crypto/rand"
 	"encoding/hex"
+	"encoding/json"
 	"net/url"
 	"os"
 	"testing"
@@ -56,6 +57,7 @@ func TestPostgresPublicReaderMultiCategoryAndReadPaths(t *testing.T) {
 		`CREATE TABLE ` + schema + `.articles(id bigint PRIMARY KEY,source_id bigint,title text NOT NULL,summary text,content text,url text NOT NULL,image_url text,media_files jsonb,published_at timestamp,fetched_at timestamp,is_advertisement boolean,ad_confidence real,ad_type text,ad_reasoning text,ad_markers jsonb,processing_state text,ad_processed boolean)`,
 		`CREATE TABLE ` + schema + `.article_categories(id bigint PRIMARY KEY,article_id bigint NOT NULL,category_id bigint NOT NULL,confidence real,ai_category text)`,
 		`CREATE TABLE ` + schema + `.daily_summaries(id bigint PRIMARY KEY,date date NOT NULL,category text NOT NULL,summary_text text NOT NULL,articles_count integer NOT NULL)`,
+		`CREATE TABLE ` + schema + `.editorial_digest_editions(id uuid PRIMARY KEY,edition_date date NOT NULL,locale varchar(16) NOT NULL,policy_version varchar(32),snapshot_hash varchar(64),snapshot jsonb NOT NULL,edition jsonb NOT NULL,rendered jsonb NOT NULL,provider_usage jsonb NOT NULL DEFAULT '{}'::jsonb,job_id uuid,attempt_generation integer,created_at timestamp NOT NULL DEFAULT timezone('UTC',now()))`,
 	}
 	for _, statement := range ddl {
 		if _, err = admin.Exec(ctx, statement); err != nil {
@@ -88,6 +90,12 @@ func TestPostgresPublicReaderMultiCategoryAndReadPaths(t *testing.T) {
 	}
 	defer pool.Close()
 	reader := &Postgres{pool: pool}
+	snapshot := json.RawMessage(`{"date":"2026-10-26","cutoff_utc":"2026-10-26T09:00:00Z","site_base_url":"https://example.test","edition_url":"https://example.test/digest/2026-10-26","articles":[{"id":"42","title":"Frozen snapshot title","summary":"Frozen source summary","content":"Frozen source body","source_name":"Frozen source","url":"https://snapshot.example/story/42","category_id":"1","category_name":"Технологии"}]}`)
+	editionJSON := json.RawMessage(`{"version":"1","locale":"ru","date":"2026-10-26","cutoff_utc":"2026-10-26T09:00:00Z","site_base_url":"https://example.test","edition_url":"https://example.test/digest/2026-10-26","source_snapshot_hash":"snapshot-hash","content_hash":"content-hash","stories":[{"id":"main-1","kind":"main","title":"Frozen editorial headline","summary":"Frozen editorial summary","primary_article_id":"42","article_ids":["42"],"evidence":[]}],"excluded":[]}`)
+	const editionID = "8c93bb34-383d-449c-9e85-28aa9121a4fe"
+	if _, err = pool.Exec(ctx, `INSERT INTO editorial_digest_editions(id,edition_date,locale,snapshot_hash,snapshot,edition,rendered) VALUES($1,'2026-10-26','ru','snapshot-hash',$2,$3,'{}')`, editionID, snapshot, editionJSON); err != nil {
+		t.Fatal(err)
+	}
 	feed, err := reader.Feed(ctx, FeedQuery{Limit: 20, HideAds: true})
 	if err != nil {
 		t.Fatal(err)
@@ -157,5 +165,84 @@ func TestPostgresPublicReaderMultiCategoryAndReadPaths(t *testing.T) {
 	}
 	if len(digest.Summaries) != 1 || len(digest.Categories) != 2 {
 		t.Fatalf("digest mapping mismatch: %+v", digest)
+	}
+	if _, err = pool.Exec(ctx, `UPDATE articles SET title='Mutated live title',url='https://mutated.example/story/42' WHERE id=42`); err != nil {
+		t.Fatal(err)
+	}
+	editorial, err := reader.EditorialDigest(ctx, time.Date(2026, 10, 26, 0, 0, 0, 0, time.UTC), editionID, "ru")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if editorial == nil || editorial.Snapshot.Articles[0].Title != "Frozen snapshot title" || editorial.Snapshot.Articles[0].URL != "https://snapshot.example/story/42" || editorial.Edition.Stories[0].Title != "Frozen editorial headline" {
+		t.Fatalf("immutable editorial snapshot changed with current article rows: %#v", editorial)
+	}
+	latest, err := reader.EditorialDigest(ctx, time.Date(2026, 10, 26, 0, 0, 0, 0, time.UTC), "", "ru")
+	if err != nil || latest == nil || latest.ID != editionID {
+		t.Fatalf("latest editorial edition lookup failed: edition=%#v err=%v", latest, err)
+	}
+}
+
+func TestPostgresEditorialDigestStatusDoesNotNeedLegacySummaries(t *testing.T) {
+	dsn := os.Getenv("TEST_DATABASE_URL")
+	if dsn == "" {
+		t.Skip("TEST_DATABASE_URL is not set")
+	}
+	parsed, err := url.Parse(dsn)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if parsed.Hostname() != "127.0.0.1" && parsed.Hostname() != "localhost" {
+		t.Fatalf("refusing non-loopback TEST_DATABASE_URL host %q", parsed.Hostname())
+	}
+	ctx, cancel := context.WithTimeout(context.Background(), 20*time.Second)
+	defer cancel()
+	adminCfg, err := pgxpool.ParseConfig(dsn)
+	if err != nil {
+		t.Fatal(err)
+	}
+	admin, err := pgxpool.NewWithConfig(ctx, adminCfg)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer admin.Close()
+	var random [6]byte
+	if _, err := rand.Read(random[:]); err != nil {
+		t.Fatal(err)
+	}
+	schema := "web_editorial_status_" + hex.EncodeToString(random[:])
+	if _, err := admin.Exec(ctx, `CREATE SCHEMA `+schema); err != nil {
+		t.Fatal(err)
+	}
+	defer func() { _, _ = admin.Exec(context.Background(), `DROP SCHEMA `+schema+` CASCADE`) }()
+	readerCfg, err := pgxpool.ParseConfig(dsn)
+	if err != nil {
+		t.Fatal(err)
+	}
+	readerCfg.ConnConfig.RuntimeParams["search_path"] = schema
+	pool, err := pgxpool.NewWithConfig(ctx, readerCfg)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer pool.Close()
+	if _, err := pool.Exec(ctx, `CREATE TABLE editorial_digest_editions(id uuid PRIMARY KEY,edition_date date NOT NULL,locale varchar(16) NOT NULL,policy_version varchar(32),snapshot_hash varchar(64),snapshot jsonb NOT NULL,edition jsonb NOT NULL,rendered jsonb NOT NULL,provider_usage jsonb NOT NULL DEFAULT '{}'::jsonb,job_id uuid,attempt_generation integer,created_at timestamp NOT NULL DEFAULT timezone('UTC',now()))`); err != nil {
+		t.Fatal(err)
+	}
+	snapshot := json.RawMessage(`{"date":"2026-10-27","cutoff_utc":"2026-10-27T09:00:00Z","site_base_url":"https://example.test","edition_url":"https://example.test/digest/2026-10-27","articles":[{"id":"42","title":"Frozen title","summary":"Frozen summary","content":"Private frozen source content","source_name":"Source","url":"https://source.example/42","category_id":"1","category_name":"Технологии"},{"id":"43","title":"Second title","source_name":"Source 2","url":"https://source.example/43","category_id":"2","category_name":"Мир"}]}`)
+	issued := json.RawMessage(`{"version":"1","locale":"ru","date":"2026-10-27","cutoff_utc":"2026-10-27T09:00:00Z","site_base_url":"https://example.test","edition_url":"https://example.test/digest/2026-10-27","source_snapshot_hash":"snapshot-hash","content_hash":"content-hash","stories":[{"id":"main-1","kind":"main","title":"Main story","summary":"Main copy","primary_article_id":"42","article_ids":["42"],"evidence":[]},{"id":"brief-1","kind":"brief","title":"Short item","summary":"Brief copy","primary_article_id":"43","article_ids":["43"],"evidence":[]}],"excluded":[]}`)
+	const editionID = "8c93bb34-383d-449c-9e85-28aa9121a4fe"
+	if _, err := pool.Exec(ctx, `INSERT INTO editorial_digest_editions(id,edition_date,locale,snapshot_hash,snapshot,edition,rendered) VALUES($1,'2026-10-27','ru','snapshot-hash',$2,$3,'{}')`, editionID, snapshot, issued); err != nil {
+		t.Fatal(err)
+	}
+	reader := &Postgres{pool: pool}
+	status, err := reader.EditorialDigestStatus(ctx, time.Date(2026, 10, 27, 0, 0, 0, 0, time.UTC), "ru")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !status.Ready || status.EditionID != editionID || status.Date != "2026-10-27" || status.Locale != "ru" || status.MainCount != 1 || status.BriefCount != 1 || status.StoryCount != 2 || status.ArticleCount != 2 {
+		t.Fatalf("editorial status mismatch with zero daily_summaries table: %+v", status)
+	}
+	missing, err := reader.EditorialDigestStatus(ctx, time.Date(2026, 10, 26, 0, 0, 0, 0, time.UTC), "ru")
+	if err != nil || missing.Ready || missing.EditionID != "" || missing.ArticleCount != 0 {
+		t.Fatalf("missing edition was presented as ready: status=%+v err=%v", missing, err)
 	}
 }

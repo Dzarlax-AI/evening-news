@@ -116,24 +116,60 @@ def test_default_news_digest_gate_uses_python_queue_producer_and_precedes_ambigu
     assert 'result->>\'parts_sent\'' in source
 
 
-def test_blocked_ai_failure_captures_safe_attempt_diagnostics_and_parses_article_id(monkeypatch, tmp_path):
+def test_web_unavailable_outbox_probe_uses_non_delivery_dry_run(monkeypatch, tmp_path):
+    from types import SimpleNamespace
+
+    module = load_gate_module()
+    gate = module.ConsolidatedBackgroundGate(dict(module.DEFAULT_IMAGES), tmp_path)
+    imported = []
+
+    def scheduler_request(method, path, body=None):
+        if path == "/v1/status":
+            return 200, {"control_revision": 0, "paused": False}
+        if path == "/v1/control":
+            return 200, {"revision": body["expected_revision"] + 1, "paused": body["paused"]}
+        if path == "/v1/import":
+            imported.extend(body["items"])
+            return 200, {}
+        if path.startswith("/v1/occurrences"):
+            return 200, {"occurrences": [{"schedule_key": "fixture:web-unavailable",
+                                          "status": "pending", "attempts": 1}]}
+        raise AssertionError("unexpected scheduler operation")
+
+    monkeypatch.setattr(gate, "scheduler_request", scheduler_request)
+    monkeypatch.setattr(gate, "docker", lambda *args, **kwargs: SimpleNamespace(returncode=1))
+    gate.arm_outbox_while_web_is_unavailable()
+    assert len(imported) == 1
+    assert imported[0]["operation"] == "reprocess_failed"
+    assert imported[0]["payload"] == {"dry_run": True}
+    assert gate.report["checks"]["web_unavailable_scheduler_dispatch_remains_pending"] is True
+
+
+def test_blocked_ai_timeout_captures_queued_job_and_worker_dispatch_diagnostics(monkeypatch, tmp_path):
     module = load_gate_module()
     gate = module.ConsolidatedBackgroundGate(dict(module.DEFAULT_IMAGES), tmp_path)
     gate.access_token = "fixture-token"
     monkeypatch.setattr(gate, "fake_counters_http", lambda: {"providers": {"gemini": 15}})
     monkeypatch.setattr(gate, "request", lambda *args, **kwargs: (
-        200, {"status": "failed", "error_code": "worker_error", "error_type": None}
+        200, {"status": "queued", "error_code": None, "error_type": None}
     ))
     article_queries = []
 
     def pg_value(query):
         article_queries.append(query)
-        return "pending|false|false|false|false" if "processing_state" in query else ""
+        if "processing_state" in query:
+            return "pending|false|false|false|false"
+        if "background_worker_status" in query:
+            return "8|running|true|0.2"
+        if "background_job_executions WHERE state IN" in query:
+            return "4|1|0"
+        return ""
 
     monkeypatch.setattr(gate, "pg_value", pg_value)
     monkeypatch.setattr(gate, "capture_execution_failure_diagnostics", lambda job_id: {
-        "execution_attempts": [{"attempt_generation": 2, "state": "failed", "error_code": "worker_error"}],
-        "execution_log_phases": [{"phase": "pipeline_execute", "reason_code": "handler_failed"}],
+        "job": {"state": "queued", "attempt_generation": 0},
+        "execution_attempts": [],
+        "execution_log_phases": [],
     })
     try:
         gate.wait_gemini_call(15, timeout=0, job_id="11111111-1111-4111-8111-111111111111",
@@ -146,8 +182,61 @@ def test_blocked_ai_failure_captures_safe_attempt_diagnostics_and_parses_article
     diagnostic = gate.report["blocked_ai_wait_diagnostics"]["worker_reprocess"]
     assert diagnostic["article_id"] == 5
     assert diagnostic["article_stage_state"] == "pending|false|false|false|false"
-    assert diagnostic["failure_diagnostics"]["execution_attempts"][0]["error_code"] == "worker_error"
-    assert len(article_queries) == 2
+    assert diagnostic["job_execution_diagnostics"]["job"]["state"] == "queued"
+    assert diagnostic["job_execution_diagnostics"]["execution_attempts"] == []
+    assert diagnostic["worker_lease"] == {
+        "generation": 8, "status": "running", "owner_present": True, "heartbeat_age_seconds": 0.2,
+    }
+    assert diagnostic["worker_dispatch"] == {
+        "queued_jobs": 4, "running_jobs": 1, "active_execution_attempts": 0,
+        "active_jobs": None,
+    }
+    assert len(article_queries) == 5
+
+
+def test_worker_dispatch_snapshot_limits_active_job_fields_to_safe_metadata(monkeypatch, tmp_path):
+    module = load_gate_module()
+    gate = module.ConsolidatedBackgroundGate(dict(module.DEFAULT_IMAGES), tmp_path)
+    monkeypatch.setattr(gate, "pg_value", lambda _query: "2|1|1")
+    monkeypatch.setattr(gate, "_json_probe", lambda _query: [
+        {"kind": "news_processing", "state": "running", "scheduled": True,
+         "payload": {"secret": "must not be copied"}},
+        {"kind": "unexpected", "state": "running", "scheduled": False},
+    ])
+
+    snapshot = gate.worker_dispatch_snapshot()
+    assert snapshot == {
+        "queued_jobs": 2, "running_jobs": 1, "active_execution_attempts": 1,
+        "active_jobs": [{"kind": "news_processing", "state": "running", "scheduled": True}],
+    }
+    assert "secret" not in repr(snapshot)
+
+
+def test_worker_queue_idle_rejects_active_or_unknown_work(monkeypatch, tmp_path):
+    module = load_gate_module()
+    gate = module.ConsolidatedBackgroundGate(dict(module.DEFAULT_IMAGES), tmp_path)
+    monkeypatch.setattr(gate, "worker_lease_snapshot", lambda: {"generation": 2})
+    for counts in ((1, 0, 0), (0, 1, 0), (0, 0, 1), (None, None, None)):
+        snapshot = dict(zip(("queued_jobs", "running_jobs", "active_execution_attempts"), counts))
+        monkeypatch.setattr(gate, "worker_dispatch_snapshot", lambda: snapshot)
+        try:
+            gate.wait_worker_queue_idle(timeout=0)
+        except module.GateFailure as exc:
+            assert str(exc) == "fixture_worker_queue_did_not_drain"
+        else:
+            raise AssertionError("active or unavailable queue was treated as idle")
+        assert gate.report["worker_queue_quiescence"]["idle"] is False
+
+
+def test_worker_queue_idle_accepts_only_drained_work(monkeypatch, tmp_path):
+    module = load_gate_module()
+    gate = module.ConsolidatedBackgroundGate(dict(module.DEFAULT_IMAGES), tmp_path)
+    monkeypatch.setattr(gate, "worker_lease_snapshot", lambda: {"generation": 2})
+    monkeypatch.setattr(gate, "worker_dispatch_snapshot", lambda: {
+        "queued_jobs": 0, "running_jobs": 0, "active_execution_attempts": 0,
+    })
+    gate.wait_worker_queue_idle(timeout=0)
+    assert gate.report["worker_queue_quiescence"]["idle"] is True
 
 
 def test_scheduler_probe_command_is_valid_python_and_targets_internal_runtime(monkeypatch, tmp_path):
@@ -382,6 +471,33 @@ def test_active_sigterm_article_is_fresh_synthetic_and_requires_ai(monkeypatch, 
     assert gate.report["active_sigterm_fixture_article"]["stage_state"] == "pending|false|false|false|false"
     assert "force=False" in SCRIPT.read_text()
     assert '"article_last_processing_error": article_error_code' in SCRIPT.read_text()
+
+
+def test_lease_recovery_article_is_fresh_synthetic_and_requires_ai(monkeypatch, tmp_path):
+    module = load_gate_module()
+    gate = module.ConsolidatedBackgroundGate(dict(module.DEFAULT_IMAGES), tmp_path)
+    gate.run_id = "abcdef123456"
+    statements = []
+
+    def fake_pg_value(sql):
+        statements.append(sql)
+        if sql.startswith("SELECT id FROM sources"):
+            return "7"
+        if sql.startswith("INSERT INTO articles"):
+            return "43"
+        return "pending|false|false|false|false"
+
+    monkeypatch.setattr(gate, "pg_value", fake_pg_value)
+    article_id = gate.create_fresh_fixture_article("worker_lease_recovery")
+    insert = next(sql for sql in statements if sql.startswith("INSERT INTO articles"))
+    assert article_id == 43
+    assert "Synthetic active SIGTERM fixture" in insert
+    assert "rss.fixture.test/active-sigterm/" in insert
+    assert "abcdef123456" not in insert
+    assert "'pending',0," in insert
+    assert gate.report["checks"]["lease_recovery_fixture_article_requires_ai"] is True
+    assert gate.report["lease_recovery_fixture_article"]["stage_state"] == "pending|false|false|false|false"
+    assert "force=False" in SCRIPT.read_text()
 
 
 def test_active_sigterm_origin_serves_only_valid_synthetic_markers():

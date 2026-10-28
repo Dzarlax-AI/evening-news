@@ -26,6 +26,8 @@ AI / rate limiting:
 - CATEGORIZATION_MODEL
 - DIGEST_MODEL
 
+All three settings default to `gemini-3.5-flash-lite`. Combined article summarization and categorization use `SUMMARIZATION_MODEL`; editorial digest generation uses `DIGEST_MODEL`. `CATEGORIZATION_MODEL` is retained for compatibility and does not independently control the combined article-analysis request.
+
 Telegram:
 - TELEGRAM_TOKEN
 - TELEGRAM_CHAT_ID

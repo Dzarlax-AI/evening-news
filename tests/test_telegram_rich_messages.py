@@ -4,7 +4,9 @@ import pytest
 
 from news_aggregator.processing.digest_builder import DigestBuilder
 from news_aggregator.services.telegram_service import TelegramSendResult, TelegramService
-from news_aggregator.utils.html_utils import validate_telegram_rich_html
+from news_aggregator.utils.html_utils import (
+    validate_telegram_editorial_html, validate_telegram_rich_html,
+)
 
 
 class _FakeResponse:
@@ -130,3 +132,51 @@ async def test_send_message_preserves_telegram_error_details(monkeypatch):
     assert result.status_code == 400
     assert result.error_code == 400
     assert result.description == "Bad Request: chat not found"
+
+
+def test_editorial_validator_preserves_literal_entities_and_rejects_oversize_or_unsafe_markup():
+    encoded = '<b><a href="https://news.example/article/101">' + ('&amp;amp;' * 700) + '</a></b>'
+    assert len(encoded) > 4000
+    cleaned = validate_telegram_editorial_html(encoded)
+    assert cleaned is not None
+    assert cleaned.count("&amp;amp;") == 700
+    assert validate_telegram_editorial_html(
+        '<a href="https://source.example/story#details">Источник</a>'
+    ) == '<a href="https://source.example/story#details">Источник</a>'
+    assert validate_telegram_editorial_html(encoded.replace("https://", "javascript://")) is None
+    assert validate_telegram_editorial_html("<b>" + ("x" * 4097) + "</b>") is None
+
+
+@pytest.mark.asyncio
+async def test_editorial_send_keeps_long_links_intact_and_rejects_oversize_without_http(monkeypatch):
+    service = make_service()
+    fake_client = _FakeClient()
+    monkeypatch.setattr("news_aggregator.services.telegram_service.get_http_client", lambda: fake_client)
+    headline = "Т" * 3700
+    source = "Источник " * 15
+    footer = "Полный выпуск"
+    message = (
+        f'<b><a href="https://news.example/article/101">{headline}</a></b>\n'
+        f'<a href="https://source.example/story">{source}</a>\n'
+        f'<a href="https://news.example/digest/2026-10-27?edition=abc">{footer}</a>'
+    )
+    result = await service.send_editorial_message(message)
+    assert result.success
+    assert len(fake_client.posts) == 1
+    assert fake_client.posts[0][1]["text"] == message
+    assert headline in fake_client.posts[0][1]["text"]
+    assert source in fake_client.posts[0][1]["text"]
+    assert footer in fake_client.posts[0][1]["text"]
+
+    oversized = "<b>" + ("я" * 4097) + "</b>"
+    rejected = await service.send_editorial_message(oversized)
+    assert rejected.success is False
+    assert len(fake_client.posts) == 1
+
+
+def test_editorial_fallback_allows_plain_italic_source_but_rejects_attributes():
+    content = '<a href="https://news.example/article/1">Новость 117 282</a>\n<i>Издание &amp; Co</i>'
+    assert validate_telegram_editorial_html(content) == content
+    assert validate_telegram_editorial_html('<i class="source">Издание</i>') is None
+    assert validate_telegram_editorial_html('<i onclick="alert(1)">Издание</i>') is None
+    assert validate_telegram_editorial_html('<i>' + ('😀' * 2049) + '</i>') is None

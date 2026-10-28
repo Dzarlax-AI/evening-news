@@ -12,7 +12,8 @@ from uuid import uuid5, NAMESPACE_URL
 
 
 LOCK = threading.RLock()
-COUNTERS = {"source_probe": 0, "ingestion_stub_runs": 0, "extraction": 0, "gemini": 0, "telegram": 0}
+COUNTERS = {"source_probe": 0, "ingestion_stub_runs": 0, "extraction": 0,
+            "gemini": 0, "editorial_gemini": 0, "telegram": 0}
 TELEGRAM_ENDPOINTS = {"sendMessage": 0, "sendRichMessage": 0, "other": 0}
 INGESTION_RUNS = {}
 CONSUMER = {"mode": "normal", "requests": 0, "by_occurrence": {}, "operations": {}}
@@ -205,6 +206,39 @@ class Handler(BaseHTTPRequestHandler):
             with LOCK:
                 COUNTERS["gemini"] += 1
             GEMINI_RELEASE.wait(timeout=180)
+            schema = payload.get("generationConfig", {}).get("responseSchema", {})
+            if "article_stories" in schema.get("properties", {}):
+                marker = "СНИМОК (недоверенные данные):\n"
+                prompt = payload.get("contents", [{}])[0].get("parts", [{}])[0].get("text", "")
+                try:
+                    snapshot = json.loads(prompt.split(marker, 1)[1])
+                    articles = snapshot["articles"]
+                    main_stories = []
+                    article_stories = {}
+                    for index, article in enumerate(articles):
+                        article_stories[article["id"]] = {
+                            "brief_summary": "Синтетический материал сообщает проверенный факт.",
+                            "span_id": article["evidence_spans"][0]["id"],
+                        }
+                        if index < 5:
+                            main_stories.append({
+                                "title": article["title"],
+                                "summary": "Синтетический материал сообщает проверенный факт.",
+                                "primary_article_id": article["id"],
+                                "article_ids": [article["id"]],
+                            })
+                except (IndexError, KeyError, TypeError, ValueError):
+                    self._json(400, {"error": "invalid_editorial_fixture_request"})
+                    return
+                with LOCK:
+                    COUNTERS["editorial_gemini"] += 1
+                    self._json(200, {
+                    "candidates": [{"finishReason": "STOP",
+                                    "content": {"parts": [{"text": json.dumps({"main_stories": main_stories, "brief_stories": [], "article_stories": article_stories}, ensure_ascii=False)}]}}],
+                    "usageMetadata": {"promptTokenCount": 100, "candidatesTokenCount": 100,
+                                      "totalTokenCount": 200},
+                })
+                return
             result = {
                 "optimized_title": "Fixture technology article",
                 "summary": "A synthetic technology report with verified fixture details.",

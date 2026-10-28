@@ -31,7 +31,8 @@ flowchart LR
     end
     Domain["Private News operations<br/>(Python executor process)"]
     AI["AI analysis and prompts<br/>(private executor domain code)"]
-    Delivery["Daily summaries and Telegram delivery<br/>(private executor domain code)"]
+    Editorial["Editorial generation and rendering<br/>(Go CLI in private domain runtime)"]
+    Delivery["Edition persistence and Telegram delivery<br/>(private executor domain code)"]
     Sources["RSS, Telegram, and Page Monitor adapters<br/>(Go collection code)"]
     Extract["Article extraction<br/>(Go extraction process)"]
     SchedulerDB[(Scheduler PostgreSQL)]
@@ -55,6 +56,7 @@ flowchart LR
     Processing --> Extract
     Processing -->|private AI callback| AI
     Domain --> AI
+    Domain --> Editorial
     Domain --> Delivery
     Delivery --> Telegram
     Delivery <--> NewsDB
@@ -67,7 +69,13 @@ flowchart LR
 
 The Go web service replaces the former Python web application. It serves the public reader, admin pages, health endpoints, and public and management APIs. The private Python executor remains responsible for fixed domain operations that use Python code, AI prompts and provider calls, summaries, and Telegram delivery. One Go background runtime hosts the queue worker, scheduler, ingestion, article processing, and execution components. The execution component owns durable job receipts, worker and execution fencing, and orchestration; it calls the Python executor for typed domain operations. Each background component keeps its own configuration and database boundary inside the process. The extractor remains a separate Go service.
 
+Article summarization and categorization run together in `AIClient.analyze_article_complete` and use `SUMMARIZATION_MODEL`. Editorial digest generation uses `DIGEST_MODEL`; both default to `gemini-3.5-flash-lite`. `CATEGORIZATION_MODEL` remains a compatibility setting and does not independently select the model for combined article analysis.
+
 The one-shot `migrate` service runs `python -m news_aggregator.migrate` before schema-dependent services start. The Go web service does not apply migrations. `WEB_BACKEND_URL` names only the private executor origin, such as `http://executor:8100`; the Go client appends its fixed operation paths. `WEB_BACKEND_TOKEN` is a separate service credential shared only by the Go web process and private executor. Provider credentials such as `GEMINI_API_KEY` and `TELEGRAM_TOKEN` belong to the executor and are not required by the Go web service.
+
+## Editorial digests
+
+The Russian editorial format presents main stories first, then short stories grouped by category. The `go-editorial` engine runs as a bounded CLI inside the private domain runtime; it adds no container. Stored editions preserve their article snapshot and source links. Headlines open a news page on this site, while source labels open the original publication. Serbian output and website localization are a later stage, with a separate Serbian Telegram channel. See [editorial digest contracts and boundaries](docs/editorial-digests.md).
 
 ## Admin panel
 
@@ -108,7 +116,10 @@ docker compose -f docker-compose.example.yml -f docker-compose.dev.yml up --buil
 Run the Python domain/executor suite and Go checks from the repository root:
 
 ```sh
-TEST_DATABASE_URL=postgresql+asyncpg://fixture_admin:fixture-only@127.0.0.1:5432/webtests python -m pytest tests -q
+(cd go-editorial && go build -o /tmp/news-editorial ./cmd/news-editorial)
+TEST_DATABASE_URL=postgresql+asyncpg://fixture_admin:fixture-only@127.0.0.1:5432/webtests \
+  NEWS_EDITORIAL_BINARY=/tmp/news-editorial NEWS_EDITORIAL_INTEGRATION_REQUIRED=1 \
+  python -m pytest tests -q
 cd go-web
 TEST_DATABASE_URL=postgres://fixture_admin:fixture-only@127.0.0.1:5432/webtests go test -race -count=1 ./...
 go vet ./...

@@ -6,7 +6,6 @@ from sqlalchemy import create_engine, event
 from sqlalchemy.orm import Session
 
 from news_aggregator.database import Base
-from news_aggregator.services.domain_operations import _group_articles_by_category
 
 
 class AsyncSessionAdapter:

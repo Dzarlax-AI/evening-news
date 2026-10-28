@@ -1,0 +1,146 @@
+{
+  "ok": true,
+  "edition": {
+    "version": "1",
+    "locale": "ru",
+    "date": "2026-10-27",
+    "cutoff_utc": "2026-10-27T18:00:00Z",
+    "site_base_url": "https://news.example",
+    "edition_url": "https://news.example/digest/2026-10-27?edition=fixture",
+    "source_snapshot_hash": "e8286b0376402b1c2f0bed512e96f844a7cd30d8207016c096d07ec3e372bfce",
+    "content_hash": "a4170109c210407d6938f61d6e678a81688a02f765ac329a22539a02ae768a37",
+    "stories": [
+      {
+        "id": "main-e2ba68b20bc2aa9a",
+        "kind": "main",
+        "title": "Город начал строительство моста",
+        "summary": "Город сообщил о начале строительства нового моста через реку.",
+        "primary_article_id": "1001",
+        "article_ids": [
+          "1001",
+          "1002"
+        ],
+        "evidence": [
+          {
+            "article_id": "1001",
+            "quote": "Город сообщил о начале строительства нового моста через реку."
+          },
+          {
+            "article_id": "1002",
+            "quote": "Работы по строительству моста через реку начались сегодня."
+          }
+        ]
+      },
+      {
+        "id": "main-982b649112a5e005",
+        "kind": "main",
+        "title": "Событие номер 3",
+        "summary": "Подтверждённый фрагмент материала 3.",
+        "primary_article_id": "1003",
+        "article_ids": [
+          "1003"
+        ],
+        "evidence": [
+          {
+            "article_id": "1003",
+            "quote": "Подтверждённый фрагмент материала 3."
+          }
+        ]
+      },
+      {
+        "id": "brief-451cf4c96d87d403",
+        "kind": "brief",
+        "title": "Событие номер 4",
+        "summary": "Подтверждённый фрагмент материала 4.",
+        "primary_article_id": "1004",
+        "article_ids": [
+          "1004"
+        ],
+        "evidence": [
+          {
+            "article_id": "1004",
+            "quote": "Подтверждённый фрагмент материала 4."
+          }
+        ]
+      },
+      {
+        "id": "brief-32486c6d5da5eea3",
+        "kind": "brief",
+        "title": "<script>alert(1)</script> & «заголовок»",
+        "summary": "<img src=x onerror=alert(1)> заявляет: это проверяется.",
+        "primary_article_id": "1005",
+        "article_ids": [
+          "1005"
+        ],
+        "evidence": [
+          {
+            "article_id": "1005",
+            "quote": "<img src=x onerror=alert(1)> заявляет: это проверяется."
+          }
+        ]
+      },
+      {
+        "id": "brief-ad60b717e615a497",
+        "kind": "brief",
+        "title": "Српске вести о мосту",
+        "summary": "Независимый текст на српском језику — фрагмент.",
+        "primary_article_id": "1006",
+        "article_ids": [
+          "1006"
+        ],
+        "evidence": [
+          {
+            "article_id": "1006",
+            "quote": "Независимый текст на српском језику — фрагмент."
+          }
+        ]
+      },
+      {
+        "id": "brief-49defe9f202bad81",
+        "kind": "brief",
+        "title": "Событие номер 7",
+        "summary": "Источник пересказывает неподтверждённый слух; редакция не подтверждает сообщение.",
+        "primary_article_id": "1007",
+        "article_ids": [
+          "1007"
+        ],
+        "evidence": [
+          {
+            "article_id": "1007",
+            "quote": "Источник пересказывает неподтверждённый слух; редакция не подтверждает сообщение."
+          }
+        ]
+      },
+      {
+        "id": "brief-cf16b4531d78e96c",
+        "kind": "brief",
+        "title": "Событие номер 8",
+        "summary": "Подтверждённый фрагмент материала 8.",
+        "primary_article_id": "1008",
+        "article_ids": [
+          "1008"
+        ],
+        "evidence": [
+          {
+            "article_id": "1008",
+            "quote": "Подтверждённый фрагмент материала 8."
+          }
+        ]
+      }
+    ]
+  },
+  "rendered": {
+    "rich_html": "<h2>Evening News · 27 октября 2026</h2><p>8 исходных материалов · Русский</p><h2>Главное</h2><h3><a href=\"https://news.example/article/1001\">Город начал строительство моста</a></h3><p>Город сообщил о начале строительства нового моста через реку.</p><p>Источники: Источник 1, Источник 2</p><h3><a href=\"https://news.example/article/1003\">Событие номер 3</a></h3><p>Подтверждённый фрагмент материала 3.</p><p>Источник: Источник 3</p><h2>Ещё коротко</h2><h3>Технологии</h3><p>• <a href=\"https://news.example/article/1004\">Подтверждённый фрагмент материала 4.</a><br><em>Источник 4</em></p><hr><p>• <a href=\"https://news.example/article/1005\">&lt;img src=x onerror=alert(1)&gt; заявляет: это проверяется.</a><br><em>Источник 5</em></p><hr><p>• <a href=\"https://news.example/article/1006\">Независимый текст на српском језику — фрагмент.</a><br><em>Источник 6</em></p><hr><p>• <a href=\"https://news.example/article/1007\">Источник пересказывает неподтверждённый слух; редакция не подтверждает сообщение.</a><br><em>Источник 7</em></p><hr><p>• <a href=\"https://news.example/article/1008\">Подтверждённый фрагмент материала 8.</a><br><em>Источник 8</em></p><hr><p><a href=\"https://news.example/digest/2026-10-27?edition=fixture\">Полный выпуск</a></p>",
+    "plain_parts": [
+      "<b>Evening News · 27 октября 2026</b>\n8 исходных материалов · Русский\n\n<b>Главное</b>\n\n<b><a href=\"https://news.example/article/1001\">Город начал строительство моста</a></b>\nГород сообщил о начале строительства нового моста через реку.\nИсточники: Источник 1, Источник 2\n\n<b><a href=\"https://news.example/article/1003\">Событие номер 3</a></b>\nПодтверждённый фрагмент материала 3.\nИсточник: Источник 3\n\n<b>Ещё коротко</b>\n\n<b>Технологии</b>\n• <a href=\"https://news.example/article/1004\">Подтверждённый фрагмент материала 4.</a>\n<i>Источник 4</i>\n\n────────\n• <a href=\"https://news.example/article/1005\">&lt;img src=x onerror=alert(1)&gt; заявляет: это проверяется.</a>\n<i>Источник 5</i>\n\n────────\n• <a href=\"https://news.example/article/1006\">Независимый текст на српском језику — фрагмент.</a>\n<i>Источник 6</i>\n\n────────\n• <a href=\"https://news.example/article/1007\">Источник пересказывает неподтверждённый слух; редакция не подтверждает сообщение.</a>\n<i>Источник 7</i>\n\n────────\n• <a href=\"https://news.example/article/1008\">Подтверждённый фрагмент материала 8.</a>\n<i>Источник 8</i>\n\n<a href=\"https://news.example/digest/2026-10-27?edition=fixture\">Полный выпуск</a>"
+    ],
+    "preview_text": "Evening News · 27 октября 2026\n8 исходных материалов · Русский\nГлавное\n• Город начал строительство моста\nhttps://news.example/article/1001\nГород сообщил о начале строительства нового моста через реку.\nИсточники: Источник 1, Источник 2\n• Событие номер 3\nhttps://news.example/article/1003\nПодтверждённый фрагмент материала 3.\nИсточник: Источник 3\n\nЕщё коротко\n• Подтверждённый фрагмент материала 4. — https://news.example/article/1004\nИсточник 4\n\n────────\n• <img src=x onerror=alert(1)> заявляет: это проверяется. — https://news.example/article/1005\nИсточник 5\n\n────────\n• Независимый текст на српском језику — фрагмент. — https://news.example/article/1006\nИсточник 6\n\n────────\n• Источник пересказывает неподтверждённый слух; редакция не подтверждает сообщение. — https://news.example/article/1007\nИсточник 7\n\n────────\n• Подтверждённый фрагмент материала 8. — https://news.example/article/1008\nИсточник 8\n\nПолный выпуск: https://news.example/digest/2026-10-27?edition=fixture"
+  },
+  "provider_usage": {
+    "model": "gemini-example-model",
+    "prompt_token_count": 321,
+    "candidates_token_count": 123,
+    "total_token_count": 444
+  },
+  "result_hash": "a4170109c210407d6938f61d6e678a81688a02f765ac329a22539a02ae768a37"
+}

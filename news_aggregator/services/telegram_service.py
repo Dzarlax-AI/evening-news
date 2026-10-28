@@ -9,7 +9,10 @@ from datetime import datetime
 from ..config import settings
 from ..core.http_client import get_http_client
 from ..core.exceptions import TelegramError
-from ..utils.html_utils import validate_telegram_html, validate_telegram_rich_html, strip_html_tags
+from ..utils.html_utils import (
+    validate_telegram_editorial_html, validate_telegram_html,
+    validate_telegram_rich_html, strip_html_tags,
+)
 
 
 @dataclass(frozen=True)
@@ -137,6 +140,10 @@ class TelegramService:
         """Send message to the main news channel (HTML formatted)."""
         return await self._send_to_chat(text, self.chat_id)
 
+    async def send_editorial_message(self, text: str) -> TelegramSendResult:
+        """Send one complete pre-rendered editorial part without truncation."""
+        return await self._send_to_chat(text, self.chat_id, editorial=True)
+
     async def send_rich_message(self, html: str, fallback_text: Optional[str] = None) -> TelegramSendResult:
         """Send a Rich Message to the main news channel, falling back to sendMessage."""
         sent = await self._send_rich_to_chat(html, self.chat_id)
@@ -153,13 +160,18 @@ class TelegramService:
         """Send message to the service channel (errors, alerts)."""
         return await self._send_to_chat(text, self.service_chat_id)
 
-    async def _send_to_chat(self, text: str, chat_id: str) -> TelegramSendResult:
+    async def _send_to_chat(self, text: str, chat_id: str, *, editorial: bool = False) -> TelegramSendResult:
         """Low-level send to a specific chat_id."""
         if not text or not str(text).strip():
             logging.warning("Telegram _send_to_chat called with empty text")
             return TelegramSendResult(False, "sendMessage", chat_id, description="empty message")
 
-        cleaned_text = validate_telegram_html(text)
+        if editorial:
+            cleaned_text = validate_telegram_editorial_html(text)
+            if cleaned_text is None:
+                return TelegramSendResult(False, "sendMessage", chat_id, description="editorial message rejected")
+        else:
+            cleaned_text = validate_telegram_html(text)
         if cleaned_text is None:
             cleaned_text = strip_html_tags(text)
 

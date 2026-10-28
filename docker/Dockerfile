@@ -13,6 +13,15 @@ ARG TARGETARCH
 RUN CGO_ENABLED=0 GOOS=${TARGETOS} GOARCH=${TARGETARCH} \
     go build -trimpath -ldflags="-s -w" -o /out/news-web ./cmd/news-web
 
+FROM ${GO_BUILD_IMAGE} AS go-editorial-build
+WORKDIR /src/go-editorial
+COPY go-editorial/go.mod ./
+COPY go-editorial/ ./
+ARG TARGETOS
+ARG TARGETARCH
+RUN CGO_ENABLED=0 GOOS=${TARGETOS} GOARCH=${TARGETARCH} \
+    go build -trimpath -ldflags="-s -w" -o /out/news-editorial ./cmd/news-editorial
+
 FROM ${GO_BUILD_IMAGE} AS go-background-build
 WORKDIR /src/go-background
 # Local replacements must be present before go mod download.
@@ -91,6 +100,7 @@ RUN apt-get update \
     && chown -R app:app /app
 WORKDIR /app
 COPY --from=python-dependencies /install/ /usr/local/
+COPY --from=go-editorial-build /out/news-editorial /usr/local/bin/news-editorial
 COPY db/ ./db/
 COPY news_aggregator/ ./news_aggregator/
 USER 10001:10001

@@ -1,0 +1,19 @@
+{{define "extra-head"}}<link rel="stylesheet" href="/static/css/editorial.css">{{end}}
+{{define "content"}}
+<div class="editorial-page article-page">
+  <article class="editorial-shell article-shell">
+    <a class="editorial-back" href="/">← К ленте</a>
+    <header class="editorial-masthead article-masthead">
+      <p class="editorial-eyebrow">{{if .Article.Category}}{{.Article.Category}}{{else}}Материал{{end}}{{if .Article.PublishedAt}} · <time datetime="{{.Article.PublishedISO}}">{{.Article.PublishedAt}}</time>{{end}}</p>
+      <h1>{{.Article.Title}}</h1>
+      {{if .Article.Summary}}<p class="editorial-deck">{{.Article.Summary}}</p>{{end}}
+      {{if .Article.SourceURL}}<p class="article-source">Источник: <a href="{{.Article.SourceURL}}" target="_blank" rel="noopener noreferrer">{{if .Article.SourceName}}{{.Article.SourceName}}{{else}}Открыть оригинал{{end}}</a></p>{{end}}
+    </header>
+    <div class="article-content">
+      {{range paragraphs .Article.Content}}<p>{{.}}</p>{{end}}
+    </div>
+    <footer class="article-footer"><a href="/">← Вернуться к новостям</a></footer>
+  </article>
+</div>
+{{end}}
+{{template "base" .}}

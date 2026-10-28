@@ -477,7 +477,9 @@ class ConsolidatedBackgroundGate(GoWebGate):
         due = (datetime.now(timezone.utc) + timedelta(seconds=2)).isoformat(timespec="microseconds").replace("+00:00", "Z")
         schedule = {"schedule_key": "fixture:web-unavailable", "enabled": True,
                     "calendar": {"type": "interval", "timezone": "UTC", "interval_minutes": 1440},
-                    "target_alias": "news-worker", "operation": "telegram_digest", "payload": {},
+                    # Exercise durable outbox retention and exactly-once admission without
+                    # invoking the editorial/Telegram path before a ready edition exists.
+                    "target_alias": "news-worker", "operation": "reprocess_failed", "payload": {"dry_run": True},
                     "next_due_at": due}
         imported, _ = self.scheduler_request("POST", "/v1/import", {
             "expected_control_revision": paused["revision"], "items": [schedule],
@@ -750,13 +752,15 @@ class ConsolidatedBackgroundGate(GoWebGate):
             raise GateFailure("fixture_reprocess_job_not_accepted")
         return job_id
 
-    def create_fresh_sigterm_article(self):
-        if not re.fullmatch(r"[0-9a-f]{12}", self.run_id):
+    def create_fresh_fixture_article(self, scenario):
+        if scenario not in {"active_sigterm", "worker_lease_recovery"} or not re.fullmatch(r"[0-9a-f]{12}", self.run_id):
             raise GateFailure("fixture_run_id_invalid_for_article_seed")
         source_id = self.pg_value("SELECT id FROM sources WHERE name='Go Web Gate RSS 1'")
         if not source_id.isdigit():
-            raise GateFailure("fresh_sigterm_fixture_source_missing")
-        marker = self.run_id
+            raise GateFailure("fresh_ai_fixture_source_missing")
+        marker = self.run_id if scenario == "active_sigterm" else hashlib.sha256(
+            (self.run_id + scenario).encode("ascii")
+        ).hexdigest()[:12]
         title = f"Synthetic active SIGTERM fixture {marker}"
         url = f"https://rss.fixture.test/active-sigterm/{marker}"
         content = ("This is a synthetic fixture article created only for the disposable active shutdown test. "
@@ -776,20 +780,24 @@ class ConsolidatedBackgroundGate(GoWebGate):
         )
         article_id = self.pg_value(sql)
         if not article_id.isdigit():
-            raise GateFailure("fresh_sigterm_fixture_article_not_created")
+            raise GateFailure("fresh_ai_fixture_article_not_created")
         stage_state = self.pg_value(
             "SELECT processing_state || '|' || processed::text || '|' || summary_processed::text || '|' || "
             "category_processed::text || '|' || ad_processed::text FROM articles WHERE id=" + article_id
         )
         expected = "pending|false|false|false|false"
-        self.check("active_sigterm_fixture_article_requires_ai", stage_state == expected)
-        self.report["active_sigterm_fixture_article"] = {
+        scenario_label = "active_sigterm" if scenario == "active_sigterm" else "lease_recovery"
+        self.check(f"{scenario_label}_fixture_article_requires_ai", stage_state == expected)
+        self.report[f"{scenario_label}_fixture_article"] = {
             "article_id": int(article_id),
             "source_id": int(source_id),
             "synthetic_unique_content_hash": content_hash,
             "stage_state": stage_state,
         }
         return int(article_id)
+
+    def create_fresh_sigterm_article(self):
+        return self.create_fresh_fixture_article("active_sigterm")
 
     def wait_gemini_call(self, previous_count, timeout=90, job_id=None, phase="unspecified", article_id=None):
         deadline = time.monotonic() + timeout
@@ -846,9 +854,11 @@ class ConsolidatedBackgroundGate(GoWebGate):
             "article_id": article_id_value,
             "article_stage_state": article_state,
             "article_last_processing_error": article_error_code,
+            "worker_lease": self.worker_lease_snapshot(),
+            "worker_dispatch": self.worker_dispatch_snapshot(),
         }
-        if job_id and job_status in {"failed", "interrupted", "delivery_unknown"}:
-            wait_diagnostic["failure_diagnostics"] = self.capture_execution_failure_diagnostics(job_id)
+        if job_id:
+            wait_diagnostic["job_execution_diagnostics"] = self.capture_execution_failure_diagnostics(job_id)
         self.report.setdefault("blocked_ai_wait_diagnostics", {})[phase] = wait_diagnostic
         raise GateFailure("fixture_job_did_not_reach_blocked_fake_ai")
 
@@ -890,6 +900,78 @@ class ConsolidatedBackgroundGate(GoWebGate):
         except (ValueError, TypeError):
             return {"generation": None, "status": None, "owner_present": None,
                     "heartbeat_age_seconds": None}
+
+    def worker_dispatch_snapshot(self):
+        value = self.pg_value(
+            "SELECT (SELECT count(*) FROM background_jobs WHERE state='queued')::text || '|' || "
+            "(SELECT count(*) FROM background_jobs WHERE state='running')::text || '|' || "
+            "(SELECT count(*) FROM background_job_executions WHERE state IN ('accepted','running'))::text"
+        )
+        try:
+            queued_jobs, running_jobs, active_attempts = (int(part) for part in value.split("|", 2))
+            if min(queued_jobs, running_jobs, active_attempts) < 0:
+                raise ValueError
+            return {
+                "queued_jobs": queued_jobs,
+                "running_jobs": running_jobs,
+                "active_execution_attempts": active_attempts,
+                "active_jobs": self._active_job_snapshot(),
+            }
+        except (ValueError, TypeError):
+            return {"queued_jobs": None, "running_jobs": None, "active_execution_attempts": None,
+                    "active_jobs": self._active_job_snapshot()}
+
+    def _active_job_snapshot(self):
+        rows = self._json_probe(
+            "SELECT COALESCE(json_agg(json_build_object('kind',kind,'state',state,'scheduled',scheduled) "
+            "ORDER BY state,kind),'[]'::json)::text FROM ("
+            "SELECT kind,state,(schedule_key IS NOT NULL) AS scheduled FROM background_jobs "
+            "WHERE state IN ('queued','running') ORDER BY queue_position LIMIT 10) active"
+        )
+        if not isinstance(rows, list):
+            return None
+        safe = []
+        for row in rows:
+            if not isinstance(row, dict):
+                continue
+            kind = self._safe_state(row.get("kind"), {"news_processing", "news_digest", "telegram_digest",
+                                                      "backup", "reprocess_failed", "article_reprocess",
+                                                      "summaries_generate", "source_test"})
+            state = self._safe_state(row.get("state"), {"queued", "running"})
+            scheduled = row.get("scheduled") if type(row.get("scheduled")) is bool else None
+            if kind and state:
+                safe.append({"kind": kind, "state": state, "scheduled": scheduled})
+        return safe
+
+    def wait_worker_queue_idle(self, timeout=60):
+        deadline = time.monotonic() + timeout
+        while True:
+            snapshot = self.worker_dispatch_snapshot()
+            if (snapshot["queued_jobs"] == 0 and snapshot["running_jobs"] == 0
+                    and snapshot["active_execution_attempts"] == 0):
+                self.report["worker_queue_quiescence"] = {
+                    "idle": True, "worker_lease": self.worker_lease_snapshot(), **snapshot,
+                }
+                return
+            if time.monotonic() >= deadline:
+                self.report["worker_queue_quiescence"] = {
+                    "idle": False, "worker_lease": self.worker_lease_snapshot(), **snapshot,
+                }
+                raise GateFailure("fixture_worker_queue_did_not_drain")
+            time.sleep(0.25)
+
+    def pause_fixture_scheduler(self):
+        status, runtime = self.scheduler_request("GET", "/v1/status")
+        revision = runtime.get("control_revision") if status == 200 and isinstance(runtime, dict) else None
+        if type(revision) is not int:
+            raise GateFailure("fixture_scheduler_control_revision_unavailable")
+        pause_status, paused = self.scheduler_request("PUT", "/v1/control", {
+            "expected_revision": revision, "paused": True,
+        })
+        if (pause_status != 200 or not isinstance(paused, dict) or paused.get("paused") is not True
+                or paused.get("revision") != revision + 1):
+            raise GateFailure("fixture_scheduler_could_not_quiesce")
+        self.report["checks"]["fixture_scheduler_paused_before_fault_injection"] = True
 
     def observe_worker_during_row_lock(self, holder, timeout=26):
         started = time.monotonic()
@@ -951,10 +1033,12 @@ class ConsolidatedBackgroundGate(GoWebGate):
         }
 
     def verify_lease_loss_recovery(self, background_id, background_pid):
+        self.wait_worker_queue_idle(timeout=60)
         baseline = self.fake_counters_http().get("providers", {}).get("gemini", 0)
         self.control_fake_services(gemini_mode="block")
-        article_id = self.pg_value("SELECT id FROM articles WHERE processed=true ORDER BY id LIMIT 1")
-        job_id = self.enqueue_article_reprocess(article_id, "lease-recovery-fixture-" + self.run_id)
+        article_id = self.create_fresh_fixture_article("worker_lease_recovery")
+        job_id = self.enqueue_article_reprocess(article_id, "lease-recovery-fixture-" + self.run_id,
+                                                force=False)
         self.wait_gemini_call(baseline, job_id=job_id, phase="worker_reprocess", article_id=article_id)
         before_lease = self.pg_value("SELECT generation::text || '|' || lock_backend_pid::text "
                                      "FROM background_worker_status WHERE id=1")
@@ -1129,7 +1213,11 @@ class ConsolidatedBackgroundGate(GoWebGate):
 
     def verify_default_news_digest_authority(self):
         """Exercise omitted digest flags through the real Go-to-Python authority path."""
-        before = self.fake_counters_http().get("providers", {}).get("telegram")
+        before_counters = self.fake_counters_http()
+        before = before_counters.get("providers", {}).get("telegram", before_counters.get("telegram"))
+        before_editorial = before_counters.get("providers", {}).get(
+            "editorial_gemini", before_counters.get("editorial_gemini")
+        )
         if type(before) is not int or before < 0:
             raise GateFailure("default_news_digest_telegram_counter_unavailable")
         idempotency_key = "go-news-digest-default-" + self.run_id
@@ -1151,18 +1239,39 @@ class ConsolidatedBackgroundGate(GoWebGate):
             "SELECT COALESCE(result->>'parts_sent','') FROM background_jobs WHERE id='" + job_id + "'::uuid"
         )
         parts_sent = int(raw_parts) if raw_parts.isdigit() else None
-        after = self.fake_counters_http().get("providers", {}).get("telegram")
+        edition_count_raw = self.pg_value(
+            "SELECT count(*) FROM editorial_digest_editions WHERE job_id='" + job_id + "'::uuid AND locale='ru'"
+        )
+        material_count_raw = self.pg_value(
+            "SELECT COALESCE(max(jsonb_array_length(snapshot->'articles')),0) "
+            "FROM editorial_digest_editions WHERE job_id='" + job_id + "'::uuid AND locale='ru'"
+        )
+        after_counters = self.fake_counters_http()
+        after = after_counters.get("providers", {}).get("telegram", after_counters.get("telegram"))
+        after_editorial = after_counters.get("providers", {}).get(
+            "editorial_gemini", after_counters.get("editorial_gemini")
+        )
+        edition_count = int(edition_count_raw) if edition_count_raw.isdigit() else 0
+        material_count = int(material_count_raw) if material_count_raw.isdigit() else 0
         self.report["default_news_digest_authority"] = {
             "status": job.get("status"),
             "error_code": self._safe_code(job.get("error_code")),
             "parts_sent": parts_sent,
             "telegram_count_before": before,
             "telegram_count_after": after if type(after) is int and after >= 0 else None,
+            "editorial_gemini_count_before": before_editorial,
+            "editorial_gemini_count_after": after_editorial,
+            "persisted_editions": edition_count,
+            "snapshot_materials": material_count,
         }
         self.check("news_digest_omitted_flags_authority_and_delivery",
                    job.get("status") == "succeeded" and job.get("error_code") is None
                    and isinstance(parts_sent, int) and parts_sent > 0
-                   and type(after) is int and after > before)
+                   and type(after) is int and type(before) is int and after > before)
+        self.check("news_digest_persists_complete_editorial_edition",
+                   edition_count == 1 and material_count > 0
+                   and type(before_editorial) is int and type(after_editorial) is int
+                   and after_editorial > before_editorial)
 
     def verify_bounded_sigterm(self):
         name = self.prefix + "-background"
@@ -1245,7 +1354,9 @@ class ConsolidatedBackgroundGate(GoWebGate):
                    and control.get("revision") == current_revision + 1)
         if paused != 200:
             raise GateFailure("embedded_scheduler_pause_failed")
-        due = (datetime.now(timezone.utc) + timedelta(seconds=30)).isoformat(timespec="microseconds").replace("+00:00", "Z")
+        # This schedule covers timestamp preservation only. A future day keeps
+        # it from generating unrelated worker load during later fault tests.
+        due = (datetime.now(timezone.utc) + timedelta(days=1)).isoformat(timespec="microseconds").replace("+00:00", "Z")
         schedule = {"schedule_key": "fixture:consolidated-due", "enabled": True,
                     "calendar": {"type": "interval", "timezone": "UTC", "interval_minutes": 1440},
                     "target_alias": "news-worker", "operation": "news_processing", "payload": {},
@@ -1307,8 +1418,11 @@ class ConsolidatedBackgroundGate(GoWebGate):
             if occurrence and occurrence.get("status") in {"accepted", "blocked"}:
                 break
             time.sleep(0.5)
+        accepted_job_id = occurrence.get("job_id") if isinstance(occurrence, dict) else None
         accepted = bool(occurrence and occurrence.get("status") == "accepted"
-                        and occurrence.get("job_id") and occurrence.get("attempts", 0) >= 1)
+                        and isinstance(accepted_job_id, str)
+                        and re.fullmatch(r"[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}", accepted_job_id)
+                        and occurrence.get("attempts", 0) >= 1)
         if not accepted:
             schedule_status, schedule = self.scheduler_request(
                 "GET", "/v1/schedules/fixture:consolidated-dispatch")
@@ -1345,10 +1459,12 @@ class ConsolidatedBackgroundGate(GoWebGate):
             "schedule_key": occurrence.get("schedule_key"), "status": occurrence.get("status"),
             "attempts": occurrence.get("attempts"), "has_job_id": bool(occurrence.get("job_id")),
         }
+        scheduled_jobs = [("fixture:consolidated-dispatch", accepted_job_id)]
         _, all_occurrences = self.scheduler_request("GET", "/v1/occurrences?limit=100")
         retained = next((item for item in (all_occurrences or {}).get("occurrences", [])
                          if item.get("schedule_key") == "fixture:web-unavailable"), None)
         occurrence_id = retained.get("occurrence_id") if retained else None
+        retained_job_id = retained.get("job_id") if retained else None
         receipt_count = "0"
         if isinstance(occurrence_id, str) and re.fullmatch(
                 r"[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}", occurrence_id):
@@ -1363,6 +1479,25 @@ class ConsolidatedBackgroundGate(GoWebGate):
         }
         self.check("web_unavailable_outbox_delivered_once_after_web_start",
                    retained is not None and retained.get("status") == "accepted" and receipt_count == "1")
+        if (retained is not None and retained.get("status") == "accepted"
+                and (not isinstance(retained_job_id, str) or re.fullmatch(
+                    r"[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}",
+                    retained_job_id) is None)):
+            raise GateFailure("fixture_pre_web_scheduled_job_id_missing")
+        if isinstance(retained_job_id, str):
+            scheduled_jobs.append(("fixture:web-unavailable", retained_job_id))
+        self.pause_fixture_scheduler()
+        completed = []
+        for schedule_key, job_id in scheduled_jobs:
+            job = self.wait_job_http(job_id, timeout=180)
+            completed.append({"schedule_key": schedule_key,
+                              "status": self._safe_state(job.get("status"), {
+                                  "queued", "running", "succeeded", "failed", "interrupted",
+                                  "delivery_unknown",
+                              })})
+            if job.get("status") != "succeeded":
+                raise GateFailure("fixture_scheduled_job_did_not_finish")
+        self.report["scheduler_fixture_jobs"] = completed
 
     def verify_runtime_db_users(self):
         result = self.docker("exec", self.prefix + "-postgres", "psql", "-U", "gate_user", "-d", "gate_db",
