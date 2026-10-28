@@ -70,7 +70,7 @@ The scheduled-job receiver returns 202 for a new receipt, 200 for an exact dupli
 
 `DATABASE_URL`, `ADMIN_PASSWORD`, `WEB_BACKEND_URL`, and `WEB_BACKEND_TOKEN` are required for the Go web. The private backend URL is an origin only, such as `http://executor:8100`; the client appends fixed operation paths. Other settings cover admin identity/JWT, scheduler client and receiver tokens, allowed origins, trusted hosts, site URL, and trusted proxy CIDRs. Provider credentials are configured only for provider-owning services.
 
-The one-shot `migrate` service runs `python -m news_aggregator.migrate` and must complete successfully before database consumers start. The Go web verifies the expected schema at startup and performs no DDL.
+The one-shot `migrate` service runs `/usr/local/bin/news-migrate` and must complete successfully before database consumers start. The Go web verifies the expected schema at startup and performs no DDL.
 
 Run web tests from the repository root:
 

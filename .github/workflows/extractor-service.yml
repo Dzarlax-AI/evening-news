@@ -4,33 +4,12 @@ on:
   pull_request:
     paths:
       - 'go/**'
+      - 'go-tools/**'
       - 'go-processing/**'
-      - 'news_aggregator/extraction/**'
-      - 'news_aggregator/telegram/**'
-      - 'news_aggregator/sources/**'
-      - 'news_aggregator/core/**'
-      - 'news_aggregator/config.py'
-      - 'news_aggregator/processing/**'
-      - 'news_aggregator/services/ai_client.py'
-      - 'news_aggregator/services/source_manager.py'
-      - 'tests/test_extractor_service*'
-      - 'tests/test_telegram*'
-      - 'tests/test_page_monitor*'
-      - 'tests/test_source_manager*'
-      - 'tests/test_public_feed_template_security.py'
       - 'go-web/templates/public/fragments/feed_core.html'
-      - 'tests/test_browser*'
-      - 'tests/test_native*'
-      - 'tests/test_shadow_cdp_relay*'
-      - 'tests/test_linux_vps_gate_harness.py'
-      - 'tests/test_processing_batches.py'
       - 'tests/fixtures/**'
-      - 'scripts/native_*.py'
-      - 'scripts/run_native_*.py'
-      - 'scripts/run_go_cloak_linux_gate.py'
       - 'scripts/shadow_cdp_relay.py'
-      - 'scripts/smoke_extractor_service.py'
-      - 'scripts/compare_extractor_service.py'
+      - 'scripts/shadow_x11_client.sh'
       - 'deploy/news-extractor/**'
       - 'docker/Dockerfile.extractor'
       - 'docker-compose.extractor-test.yml'
@@ -38,33 +17,12 @@ on:
   push:
     paths:
       - 'go/**'
+      - 'go-tools/**'
       - 'go-processing/**'
-      - 'news_aggregator/extraction/**'
-      - 'news_aggregator/telegram/**'
-      - 'news_aggregator/sources/**'
-      - 'news_aggregator/core/**'
-      - 'news_aggregator/config.py'
-      - 'news_aggregator/processing/**'
-      - 'news_aggregator/services/ai_client.py'
-      - 'news_aggregator/services/source_manager.py'
-      - 'tests/test_extractor_service*'
-      - 'tests/test_telegram*'
-      - 'tests/test_page_monitor*'
-      - 'tests/test_source_manager*'
-      - 'tests/test_public_feed_template_security.py'
       - 'go-web/templates/public/fragments/feed_core.html'
-      - 'tests/test_browser*'
-      - 'tests/test_native*'
-      - 'tests/test_shadow_cdp_relay*'
-      - 'tests/test_linux_vps_gate_harness.py'
-      - 'tests/test_processing_batches.py'
       - 'tests/fixtures/**'
-      - 'scripts/native_*.py'
-      - 'scripts/run_native_*.py'
-      - 'scripts/run_go_cloak_linux_gate.py'
       - 'scripts/shadow_cdp_relay.py'
-      - 'scripts/smoke_extractor_service.py'
-      - 'scripts/compare_extractor_service.py'
+      - 'scripts/shadow_x11_client.sh'
       - 'deploy/news-extractor/**'
       - 'docker/Dockerfile.extractor'
       - 'docker-compose.extractor-test.yml'
@@ -117,28 +75,28 @@ jobs:
         with:
           go-version-file: go/go.mod
           cache-dependency-path: go/go.sum
-      - uses: actions/setup-python@v5
-        with:
-          python-version: '3.12'
-          cache: pip
       - uses: actions/setup-node@v4
         with:
           node-version: '22'
-      - run: python -m pip install -r requirements.txt
       - name: Test Go contracts and lifecycle
         working-directory: go
         run: |
           go test -race -count=1 ./...
           go vet ./...
           go mod verify
-      - name: Test Python service integration
-        run: python -m pytest tests -q
+      - name: Test Go fixture probes
+        working-directory: go-tools
+        run: |
+          go test -race ./extractorcompare ./extractorsmoke ./cmd/extractor-candidate-metadata
+          go vet ./extractorcompare ./extractorsmoke ./cmd/extractor-candidate-metadata
       - name: Build independent image and start isolated service
         run: docker compose --env-file /dev/null -f docker-compose.extractor-test.yml up -d --build --wait
-      - name: Smoke API through the Python client
-        run: python scripts/smoke_extractor_service.py --endpoint http://127.0.0.1:18080 --expected-build "$EXTRACTOR_TEST_VERSION"
+      - name: Smoke API through the Go client
+        working-directory: go-tools
+        run: go run ./cmd/smoke-extractor-service --endpoint http://127.0.0.1:18080 --expected-build "$EXTRACTOR_TEST_VERSION" --corpus ../tests/fixtures/go-parity/manifest.json
       - name: Compare captured input outside the processing pipeline
-        run: python scripts/compare_extractor_service.py --corpus tests/fixtures/extractor-service/source-content-smoke.json --cycles 6 --endpoint http://127.0.0.1:18080 --output artifacts/extractor-service-comparison.json
+        working-directory: go-tools
+        run: go run ./cmd/compare-extractor-service --corpus ../tests/fixtures/extractor-service/source-content-smoke.json --cycles 6 --endpoint http://127.0.0.1:18080 --output ../artifacts/extractor-service-comparison.json
       - name: Package verified CI candidate image (test only)
         run: |
           set -euo pipefail
@@ -153,34 +111,9 @@ jobs:
           mkdir -p "$artifact_dir"
           archive="$artifact_dir/evening-news-extractor-image.tar"
           docker save --output "$archive" "$image_ref"
-          IMAGE_REF="$image_ref" IMAGE_ID="$image_id" SOURCE_SHA="$EXTRACTOR_TEST_VERSION" ARCHIVE="$archive" python - <<'PY'
-          import hashlib
-          import json
-          import os
-          from pathlib import Path
-          import re
-
-          image_id = os.environ['IMAGE_ID']
-          source_sha = os.environ['SOURCE_SHA']
-          archive = Path(os.environ['ARCHIVE'])
-          if not re.fullmatch(r'sha256:[0-9a-f]{64}', image_id):
-              raise SystemExit('candidate_image_id_invalid')
-          if not re.fullmatch(r'[0-9a-f]{40}', source_sha):
-              raise SystemExit('candidate_source_sha_invalid')
-          digest = hashlib.sha256()
-          with archive.open('rb') as stream:
-              for block in iter(lambda: stream.read(1024 * 1024), b''):
-                  digest.update(block)
-          metadata = {
-              'artifact_type': 'ci_test_only_candidate',
-              'image_ref': os.environ['IMAGE_REF'],
-              'image_id': image_id,
-              'source_sha': source_sha,
-              'archive': archive.name,
-              'archive_sha256': digest.hexdigest(),
-          }
-          (archive.parent / 'metadata.json').write_text(json.dumps(metadata, indent=2) + '\n')
-          PY
+          (cd go-tools && go run ./cmd/extractor-candidate-metadata \
+            --image-ref "$image_ref" --image-id "$image_id" --source-sha "$EXTRACTOR_TEST_VERSION" \
+            --archive "../$archive" --output "../$artifact_dir/metadata.json")
       - uses: actions/upload-artifact@v4
         with:
           name: extractor-candidate-image
@@ -244,22 +177,33 @@ jobs:
         with:
           go-version-file: go/go.mod
           cache-dependency-path: go/go.sum
-      - uses: actions/setup-python@v5
-        with:
-          python-version: '3.12'
       - name: Build candidate binaries for the isolated native gate
         run: |
           CGO_ENABLED=0 GOOS=linux GOARCH=amd64 go build -C go -o /tmp/concurrency-extract-service ./cmd/extract-service
           CGO_ENABLED=0 GOOS=linux GOARCH=amd64 go build -C go -o /tmp/concurrency-extract-egress ./cmd/extract-egress
+      - uses: actions/setup-go@v5
+        with:
+          go-version-file: go-tools/go.mod
+          cache-dependency-path: go-tools/go.sum
+      - name: Build the Go fixture gate
+        run: CGO_ENABLED=0 GOOS=linux GOARCH=amd64 go build -C go-tools -o /tmp/cloak-fixture ./cmd/cloak-fixture
+      - name: Ensure isolated network tools are available
+        run: |
+          set -euo pipefail
+          command -v nsenter
+          if ! command -v nft >/dev/null; then
+            sudo apt-get update
+            sudo apt-get install -y nftables
+          fi
       - name: Fetch test runtime images without publishing candidates
         run: |
           docker pull --platform linux/amd64 cloakhq/cloakbrowser:0.5.2@sha256:2c0d257802f54c4f86c9ccae336864baf63e118612732127cb96df35756a57a4
-          docker pull --platform linux/amd64 python:3.12-alpine
           docker pull --platform linux/amd64 alpine:3.21
       - name: Compare one and two Cloak tabs with an independent CDP peer
         run: |
+          mkdir -p artifacts
           native_gate_status=0
-          sudo env "PATH=$PATH" python scripts/native_cloak_concurrency_gate.py --worker-binary /tmp/concurrency-extract-service --egress-binary /tmp/concurrency-extract-egress --output artifacts/native-cloak-concurrency.json || native_gate_status=$?
+          sudo env "PATH=$PATH" /tmp/cloak-fixture gate --worker-binary /tmp/concurrency-extract-service --egress-binary /tmp/concurrency-extract-egress --fixture-binary /tmp/cloak-fixture --relay-script scripts/shadow_cdp_relay.py --x11-script scripts/shadow_x11_client.sh --output artifacts/native-cloak-concurrency.json || native_gate_status=$?
           if [ -f artifacts/native-cloak-concurrency.json ]; then
             sudo chown "$(id -u):$(id -g)" artifacts/native-cloak-concurrency.json
           fi
@@ -271,3 +215,6 @@ jobs:
           name: native-cloak-concurrency-evidence
           path: artifacts/native-cloak-concurrency.json
           if-no-files-found: warn
+      - name: Remove owned fixture binaries
+        if: always()
+        run: rm -f /tmp/concurrency-extract-service /tmp/concurrency-extract-egress /tmp/cloak-fixture

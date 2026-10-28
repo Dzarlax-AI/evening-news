@@ -1,0 +1,4662 @@
+{
+  "revision": "b9aa1a4637c676dac559719b51af352e481c0142",
+  "method": "actual original state-machine code, fake Setting session only; no DB or external transport",
+  "identity": "key:news_processing",
+  "cases": [
+    {
+      "name": "single-warning",
+      "steps": [
+        {
+          "position": 1,
+          "previous_position": null,
+          "job_id": "00000000-0000-4000-8000-000000000001",
+          "observation": {
+            "sources": [
+              {
+                "id": 1,
+                "type": "rss",
+                "config": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+                "state": "healthy"
+              },
+              {
+                "id": 2,
+                "type": "rss",
+                "config": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+                "state": "healthy"
+              },
+              {
+                "id": 3,
+                "type": "rss",
+                "config": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+                "state": "healthy"
+              },
+              {
+                "id": 4,
+                "type": "rss",
+                "config": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+                "state": "healthy"
+              },
+              {
+                "id": 5,
+                "type": "telegram",
+                "config": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+                "state": "healthy"
+              },
+              {
+                "id": 6,
+                "type": "custom",
+                "config": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+                "state": "healthy"
+              },
+              {
+                "id": 7,
+                "type": "custom",
+                "config": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+                "state": "healthy"
+              },
+              {
+                "id": 10,
+                "type": "custom",
+                "config": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+                "state": "warning",
+                "code": "transport_failed"
+              }
+            ],
+            "successful": 7,
+            "total": 8,
+            "warning": "transport_failed"
+          },
+          "delivered": true,
+          "decision": {
+            "event": null,
+            "identity": "key:news_processing",
+            "source_ids": [],
+            "recovery": false
+          },
+          "state_after": {
+            "v": 1,
+            "last_position": 1,
+            "sources": {
+              "1": {
+                "config": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+                "failed_streak": 0,
+                "healthy_streak": 1,
+                "last_state": "healthy",
+                "incident": "none",
+                "event_job": null
+              },
+              "2": {
+                "config": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+                "failed_streak": 0,
+                "healthy_streak": 1,
+                "last_state": "healthy",
+                "incident": "none",
+                "event_job": null
+              },
+              "3": {
+                "config": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+                "failed_streak": 0,
+                "healthy_streak": 1,
+                "last_state": "healthy",
+                "incident": "none",
+                "event_job": null
+              },
+              "4": {
+                "config": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+                "failed_streak": 0,
+                "healthy_streak": 1,
+                "last_state": "healthy",
+                "incident": "none",
+                "event_job": null
+              },
+              "5": {
+                "config": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+                "failed_streak": 0,
+                "healthy_streak": 1,
+                "last_state": "healthy",
+                "incident": "none",
+                "event_job": null
+              },
+              "6": {
+                "config": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+                "failed_streak": 0,
+                "healthy_streak": 1,
+                "last_state": "healthy",
+                "incident": "none",
+                "event_job": null
+              },
+              "7": {
+                "config": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+                "failed_streak": 0,
+                "healthy_streak": 1,
+                "last_state": "healthy",
+                "incident": "none",
+                "event_job": null
+              },
+              "10": {
+                "config": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+                "failed_streak": 1,
+                "healthy_streak": 0,
+                "last_state": "warning",
+                "incident": "none",
+                "event_job": null
+              }
+            }
+          }
+        },
+        {
+          "position": 2,
+          "previous_position": 1,
+          "job_id": "00000000-0000-4000-8000-000000000002",
+          "observation": {
+            "sources": [
+              {
+                "id": 1,
+                "type": "rss",
+                "config": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+                "state": "healthy"
+              },
+              {
+                "id": 2,
+                "type": "rss",
+                "config": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+                "state": "healthy"
+              },
+              {
+                "id": 3,
+                "type": "rss",
+                "config": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+                "state": "healthy"
+              },
+              {
+                "id": 4,
+                "type": "rss",
+                "config": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+                "state": "healthy"
+              },
+              {
+                "id": 5,
+                "type": "telegram",
+                "config": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+                "state": "healthy"
+              },
+              {
+                "id": 6,
+                "type": "custom",
+                "config": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+                "state": "healthy"
+              },
+              {
+                "id": 7,
+                "type": "custom",
+                "config": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+                "state": "healthy"
+              },
+              {
+                "id": 10,
+                "type": "custom",
+                "config": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+                "state": "healthy"
+              }
+            ],
+            "successful": 8,
+            "total": 8,
+            "warning": null
+          },
+          "delivered": true,
+          "decision": {
+            "event": null,
+            "identity": "key:news_processing",
+            "source_ids": [],
+            "recovery": false
+          },
+          "state_after": {
+            "v": 1,
+            "last_position": 2,
+            "sources": {
+              "1": {
+                "config": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+                "failed_streak": 0,
+                "healthy_streak": 2,
+                "last_state": "healthy",
+                "incident": "none",
+                "event_job": null
+              },
+              "2": {
+                "config": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+                "failed_streak": 0,
+                "healthy_streak": 2,
+                "last_state": "healthy",
+                "incident": "none",
+                "event_job": null
+              },
+              "3": {
+                "config": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+                "failed_streak": 0,
+                "healthy_streak": 2,
+                "last_state": "healthy",
+                "incident": "none",
+                "event_job": null
+              },
+              "4": {
+                "config": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+                "failed_streak": 0,
+                "healthy_streak": 2,
+                "last_state": "healthy",
+                "incident": "none",
+                "event_job": null
+              },
+              "5": {
+                "config": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+                "failed_streak": 0,
+                "healthy_streak": 2,
+                "last_state": "healthy",
+                "incident": "none",
+                "event_job": null
+              },
+              "6": {
+                "config": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+                "failed_streak": 0,
+                "healthy_streak": 2,
+                "last_state": "healthy",
+                "incident": "none",
+                "event_job": null
+              },
+              "7": {
+                "config": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+                "failed_streak": 0,
+                "healthy_streak": 2,
+                "last_state": "healthy",
+                "incident": "none",
+                "event_job": null
+              },
+              "10": {
+                "config": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+                "failed_streak": 0,
+                "healthy_streak": 1,
+                "last_state": "healthy",
+                "incident": "none",
+                "event_job": null
+              }
+            }
+          }
+        },
+        {
+          "position": 3,
+          "previous_position": 2,
+          "job_id": "00000000-0000-4000-8000-000000000003",
+          "observation": {
+            "sources": [
+              {
+                "id": 1,
+                "type": "rss",
+                "config": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+                "state": "healthy"
+              },
+              {
+                "id": 2,
+                "type": "rss",
+                "config": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+                "state": "healthy"
+              },
+              {
+                "id": 3,
+                "type": "rss",
+                "config": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+                "state": "healthy"
+              },
+              {
+                "id": 4,
+                "type": "rss",
+                "config": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+                "state": "healthy"
+              },
+              {
+                "id": 5,
+                "type": "telegram",
+                "config": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+                "state": "healthy"
+              },
+              {
+                "id": 6,
+                "type": "custom",
+                "config": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+                "state": "healthy"
+              },
+              {
+                "id": 7,
+                "type": "custom",
+                "config": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+                "state": "healthy"
+              },
+              {
+                "id": 10,
+                "type": "custom",
+                "config": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+                "state": "healthy"
+              }
+            ],
+            "successful": 8,
+            "total": 8,
+            "warning": null
+          },
+          "delivered": true,
+          "decision": {
+            "event": null,
+            "identity": "key:news_processing",
+            "source_ids": [],
+            "recovery": false
+          },
+          "state_after": {
+            "v": 1,
+            "last_position": 3,
+            "sources": {
+              "1": {
+                "config": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+                "failed_streak": 0,
+                "healthy_streak": 2,
+                "last_state": "healthy",
+                "incident": "none",
+                "event_job": null
+              },
+              "2": {
+                "config": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+                "failed_streak": 0,
+                "healthy_streak": 2,
+                "last_state": "healthy",
+                "incident": "none",
+                "event_job": null
+              },
+              "3": {
+                "config": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+                "failed_streak": 0,
+                "healthy_streak": 2,
+                "last_state": "healthy",
+                "incident": "none",
+                "event_job": null
+              },
+              "4": {
+                "config": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+                "failed_streak": 0,
+                "healthy_streak": 2,
+                "last_state": "healthy",
+                "incident": "none",
+                "event_job": null
+              },
+              "5": {
+                "config": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+                "failed_streak": 0,
+                "healthy_streak": 2,
+                "last_state": "healthy",
+                "incident": "none",
+                "event_job": null
+              },
+              "6": {
+                "config": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+                "failed_streak": 0,
+                "healthy_streak": 2,
+                "last_state": "healthy",
+                "incident": "none",
+                "event_job": null
+              },
+              "7": {
+                "config": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+                "failed_streak": 0,
+                "healthy_streak": 2,
+                "last_state": "healthy",
+                "incident": "none",
+                "event_job": null
+              },
+              "10": {
+                "config": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+                "failed_streak": 0,
+                "healthy_streak": 2,
+                "last_state": "healthy",
+                "incident": "none",
+                "event_job": null
+              }
+            }
+          }
+        }
+      ]
+    },
+    {
+      "name": "consecutive-warning-and-recovery",
+      "steps": [
+        {
+          "position": 1,
+          "previous_position": null,
+          "job_id": "00000000-0000-4000-8000-000000000001",
+          "observation": {
+            "sources": [
+              {
+                "id": 1,
+                "type": "rss",
+                "config": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+                "state": "healthy"
+              },
+              {
+                "id": 2,
+                "type": "rss",
+                "config": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+                "state": "healthy"
+              },
+              {
+                "id": 3,
+                "type": "rss",
+                "config": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+                "state": "healthy"
+              },
+              {
+                "id": 4,
+                "type": "rss",
+                "config": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+                "state": "healthy"
+              },
+              {
+                "id": 5,
+                "type": "telegram",
+                "config": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+                "state": "healthy"
+              },
+              {
+                "id": 6,
+                "type": "custom",
+                "config": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+                "state": "healthy"
+              },
+              {
+                "id": 7,
+                "type": "custom",
+                "config": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+                "state": "healthy"
+              },
+              {
+                "id": 10,
+                "type": "custom",
+                "config": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+                "state": "warning",
+                "code": "transport_failed"
+              }
+            ],
+            "successful": 7,
+            "total": 8,
+            "warning": "transport_failed"
+          },
+          "delivered": true,
+          "decision": {
+            "event": null,
+            "identity": "key:news_processing",
+            "source_ids": [],
+            "recovery": false
+          },
+          "state_after": {
+            "v": 1,
+            "last_position": 1,
+            "sources": {
+              "1": {
+                "config": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+                "failed_streak": 0,
+                "healthy_streak": 1,
+                "last_state": "healthy",
+                "incident": "none",
+                "event_job": null
+              },
+              "2": {
+                "config": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+                "failed_streak": 0,
+                "healthy_streak": 1,
+                "last_state": "healthy",
+                "incident": "none",
+                "event_job": null
+              },
+              "3": {
+                "config": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+                "failed_streak": 0,
+                "healthy_streak": 1,
+                "last_state": "healthy",
+                "incident": "none",
+                "event_job": null
+              },
+              "4": {
+                "config": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+                "failed_streak": 0,
+                "healthy_streak": 1,
+                "last_state": "healthy",
+                "incident": "none",
+                "event_job": null
+              },
+              "5": {
+                "config": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+                "failed_streak": 0,
+                "healthy_streak": 1,
+                "last_state": "healthy",
+                "incident": "none",
+                "event_job": null
+              },
+              "6": {
+                "config": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+                "failed_streak": 0,
+                "healthy_streak": 1,
+                "last_state": "healthy",
+                "incident": "none",
+                "event_job": null
+              },
+              "7": {
+                "config": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+                "failed_streak": 0,
+                "healthy_streak": 1,
+                "last_state": "healthy",
+                "incident": "none",
+                "event_job": null
+              },
+              "10": {
+                "config": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+                "failed_streak": 1,
+                "healthy_streak": 0,
+                "last_state": "warning",
+                "incident": "none",
+                "event_job": null
+              }
+            }
+          }
+        },
+        {
+          "position": 2,
+          "previous_position": 1,
+          "job_id": "00000000-0000-4000-8000-000000000002",
+          "observation": {
+            "sources": [
+              {
+                "id": 1,
+                "type": "rss",
+                "config": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+                "state": "healthy"
+              },
+              {
+                "id": 2,
+                "type": "rss",
+                "config": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+                "state": "healthy"
+              },
+              {
+                "id": 3,
+                "type": "rss",
+                "config": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+                "state": "healthy"
+              },
+              {
+                "id": 4,
+                "type": "rss",
+                "config": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+                "state": "healthy"
+              },
+              {
+                "id": 5,
+                "type": "telegram",
+                "config": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+                "state": "healthy"
+              },
+              {
+                "id": 6,
+                "type": "custom",
+                "config": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+                "state": "healthy"
+              },
+              {
+                "id": 7,
+                "type": "custom",
+                "config": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+                "state": "healthy"
+              },
+              {
+                "id": 10,
+                "type": "custom",
+                "config": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+                "state": "warning",
+                "code": "transport_failed"
+              }
+            ],
+            "successful": 7,
+            "total": 8,
+            "warning": "transport_failed"
+          },
+          "delivered": true,
+          "decision": {
+            "event": {
+              "title": "Scheduled source warning",
+              "message": "Source #10 (Page Monitor) reported transport_failed. Sources successful: 7/8."
+            },
+            "identity": "key:news_processing",
+            "events": [
+              {
+                "source_id": 10,
+                "type": "custom",
+                "code": "transport_failed",
+                "recovery": false
+              }
+            ]
+          },
+          "state_after": {
+            "v": 1,
+            "last_position": 2,
+            "sources": {
+              "1": {
+                "config": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+                "failed_streak": 0,
+                "healthy_streak": 2,
+                "last_state": "healthy",
+                "incident": "none",
+                "event_job": null
+              },
+              "2": {
+                "config": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+                "failed_streak": 0,
+                "healthy_streak": 2,
+                "last_state": "healthy",
+                "incident": "none",
+                "event_job": null
+              },
+              "3": {
+                "config": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+                "failed_streak": 0,
+                "healthy_streak": 2,
+                "last_state": "healthy",
+                "incident": "none",
+                "event_job": null
+              },
+              "4": {
+                "config": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+                "failed_streak": 0,
+                "healthy_streak": 2,
+                "last_state": "healthy",
+                "incident": "none",
+                "event_job": null
+              },
+              "5": {
+                "config": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+                "failed_streak": 0,
+                "healthy_streak": 2,
+                "last_state": "healthy",
+                "incident": "none",
+                "event_job": null
+              },
+              "6": {
+                "config": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+                "failed_streak": 0,
+                "healthy_streak": 2,
+                "last_state": "healthy",
+                "incident": "none",
+                "event_job": null
+              },
+              "7": {
+                "config": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+                "failed_streak": 0,
+                "healthy_streak": 2,
+                "last_state": "healthy",
+                "incident": "none",
+                "event_job": null
+              },
+              "10": {
+                "config": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+                "failed_streak": 2,
+                "healthy_streak": 0,
+                "last_state": "warning",
+                "incident": "active",
+                "event_job": null
+              }
+            }
+          }
+        },
+        {
+          "position": 3,
+          "previous_position": 2,
+          "job_id": "00000000-0000-4000-8000-000000000003",
+          "observation": {
+            "sources": [
+              {
+                "id": 1,
+                "type": "rss",
+                "config": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+                "state": "healthy"
+              },
+              {
+                "id": 2,
+                "type": "rss",
+                "config": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+                "state": "healthy"
+              },
+              {
+                "id": 3,
+                "type": "rss",
+                "config": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+                "state": "healthy"
+              },
+              {
+                "id": 4,
+                "type": "rss",
+                "config": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+                "state": "healthy"
+              },
+              {
+                "id": 5,
+                "type": "telegram",
+                "config": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+                "state": "healthy"
+              },
+              {
+                "id": 6,
+                "type": "custom",
+                "config": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+                "state": "healthy"
+              },
+              {
+                "id": 7,
+                "type": "custom",
+                "config": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+                "state": "healthy"
+              },
+              {
+                "id": 10,
+                "type": "custom",
+                "config": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+                "state": "warning",
+                "code": "transport_failed"
+              }
+            ],
+            "successful": 7,
+            "total": 8,
+            "warning": "transport_failed"
+          },
+          "delivered": true,
+          "decision": {
+            "event": null,
+            "identity": "key:news_processing",
+            "source_ids": [],
+            "recovery": false
+          },
+          "state_after": {
+            "v": 1,
+            "last_position": 3,
+            "sources": {
+              "1": {
+                "config": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+                "failed_streak": 0,
+                "healthy_streak": 2,
+                "last_state": "healthy",
+                "incident": "none",
+                "event_job": null
+              },
+              "2": {
+                "config": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+                "failed_streak": 0,
+                "healthy_streak": 2,
+                "last_state": "healthy",
+                "incident": "none",
+                "event_job": null
+              },
+              "3": {
+                "config": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+                "failed_streak": 0,
+                "healthy_streak": 2,
+                "last_state": "healthy",
+                "incident": "none",
+                "event_job": null
+              },
+              "4": {
+                "config": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+                "failed_streak": 0,
+                "healthy_streak": 2,
+                "last_state": "healthy",
+                "incident": "none",
+                "event_job": null
+              },
+              "5": {
+                "config": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+                "failed_streak": 0,
+                "healthy_streak": 2,
+                "last_state": "healthy",
+                "incident": "none",
+                "event_job": null
+              },
+              "6": {
+                "config": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+                "failed_streak": 0,
+                "healthy_streak": 2,
+                "last_state": "healthy",
+                "incident": "none",
+                "event_job": null
+              },
+              "7": {
+                "config": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+                "failed_streak": 0,
+                "healthy_streak": 2,
+                "last_state": "healthy",
+                "incident": "none",
+                "event_job": null
+              },
+              "10": {
+                "config": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+                "failed_streak": 2,
+                "healthy_streak": 0,
+                "last_state": "warning",
+                "incident": "active",
+                "event_job": null
+              }
+            }
+          }
+        },
+        {
+          "position": 4,
+          "previous_position": 3,
+          "job_id": "00000000-0000-4000-8000-000000000004",
+          "observation": {
+            "sources": [
+              {
+                "id": 1,
+                "type": "rss",
+                "config": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+                "state": "healthy"
+              },
+              {
+                "id": 2,
+                "type": "rss",
+                "config": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+                "state": "healthy"
+              },
+              {
+                "id": 3,
+                "type": "rss",
+                "config": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+                "state": "healthy"
+              },
+              {
+                "id": 4,
+                "type": "rss",
+                "config": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+                "state": "healthy"
+              },
+              {
+                "id": 5,
+                "type": "telegram",
+                "config": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+                "state": "healthy"
+              },
+              {
+                "id": 6,
+                "type": "custom",
+                "config": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+                "state": "healthy"
+              },
+              {
+                "id": 7,
+                "type": "custom",
+                "config": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+                "state": "healthy"
+              },
+              {
+                "id": 10,
+                "type": "custom",
+                "config": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+                "state": "healthy"
+              }
+            ],
+            "successful": 8,
+            "total": 8,
+            "warning": null
+          },
+          "delivered": true,
+          "decision": {
+            "event": null,
+            "identity": "key:news_processing",
+            "source_ids": [],
+            "recovery": false
+          },
+          "state_after": {
+            "v": 1,
+            "last_position": 4,
+            "sources": {
+              "1": {
+                "config": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+                "failed_streak": 0,
+                "healthy_streak": 2,
+                "last_state": "healthy",
+                "incident": "none",
+                "event_job": null
+              },
+              "2": {
+                "config": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+                "failed_streak": 0,
+                "healthy_streak": 2,
+                "last_state": "healthy",
+                "incident": "none",
+                "event_job": null
+              },
+              "3": {
+                "config": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+                "failed_streak": 0,
+                "healthy_streak": 2,
+                "last_state": "healthy",
+                "incident": "none",
+                "event_job": null
+              },
+              "4": {
+                "config": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+                "failed_streak": 0,
+                "healthy_streak": 2,
+                "last_state": "healthy",
+                "incident": "none",
+                "event_job": null
+              },
+              "5": {
+                "config": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+                "failed_streak": 0,
+                "healthy_streak": 2,
+                "last_state": "healthy",
+                "incident": "none",
+                "event_job": null
+              },
+              "6": {
+                "config": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+                "failed_streak": 0,
+                "healthy_streak": 2,
+                "last_state": "healthy",
+                "incident": "none",
+                "event_job": null
+              },
+              "7": {
+                "config": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+                "failed_streak": 0,
+                "healthy_streak": 2,
+                "last_state": "healthy",
+                "incident": "none",
+                "event_job": null
+              },
+              "10": {
+                "config": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+                "failed_streak": 0,
+                "healthy_streak": 1,
+                "last_state": "healthy",
+                "incident": "active",
+                "event_job": null
+              }
+            }
+          }
+        },
+        {
+          "position": 5,
+          "previous_position": 4,
+          "job_id": "00000000-0000-4000-8000-000000000005",
+          "observation": {
+            "sources": [
+              {
+                "id": 1,
+                "type": "rss",
+                "config": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+                "state": "healthy"
+              },
+              {
+                "id": 2,
+                "type": "rss",
+                "config": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+                "state": "healthy"
+              },
+              {
+                "id": 3,
+                "type": "rss",
+                "config": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+                "state": "healthy"
+              },
+              {
+                "id": 4,
+                "type": "rss",
+                "config": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+                "state": "healthy"
+              },
+              {
+                "id": 5,
+                "type": "telegram",
+                "config": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+                "state": "healthy"
+              },
+              {
+                "id": 6,
+                "type": "custom",
+                "config": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+                "state": "healthy"
+              },
+              {
+                "id": 7,
+                "type": "custom",
+                "config": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+                "state": "healthy"
+              },
+              {
+                "id": 10,
+                "type": "custom",
+                "config": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+                "state": "healthy"
+              }
+            ],
+            "successful": 8,
+            "total": 8,
+            "warning": null
+          },
+          "delivered": true,
+          "decision": {
+            "event": {
+              "title": "Scheduled source recovered",
+              "message": "Source #10 (Page Monitor) recovered. Sources successful: 8/8."
+            },
+            "identity": "key:news_processing",
+            "events": [
+              {
+                "source_id": 10,
+                "type": "custom",
+                "recovery": true
+              }
+            ]
+          },
+          "state_after": {
+            "v": 1,
+            "last_position": 5,
+            "sources": {
+              "1": {
+                "config": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+                "failed_streak": 0,
+                "healthy_streak": 2,
+                "last_state": "healthy",
+                "incident": "none",
+                "event_job": null
+              },
+              "2": {
+                "config": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+                "failed_streak": 0,
+                "healthy_streak": 2,
+                "last_state": "healthy",
+                "incident": "none",
+                "event_job": null
+              },
+              "3": {
+                "config": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+                "failed_streak": 0,
+                "healthy_streak": 2,
+                "last_state": "healthy",
+                "incident": "none",
+                "event_job": null
+              },
+              "4": {
+                "config": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+                "failed_streak": 0,
+                "healthy_streak": 2,
+                "last_state": "healthy",
+                "incident": "none",
+                "event_job": null
+              },
+              "5": {
+                "config": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+                "failed_streak": 0,
+                "healthy_streak": 2,
+                "last_state": "healthy",
+                "incident": "none",
+                "event_job": null
+              },
+              "6": {
+                "config": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+                "failed_streak": 0,
+                "healthy_streak": 2,
+                "last_state": "healthy",
+                "incident": "none",
+                "event_job": null
+              },
+              "7": {
+                "config": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+                "failed_streak": 0,
+                "healthy_streak": 2,
+                "last_state": "healthy",
+                "incident": "none",
+                "event_job": null
+              },
+              "10": {
+                "config": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+                "failed_streak": 0,
+                "healthy_streak": 0,
+                "last_state": "healthy",
+                "incident": "none",
+                "event_job": null
+              }
+            }
+          }
+        },
+        {
+          "position": 6,
+          "previous_position": 5,
+          "job_id": "00000000-0000-4000-8000-000000000006",
+          "observation": {
+            "sources": [
+              {
+                "id": 1,
+                "type": "rss",
+                "config": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+                "state": "healthy"
+              },
+              {
+                "id": 2,
+                "type": "rss",
+                "config": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+                "state": "healthy"
+              },
+              {
+                "id": 3,
+                "type": "rss",
+                "config": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+                "state": "healthy"
+              },
+              {
+                "id": 4,
+                "type": "rss",
+                "config": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+                "state": "healthy"
+              },
+              {
+                "id": 5,
+                "type": "telegram",
+                "config": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+                "state": "healthy"
+              },
+              {
+                "id": 6,
+                "type": "custom",
+                "config": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+                "state": "healthy"
+              },
+              {
+                "id": 7,
+                "type": "custom",
+                "config": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+                "state": "healthy"
+              },
+              {
+                "id": 10,
+                "type": "custom",
+                "config": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+                "state": "healthy"
+              }
+            ],
+            "successful": 8,
+            "total": 8,
+            "warning": null
+          },
+          "delivered": true,
+          "decision": {
+            "event": null,
+            "identity": "key:news_processing",
+            "source_ids": [],
+            "recovery": false
+          },
+          "state_after": {
+            "v": 1,
+            "last_position": 6,
+            "sources": {
+              "1": {
+                "config": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+                "failed_streak": 0,
+                "healthy_streak": 2,
+                "last_state": "healthy",
+                "incident": "none",
+                "event_job": null
+              },
+              "2": {
+                "config": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+                "failed_streak": 0,
+                "healthy_streak": 2,
+                "last_state": "healthy",
+                "incident": "none",
+                "event_job": null
+              },
+              "3": {
+                "config": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+                "failed_streak": 0,
+                "healthy_streak": 2,
+                "last_state": "healthy",
+                "incident": "none",
+                "event_job": null
+              },
+              "4": {
+                "config": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+                "failed_streak": 0,
+                "healthy_streak": 2,
+                "last_state": "healthy",
+                "incident": "none",
+                "event_job": null
+              },
+              "5": {
+                "config": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+                "failed_streak": 0,
+                "healthy_streak": 2,
+                "last_state": "healthy",
+                "incident": "none",
+                "event_job": null
+              },
+              "6": {
+                "config": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+                "failed_streak": 0,
+                "healthy_streak": 2,
+                "last_state": "healthy",
+                "incident": "none",
+                "event_job": null
+              },
+              "7": {
+                "config": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+                "failed_streak": 0,
+                "healthy_streak": 2,
+                "last_state": "healthy",
+                "incident": "none",
+                "event_job": null
+              },
+              "10": {
+                "config": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+                "failed_streak": 0,
+                "healthy_streak": 1,
+                "last_state": "healthy",
+                "incident": "none",
+                "event_job": null
+              }
+            }
+          }
+        }
+      ]
+    },
+    {
+      "name": "unknown-delivery-no-replay",
+      "steps": [
+        {
+          "position": 1,
+          "previous_position": null,
+          "job_id": "00000000-0000-4000-8000-000000000001",
+          "observation": {
+            "sources": [
+              {
+                "id": 1,
+                "type": "rss",
+                "config": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+                "state": "healthy"
+              },
+              {
+                "id": 2,
+                "type": "rss",
+                "config": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+                "state": "healthy"
+              },
+              {
+                "id": 3,
+                "type": "rss",
+                "config": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+                "state": "healthy"
+              },
+              {
+                "id": 4,
+                "type": "rss",
+                "config": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+                "state": "healthy"
+              },
+              {
+                "id": 5,
+                "type": "telegram",
+                "config": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+                "state": "healthy"
+              },
+              {
+                "id": 6,
+                "type": "custom",
+                "config": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+                "state": "healthy"
+              },
+              {
+                "id": 7,
+                "type": "custom",
+                "config": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+                "state": "healthy"
+              },
+              {
+                "id": 10,
+                "type": "custom",
+                "config": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+                "state": "warning",
+                "code": "transport_failed"
+              }
+            ],
+            "successful": 7,
+            "total": 8,
+            "warning": "transport_failed"
+          },
+          "delivered": true,
+          "decision": {
+            "event": null,
+            "identity": "key:news_processing",
+            "source_ids": [],
+            "recovery": false
+          },
+          "state_after": {
+            "v": 1,
+            "last_position": 1,
+            "sources": {
+              "1": {
+                "config": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+                "failed_streak": 0,
+                "healthy_streak": 1,
+                "last_state": "healthy",
+                "incident": "none",
+                "event_job": null
+              },
+              "2": {
+                "config": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+                "failed_streak": 0,
+                "healthy_streak": 1,
+                "last_state": "healthy",
+                "incident": "none",
+                "event_job": null
+              },
+              "3": {
+                "config": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+                "failed_streak": 0,
+                "healthy_streak": 1,
+                "last_state": "healthy",
+                "incident": "none",
+                "event_job": null
+              },
+              "4": {
+                "config": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+                "failed_streak": 0,
+                "healthy_streak": 1,
+                "last_state": "healthy",
+                "incident": "none",
+                "event_job": null
+              },
+              "5": {
+                "config": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+                "failed_streak": 0,
+                "healthy_streak": 1,
+                "last_state": "healthy",
+                "incident": "none",
+                "event_job": null
+              },
+              "6": {
+                "config": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+                "failed_streak": 0,
+                "healthy_streak": 1,
+                "last_state": "healthy",
+                "incident": "none",
+                "event_job": null
+              },
+              "7": {
+                "config": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+                "failed_streak": 0,
+                "healthy_streak": 1,
+                "last_state": "healthy",
+                "incident": "none",
+                "event_job": null
+              },
+              "10": {
+                "config": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+                "failed_streak": 1,
+                "healthy_streak": 0,
+                "last_state": "warning",
+                "incident": "none",
+                "event_job": null
+              }
+            }
+          }
+        },
+        {
+          "position": 2,
+          "previous_position": 1,
+          "job_id": "00000000-0000-4000-8000-000000000002",
+          "observation": {
+            "sources": [
+              {
+                "id": 1,
+                "type": "rss",
+                "config": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+                "state": "healthy"
+              },
+              {
+                "id": 2,
+                "type": "rss",
+                "config": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+                "state": "healthy"
+              },
+              {
+                "id": 3,
+                "type": "rss",
+                "config": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+                "state": "healthy"
+              },
+              {
+                "id": 4,
+                "type": "rss",
+                "config": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+                "state": "healthy"
+              },
+              {
+                "id": 5,
+                "type": "telegram",
+                "config": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+                "state": "healthy"
+              },
+              {
+                "id": 6,
+                "type": "custom",
+                "config": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+                "state": "healthy"
+              },
+              {
+                "id": 7,
+                "type": "custom",
+                "config": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+                "state": "healthy"
+              },
+              {
+                "id": 10,
+                "type": "custom",
+                "config": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+                "state": "warning",
+                "code": "transport_failed"
+              }
+            ],
+            "successful": 7,
+            "total": 8,
+            "warning": "transport_failed"
+          },
+          "delivered": false,
+          "decision": {
+            "event": {
+              "title": "Scheduled source warning",
+              "message": "Source #10 (Page Monitor) reported transport_failed. Sources successful: 7/8."
+            },
+            "identity": "key:news_processing",
+            "events": [
+              {
+                "source_id": 10,
+                "type": "custom",
+                "code": "transport_failed",
+                "recovery": false
+              }
+            ]
+          },
+          "state_after": {
+            "v": 1,
+            "last_position": 2,
+            "sources": {
+              "1": {
+                "config": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+                "failed_streak": 0,
+                "healthy_streak": 2,
+                "last_state": "healthy",
+                "incident": "none",
+                "event_job": null
+              },
+              "2": {
+                "config": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+                "failed_streak": 0,
+                "healthy_streak": 2,
+                "last_state": "healthy",
+                "incident": "none",
+                "event_job": null
+              },
+              "3": {
+                "config": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+                "failed_streak": 0,
+                "healthy_streak": 2,
+                "last_state": "healthy",
+                "incident": "none",
+                "event_job": null
+              },
+              "4": {
+                "config": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+                "failed_streak": 0,
+                "healthy_streak": 2,
+                "last_state": "healthy",
+                "incident": "none",
+                "event_job": null
+              },
+              "5": {
+                "config": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+                "failed_streak": 0,
+                "healthy_streak": 2,
+                "last_state": "healthy",
+                "incident": "none",
+                "event_job": null
+              },
+              "6": {
+                "config": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+                "failed_streak": 0,
+                "healthy_streak": 2,
+                "last_state": "healthy",
+                "incident": "none",
+                "event_job": null
+              },
+              "7": {
+                "config": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+                "failed_streak": 0,
+                "healthy_streak": 2,
+                "last_state": "healthy",
+                "incident": "none",
+                "event_job": null
+              },
+              "10": {
+                "config": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+                "failed_streak": 2,
+                "healthy_streak": 0,
+                "last_state": "warning",
+                "incident": "unknown",
+                "event_job": null
+              }
+            }
+          }
+        },
+        {
+          "position": 3,
+          "previous_position": 2,
+          "job_id": "00000000-0000-4000-8000-000000000003",
+          "observation": {
+            "sources": [
+              {
+                "id": 1,
+                "type": "rss",
+                "config": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+                "state": "healthy"
+              },
+              {
+                "id": 2,
+                "type": "rss",
+                "config": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+                "state": "healthy"
+              },
+              {
+                "id": 3,
+                "type": "rss",
+                "config": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+                "state": "healthy"
+              },
+              {
+                "id": 4,
+                "type": "rss",
+                "config": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+                "state": "healthy"
+              },
+              {
+                "id": 5,
+                "type": "telegram",
+                "config": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+                "state": "healthy"
+              },
+              {
+                "id": 6,
+                "type": "custom",
+                "config": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+                "state": "healthy"
+              },
+              {
+                "id": 7,
+                "type": "custom",
+                "config": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+                "state": "healthy"
+              },
+              {
+                "id": 10,
+                "type": "custom",
+                "config": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+                "state": "warning",
+                "code": "transport_failed"
+              }
+            ],
+            "successful": 7,
+            "total": 8,
+            "warning": "transport_failed"
+          },
+          "delivered": true,
+          "decision": {
+            "event": null,
+            "identity": "key:news_processing",
+            "source_ids": [],
+            "recovery": false
+          },
+          "state_after": {
+            "v": 1,
+            "last_position": 3,
+            "sources": {
+              "1": {
+                "config": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+                "failed_streak": 0,
+                "healthy_streak": 2,
+                "last_state": "healthy",
+                "incident": "none",
+                "event_job": null
+              },
+              "2": {
+                "config": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+                "failed_streak": 0,
+                "healthy_streak": 2,
+                "last_state": "healthy",
+                "incident": "none",
+                "event_job": null
+              },
+              "3": {
+                "config": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+                "failed_streak": 0,
+                "healthy_streak": 2,
+                "last_state": "healthy",
+                "incident": "none",
+                "event_job": null
+              },
+              "4": {
+                "config": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+                "failed_streak": 0,
+                "healthy_streak": 2,
+                "last_state": "healthy",
+                "incident": "none",
+                "event_job": null
+              },
+              "5": {
+                "config": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+                "failed_streak": 0,
+                "healthy_streak": 2,
+                "last_state": "healthy",
+                "incident": "none",
+                "event_job": null
+              },
+              "6": {
+                "config": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+                "failed_streak": 0,
+                "healthy_streak": 2,
+                "last_state": "healthy",
+                "incident": "none",
+                "event_job": null
+              },
+              "7": {
+                "config": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+                "failed_streak": 0,
+                "healthy_streak": 2,
+                "last_state": "healthy",
+                "incident": "none",
+                "event_job": null
+              },
+              "10": {
+                "config": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+                "failed_streak": 2,
+                "healthy_streak": 0,
+                "last_state": "warning",
+                "incident": "unknown",
+                "event_job": null
+              }
+            }
+          }
+        },
+        {
+          "position": 4,
+          "previous_position": 3,
+          "job_id": "00000000-0000-4000-8000-000000000004",
+          "observation": {
+            "sources": [
+              {
+                "id": 1,
+                "type": "rss",
+                "config": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+                "state": "healthy"
+              },
+              {
+                "id": 2,
+                "type": "rss",
+                "config": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+                "state": "healthy"
+              },
+              {
+                "id": 3,
+                "type": "rss",
+                "config": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+                "state": "healthy"
+              },
+              {
+                "id": 4,
+                "type": "rss",
+                "config": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+                "state": "healthy"
+              },
+              {
+                "id": 5,
+                "type": "telegram",
+                "config": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+                "state": "healthy"
+              },
+              {
+                "id": 6,
+                "type": "custom",
+                "config": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+                "state": "healthy"
+              },
+              {
+                "id": 7,
+                "type": "custom",
+                "config": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+                "state": "healthy"
+              },
+              {
+                "id": 10,
+                "type": "custom",
+                "config": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+                "state": "healthy"
+              }
+            ],
+            "successful": 8,
+            "total": 8,
+            "warning": null
+          },
+          "delivered": true,
+          "decision": {
+            "event": null,
+            "identity": "key:news_processing",
+            "source_ids": [],
+            "recovery": false
+          },
+          "state_after": {
+            "v": 1,
+            "last_position": 4,
+            "sources": {
+              "1": {
+                "config": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+                "failed_streak": 0,
+                "healthy_streak": 2,
+                "last_state": "healthy",
+                "incident": "none",
+                "event_job": null
+              },
+              "2": {
+                "config": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+                "failed_streak": 0,
+                "healthy_streak": 2,
+                "last_state": "healthy",
+                "incident": "none",
+                "event_job": null
+              },
+              "3": {
+                "config": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+                "failed_streak": 0,
+                "healthy_streak": 2,
+                "last_state": "healthy",
+                "incident": "none",
+                "event_job": null
+              },
+              "4": {
+                "config": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+                "failed_streak": 0,
+                "healthy_streak": 2,
+                "last_state": "healthy",
+                "incident": "none",
+                "event_job": null
+              },
+              "5": {
+                "config": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+                "failed_streak": 0,
+                "healthy_streak": 2,
+                "last_state": "healthy",
+                "incident": "none",
+                "event_job": null
+              },
+              "6": {
+                "config": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+                "failed_streak": 0,
+                "healthy_streak": 2,
+                "last_state": "healthy",
+                "incident": "none",
+                "event_job": null
+              },
+              "7": {
+                "config": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+                "failed_streak": 0,
+                "healthy_streak": 2,
+                "last_state": "healthy",
+                "incident": "none",
+                "event_job": null
+              },
+              "10": {
+                "config": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+                "failed_streak": 0,
+                "healthy_streak": 1,
+                "last_state": "healthy",
+                "incident": "unknown",
+                "event_job": null
+              }
+            }
+          }
+        },
+        {
+          "position": 5,
+          "previous_position": 4,
+          "job_id": "00000000-0000-4000-8000-000000000005",
+          "observation": {
+            "sources": [
+              {
+                "id": 1,
+                "type": "rss",
+                "config": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+                "state": "healthy"
+              },
+              {
+                "id": 2,
+                "type": "rss",
+                "config": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+                "state": "healthy"
+              },
+              {
+                "id": 3,
+                "type": "rss",
+                "config": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+                "state": "healthy"
+              },
+              {
+                "id": 4,
+                "type": "rss",
+                "config": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+                "state": "healthy"
+              },
+              {
+                "id": 5,
+                "type": "telegram",
+                "config": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+                "state": "healthy"
+              },
+              {
+                "id": 6,
+                "type": "custom",
+                "config": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+                "state": "healthy"
+              },
+              {
+                "id": 7,
+                "type": "custom",
+                "config": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+                "state": "healthy"
+              },
+              {
+                "id": 10,
+                "type": "custom",
+                "config": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+                "state": "healthy"
+              }
+            ],
+            "successful": 8,
+            "total": 8,
+            "warning": null
+          },
+          "delivered": true,
+          "decision": {
+            "event": null,
+            "identity": "key:news_processing",
+            "source_ids": [],
+            "recovery": false
+          },
+          "state_after": {
+            "v": 1,
+            "last_position": 5,
+            "sources": {
+              "1": {
+                "config": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+                "failed_streak": 0,
+                "healthy_streak": 2,
+                "last_state": "healthy",
+                "incident": "none",
+                "event_job": null
+              },
+              "2": {
+                "config": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+                "failed_streak": 0,
+                "healthy_streak": 2,
+                "last_state": "healthy",
+                "incident": "none",
+                "event_job": null
+              },
+              "3": {
+                "config": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+                "failed_streak": 0,
+                "healthy_streak": 2,
+                "last_state": "healthy",
+                "incident": "none",
+                "event_job": null
+              },
+              "4": {
+                "config": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+                "failed_streak": 0,
+                "healthy_streak": 2,
+                "last_state": "healthy",
+                "incident": "none",
+                "event_job": null
+              },
+              "5": {
+                "config": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+                "failed_streak": 0,
+                "healthy_streak": 2,
+                "last_state": "healthy",
+                "incident": "none",
+                "event_job": null
+              },
+              "6": {
+                "config": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+                "failed_streak": 0,
+                "healthy_streak": 2,
+                "last_state": "healthy",
+                "incident": "none",
+                "event_job": null
+              },
+              "7": {
+                "config": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+                "failed_streak": 0,
+                "healthy_streak": 2,
+                "last_state": "healthy",
+                "incident": "none",
+                "event_job": null
+              },
+              "10": {
+                "config": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+                "failed_streak": 0,
+                "healthy_streak": 2,
+                "last_state": "healthy",
+                "incident": "none",
+                "event_job": null
+              }
+            }
+          }
+        }
+      ]
+    },
+    {
+      "name": "out-of-order",
+      "steps": [
+        {
+          "position": 2,
+          "previous_position": 1,
+          "job_id": "00000000-0000-4000-8000-000000000002",
+          "observation": {
+            "sources": [
+              {
+                "id": 1,
+                "type": "rss",
+                "config": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+                "state": "healthy"
+              },
+              {
+                "id": 2,
+                "type": "rss",
+                "config": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+                "state": "healthy"
+              },
+              {
+                "id": 3,
+                "type": "rss",
+                "config": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+                "state": "healthy"
+              },
+              {
+                "id": 4,
+                "type": "rss",
+                "config": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+                "state": "healthy"
+              },
+              {
+                "id": 5,
+                "type": "telegram",
+                "config": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+                "state": "healthy"
+              },
+              {
+                "id": 6,
+                "type": "custom",
+                "config": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+                "state": "healthy"
+              },
+              {
+                "id": 7,
+                "type": "custom",
+                "config": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+                "state": "healthy"
+              },
+              {
+                "id": 10,
+                "type": "custom",
+                "config": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+                "state": "warning",
+                "code": "transport_failed"
+              }
+            ],
+            "successful": 7,
+            "total": 8,
+            "warning": "transport_failed"
+          },
+          "delivered": true,
+          "decision": {
+            "event": null,
+            "identity": "key:news_processing",
+            "source_ids": [],
+            "recovery": false
+          },
+          "state_after": {
+            "v": 1,
+            "last_position": 2,
+            "sources": {
+              "1": {
+                "config": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+                "failed_streak": 0,
+                "healthy_streak": 1,
+                "last_state": "healthy",
+                "incident": "none",
+                "event_job": null
+              },
+              "2": {
+                "config": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+                "failed_streak": 0,
+                "healthy_streak": 1,
+                "last_state": "healthy",
+                "incident": "none",
+                "event_job": null
+              },
+              "3": {
+                "config": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+                "failed_streak": 0,
+                "healthy_streak": 1,
+                "last_state": "healthy",
+                "incident": "none",
+                "event_job": null
+              },
+              "4": {
+                "config": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+                "failed_streak": 0,
+                "healthy_streak": 1,
+                "last_state": "healthy",
+                "incident": "none",
+                "event_job": null
+              },
+              "5": {
+                "config": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+                "failed_streak": 0,
+                "healthy_streak": 1,
+                "last_state": "healthy",
+                "incident": "none",
+                "event_job": null
+              },
+              "6": {
+                "config": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+                "failed_streak": 0,
+                "healthy_streak": 1,
+                "last_state": "healthy",
+                "incident": "none",
+                "event_job": null
+              },
+              "7": {
+                "config": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+                "failed_streak": 0,
+                "healthy_streak": 1,
+                "last_state": "healthy",
+                "incident": "none",
+                "event_job": null
+              },
+              "10": {
+                "config": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+                "failed_streak": 1,
+                "healthy_streak": 0,
+                "last_state": "warning",
+                "incident": "none",
+                "event_job": null
+              }
+            }
+          }
+        },
+        {
+          "position": 1,
+          "previous_position": null,
+          "job_id": "00000000-0000-4000-8000-000000000001",
+          "observation": {
+            "sources": [
+              {
+                "id": 1,
+                "type": "rss",
+                "config": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+                "state": "healthy"
+              },
+              {
+                "id": 2,
+                "type": "rss",
+                "config": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+                "state": "healthy"
+              },
+              {
+                "id": 3,
+                "type": "rss",
+                "config": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+                "state": "healthy"
+              },
+              {
+                "id": 4,
+                "type": "rss",
+                "config": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+                "state": "healthy"
+              },
+              {
+                "id": 5,
+                "type": "telegram",
+                "config": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+                "state": "healthy"
+              },
+              {
+                "id": 6,
+                "type": "custom",
+                "config": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+                "state": "healthy"
+              },
+              {
+                "id": 7,
+                "type": "custom",
+                "config": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+                "state": "healthy"
+              },
+              {
+                "id": 10,
+                "type": "custom",
+                "config": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+                "state": "warning",
+                "code": "transport_failed"
+              }
+            ],
+            "successful": 7,
+            "total": 8,
+            "warning": "transport_failed"
+          },
+          "delivered": true,
+          "decision": {
+            "event": null,
+            "identity": "key:news_processing",
+            "source_ids": [],
+            "recovery": false
+          },
+          "state_after": {
+            "v": 1,
+            "last_position": 2,
+            "sources": {
+              "1": {
+                "config": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+                "failed_streak": 0,
+                "healthy_streak": 1,
+                "last_state": "healthy",
+                "incident": "none",
+                "event_job": null
+              },
+              "2": {
+                "config": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+                "failed_streak": 0,
+                "healthy_streak": 1,
+                "last_state": "healthy",
+                "incident": "none",
+                "event_job": null
+              },
+              "3": {
+                "config": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+                "failed_streak": 0,
+                "healthy_streak": 1,
+                "last_state": "healthy",
+                "incident": "none",
+                "event_job": null
+              },
+              "4": {
+                "config": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+                "failed_streak": 0,
+                "healthy_streak": 1,
+                "last_state": "healthy",
+                "incident": "none",
+                "event_job": null
+              },
+              "5": {
+                "config": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+                "failed_streak": 0,
+                "healthy_streak": 1,
+                "last_state": "healthy",
+                "incident": "none",
+                "event_job": null
+              },
+              "6": {
+                "config": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+                "failed_streak": 0,
+                "healthy_streak": 1,
+                "last_state": "healthy",
+                "incident": "none",
+                "event_job": null
+              },
+              "7": {
+                "config": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+                "failed_streak": 0,
+                "healthy_streak": 1,
+                "last_state": "healthy",
+                "incident": "none",
+                "event_job": null
+              },
+              "10": {
+                "config": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+                "failed_streak": 1,
+                "healthy_streak": 0,
+                "last_state": "warning",
+                "incident": "none",
+                "event_job": null
+              }
+            }
+          }
+        },
+        {
+          "position": 3,
+          "previous_position": 2,
+          "job_id": "00000000-0000-4000-8000-000000000003",
+          "observation": {
+            "sources": [
+              {
+                "id": 1,
+                "type": "rss",
+                "config": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+                "state": "healthy"
+              },
+              {
+                "id": 2,
+                "type": "rss",
+                "config": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+                "state": "healthy"
+              },
+              {
+                "id": 3,
+                "type": "rss",
+                "config": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+                "state": "healthy"
+              },
+              {
+                "id": 4,
+                "type": "rss",
+                "config": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+                "state": "healthy"
+              },
+              {
+                "id": 5,
+                "type": "telegram",
+                "config": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+                "state": "healthy"
+              },
+              {
+                "id": 6,
+                "type": "custom",
+                "config": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+                "state": "healthy"
+              },
+              {
+                "id": 7,
+                "type": "custom",
+                "config": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+                "state": "healthy"
+              },
+              {
+                "id": 10,
+                "type": "custom",
+                "config": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+                "state": "warning",
+                "code": "transport_failed"
+              }
+            ],
+            "successful": 7,
+            "total": 8,
+            "warning": "transport_failed"
+          },
+          "delivered": true,
+          "decision": {
+            "event": {
+              "title": "Scheduled source warning",
+              "message": "Source #10 (Page Monitor) reported transport_failed. Sources successful: 7/8."
+            },
+            "identity": "key:news_processing",
+            "events": [
+              {
+                "source_id": 10,
+                "type": "custom",
+                "code": "transport_failed",
+                "recovery": false
+              }
+            ]
+          },
+          "state_after": {
+            "v": 1,
+            "last_position": 3,
+            "sources": {
+              "1": {
+                "config": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+                "failed_streak": 0,
+                "healthy_streak": 2,
+                "last_state": "healthy",
+                "incident": "none",
+                "event_job": null
+              },
+              "2": {
+                "config": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+                "failed_streak": 0,
+                "healthy_streak": 2,
+                "last_state": "healthy",
+                "incident": "none",
+                "event_job": null
+              },
+              "3": {
+                "config": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+                "failed_streak": 0,
+                "healthy_streak": 2,
+                "last_state": "healthy",
+                "incident": "none",
+                "event_job": null
+              },
+              "4": {
+                "config": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+                "failed_streak": 0,
+                "healthy_streak": 2,
+                "last_state": "healthy",
+                "incident": "none",
+                "event_job": null
+              },
+              "5": {
+                "config": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+                "failed_streak": 0,
+                "healthy_streak": 2,
+                "last_state": "healthy",
+                "incident": "none",
+                "event_job": null
+              },
+              "6": {
+                "config": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+                "failed_streak": 0,
+                "healthy_streak": 2,
+                "last_state": "healthy",
+                "incident": "none",
+                "event_job": null
+              },
+              "7": {
+                "config": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+                "failed_streak": 0,
+                "healthy_streak": 2,
+                "last_state": "healthy",
+                "incident": "none",
+                "event_job": null
+              },
+              "10": {
+                "config": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+                "failed_streak": 2,
+                "healthy_streak": 0,
+                "last_state": "warning",
+                "incident": "active",
+                "event_job": null
+              }
+            }
+          }
+        }
+      ]
+    },
+    {
+      "name": "missing-previous-job",
+      "steps": [
+        {
+          "position": 1,
+          "previous_position": null,
+          "job_id": "00000000-0000-4000-8000-000000000001",
+          "observation": {
+            "sources": [
+              {
+                "id": 1,
+                "type": "rss",
+                "config": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+                "state": "healthy"
+              },
+              {
+                "id": 2,
+                "type": "rss",
+                "config": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+                "state": "healthy"
+              },
+              {
+                "id": 3,
+                "type": "rss",
+                "config": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+                "state": "healthy"
+              },
+              {
+                "id": 4,
+                "type": "rss",
+                "config": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+                "state": "healthy"
+              },
+              {
+                "id": 5,
+                "type": "telegram",
+                "config": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+                "state": "healthy"
+              },
+              {
+                "id": 6,
+                "type": "custom",
+                "config": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+                "state": "healthy"
+              },
+              {
+                "id": 7,
+                "type": "custom",
+                "config": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+                "state": "healthy"
+              },
+              {
+                "id": 10,
+                "type": "custom",
+                "config": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+                "state": "warning",
+                "code": "transport_failed"
+              }
+            ],
+            "successful": 7,
+            "total": 8,
+            "warning": "transport_failed"
+          },
+          "delivered": true,
+          "decision": {
+            "event": null,
+            "identity": "key:news_processing",
+            "source_ids": [],
+            "recovery": false
+          },
+          "state_after": {
+            "v": 1,
+            "last_position": 1,
+            "sources": {
+              "1": {
+                "config": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+                "failed_streak": 0,
+                "healthy_streak": 1,
+                "last_state": "healthy",
+                "incident": "none",
+                "event_job": null
+              },
+              "2": {
+                "config": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+                "failed_streak": 0,
+                "healthy_streak": 1,
+                "last_state": "healthy",
+                "incident": "none",
+                "event_job": null
+              },
+              "3": {
+                "config": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+                "failed_streak": 0,
+                "healthy_streak": 1,
+                "last_state": "healthy",
+                "incident": "none",
+                "event_job": null
+              },
+              "4": {
+                "config": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+                "failed_streak": 0,
+                "healthy_streak": 1,
+                "last_state": "healthy",
+                "incident": "none",
+                "event_job": null
+              },
+              "5": {
+                "config": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+                "failed_streak": 0,
+                "healthy_streak": 1,
+                "last_state": "healthy",
+                "incident": "none",
+                "event_job": null
+              },
+              "6": {
+                "config": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+                "failed_streak": 0,
+                "healthy_streak": 1,
+                "last_state": "healthy",
+                "incident": "none",
+                "event_job": null
+              },
+              "7": {
+                "config": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+                "failed_streak": 0,
+                "healthy_streak": 1,
+                "last_state": "healthy",
+                "incident": "none",
+                "event_job": null
+              },
+              "10": {
+                "config": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+                "failed_streak": 1,
+                "healthy_streak": 0,
+                "last_state": "warning",
+                "incident": "none",
+                "event_job": null
+              }
+            }
+          }
+        },
+        {
+          "position": 3,
+          "previous_position": 2,
+          "job_id": "00000000-0000-4000-8000-000000000003",
+          "observation": {
+            "sources": [
+              {
+                "id": 1,
+                "type": "rss",
+                "config": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+                "state": "healthy"
+              },
+              {
+                "id": 2,
+                "type": "rss",
+                "config": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+                "state": "healthy"
+              },
+              {
+                "id": 3,
+                "type": "rss",
+                "config": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+                "state": "healthy"
+              },
+              {
+                "id": 4,
+                "type": "rss",
+                "config": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+                "state": "healthy"
+              },
+              {
+                "id": 5,
+                "type": "telegram",
+                "config": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+                "state": "healthy"
+              },
+              {
+                "id": 6,
+                "type": "custom",
+                "config": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+                "state": "healthy"
+              },
+              {
+                "id": 7,
+                "type": "custom",
+                "config": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+                "state": "healthy"
+              },
+              {
+                "id": 10,
+                "type": "custom",
+                "config": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+                "state": "warning",
+                "code": "transport_failed"
+              }
+            ],
+            "successful": 7,
+            "total": 8,
+            "warning": "transport_failed"
+          },
+          "delivered": true,
+          "decision": {
+            "event": null,
+            "identity": "key:news_processing",
+            "source_ids": [],
+            "recovery": false
+          },
+          "state_after": {
+            "v": 1,
+            "last_position": 3,
+            "sources": {
+              "1": {
+                "config": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+                "failed_streak": 0,
+                "healthy_streak": 1,
+                "last_state": "healthy",
+                "incident": "none",
+                "event_job": null
+              },
+              "2": {
+                "config": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+                "failed_streak": 0,
+                "healthy_streak": 1,
+                "last_state": "healthy",
+                "incident": "none",
+                "event_job": null
+              },
+              "3": {
+                "config": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+                "failed_streak": 0,
+                "healthy_streak": 1,
+                "last_state": "healthy",
+                "incident": "none",
+                "event_job": null
+              },
+              "4": {
+                "config": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+                "failed_streak": 0,
+                "healthy_streak": 1,
+                "last_state": "healthy",
+                "incident": "none",
+                "event_job": null
+              },
+              "5": {
+                "config": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+                "failed_streak": 0,
+                "healthy_streak": 1,
+                "last_state": "healthy",
+                "incident": "none",
+                "event_job": null
+              },
+              "6": {
+                "config": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+                "failed_streak": 0,
+                "healthy_streak": 1,
+                "last_state": "healthy",
+                "incident": "none",
+                "event_job": null
+              },
+              "7": {
+                "config": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+                "failed_streak": 0,
+                "healthy_streak": 1,
+                "last_state": "healthy",
+                "incident": "none",
+                "event_job": null
+              },
+              "10": {
+                "config": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+                "failed_streak": 1,
+                "healthy_streak": 0,
+                "last_state": "warning",
+                "incident": "none",
+                "event_job": null
+              }
+            }
+          }
+        },
+        {
+          "position": 4,
+          "previous_position": 3,
+          "job_id": "00000000-0000-4000-8000-000000000004",
+          "observation": {
+            "sources": [
+              {
+                "id": 1,
+                "type": "rss",
+                "config": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+                "state": "healthy"
+              },
+              {
+                "id": 2,
+                "type": "rss",
+                "config": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+                "state": "healthy"
+              },
+              {
+                "id": 3,
+                "type": "rss",
+                "config": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+                "state": "healthy"
+              },
+              {
+                "id": 4,
+                "type": "rss",
+                "config": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+                "state": "healthy"
+              },
+              {
+                "id": 5,
+                "type": "telegram",
+                "config": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+                "state": "healthy"
+              },
+              {
+                "id": 6,
+                "type": "custom",
+                "config": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+                "state": "healthy"
+              },
+              {
+                "id": 7,
+                "type": "custom",
+                "config": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+                "state": "healthy"
+              },
+              {
+                "id": 10,
+                "type": "custom",
+                "config": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+                "state": "warning",
+                "code": "transport_failed"
+              }
+            ],
+            "successful": 7,
+            "total": 8,
+            "warning": "transport_failed"
+          },
+          "delivered": true,
+          "decision": {
+            "event": {
+              "title": "Scheduled source warning",
+              "message": "Source #10 (Page Monitor) reported transport_failed. Sources successful: 7/8."
+            },
+            "identity": "key:news_processing",
+            "events": [
+              {
+                "source_id": 10,
+                "type": "custom",
+                "code": "transport_failed",
+                "recovery": false
+              }
+            ]
+          },
+          "state_after": {
+            "v": 1,
+            "last_position": 4,
+            "sources": {
+              "1": {
+                "config": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+                "failed_streak": 0,
+                "healthy_streak": 2,
+                "last_state": "healthy",
+                "incident": "none",
+                "event_job": null
+              },
+              "2": {
+                "config": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+                "failed_streak": 0,
+                "healthy_streak": 2,
+                "last_state": "healthy",
+                "incident": "none",
+                "event_job": null
+              },
+              "3": {
+                "config": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+                "failed_streak": 0,
+                "healthy_streak": 2,
+                "last_state": "healthy",
+                "incident": "none",
+                "event_job": null
+              },
+              "4": {
+                "config": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+                "failed_streak": 0,
+                "healthy_streak": 2,
+                "last_state": "healthy",
+                "incident": "none",
+                "event_job": null
+              },
+              "5": {
+                "config": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+                "failed_streak": 0,
+                "healthy_streak": 2,
+                "last_state": "healthy",
+                "incident": "none",
+                "event_job": null
+              },
+              "6": {
+                "config": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+                "failed_streak": 0,
+                "healthy_streak": 2,
+                "last_state": "healthy",
+                "incident": "none",
+                "event_job": null
+              },
+              "7": {
+                "config": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+                "failed_streak": 0,
+                "healthy_streak": 2,
+                "last_state": "healthy",
+                "incident": "none",
+                "event_job": null
+              },
+              "10": {
+                "config": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+                "failed_streak": 2,
+                "healthy_streak": 0,
+                "last_state": "warning",
+                "incident": "active",
+                "event_job": null
+              }
+            }
+          }
+        }
+      ]
+    },
+    {
+      "name": "config-change",
+      "steps": [
+        {
+          "position": 1,
+          "previous_position": null,
+          "job_id": "00000000-0000-4000-8000-000000000001",
+          "observation": {
+            "sources": [
+              {
+                "id": 1,
+                "type": "rss",
+                "config": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+                "state": "healthy"
+              },
+              {
+                "id": 2,
+                "type": "rss",
+                "config": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+                "state": "healthy"
+              },
+              {
+                "id": 3,
+                "type": "rss",
+                "config": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+                "state": "healthy"
+              },
+              {
+                "id": 4,
+                "type": "rss",
+                "config": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+                "state": "healthy"
+              },
+              {
+                "id": 5,
+                "type": "telegram",
+                "config": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+                "state": "healthy"
+              },
+              {
+                "id": 6,
+                "type": "custom",
+                "config": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+                "state": "healthy"
+              },
+              {
+                "id": 7,
+                "type": "custom",
+                "config": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+                "state": "healthy"
+              },
+              {
+                "id": 10,
+                "type": "custom",
+                "config": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+                "state": "warning",
+                "code": "transport_failed"
+              }
+            ],
+            "successful": 7,
+            "total": 8,
+            "warning": "transport_failed"
+          },
+          "delivered": true,
+          "decision": {
+            "event": null,
+            "identity": "key:news_processing",
+            "source_ids": [],
+            "recovery": false
+          },
+          "state_after": {
+            "v": 1,
+            "last_position": 1,
+            "sources": {
+              "1": {
+                "config": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+                "failed_streak": 0,
+                "healthy_streak": 1,
+                "last_state": "healthy",
+                "incident": "none",
+                "event_job": null
+              },
+              "2": {
+                "config": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+                "failed_streak": 0,
+                "healthy_streak": 1,
+                "last_state": "healthy",
+                "incident": "none",
+                "event_job": null
+              },
+              "3": {
+                "config": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+                "failed_streak": 0,
+                "healthy_streak": 1,
+                "last_state": "healthy",
+                "incident": "none",
+                "event_job": null
+              },
+              "4": {
+                "config": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+                "failed_streak": 0,
+                "healthy_streak": 1,
+                "last_state": "healthy",
+                "incident": "none",
+                "event_job": null
+              },
+              "5": {
+                "config": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+                "failed_streak": 0,
+                "healthy_streak": 1,
+                "last_state": "healthy",
+                "incident": "none",
+                "event_job": null
+              },
+              "6": {
+                "config": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+                "failed_streak": 0,
+                "healthy_streak": 1,
+                "last_state": "healthy",
+                "incident": "none",
+                "event_job": null
+              },
+              "7": {
+                "config": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+                "failed_streak": 0,
+                "healthy_streak": 1,
+                "last_state": "healthy",
+                "incident": "none",
+                "event_job": null
+              },
+              "10": {
+                "config": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+                "failed_streak": 1,
+                "healthy_streak": 0,
+                "last_state": "warning",
+                "incident": "none",
+                "event_job": null
+              }
+            }
+          }
+        },
+        {
+          "position": 2,
+          "previous_position": 1,
+          "job_id": "00000000-0000-4000-8000-000000000002",
+          "observation": {
+            "sources": [
+              {
+                "id": 1,
+                "type": "rss",
+                "config": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+                "state": "healthy"
+              },
+              {
+                "id": 2,
+                "type": "rss",
+                "config": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+                "state": "healthy"
+              },
+              {
+                "id": 3,
+                "type": "rss",
+                "config": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+                "state": "healthy"
+              },
+              {
+                "id": 4,
+                "type": "rss",
+                "config": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+                "state": "healthy"
+              },
+              {
+                "id": 5,
+                "type": "telegram",
+                "config": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+                "state": "healthy"
+              },
+              {
+                "id": 6,
+                "type": "custom",
+                "config": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+                "state": "healthy"
+              },
+              {
+                "id": 7,
+                "type": "custom",
+                "config": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+                "state": "healthy"
+              },
+              {
+                "id": 10,
+                "type": "custom",
+                "config": "bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb",
+                "state": "warning",
+                "code": "transport_failed"
+              }
+            ],
+            "successful": 7,
+            "total": 8,
+            "warning": "transport_failed"
+          },
+          "delivered": true,
+          "decision": {
+            "event": null,
+            "identity": "key:news_processing",
+            "source_ids": [],
+            "recovery": false
+          },
+          "state_after": {
+            "v": 1,
+            "last_position": 2,
+            "sources": {
+              "1": {
+                "config": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+                "failed_streak": 0,
+                "healthy_streak": 2,
+                "last_state": "healthy",
+                "incident": "none",
+                "event_job": null
+              },
+              "2": {
+                "config": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+                "failed_streak": 0,
+                "healthy_streak": 2,
+                "last_state": "healthy",
+                "incident": "none",
+                "event_job": null
+              },
+              "3": {
+                "config": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+                "failed_streak": 0,
+                "healthy_streak": 2,
+                "last_state": "healthy",
+                "incident": "none",
+                "event_job": null
+              },
+              "4": {
+                "config": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+                "failed_streak": 0,
+                "healthy_streak": 2,
+                "last_state": "healthy",
+                "incident": "none",
+                "event_job": null
+              },
+              "5": {
+                "config": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+                "failed_streak": 0,
+                "healthy_streak": 2,
+                "last_state": "healthy",
+                "incident": "none",
+                "event_job": null
+              },
+              "6": {
+                "config": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+                "failed_streak": 0,
+                "healthy_streak": 2,
+                "last_state": "healthy",
+                "incident": "none",
+                "event_job": null
+              },
+              "7": {
+                "config": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+                "failed_streak": 0,
+                "healthy_streak": 2,
+                "last_state": "healthy",
+                "incident": "none",
+                "event_job": null
+              },
+              "10": {
+                "config": "bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb",
+                "failed_streak": 1,
+                "healthy_streak": 0,
+                "last_state": "warning",
+                "incident": "none",
+                "event_job": null
+              }
+            }
+          }
+        },
+        {
+          "position": 3,
+          "previous_position": 2,
+          "job_id": "00000000-0000-4000-8000-000000000003",
+          "observation": {
+            "sources": [
+              {
+                "id": 1,
+                "type": "rss",
+                "config": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+                "state": "healthy"
+              },
+              {
+                "id": 2,
+                "type": "rss",
+                "config": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+                "state": "healthy"
+              },
+              {
+                "id": 3,
+                "type": "rss",
+                "config": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+                "state": "healthy"
+              },
+              {
+                "id": 4,
+                "type": "rss",
+                "config": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+                "state": "healthy"
+              },
+              {
+                "id": 5,
+                "type": "telegram",
+                "config": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+                "state": "healthy"
+              },
+              {
+                "id": 6,
+                "type": "custom",
+                "config": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+                "state": "healthy"
+              },
+              {
+                "id": 7,
+                "type": "custom",
+                "config": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+                "state": "healthy"
+              },
+              {
+                "id": 10,
+                "type": "custom",
+                "config": "bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb",
+                "state": "warning",
+                "code": "transport_failed"
+              }
+            ],
+            "successful": 7,
+            "total": 8,
+            "warning": "transport_failed"
+          },
+          "delivered": true,
+          "decision": {
+            "event": {
+              "title": "Scheduled source warning",
+              "message": "Source #10 (Page Monitor) reported transport_failed. Sources successful: 7/8."
+            },
+            "identity": "key:news_processing",
+            "events": [
+              {
+                "source_id": 10,
+                "type": "custom",
+                "code": "transport_failed",
+                "recovery": false
+              }
+            ]
+          },
+          "state_after": {
+            "v": 1,
+            "last_position": 3,
+            "sources": {
+              "1": {
+                "config": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+                "failed_streak": 0,
+                "healthy_streak": 2,
+                "last_state": "healthy",
+                "incident": "none",
+                "event_job": null
+              },
+              "2": {
+                "config": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+                "failed_streak": 0,
+                "healthy_streak": 2,
+                "last_state": "healthy",
+                "incident": "none",
+                "event_job": null
+              },
+              "3": {
+                "config": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+                "failed_streak": 0,
+                "healthy_streak": 2,
+                "last_state": "healthy",
+                "incident": "none",
+                "event_job": null
+              },
+              "4": {
+                "config": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+                "failed_streak": 0,
+                "healthy_streak": 2,
+                "last_state": "healthy",
+                "incident": "none",
+                "event_job": null
+              },
+              "5": {
+                "config": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+                "failed_streak": 0,
+                "healthy_streak": 2,
+                "last_state": "healthy",
+                "incident": "none",
+                "event_job": null
+              },
+              "6": {
+                "config": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+                "failed_streak": 0,
+                "healthy_streak": 2,
+                "last_state": "healthy",
+                "incident": "none",
+                "event_job": null
+              },
+              "7": {
+                "config": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+                "failed_streak": 0,
+                "healthy_streak": 2,
+                "last_state": "healthy",
+                "incident": "none",
+                "event_job": null
+              },
+              "10": {
+                "config": "bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb",
+                "failed_streak": 2,
+                "healthy_streak": 0,
+                "last_state": "warning",
+                "incident": "active",
+                "event_job": null
+              }
+            }
+          }
+        }
+      ]
+    },
+    {
+      "name": "missing-source",
+      "steps": [
+        {
+          "position": 1,
+          "previous_position": null,
+          "job_id": "00000000-0000-4000-8000-000000000001",
+          "observation": {
+            "sources": [
+              {
+                "id": 1,
+                "type": "rss",
+                "config": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+                "state": "healthy"
+              },
+              {
+                "id": 2,
+                "type": "rss",
+                "config": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+                "state": "healthy"
+              },
+              {
+                "id": 3,
+                "type": "rss",
+                "config": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+                "state": "healthy"
+              },
+              {
+                "id": 4,
+                "type": "rss",
+                "config": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+                "state": "healthy"
+              },
+              {
+                "id": 5,
+                "type": "telegram",
+                "config": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+                "state": "healthy"
+              },
+              {
+                "id": 6,
+                "type": "custom",
+                "config": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+                "state": "healthy"
+              },
+              {
+                "id": 7,
+                "type": "custom",
+                "config": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+                "state": "healthy"
+              },
+              {
+                "id": 10,
+                "type": "custom",
+                "config": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+                "state": "warning",
+                "code": "transport_failed"
+              }
+            ],
+            "successful": 7,
+            "total": 8,
+            "warning": "transport_failed"
+          },
+          "delivered": true,
+          "decision": {
+            "event": null,
+            "identity": "key:news_processing",
+            "source_ids": [],
+            "recovery": false
+          },
+          "state_after": {
+            "v": 1,
+            "last_position": 1,
+            "sources": {
+              "1": {
+                "config": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+                "failed_streak": 0,
+                "healthy_streak": 1,
+                "last_state": "healthy",
+                "incident": "none",
+                "event_job": null
+              },
+              "2": {
+                "config": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+                "failed_streak": 0,
+                "healthy_streak": 1,
+                "last_state": "healthy",
+                "incident": "none",
+                "event_job": null
+              },
+              "3": {
+                "config": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+                "failed_streak": 0,
+                "healthy_streak": 1,
+                "last_state": "healthy",
+                "incident": "none",
+                "event_job": null
+              },
+              "4": {
+                "config": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+                "failed_streak": 0,
+                "healthy_streak": 1,
+                "last_state": "healthy",
+                "incident": "none",
+                "event_job": null
+              },
+              "5": {
+                "config": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+                "failed_streak": 0,
+                "healthy_streak": 1,
+                "last_state": "healthy",
+                "incident": "none",
+                "event_job": null
+              },
+              "6": {
+                "config": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+                "failed_streak": 0,
+                "healthy_streak": 1,
+                "last_state": "healthy",
+                "incident": "none",
+                "event_job": null
+              },
+              "7": {
+                "config": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+                "failed_streak": 0,
+                "healthy_streak": 1,
+                "last_state": "healthy",
+                "incident": "none",
+                "event_job": null
+              },
+              "10": {
+                "config": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+                "failed_streak": 1,
+                "healthy_streak": 0,
+                "last_state": "warning",
+                "incident": "none",
+                "event_job": null
+              }
+            }
+          }
+        },
+        {
+          "position": 2,
+          "previous_position": 1,
+          "job_id": "00000000-0000-4000-8000-000000000002",
+          "observation": {
+            "sources": [
+              {
+                "id": 1,
+                "type": "rss",
+                "config": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+                "state": "healthy"
+              },
+              {
+                "id": 2,
+                "type": "rss",
+                "config": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+                "state": "healthy"
+              },
+              {
+                "id": 3,
+                "type": "rss",
+                "config": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+                "state": "healthy"
+              },
+              {
+                "id": 4,
+                "type": "rss",
+                "config": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+                "state": "healthy"
+              },
+              {
+                "id": 5,
+                "type": "telegram",
+                "config": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+                "state": "healthy"
+              },
+              {
+                "id": 6,
+                "type": "custom",
+                "config": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+                "state": "healthy"
+              },
+              {
+                "id": 7,
+                "type": "custom",
+                "config": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+                "state": "healthy"
+              },
+              {
+                "id": 10,
+                "type": "custom",
+                "config": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+                "state": "warning",
+                "code": "transport_failed"
+              }
+            ],
+            "successful": 7,
+            "total": 8,
+            "warning": "transport_failed"
+          },
+          "delivered": true,
+          "decision": {
+            "event": {
+              "title": "Scheduled source warning",
+              "message": "Source #10 (Page Monitor) reported transport_failed. Sources successful: 7/8."
+            },
+            "identity": "key:news_processing",
+            "events": [
+              {
+                "source_id": 10,
+                "type": "custom",
+                "code": "transport_failed",
+                "recovery": false
+              }
+            ]
+          },
+          "state_after": {
+            "v": 1,
+            "last_position": 2,
+            "sources": {
+              "1": {
+                "config": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+                "failed_streak": 0,
+                "healthy_streak": 2,
+                "last_state": "healthy",
+                "incident": "none",
+                "event_job": null
+              },
+              "2": {
+                "config": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+                "failed_streak": 0,
+                "healthy_streak": 2,
+                "last_state": "healthy",
+                "incident": "none",
+                "event_job": null
+              },
+              "3": {
+                "config": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+                "failed_streak": 0,
+                "healthy_streak": 2,
+                "last_state": "healthy",
+                "incident": "none",
+                "event_job": null
+              },
+              "4": {
+                "config": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+                "failed_streak": 0,
+                "healthy_streak": 2,
+                "last_state": "healthy",
+                "incident": "none",
+                "event_job": null
+              },
+              "5": {
+                "config": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+                "failed_streak": 0,
+                "healthy_streak": 2,
+                "last_state": "healthy",
+                "incident": "none",
+                "event_job": null
+              },
+              "6": {
+                "config": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+                "failed_streak": 0,
+                "healthy_streak": 2,
+                "last_state": "healthy",
+                "incident": "none",
+                "event_job": null
+              },
+              "7": {
+                "config": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+                "failed_streak": 0,
+                "healthy_streak": 2,
+                "last_state": "healthy",
+                "incident": "none",
+                "event_job": null
+              },
+              "10": {
+                "config": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+                "failed_streak": 2,
+                "healthy_streak": 0,
+                "last_state": "warning",
+                "incident": "active",
+                "event_job": null
+              }
+            }
+          }
+        },
+        {
+          "position": 3,
+          "previous_position": 2,
+          "job_id": "00000000-0000-4000-8000-000000000003",
+          "observation": {
+            "sources": [
+              {
+                "id": 1,
+                "type": "rss",
+                "config": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+                "state": "healthy"
+              },
+              {
+                "id": 2,
+                "type": "rss",
+                "config": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+                "state": "healthy"
+              },
+              {
+                "id": 3,
+                "type": "rss",
+                "config": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+                "state": "healthy"
+              },
+              {
+                "id": 4,
+                "type": "rss",
+                "config": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+                "state": "healthy"
+              },
+              {
+                "id": 5,
+                "type": "telegram",
+                "config": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+                "state": "healthy"
+              },
+              {
+                "id": 6,
+                "type": "custom",
+                "config": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+                "state": "healthy"
+              },
+              {
+                "id": 7,
+                "type": "custom",
+                "config": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+                "state": "healthy"
+              }
+            ],
+            "successful": 7,
+            "total": 7,
+            "warning": null
+          },
+          "delivered": true,
+          "decision": {
+            "event": null,
+            "identity": "key:news_processing",
+            "source_ids": [],
+            "recovery": false
+          },
+          "state_after": {
+            "v": 1,
+            "last_position": 3,
+            "sources": {
+              "1": {
+                "config": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+                "failed_streak": 0,
+                "healthy_streak": 2,
+                "last_state": "healthy",
+                "incident": "none",
+                "event_job": null
+              },
+              "2": {
+                "config": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+                "failed_streak": 0,
+                "healthy_streak": 2,
+                "last_state": "healthy",
+                "incident": "none",
+                "event_job": null
+              },
+              "3": {
+                "config": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+                "failed_streak": 0,
+                "healthy_streak": 2,
+                "last_state": "healthy",
+                "incident": "none",
+                "event_job": null
+              },
+              "4": {
+                "config": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+                "failed_streak": 0,
+                "healthy_streak": 2,
+                "last_state": "healthy",
+                "incident": "none",
+                "event_job": null
+              },
+              "5": {
+                "config": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+                "failed_streak": 0,
+                "healthy_streak": 2,
+                "last_state": "healthy",
+                "incident": "none",
+                "event_job": null
+              },
+              "6": {
+                "config": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+                "failed_streak": 0,
+                "healthy_streak": 2,
+                "last_state": "healthy",
+                "incident": "none",
+                "event_job": null
+              },
+              "7": {
+                "config": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+                "failed_streak": 0,
+                "healthy_streak": 2,
+                "last_state": "healthy",
+                "incident": "none",
+                "event_job": null
+              },
+              "10": {
+                "config": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+                "failed_streak": 0,
+                "healthy_streak": 0,
+                "last_state": "missing",
+                "incident": "active",
+                "event_job": null
+              }
+            }
+          }
+        },
+        {
+          "position": 4,
+          "previous_position": 3,
+          "job_id": "00000000-0000-4000-8000-000000000004",
+          "observation": {
+            "sources": [
+              {
+                "id": 1,
+                "type": "rss",
+                "config": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+                "state": "healthy"
+              },
+              {
+                "id": 2,
+                "type": "rss",
+                "config": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+                "state": "healthy"
+              },
+              {
+                "id": 3,
+                "type": "rss",
+                "config": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+                "state": "healthy"
+              },
+              {
+                "id": 4,
+                "type": "rss",
+                "config": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+                "state": "healthy"
+              },
+              {
+                "id": 5,
+                "type": "telegram",
+                "config": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+                "state": "healthy"
+              },
+              {
+                "id": 6,
+                "type": "custom",
+                "config": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+                "state": "healthy"
+              },
+              {
+                "id": 7,
+                "type": "custom",
+                "config": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+                "state": "healthy"
+              },
+              {
+                "id": 10,
+                "type": "custom",
+                "config": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+                "state": "healthy"
+              }
+            ],
+            "successful": 8,
+            "total": 8,
+            "warning": null
+          },
+          "delivered": true,
+          "decision": {
+            "event": null,
+            "identity": "key:news_processing",
+            "source_ids": [],
+            "recovery": false
+          },
+          "state_after": {
+            "v": 1,
+            "last_position": 4,
+            "sources": {
+              "1": {
+                "config": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+                "failed_streak": 0,
+                "healthy_streak": 2,
+                "last_state": "healthy",
+                "incident": "none",
+                "event_job": null
+              },
+              "2": {
+                "config": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+                "failed_streak": 0,
+                "healthy_streak": 2,
+                "last_state": "healthy",
+                "incident": "none",
+                "event_job": null
+              },
+              "3": {
+                "config": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+                "failed_streak": 0,
+                "healthy_streak": 2,
+                "last_state": "healthy",
+                "incident": "none",
+                "event_job": null
+              },
+              "4": {
+                "config": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+                "failed_streak": 0,
+                "healthy_streak": 2,
+                "last_state": "healthy",
+                "incident": "none",
+                "event_job": null
+              },
+              "5": {
+                "config": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+                "failed_streak": 0,
+                "healthy_streak": 2,
+                "last_state": "healthy",
+                "incident": "none",
+                "event_job": null
+              },
+              "6": {
+                "config": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+                "failed_streak": 0,
+                "healthy_streak": 2,
+                "last_state": "healthy",
+                "incident": "none",
+                "event_job": null
+              },
+              "7": {
+                "config": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+                "failed_streak": 0,
+                "healthy_streak": 2,
+                "last_state": "healthy",
+                "incident": "none",
+                "event_job": null
+              },
+              "10": {
+                "config": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+                "failed_streak": 0,
+                "healthy_streak": 1,
+                "last_state": "healthy",
+                "incident": "active",
+                "event_job": null
+              }
+            }
+          }
+        },
+        {
+          "position": 5,
+          "previous_position": 4,
+          "job_id": "00000000-0000-4000-8000-000000000005",
+          "observation": {
+            "sources": [
+              {
+                "id": 1,
+                "type": "rss",
+                "config": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+                "state": "healthy"
+              },
+              {
+                "id": 2,
+                "type": "rss",
+                "config": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+                "state": "healthy"
+              },
+              {
+                "id": 3,
+                "type": "rss",
+                "config": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+                "state": "healthy"
+              },
+              {
+                "id": 4,
+                "type": "rss",
+                "config": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+                "state": "healthy"
+              },
+              {
+                "id": 5,
+                "type": "telegram",
+                "config": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+                "state": "healthy"
+              },
+              {
+                "id": 6,
+                "type": "custom",
+                "config": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+                "state": "healthy"
+              },
+              {
+                "id": 7,
+                "type": "custom",
+                "config": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+                "state": "healthy"
+              },
+              {
+                "id": 10,
+                "type": "custom",
+                "config": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+                "state": "healthy"
+              }
+            ],
+            "successful": 8,
+            "total": 8,
+            "warning": null
+          },
+          "delivered": true,
+          "decision": {
+            "event": {
+              "title": "Scheduled source recovered",
+              "message": "Source #10 (Page Monitor) recovered. Sources successful: 8/8."
+            },
+            "identity": "key:news_processing",
+            "events": [
+              {
+                "source_id": 10,
+                "type": "custom",
+                "recovery": true
+              }
+            ]
+          },
+          "state_after": {
+            "v": 1,
+            "last_position": 5,
+            "sources": {
+              "1": {
+                "config": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+                "failed_streak": 0,
+                "healthy_streak": 2,
+                "last_state": "healthy",
+                "incident": "none",
+                "event_job": null
+              },
+              "2": {
+                "config": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+                "failed_streak": 0,
+                "healthy_streak": 2,
+                "last_state": "healthy",
+                "incident": "none",
+                "event_job": null
+              },
+              "3": {
+                "config": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+                "failed_streak": 0,
+                "healthy_streak": 2,
+                "last_state": "healthy",
+                "incident": "none",
+                "event_job": null
+              },
+              "4": {
+                "config": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+                "failed_streak": 0,
+                "healthy_streak": 2,
+                "last_state": "healthy",
+                "incident": "none",
+                "event_job": null
+              },
+              "5": {
+                "config": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+                "failed_streak": 0,
+                "healthy_streak": 2,
+                "last_state": "healthy",
+                "incident": "none",
+                "event_job": null
+              },
+              "6": {
+                "config": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+                "failed_streak": 0,
+                "healthy_streak": 2,
+                "last_state": "healthy",
+                "incident": "none",
+                "event_job": null
+              },
+              "7": {
+                "config": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+                "failed_streak": 0,
+                "healthy_streak": 2,
+                "last_state": "healthy",
+                "incident": "none",
+                "event_job": null
+              },
+              "10": {
+                "config": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+                "failed_streak": 0,
+                "healthy_streak": 0,
+                "last_state": "healthy",
+                "incident": "none",
+                "event_job": null
+              }
+            }
+          }
+        }
+      ]
+    },
+    {
+      "name": "orphaned-delivery",
+      "steps": [
+        {
+          "position": 1,
+          "previous_position": null,
+          "job_id": "00000000-0000-4000-8000-000000000001",
+          "observation": {
+            "sources": [
+              {
+                "id": 1,
+                "type": "rss",
+                "config": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+                "state": "healthy"
+              },
+              {
+                "id": 2,
+                "type": "rss",
+                "config": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+                "state": "healthy"
+              },
+              {
+                "id": 3,
+                "type": "rss",
+                "config": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+                "state": "healthy"
+              },
+              {
+                "id": 4,
+                "type": "rss",
+                "config": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+                "state": "healthy"
+              },
+              {
+                "id": 5,
+                "type": "telegram",
+                "config": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+                "state": "healthy"
+              },
+              {
+                "id": 6,
+                "type": "custom",
+                "config": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+                "state": "healthy"
+              },
+              {
+                "id": 7,
+                "type": "custom",
+                "config": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+                "state": "healthy"
+              },
+              {
+                "id": 10,
+                "type": "custom",
+                "config": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+                "state": "warning",
+                "code": "transport_failed"
+              }
+            ],
+            "successful": 7,
+            "total": 8,
+            "warning": "transport_failed"
+          },
+          "delivered": true,
+          "decision": {
+            "event": null,
+            "identity": "key:news_processing",
+            "source_ids": [],
+            "recovery": false
+          },
+          "state_after": {
+            "v": 1,
+            "last_position": 1,
+            "sources": {
+              "1": {
+                "config": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+                "failed_streak": 0,
+                "healthy_streak": 1,
+                "last_state": "healthy",
+                "incident": "none",
+                "event_job": null
+              },
+              "2": {
+                "config": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+                "failed_streak": 0,
+                "healthy_streak": 1,
+                "last_state": "healthy",
+                "incident": "none",
+                "event_job": null
+              },
+              "3": {
+                "config": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+                "failed_streak": 0,
+                "healthy_streak": 1,
+                "last_state": "healthy",
+                "incident": "none",
+                "event_job": null
+              },
+              "4": {
+                "config": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+                "failed_streak": 0,
+                "healthy_streak": 1,
+                "last_state": "healthy",
+                "incident": "none",
+                "event_job": null
+              },
+              "5": {
+                "config": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+                "failed_streak": 0,
+                "healthy_streak": 1,
+                "last_state": "healthy",
+                "incident": "none",
+                "event_job": null
+              },
+              "6": {
+                "config": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+                "failed_streak": 0,
+                "healthy_streak": 1,
+                "last_state": "healthy",
+                "incident": "none",
+                "event_job": null
+              },
+              "7": {
+                "config": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+                "failed_streak": 0,
+                "healthy_streak": 1,
+                "last_state": "healthy",
+                "incident": "none",
+                "event_job": null
+              },
+              "10": {
+                "config": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+                "failed_streak": 1,
+                "healthy_streak": 0,
+                "last_state": "warning",
+                "incident": "none",
+                "event_job": null
+              }
+            }
+          }
+        },
+        {
+          "position": 2,
+          "previous_position": 1,
+          "job_id": "00000000-0000-4000-8000-000000000002",
+          "observation": {
+            "sources": [
+              {
+                "id": 1,
+                "type": "rss",
+                "config": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+                "state": "healthy"
+              },
+              {
+                "id": 2,
+                "type": "rss",
+                "config": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+                "state": "healthy"
+              },
+              {
+                "id": 3,
+                "type": "rss",
+                "config": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+                "state": "healthy"
+              },
+              {
+                "id": 4,
+                "type": "rss",
+                "config": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+                "state": "healthy"
+              },
+              {
+                "id": 5,
+                "type": "telegram",
+                "config": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+                "state": "healthy"
+              },
+              {
+                "id": 6,
+                "type": "custom",
+                "config": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+                "state": "healthy"
+              },
+              {
+                "id": 7,
+                "type": "custom",
+                "config": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+                "state": "healthy"
+              },
+              {
+                "id": 10,
+                "type": "custom",
+                "config": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+                "state": "warning",
+                "code": "transport_failed"
+              }
+            ],
+            "successful": 7,
+            "total": 8,
+            "warning": "transport_failed"
+          },
+          "delivered": null,
+          "decision": {
+            "event": {
+              "title": "Scheduled source warning",
+              "message": "Source #10 (Page Monitor) reported transport_failed. Sources successful: 7/8."
+            },
+            "identity": "key:news_processing",
+            "events": [
+              {
+                "source_id": 10,
+                "type": "custom",
+                "code": "transport_failed",
+                "recovery": false
+              }
+            ]
+          },
+          "state_after": {
+            "v": 1,
+            "last_position": 2,
+            "sources": {
+              "1": {
+                "config": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+                "failed_streak": 0,
+                "healthy_streak": 2,
+                "last_state": "healthy",
+                "incident": "none",
+                "event_job": null
+              },
+              "2": {
+                "config": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+                "failed_streak": 0,
+                "healthy_streak": 2,
+                "last_state": "healthy",
+                "incident": "none",
+                "event_job": null
+              },
+              "3": {
+                "config": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+                "failed_streak": 0,
+                "healthy_streak": 2,
+                "last_state": "healthy",
+                "incident": "none",
+                "event_job": null
+              },
+              "4": {
+                "config": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+                "failed_streak": 0,
+                "healthy_streak": 2,
+                "last_state": "healthy",
+                "incident": "none",
+                "event_job": null
+              },
+              "5": {
+                "config": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+                "failed_streak": 0,
+                "healthy_streak": 2,
+                "last_state": "healthy",
+                "incident": "none",
+                "event_job": null
+              },
+              "6": {
+                "config": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+                "failed_streak": 0,
+                "healthy_streak": 2,
+                "last_state": "healthy",
+                "incident": "none",
+                "event_job": null
+              },
+              "7": {
+                "config": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+                "failed_streak": 0,
+                "healthy_streak": 2,
+                "last_state": "healthy",
+                "incident": "none",
+                "event_job": null
+              },
+              "10": {
+                "config": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+                "failed_streak": 2,
+                "healthy_streak": 0,
+                "last_state": "warning",
+                "incident": "attempting",
+                "event_job": "00000000-0000-4000-8000-000000000002"
+              }
+            }
+          }
+        },
+        {
+          "position": 3,
+          "previous_position": 2,
+          "job_id": "00000000-0000-4000-8000-000000000003",
+          "observation": {
+            "sources": [
+              {
+                "id": 1,
+                "type": "rss",
+                "config": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+                "state": "healthy"
+              },
+              {
+                "id": 2,
+                "type": "rss",
+                "config": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+                "state": "healthy"
+              },
+              {
+                "id": 3,
+                "type": "rss",
+                "config": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+                "state": "healthy"
+              },
+              {
+                "id": 4,
+                "type": "rss",
+                "config": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+                "state": "healthy"
+              },
+              {
+                "id": 5,
+                "type": "telegram",
+                "config": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+                "state": "healthy"
+              },
+              {
+                "id": 6,
+                "type": "custom",
+                "config": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+                "state": "healthy"
+              },
+              {
+                "id": 7,
+                "type": "custom",
+                "config": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+                "state": "healthy"
+              },
+              {
+                "id": 10,
+                "type": "custom",
+                "config": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+                "state": "warning",
+                "code": "transport_failed"
+              }
+            ],
+            "successful": 7,
+            "total": 8,
+            "warning": "transport_failed"
+          },
+          "delivered": true,
+          "decision": {
+            "event": null,
+            "identity": "key:news_processing",
+            "source_ids": [],
+            "recovery": false
+          },
+          "state_after": {
+            "v": 1,
+            "last_position": 3,
+            "sources": {
+              "1": {
+                "config": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+                "failed_streak": 0,
+                "healthy_streak": 2,
+                "last_state": "healthy",
+                "incident": "none",
+                "event_job": null
+              },
+              "2": {
+                "config": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+                "failed_streak": 0,
+                "healthy_streak": 2,
+                "last_state": "healthy",
+                "incident": "none",
+                "event_job": null
+              },
+              "3": {
+                "config": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+                "failed_streak": 0,
+                "healthy_streak": 2,
+                "last_state": "healthy",
+                "incident": "none",
+                "event_job": null
+              },
+              "4": {
+                "config": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+                "failed_streak": 0,
+                "healthy_streak": 2,
+                "last_state": "healthy",
+                "incident": "none",
+                "event_job": null
+              },
+              "5": {
+                "config": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+                "failed_streak": 0,
+                "healthy_streak": 2,
+                "last_state": "healthy",
+                "incident": "none",
+                "event_job": null
+              },
+              "6": {
+                "config": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+                "failed_streak": 0,
+                "healthy_streak": 2,
+                "last_state": "healthy",
+                "incident": "none",
+                "event_job": null
+              },
+              "7": {
+                "config": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+                "failed_streak": 0,
+                "healthy_streak": 2,
+                "last_state": "healthy",
+                "incident": "none",
+                "event_job": null
+              },
+              "10": {
+                "config": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+                "failed_streak": 2,
+                "healthy_streak": 0,
+                "last_state": "warning",
+                "incident": "unknown",
+                "event_job": null
+              }
+            }
+          }
+        },
+        {
+          "position": 4,
+          "previous_position": 3,
+          "job_id": "00000000-0000-4000-8000-000000000004",
+          "observation": {
+            "sources": [
+              {
+                "id": 1,
+                "type": "rss",
+                "config": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+                "state": "healthy"
+              },
+              {
+                "id": 2,
+                "type": "rss",
+                "config": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+                "state": "healthy"
+              },
+              {
+                "id": 3,
+                "type": "rss",
+                "config": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+                "state": "healthy"
+              },
+              {
+                "id": 4,
+                "type": "rss",
+                "config": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+                "state": "healthy"
+              },
+              {
+                "id": 5,
+                "type": "telegram",
+                "config": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+                "state": "healthy"
+              },
+              {
+                "id": 6,
+                "type": "custom",
+                "config": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+                "state": "healthy"
+              },
+              {
+                "id": 7,
+                "type": "custom",
+                "config": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+                "state": "healthy"
+              },
+              {
+                "id": 10,
+                "type": "custom",
+                "config": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+                "state": "healthy"
+              }
+            ],
+            "successful": 8,
+            "total": 8,
+            "warning": null
+          },
+          "delivered": true,
+          "decision": {
+            "event": null,
+            "identity": "key:news_processing",
+            "source_ids": [],
+            "recovery": false
+          },
+          "state_after": {
+            "v": 1,
+            "last_position": 4,
+            "sources": {
+              "1": {
+                "config": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+                "failed_streak": 0,
+                "healthy_streak": 2,
+                "last_state": "healthy",
+                "incident": "none",
+                "event_job": null
+              },
+              "2": {
+                "config": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+                "failed_streak": 0,
+                "healthy_streak": 2,
+                "last_state": "healthy",
+                "incident": "none",
+                "event_job": null
+              },
+              "3": {
+                "config": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+                "failed_streak": 0,
+                "healthy_streak": 2,
+                "last_state": "healthy",
+                "incident": "none",
+                "event_job": null
+              },
+              "4": {
+                "config": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+                "failed_streak": 0,
+                "healthy_streak": 2,
+                "last_state": "healthy",
+                "incident": "none",
+                "event_job": null
+              },
+              "5": {
+                "config": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+                "failed_streak": 0,
+                "healthy_streak": 2,
+                "last_state": "healthy",
+                "incident": "none",
+                "event_job": null
+              },
+              "6": {
+                "config": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+                "failed_streak": 0,
+                "healthy_streak": 2,
+                "last_state": "healthy",
+                "incident": "none",
+                "event_job": null
+              },
+              "7": {
+                "config": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+                "failed_streak": 0,
+                "healthy_streak": 2,
+                "last_state": "healthy",
+                "incident": "none",
+                "event_job": null
+              },
+              "10": {
+                "config": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+                "failed_streak": 0,
+                "healthy_streak": 1,
+                "last_state": "healthy",
+                "incident": "unknown",
+                "event_job": null
+              }
+            }
+          }
+        },
+        {
+          "position": 5,
+          "previous_position": 4,
+          "job_id": "00000000-0000-4000-8000-000000000005",
+          "observation": {
+            "sources": [
+              {
+                "id": 1,
+                "type": "rss",
+                "config": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+                "state": "healthy"
+              },
+              {
+                "id": 2,
+                "type": "rss",
+                "config": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+                "state": "healthy"
+              },
+              {
+                "id": 3,
+                "type": "rss",
+                "config": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+                "state": "healthy"
+              },
+              {
+                "id": 4,
+                "type": "rss",
+                "config": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+                "state": "healthy"
+              },
+              {
+                "id": 5,
+                "type": "telegram",
+                "config": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+                "state": "healthy"
+              },
+              {
+                "id": 6,
+                "type": "custom",
+                "config": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+                "state": "healthy"
+              },
+              {
+                "id": 7,
+                "type": "custom",
+                "config": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+                "state": "healthy"
+              },
+              {
+                "id": 10,
+                "type": "custom",
+                "config": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+                "state": "healthy"
+              }
+            ],
+            "successful": 8,
+            "total": 8,
+            "warning": null
+          },
+          "delivered": true,
+          "decision": {
+            "event": null,
+            "identity": "key:news_processing",
+            "source_ids": [],
+            "recovery": false
+          },
+          "state_after": {
+            "v": 1,
+            "last_position": 5,
+            "sources": {
+              "1": {
+                "config": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+                "failed_streak": 0,
+                "healthy_streak": 2,
+                "last_state": "healthy",
+                "incident": "none",
+                "event_job": null
+              },
+              "2": {
+                "config": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+                "failed_streak": 0,
+                "healthy_streak": 2,
+                "last_state": "healthy",
+                "incident": "none",
+                "event_job": null
+              },
+              "3": {
+                "config": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+                "failed_streak": 0,
+                "healthy_streak": 2,
+                "last_state": "healthy",
+                "incident": "none",
+                "event_job": null
+              },
+              "4": {
+                "config": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+                "failed_streak": 0,
+                "healthy_streak": 2,
+                "last_state": "healthy",
+                "incident": "none",
+                "event_job": null
+              },
+              "5": {
+                "config": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+                "failed_streak": 0,
+                "healthy_streak": 2,
+                "last_state": "healthy",
+                "incident": "none",
+                "event_job": null
+              },
+              "6": {
+                "config": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+                "failed_streak": 0,
+                "healthy_streak": 2,
+                "last_state": "healthy",
+                "incident": "none",
+                "event_job": null
+              },
+              "7": {
+                "config": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+                "failed_streak": 0,
+                "healthy_streak": 2,
+                "last_state": "healthy",
+                "incident": "none",
+                "event_job": null
+              },
+              "10": {
+                "config": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+                "failed_streak": 0,
+                "healthy_streak": 2,
+                "last_state": "healthy",
+                "incident": "none",
+                "event_job": null
+              }
+            }
+          }
+        }
+      ]
+    }
+  ]
+}

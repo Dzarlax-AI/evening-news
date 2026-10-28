@@ -31,14 +31,66 @@ type Config struct {
 	RPS                                                                int
 	InputRate, OutputRate, CachedRate                                  float64
 	DBMaxConns                                                         int32
+	TelegramToken, TelegramMain, TelegramService                       string
+	TelegramEndpoint                                                   string
+	DigestModel, SiteBase                                              string
+	TelegramRich                                                       bool
 }
 
 func ConfigFromEnv() (Config, error) {
+	return configFromEnv(true)
+}
+
+// DomainConfigFromEnv loads the same provider and delivery settings without
+// requiring the retired Unix RPC socket and its ephemeral token.
+func DomainConfigFromEnv() (Config, error) {
+	return configFromEnv(false)
+}
+
+func configFromEnv(unixRPC bool) (Config, error) {
 	c := Config{Socket: os.Getenv("NEWS_AI_SOCKET"), Token: os.Getenv("NEWS_AI_TOKEN"), DatabaseURL: normalizeDSN(os.Getenv("DATABASE_URL")), APIKey: os.Getenv("GEMINI_API_KEY"), Endpoint: os.Getenv("GEMINI_API_ENDPOINT"), Model: os.Getenv("SUMMARIZATION_MODEL"), LocalCategory: os.Getenv("LOCAL_CATEGORY"), RPS: 3, DBMaxConns: 2}
-	if c.Socket == "" || c.Token == "" || c.DatabaseURL == "" || c.APIKey == "" || c.Endpoint == "" || c.Model == "" {
+	if !unixRPC && c.Endpoint == "" {
+		c.Endpoint = "https://generativelanguage.googleapis.com/v1/models"
+	}
+	if !unixRPC && c.Model == "" {
+		c.Model = "gemini-3.5-flash-lite"
+	}
+	c.TelegramToken = os.Getenv("TELEGRAM_TOKEN")
+	c.TelegramMain = os.Getenv("TELEGRAM_CHAT_ID")
+	c.TelegramService = os.Getenv("TELEGRAM_SERVICE_CHAT_ID")
+	c.TelegramEndpoint = "https://api.telegram.org"
+	if os.Getenv("NEWS_FIXTURE_MODE") == "1" {
+		fixtureEndpoint := os.Getenv("NEWS_TEST_TELEGRAM_ENDPOINT")
+		u, err := url.Parse(fixtureEndpoint)
+		if err != nil || u.Scheme != "http" || (u.Hostname() != "127.0.0.1" && u.Hostname() != "localhost" && u.Hostname() != "fixture-services") || u.User != nil || u.RawQuery != "" || u.Fragment != "" {
+			return c, errors.New("ai_runtime_fixture_configuration")
+		}
+		c.TelegramEndpoint = fixtureEndpoint
+	}
+
+	c.DigestModel = os.Getenv("DIGEST_MODEL")
+	c.SiteBase = os.Getenv("SITE_BASE_URL")
+	if !unixRPC && c.DigestModel == "" {
+		c.DigestModel = "gemini-3.5-flash-lite"
+	}
+	if !unixRPC && c.SiteBase == "" {
+		c.SiteBase = "https://news.dzarlax.dev"
+	}
+	c.TelegramRich = true
+	if raw, present := os.LookupEnv("TELEGRAM_RICH_MESSAGES_ENABLED"); present {
+		switch strings.ToLower(raw) {
+		case "1", "true", "yes", "on", "y", "t":
+			c.TelegramRich = true
+		case "0", "false", "no", "off", "n", "f":
+			c.TelegramRich = false
+		default:
+			return c, errors.New("ai_runtime_telegram_rich_configuration")
+		}
+	}
+	if (unixRPC && (c.Socket == "" || c.Token == "")) || c.DatabaseURL == "" || strings.TrimSpace(c.APIKey) == "" || c.Endpoint == "" || c.Model == "" {
 		return c, errors.New("ai_runtime_missing_configuration")
 	}
-	if len(c.Token) < 32 || len(c.Token) > 256 {
+	if unixRPC && (len(c.Token) < 32 || len(c.Token) > 256) {
 		return c, errors.New("ai_runtime_token_configuration")
 	}
 	if _, err := providerURL(c.Endpoint, c.Model); err != nil {
@@ -84,8 +136,10 @@ type Server struct {
 	usage        chan usageRecord
 	workers      sync.WaitGroup
 	closing      chan struct{}
+	drainOnce    sync.Once
 	closeOnce    sync.Once
 	mux          *http.ServeMux
+	digest       *digestRegistry
 	usageMu      sync.RWMutex
 	usageClosed  bool
 	usageFailed  atomic.Uint64
@@ -106,14 +160,31 @@ type usageRecord struct {
 
 func NewServer(c Config, db *pgxpool.Pool) *Server {
 	s := &Server{config: c, db: db, limiter: NewSlidingWindow(c.RPS), breaker: NewBreaker(), metadata: NewMetadataStore(db), client: &http.Client{}, usage: make(chan usageRecord, 64), closing: make(chan struct{}), mux: http.NewServeMux()}
+	s.digest = &digestRegistry{entries: make(map[string]*digestReceipt)}
+	s.mux.HandleFunc("POST /v2/digest/operations", s.digestAccept)
+	s.mux.HandleFunc("GET /v2/digest/operations", s.digestStatus)
 	s.mux.HandleFunc("GET /v1/status", s.status)
 	s.mux.HandleFunc("POST /v1/analyze", s.analyze)
 	s.mux.HandleFunc("POST /v1/generate", s.generate)
 	s.mux.HandleFunc("POST /v1/permit", s.permit)
+	s.mux.HandleFunc("POST /v1/telegram/send", s.telegramSend)
 	s.mux.HandleFunc("POST /v1/categories/invalidate", s.invalidate)
 	return s
 }
 func (s *Server) Handler() http.Handler { return s.auth(s.mux) }
+
+// BeginDrain revokes direct operations. The owning server must then wait for
+// in-flight calls before closing usage workers and the shared database pool.
+// DirectReady reports whether the direct runtime is still accepting work.
+func (s *Server) DirectReady() bool { return !s.draining.Load() }
+
+func (s *Server) BeginDrain() {
+	s.draining.Store(true)
+	s.drainOnce.Do(func() { close(s.closing) })
+}
+
+// InvalidateCategories refreshes metadata after a web-side category change.
+func (s *Server) InvalidateCategories() { s.metadata.Invalidate() }
 func (s *Server) auth(next http.Handler) http.Handler {
 	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		header := r.Header.Get("Authorization")
@@ -174,6 +245,14 @@ type analyzeInput struct {
 	URL             string  `json:"url"`
 	OriginalContext *string `json:"original_context"`
 	MaxTextChars    int     `json:"max_text_chars"`
+}
+
+// ArticleInput is the direct in-process input for article analysis.
+type ArticleInput struct {
+	Title, Content, URL string
+	OriginalContext     *string
+	MaxTextChars        int
+	Model               string
 }
 type analyzeRequest struct {
 	commonRequest
@@ -244,40 +323,83 @@ func (s *Server) analyze(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	defer cancel()
-	if base.Model == "" {
-		base.Model = s.config.Model
+	model := base.Model
+	if model == "" {
+		model = s.config.Model
 	}
-	if _, err := providerURL(s.config.Endpoint, base.Model); err != nil {
+	if _, err := providerURL(s.config.Endpoint, model); err != nil {
 		writeJSON(w, 400, errorEnvelope("invalid_input", 400))
 		return
 	}
+	if base.Input.MaxTextChars > 1000000 {
+		writeJSON(w, 400, errorEnvelope("resource_limit", 400))
+		return
+	}
+	result, usage, err := s.analyzeArticle(ctx, ArticleInput{Title: base.Input.Title, Content: base.Input.Content, URL: base.Input.URL, OriginalContext: base.Input.OriginalContext, MaxTextChars: base.Input.MaxTextChars, Model: base.Model})
+	if err != nil {
+		writeError(w, err)
+		return
+	}
+	writeJSON(w, 200, map[string]any{"version": 1, "ok": true, "result": map[string]any{"result": result, "usage": usage}})
+}
+
+// AnalyzeArticle shares the runtime's limiter, circuit breaker, metadata and
+// usage accounting with all other operations in this process.
+func (s *Server) AnalyzeArticle(ctx context.Context, input ArticleInput) (map[string]any, *analysis.Usage, error) {
+	if s.draining.Load() {
+		return nil, nil, &providerFailure{code: "runtime_draining"}
+	}
+	deadline, ok := ctx.Deadline()
+	if !ok || !deadline.After(time.Now()) {
+		return nil, nil, &providerFailure{code: "invalid_input"}
+	}
+	// Match the former bridge's maximum per-call deadline and cancel direct
+	// calls as soon as the runtime begins draining.
+	ctx, cancel := context.WithTimeout(ctx, 240*time.Second)
+	stop := make(chan struct{})
+	go func() {
+		select {
+		case <-s.closing:
+			cancel()
+		case <-ctx.Done():
+		case <-stop:
+		}
+	}()
+	defer func() { close(stop); cancel() }()
+	return s.analyzeArticle(ctx, input)
+}
+
+func (s *Server) analyzeArticle(ctx context.Context, input ArticleInput) (map[string]any, *analysis.Usage, error) {
+	if input.Model == "" {
+		input.Model = s.config.Model
+	}
+	if _, err := providerURL(s.config.Endpoint, input.Model); err != nil {
+		return nil, nil, &providerFailure{code: "invalid_input"}
+	}
 	cats, local := s.metadata.Load(ctx)
-	input := base.Input
 	if input.MaxTextChars == 0 {
 		input.MaxTextChars = 100000
 	}
 	if input.MaxTextChars > 1000000 {
-		writeJSON(w, 400, errorEnvelope("resource_limit", 400))
-		return
+		return nil, nil, &providerFailure{code: "resource_limit"}
 	}
-	req := analysis.Request{Version: 1, Title: input.Title, Content: input.Content, URL: input.URL, OriginalContext: input.OriginalContext, Categories: cats, LocalCategory: local, ConfiguredLocalCategory: s.config.LocalCategory, Model: base.Model, Endpoint: s.config.Endpoint, MaxTextChars: input.MaxTextChars}
+	req := analysis.Request{Version: 1, Title: input.Title, Content: input.Content, URL: input.URL, OriginalContext: input.OriginalContext, Categories: cats, LocalCategory: local, ConfiguredLocalCategory: s.config.LocalCategory, Model: input.Model, Endpoint: s.config.Endpoint, MaxTextChars: input.MaxTextChars}
 	value, err := s.breaker.Do(ctx, func() (any, error) {
 		return s.retry(ctx, func(attemptCtx context.Context) (any, error) {
 			client := *s.client
 			client.Timeout = 40 * time.Second
-			result, usage, e := analysis.Analyze(attemptCtx, req, analysis.ProviderConfig{APIKey: s.config.APIKey, Model: base.Model, Endpoint: s.config.Endpoint, Client: &client, BeforeAttempt: s.limiter.Acquire})
+			result, usage, e := analysis.Analyze(attemptCtx, req, analysis.ProviderConfig{APIKey: s.config.APIKey, Model: input.Model, Endpoint: s.config.Endpoint, Client: &client, BeforeAttempt: s.limiter.Acquire})
 			return analysisOutput{result, usage}, e
 		})
 	})
 	if err != nil {
-		writeError(w, err)
-		return
+		return nil, nil, err
 	}
 	result := value.(analysisOutput)
 	if result.usage != nil {
 		s.enqueueUsage(usageRecord{domain: domainFor(input.URL), analysisType: articleAnalysisType, usage: *result.usage})
 	}
-	writeJSON(w, 200, map[string]any{"version": 1, "ok": true, "result": map[string]any{"result": result.result, "usage": result.usage}})
+	return result.result, result.usage, nil
 }
 
 type analysisOutput struct {
@@ -751,8 +873,7 @@ func ServeUnix(ctx context.Context, s *Server) error {
 	case <-ctx.Done():
 	case serveErr = <-errCh:
 	}
-	s.draining.Store(true)
-	close(s.closing)
+	s.BeginDrain()
 	shutdownCtx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
 	shutdownErr := httpServer.Shutdown(shutdownCtx)
 	if shutdownErr != nil {

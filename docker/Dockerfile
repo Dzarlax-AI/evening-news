@@ -1,9 +1,9 @@
 # One build graph for the three core runtime images. Keep the standalone
 # extractor and browser Dockerfiles outside this graph.
 ARG GO_BUILD_IMAGE=golang:1.25.6-alpine
-ARG PYTHON_IMAGE=python:3.12-slim
+ARG GO_DOMAIN_BUILD_IMAGE=golang:1.26.10-alpine
 
-FROM ${GO_BUILD_IMAGE} AS go-web-build
+FROM --platform=$BUILDPLATFORM ${GO_BUILD_IMAGE} AS go-web-build
 WORKDIR /src
 COPY go-web/go.mod go-web/go.sum ./
 RUN go mod download && go mod verify
@@ -13,25 +13,23 @@ ARG TARGETARCH
 RUN CGO_ENABLED=0 GOOS=${TARGETOS} GOARCH=${TARGETARCH} \
     go build -trimpath -ldflags="-s -w" -o /out/news-web ./cmd/news-web
 
-FROM ${GO_BUILD_IMAGE} AS go-domain-build
+FROM --platform=$BUILDPLATFORM ${GO_DOMAIN_BUILD_IMAGE} AS go-domain-build
 WORKDIR /src/go-domain
-COPY go-domain/go.mod ./
+COPY go-domain/go.mod go-domain/go.sum ./
+COPY go-editorial/ /src/go-editorial/
+COPY go/ /src/go/
+COPY go-tools/go.mod go-tools/go.sum /src/go-tools/
+COPY go-tools/incidentfilter/ /src/go-tools/incidentfilter/
+RUN go mod download && go mod verify
 COPY go-domain/ ./
 ARG TARGETOS
 ARG TARGETARCH
 RUN CGO_ENABLED=0 GOOS=${TARGETOS} GOARCH=${TARGETARCH} \
-    go build -trimpath -ldflags="-s -w" -o /out/news-ai-runtime ./cmd/news-ai-runtime
+    go build -trimpath -ldflags="-s -w" -o /out/news-domain ./cmd/news-domain && \
+    CGO_ENABLED=0 GOOS=${TARGETOS} GOARCH=${TARGETARCH} \
+    go build -trimpath -ldflags="-s -w" -o /out/news-migrate ./cmd/news-migrate
 
-FROM ${GO_BUILD_IMAGE} AS go-editorial-build
-WORKDIR /src/go-editorial
-COPY go-editorial/go.mod ./
-COPY go-editorial/ ./
-ARG TARGETOS
-ARG TARGETARCH
-RUN CGO_ENABLED=0 GOOS=${TARGETOS} GOARCH=${TARGETARCH} \
-    go build -trimpath -ldflags="-s -w" -o /out/news-editorial ./cmd/news-editorial
-
-FROM ${GO_BUILD_IMAGE} AS go-background-build
+FROM --platform=$BUILDPLATFORM ${GO_BUILD_IMAGE} AS go-background-build
 WORKDIR /src/go-background
 # Local replacements must be present before go mod download.
 COPY go-background/go.mod go-background/go.sum ./
@@ -48,12 +46,6 @@ ARG REVISION=unknown
 RUN CGO_ENABLED=0 GOOS=${TARGETOS} GOARCH=${TARGETARCH} \
     go build -trimpath -ldflags="-s -w -X main.buildID=${REVISION}" \
     -o /out/news-background ./cmd/news-background
-
-FROM ${PYTHON_IMAGE} AS python-dependencies
-WORKDIR /install
-COPY requirements-runtime.txt /tmp/requirements-runtime.txt
-RUN pip install --no-cache-dir --prefer-binary --prefix=/install \
-    -r /tmp/requirements-runtime.txt
 
 FROM alpine:3.21 AS web
 ARG REVISION=unknown
@@ -91,30 +83,23 @@ ENTRYPOINT ["/news-background"]
 HEALTHCHECK --interval=15s --timeout=4s --start-period=30s --retries=3 \
     CMD ["/news-background", "healthcheck"]
 
-FROM ${PYTHON_IMAGE} AS executor
+FROM alpine:3.21 AS executor
 ARG REVISION=unknown
 LABEL org.opencontainers.image.title="Evening News private executor" \
       org.opencontainers.image.source="https://github.com/Dzarlax-AI/evening-news" \
       org.opencontainers.image.revision=$REVISION \
       org.opencontainers.image.version=$REVISION
-ENV PYTHONDONTWRITEBYTECODE=1 \
-    PYTHONUNBUFFERED=1 \
-    PATH=/usr/local/bin:$PATH
-RUN apt-get update \
-    && apt-get install -y --no-install-recommends ca-certificates postgresql-client tzdata \
-    && rm -rf /var/lib/apt/lists/* \
-    && groupadd --system --gid 10001 app \
-    && useradd --system --uid 10001 --gid app --home-dir /app --create-home app \
+RUN apk add --no-cache ca-certificates tzdata postgresql16-client postgresql17-client \
+    && addgroup -S -g 10001 app \
+    && adduser -S -D -u 10001 -G app -h /app app \
     && mkdir -p /app/logs /app/data /app/cache /app/backups /app/exports \
-    && chown -R app:app /app
+    && chown -R 10001:10001 /app
+ENV NEWS_BACKUP_MATCH_PG_MAJOR=1
 WORKDIR /app
-COPY --from=python-dependencies /install/ /usr/local/
-COPY --from=go-editorial-build /out/news-editorial /usr/local/bin/news-editorial
-COPY --from=go-domain-build /out/news-ai-runtime /usr/local/bin/news-ai-runtime
-COPY db/ ./db/
-COPY news_aggregator/ ./news_aggregator/
+COPY --from=go-domain-build /out/news-domain /usr/local/bin/news-domain
+COPY --from=go-domain-build /out/news-migrate /usr/local/bin/news-migrate
 USER 10001:10001
 EXPOSE 8100
 HEALTHCHECK --interval=10s --timeout=6s --start-period=30s --retries=3 \
-    CMD python -c "import json,os,urllib.request; req=urllib.request.Request('http://127.0.0.1:8100/internal/v1/status',headers={'Authorization':'Bearer '+os.environ['JOB_EXECUTOR_TOKEN']}); assert json.load(urllib.request.urlopen(req,timeout=5))['ready']" || exit 1
-CMD ["python", "-m", "news_aggregator.executor"]
+    CMD ["/usr/local/bin/news-domain", "healthcheck"]
+ENTRYPOINT ["/usr/local/bin/news-domain"]

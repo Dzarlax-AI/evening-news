@@ -1,0 +1,193 @@
+[
+  {
+    "name": "exact-post",
+    "html": "<div data-post=\"fixture/999\"><a class=\"tgme_widget_message_photo_wrap\" style=\"background-image:url(https://cdn.example/new.jpg)\"></a></div><div data-post=\"fixture/1\"><a class=\"tgme_widget_message_photo_wrap\" style=\"background-image:url(https://cdn.example/old.jpg)\"></a></div>",
+    "expected": [
+      {
+        "url": "https://cdn.example/old.jpg",
+        "type": "image",
+        "thumbnail": "https://cdn.example/old.jpg"
+      }
+    ]
+  },
+  {
+    "name": "empty",
+    "html": "<div data-post=\"fixture/1\">no media</div>",
+    "expected": []
+  },
+  {
+    "name": "photo-avatar",
+    "html": "<div data-post=\"fixture/1\"><div class=\"tgme_widget_message_user_photo\"><img src=\"https://cdn.example/avatar.jpg\"></div><div class=\"tgme_widget_message_photo\"><img src=\"https://cdn.example/photo.jpg\"></div><div class=\"tgme_widget_message_reply\"><img src=\"https://cdn.example/reply.jpg\"></div></div>",
+    "expected": [
+      {
+        "url": "https://cdn.example/photo.jpg",
+        "type": "image",
+        "thumbnail": "https://cdn.example/photo.jpg"
+      }
+    ]
+  },
+  {
+    "name": "direct-video",
+    "html": "<div data-post=\"fixture/1\"><video src=\"https://cdn.example/clip.mp4\" poster=\"https://cdn.example/poster.jpg\" duration=\"0:08\"></video></div>",
+    "expected": [
+      {
+        "url": "https://cdn.example/clip.mp4",
+        "type": "video",
+        "thumbnail": "https://cdn.example/poster.jpg",
+        "duration": "0:08",
+        "source": "direct_video"
+      }
+    ]
+  },
+  {
+    "name": "image-dedup",
+    "html": "<div data-post=\"fixture/1\"><div class=\"photo\"><img src=\"https://cdn.example/same.jpg\"></div><div class=\"media\"><img src=\"https://cdn.example/same.jpg\"></div></div>",
+    "expected": [
+      {
+        "url": "https://cdn.example/same.jpg",
+        "type": "image",
+        "thumbnail": "https://cdn.example/same.jpg"
+      }
+    ]
+  },
+  {
+    "name": "direct-audio",
+    "html": "<div data-post=\"fixture/1\"><audio src=\"https://cdn.example/a.mp3\" duration=\"1:20\"></audio></div>",
+    "expected": [
+      {
+        "url": "https://cdn.example/a.mp3",
+        "type": "audio",
+        "duration": "1:20",
+        "source": "direct_audio"
+      }
+    ]
+  },
+  {
+    "name": "sticker",
+    "html": "<div data-post=\"fixture/1\"><div class=\"sticker\"><img src=\"https://cdn.example/s.webp\"></div></div>",
+    "expected": []
+  },
+  {
+    "name": "gif",
+    "html": "<div data-post=\"fixture/1\"><a class=\"tgme_widget_message_gif\" data-gif=\"https://cdn.example/a.gif\" href=\"https://cdn.example/a.gif\"><img src=\"https://cdn.example/preview.jpg\"></a></div>",
+    "expected": [
+      {
+        "url": "https://cdn.example/a.gif",
+        "type": "gif",
+        "thumbnail": "https://cdn.example/preview.jpg",
+        "source": "gif"
+      }
+    ]
+  },
+  {
+    "name": "poll",
+    "html": "<div data-post=\"fixture/1\"><div class=\"tgme_widget_message_poll\"><div class=\"poll_question\">Choose?</div><div class=\"poll_option\">Yes</div><div class=\"poll_option\">No</div></div></div>",
+    "expected": [
+      {
+        "type": "poll",
+        "url": "#poll_7330971674493885014",
+        "poll_data": {
+          "question": "Choose?",
+          "options": [
+            "Yes",
+            "No"
+          ]
+        },
+        "source": "poll"
+      }
+    ]
+  },
+  {
+    "name": "location",
+    "html": "<div data-post=\"fixture/1\"><div class=\"tgme_widget_message_location\"><a href=\"https://maps.example/place\">Place</a></div></div>",
+    "expected": [
+      {
+        "type": "location",
+        "url": "https://maps.example/place",
+        "location_data": {
+          "text": "Place",
+          "url": "https://maps.example/place"
+        },
+        "source": "location"
+      }
+    ]
+  },
+  {
+    "name": "relative-image",
+    "html": "<div data-post=\"fixture/1\"><div class=\"photo\"><img src=\"/images/photo.jpg\"></div></div>",
+    "expected": [
+      {
+        "url": "https://t.me/images/photo.jpg",
+        "type": "image",
+        "thumbnail": "https://t.me/images/photo.jpg"
+      }
+    ]
+  },
+  {
+    "name": "nested-video",
+    "html": "<div data-post=\"fixture/1\"><div class=\"tgme_widget_message_video\"><video src=\"https://cdn.example/v.mp4\" poster=\"https://cdn.example/p.jpg\"></video></div></div>",
+    "expected": [
+      {
+        "url": "https://cdn.example/v.mp4",
+        "type": "video",
+        "thumbnail": "https://cdn.example/p.jpg",
+        "duration": null,
+        "source": "direct_video"
+      }
+    ]
+  },
+  {
+    "name": "location-no-link",
+    "html": "<div data-post=\"fixture/1\"><div class=\"tgme_widget_message_location\">Place here</div></div>",
+    "expected": [
+      {
+        "type": "location",
+        "url": "#location_-5869879493295886408",
+        "location_data": {
+          "text": "Place here",
+          "url": null
+        },
+        "source": "location"
+      }
+    ]
+  },
+  {
+    "name": "contact",
+    "html": "<div data-post=\"fixture/1\"><div class=\"tgme_widget_message_contact\"><span>Person</span><span class=\"contact_phone\">123</span></div></div>",
+    "expected": [
+      {
+        "type": "contact",
+        "url": "#contact_-542819921065069540",
+        "contact_data": {
+          "text": "Person123",
+          "phone": "123"
+        },
+        "source": "contact"
+      }
+    ]
+  },
+  {
+    "name": "wrapped-sticker",
+    "html": "<div data-post=\"fixture/1\"><div class=\"tgme_widget_message_sticker\"><img src=\"https://cdn.example/s.webp\"></div></div>",
+    "expected": [
+      {
+        "url": "https://cdn.example/s.webp",
+        "type": "animated_sticker",
+        "thumbnail": "https://cdn.example/s.webp",
+        "source": "sticker"
+      }
+    ]
+  },
+  {
+    "name": "voice",
+    "html": "<div data-post=\"fixture/1\"><div class=\"tgme_widget_message_voice\"><audio src=\"https://cdn.example/voice.ogg\"></audio></div></div>",
+    "expected": [
+      {
+        "url": "https://cdn.example/voice.ogg",
+        "type": "audio",
+        "duration": null,
+        "source": "direct_audio"
+      }
+    ]
+  }
+]

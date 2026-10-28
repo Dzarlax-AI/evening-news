@@ -13,13 +13,13 @@ on:
       - 'go-execution/**'
       - 'go-editorial/**'
       - 'go-domain/**'
+      - 'go-tools/**'
       - 'go/**'
       - 'go-ingestion/**'
       - 'go-processing/**'
       - 'go-scheduler/**'
       - 'go-worker/**'
       - 'go-web/**'
-      - 'news_aggregator/**'
       - 'docs/core-image-build-and-release.md'
       - 'docs/ai-runtime.md'
       - 'docs/article-analysis.md'
@@ -28,12 +28,6 @@ on:
       - 'README.md'
       - '.env.example'
       - 'deploy/news/**'
-      - 'requirements*.txt'
-      - 'scripts/check_core_image_inventory.py'
-      - 'scripts/prepare_runtime_env.py'
-      - 'scripts/check_ghcr_tag_absent.py'
-      - 'scripts/core_image_release.py'
-      - 'scripts/run_go_background_fixture_gate.py'
       - 'tests/**'
       - 'web/**'
       - '.github/workflows/docker-build-push.yml'
@@ -50,13 +44,13 @@ on:
       - 'go-execution/**'
       - 'go-editorial/**'
       - 'go-domain/**'
+      - 'go-tools/**'
       - 'go/**'
       - 'go-ingestion/**'
       - 'go-processing/**'
       - 'go-scheduler/**'
       - 'go-worker/**'
       - 'go-web/**'
-      - 'news_aggregator/**'
       - 'docs/core-image-build-and-release.md'
       - 'docs/ai-runtime.md'
       - 'docs/article-analysis.md'
@@ -65,12 +59,6 @@ on:
       - 'README.md'
       - '.env.example'
       - 'deploy/news/**'
-      - 'requirements*.txt'
-      - 'scripts/check_core_image_inventory.py'
-      - 'scripts/prepare_runtime_env.py'
-      - 'scripts/check_ghcr_tag_absent.py'
-      - 'scripts/core_image_release.py'
-      - 'scripts/run_go_background_fixture_gate.py'
       - 'tests/**'
       - 'web/**'
       - '.github/workflows/docker-build-push.yml'
@@ -85,62 +73,6 @@ permissions:
   contents: read
 
 jobs:
-  python-tests:
-    runs-on: ubuntu-latest
-    timeout-minutes: 25
-    services:
-      postgres:
-        image: postgres:16-alpine
-        env:
-          POSTGRES_USER: fixture_admin
-          POSTGRES_PASSWORD: fixture-only
-          POSTGRES_DB: evening_news_test
-        ports: ['5432:5432']
-        options: >-
-          --health-cmd "pg_isready -U fixture_admin -d evening_news_test"
-          --health-interval 5s --health-timeout 5s --health-retries 10
-    steps:
-      - uses: actions/checkout@v4
-        with:
-          persist-credentials: false
-      - uses: actions/setup-python@v5
-        with:
-          python-version: '3.12'
-          cache: pip
-      - uses: actions/setup-go@v5
-        with:
-          go-version-file: go-editorial/go.mod
-          cache-dependency-path: |
-            go-editorial/go.*
-            go-domain/go.*
-      - uses: actions/setup-node@v4
-        with:
-          node-version: '22'
-      - name: Install Python test dependencies
-        run: python -m pip install -r requirements.txt
-      - name: Build private editorial CLI for fake-provider integration tests
-        working-directory: go-editorial
-        run: go build -o "$RUNNER_TEMP/news-editorial" ./cmd/news-editorial
-      - name: Build private native AI runtime for fake-provider integration tests
-        working-directory: go-domain
-        run: go build -o "$RUNNER_TEMP/news-ai-runtime" ./cmd/news-ai-runtime
-      - name: Run complete Python suite
-        env:
-          CI: 'true'
-          NO_BROWSER: '1'
-          TEST_DATABASE_URL: postgresql+asyncpg://fixture_admin:fixture-only@127.0.0.1:5432/evening_news_test
-          DATABASE_URL: postgresql+asyncpg://fixture_admin:fixture-only@127.0.0.1:5432/evening_news_test
-          GEMINI_API_KEY: ''
-          TELEGRAM_TOKEN: ''
-          TELEGRAPH_ACCESS_TOKEN: ''
-          BROWSER_WS_ENDPOINT: ''
-          SCHEDULER_ENABLED: 'false'
-          NEWS_EDITORIAL_BINARY: ${{ runner.temp }}/news-editorial
-          NEWS_EDITORIAL_INTEGRATION_REQUIRED: '1'
-          NEWS_AI_RUNTIME_BINARY: ${{ runner.temp }}/news-ai-runtime
-          NEWS_AI_RUNTIME_INTEGRATION_REQUIRED: '1'
-        run: python -m pytest tests/ -q
-
   go-core-tests:
     runs-on: ubuntu-latest
     timeout-minutes: 30
@@ -148,7 +80,7 @@ jobs:
       fail-fast: false
       matrix:
         postgres: ['16', '17']
-        module: [go-worker, go-scheduler, go-ingestion, go-processing, go-execution, go-background, go-editorial, go-domain]
+        module: [go, go-web, go-worker, go-scheduler, go-ingestion, go-processing, go-execution, go-background, go-editorial, go-domain, go-tools]
     services:
       postgres:
         image: postgres:${{ matrix.postgres }}-alpine
@@ -175,12 +107,14 @@ jobs:
           SCHEDULER_TEST_DATABASE_URL: postgres://fixture_admin:fixture-only@127.0.0.1:5432/go_core_tests
         run: |
           go mod verify
-          go test -race -count=1 ./...
+          if [ '${{ matrix.module }}' = 'go-domain' ]; then
+            go test -race -count=1 -p=1 ./...
+          else
+            go test -race -count=1 ./...
+          fi
           go vet ./...
 
-  assemble-fixture:
-    if: ${{ !(github.event_name == 'workflow_dispatch' && inputs.publish && github.ref == 'refs/heads/main') }}
-    needs: [python-tests, go-core-tests]
+  cross-build-arm64:
     runs-on: ubuntu-latest
     timeout-minutes: 35
     permissions:
@@ -189,47 +123,69 @@ jobs:
       - uses: actions/checkout@v4
         with:
           persist-credentials: false
-      - uses: actions/setup-python@v5
-        with:
-          python-version: '3.12'
+      - uses: docker/setup-qemu-action@v3
       - uses: docker/setup-buildx-action@v3
-      - name: Install isolated fixture dependencies
-        run: python -m pip install -r requirements.txt
-      - name: Preload consolidated fixture infrastructure images
-        run: docker pull postgres:17-alpine && docker pull python:3.12-alpine
-      - name: Build all three core runtime targets
+      - name: Build core images for Linux ARM64 without publication
+        env:
+          REVISION: ${{ github.sha }}
+          PLATFORM: linux/arm64
+        run: docker buildx bake -f docker-bake.hcl --set '*.platform=linux/arm64' --set '*.output=type=cacheonly'
+
+  assemble-fixture:
+    if: ${{ !(github.event_name == 'workflow_dispatch' && inputs.publish && github.ref == 'refs/heads/main') }}
+    needs: [go-core-tests, cross-build-arm64]
+    runs-on: ubuntu-latest
+    timeout-minutes: 35
+    strategy:
+      fail-fast: false
+      matrix:
+        postgres: ['16', '17']
+    permissions:
+      contents: read
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          persist-credentials: false
+      - uses: actions/setup-go@v5
+        with:
+          go-version-file: go-tools/go.mod
+          cache-dependency-path: go-tools/go.sum
+      - uses: docker/setup-buildx-action@v3
+      - name: Build fixture gate
+        working-directory: go-tools
+        run: go build -o "$RUNNER_TEMP/news-vertical-fixture-gate" ./cmd/vertical-fixture-gate
+      - name: Pull isolated fixture infrastructure
+        run: docker pull postgres:${{ matrix.postgres }}-alpine && docker pull alpine:3.21
+      - name: Build all three candidate core images
         env:
           REVISION: ${{ github.sha }}
           PLATFORM: linux/amd64
         run: docker buildx bake -f docker-bake.hcl --set '*.platform=linux/amd64' --load
-      - name: Check target contents
-        run: python3 scripts/check_core_image_inventory.py
+      - name: Check image contents and identity
+        working-directory: go-tools
+        run: go run ./cmd/check-core-image-inventory
       - name: Build unchanged extractor fixture
         run: docker build --platform linux/amd64 -f docker/Dockerfile.extractor -t evening-news-collector:consolidation-fixture go
-      - name: Run consolidated synthetic acceptance
+      - name: Run isolated image acceptance
+        env:
+          NEWS_FIXTURE_PG_MAJOR: ${{ matrix.postgres }}
         run: >-
-          python scripts/run_go_background_fixture_gate.py
-          --web-image evening-news-web:consolidation-fixture
-          --background-image evening-news-background:consolidation-fixture
-          --executor-image evening-news-executor:consolidation-fixture
-          --collector-image evening-news-collector:consolidation-fixture
-          --output-dir artifacts/go-background-fixture
-      - name: Upload sanitized fixture evidence
+          "$RUNNER_TEMP/news-vertical-fixture-gate" --output-dir "artifacts/acceptance-${NEWS_FIXTURE_PG_MAJOR}"
+      - uses: actions/upload-artifact@v4
         if: always()
-        uses: actions/upload-artifact@v4
         with:
-          name: core-images-consolidated-fixture
-          path: artifacts/go-background-fixture/
+          name: core-image-acceptance-pg${{ matrix.postgres }}
+          path: artifacts/acceptance-${{ matrix.postgres }}/
           if-no-files-found: ignore
 
   publish-reviewed-main:
     if: ${{ github.event_name == 'workflow_dispatch' && inputs.publish && github.ref == 'refs/heads/main' }}
-    needs: [python-tests, go-core-tests]
+    needs: [go-core-tests, cross-build-arm64]
     concurrency:
       group: core-image-publish-${{ github.sha }}
       cancel-in-progress: false
     runs-on: ubuntu-latest
-    timeout-minutes: 45
+    timeout-minutes: 60
     permissions:
       contents: read
       packages: write
@@ -237,54 +193,56 @@ jobs:
       - uses: actions/checkout@v4
         with:
           persist-credentials: false
-      - uses: actions/setup-python@v5
+      - uses: actions/setup-go@v5
         with:
-          python-version: '3.12'
+          go-version-file: go-tools/go.mod
+          cache-dependency-path: go-tools/go.sum
       - uses: docker/setup-buildx-action@v3
-      - name: Install isolated fixture dependencies
-        run: python -m pip install -r requirements.txt
-      - name: Preload consolidated fixture infrastructure images
-        run: docker pull postgres:17-alpine && docker pull python:3.12-alpine
-      - name: Build the candidate images for the acceptance gate
+      - name: Build fixture gate
+        working-directory: go-tools
+        run: go build -o "$RUNNER_TEMP/news-vertical-fixture-gate" ./cmd/vertical-fixture-gate
+      - name: Pull isolated fixture infrastructure
+        run: docker pull postgres:16-alpine && docker pull postgres:17-alpine && docker pull alpine:3.21
+      - name: Build candidate images once
         env:
           REVISION: ${{ github.sha }}
           PLATFORM: linux/amd64
         run: docker buildx bake -f docker-bake.hcl --set '*.platform=linux/amd64' --load
       - name: Check candidate target contents
-        run: python3 scripts/check_core_image_inventory.py
+        working-directory: go-tools
+        run: go run ./cmd/check-core-image-inventory
       - name: Build unchanged extractor fixture
         run: docker build --platform linux/amd64 -f docker/Dockerfile.extractor -t evening-news-collector:consolidation-fixture go
-      - name: Run consolidated synthetic acceptance on the release candidates
-        run: >-
-          python scripts/run_go_background_fixture_gate.py
-          --web-image evening-news-web:consolidation-fixture
-          --background-image evening-news-background:consolidation-fixture
-          --executor-image evening-news-executor:consolidation-fixture
-          --collector-image evening-news-collector:consolidation-fixture
-          --output-dir artifacts/go-background-fixture
+      - name: Run isolated acceptance on PostgreSQL 16 and 17
+        run: |
+          NEWS_FIXTURE_PG_MAJOR=16 "$RUNNER_TEMP/news-vertical-fixture-gate" --output-dir artifacts/acceptance-16
+          NEWS_FIXTURE_PG_MAJOR=17 "$RUNNER_TEMP/news-vertical-fixture-gate" --output-dir artifacts/acceptance-17
+          cmp artifacts/acceptance-16/receipt.json artifacts/acceptance-17/receipt.json
       - uses: docker/login-action@v3
         with:
           registry: ghcr.io
           username: ${{ github.actor }}
           password: ${{ secrets.GITHUB_TOKEN }}
-      - name: Refuse to overwrite any existing core image SHA tag
+      - name: Refuse existing immutable SHA tags
         env:
           GHCR_USERNAME: ${{ github.actor }}
           GHCR_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        working-directory: go-tools
         run: |
           set -euo pipefail
           for repository in rss-web rss-background rss-summarizer; do
             GHCR_REPOSITORY="dzarlax-ai/${repository}" \
               IMAGE_TAG="ghcr.io/dzarlax-ai/${repository}:sha-${GITHUB_SHA}" \
-              python3 scripts/check_ghcr_tag_absent.py
+              go run ./cmd/check-ghcr-tag-absent
           done
-      - name: Publish the accepted local image contents and record manifest
+      - name: Publish the accepted local images and record manifest
+        working-directory: go-tools
         run: >-
-          python3 scripts/core_image_release.py
+          go run ./cmd/core-image-release
           --revision "${GITHUB_SHA}"
           --platform linux/amd64
-          --output artifacts/release-images.json
-          --acceptance-dir artifacts/go-background-fixture
+          --output ../artifacts/release-images.json
+          --acceptance-dir ../artifacts/acceptance-17
       - uses: actions/upload-artifact@v4
         with:
           name: release-images-${{ github.sha }}
@@ -294,5 +252,5 @@ jobs:
         if: always()
         with:
           name: release-core-fixture-${{ github.sha }}
-          path: artifacts/go-background-fixture/
+          path: artifacts/acceptance-*/
           if-no-files-found: ignore

@@ -54,7 +54,12 @@ func TestDispatcherMeasuresRetryAndLeaseFromResponseCompletion(t *testing.T) {
 
 	const retryID = "00000000-0000-4000-8000-000000000011"
 	const staleID = "00000000-0000-4000-8000-000000000012"
+	const malformedID = "00000000-0000-4000-8000-000000000013"
+	const rejectedID = "00000000-0000-4000-8000-000000000014"
+	const slowID = "00000000-0000-4000-8000-000000000015"
+	const fastID = "00000000-0000-4000-8000-000000000016"
 	retryResponseCompleted := make(chan time.Time, 1)
+	slowStarted, releaseSlow := make(chan struct{}), make(chan struct{})
 	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		switch r.Header.Get("Idempotency-Key") {
 		case retryID:
@@ -65,6 +70,19 @@ func TestDispatcherMeasuresRetryAndLeaseFromResponseCompletion(t *testing.T) {
 		case staleID:
 			time.Sleep(150 * time.Millisecond)
 			w.WriteHeader(http.StatusUnauthorized)
+		case malformedID:
+			w.Header().Set("Content-Type", "application/json")
+			w.WriteHeader(http.StatusAccepted)
+			_, _ = w.Write([]byte(`{"status":"accepted"}`))
+		case rejectedID:
+			w.WriteHeader(http.StatusUnauthorized)
+		case slowID, fastID:
+			if r.Header.Get("Idempotency-Key") == slowID {
+				close(slowStarted)
+				<-releaseSlow
+			}
+			w.Header().Set("Content-Type", "application/json")
+			_, _ = fmt.Fprintf(w, `{"version":1,"occurrence_id":%q,"job_id":"00000000-0000-4000-8000-000000000099","status":"accepted"}`, r.Header.Get("Idempotency-Key"))
 		default:
 			http.Error(w, "unexpected occurrence", http.StatusBadRequest)
 		}
@@ -116,5 +134,58 @@ func TestDispatcherMeasuresRetryAndLeaseFromResponseCompletion(t *testing.T) {
 	var outstanding int
 	if err := db.Pool.QueryRow(ctx, fmt.Sprintf(`SELECT count(*) FROM %s WHERE status='leased' AND lease_until<=clock_timestamp()`, pgx.Identifier{schema, "occurrences"}.Sanitize())).Scan(&outstanding); err != nil || outstanding != 1 {
 		t.Fatal("expired occurrence did not remain visible as leased for recovery")
+	}
+	if _, err := db.Pool.Exec(ctx, `DELETE FROM `+pgx.Identifier{schema, "occurrences"}.Sanitize()); err != nil {
+		t.Fatal(err)
+	}
+	for _, tc := range []struct{ id, want string }{{malformedID, "pending"}, {rejectedID, "blocked"}} {
+		if _, err := db.Pool.Exec(ctx, `INSERT INTO `+pgx.Identifier{schema, "occurrences"}.Sanitize()+` (occurrence_id,schedule_key,schedule_revision,scheduled_for,target_alias,operation,payload,status,attempts,available_at) VALUES ($1::uuid,'test:receipt',1,clock_timestamp(),'worker','op','{}'::jsonb,'pending',0,clock_timestamp()-interval '1 second')`, tc.id); err != nil {
+			t.Fatal(err)
+		}
+		claimed, err = db.Claim(ctx, time.Now().UTC(), 10*time.Second, 1)
+		if err != nil || len(claimed) != 1 || claimed[0].Envelope.OccurrenceID != tc.id {
+			t.Fatal("could not claim receipt fixture")
+		}
+		dispatcher.send(ctx, claimed[0])
+		if err = db.Pool.QueryRow(ctx, `SELECT status FROM `+pgx.Identifier{schema, "occurrences"}.Sanitize()+` WHERE occurrence_id=$1::uuid`, tc.id).Scan(&status); err != nil || status != tc.want {
+			t.Fatalf("receipt state=%q want=%q err=%v", status, tc.want, err)
+		}
+		if _, err = db.Pool.Exec(ctx, `DELETE FROM `+pgx.Identifier{schema, "occurrences"}.Sanitize()+` WHERE occurrence_id=$1::uuid`, tc.id); err != nil {
+			t.Fatal(err)
+		}
+	}
+	if _, err := db.Pool.Exec(ctx, `INSERT INTO `+pgx.Identifier{schema, "occurrences"}.Sanitize()+` (occurrence_id,schedule_key,schedule_revision,scheduled_for,target_alias,operation,payload,status,attempts,available_at) VALUES ($1::uuid,'test:slow',1,clock_timestamp(),'slow','op','{}'::jsonb,'pending',0,clock_timestamp()-interval '1 second'),($2::uuid,'test:fast',1,clock_timestamp(),'fast','op','{}'::jsonb,'pending',0,clock_timestamp()-interval '1 second')`, slowID, fastID); err != nil {
+		t.Fatal(err)
+	}
+	parallel := New(db, map[string]model.Target{"slow": {URL: server.URL, Token: "fixture"}, "fast": {URL: server.URL, Token: "fixture"}}, 3*time.Second, 2)
+	cycleDone := make(chan error, 1)
+	go func() { cycleDone <- parallel.Cycle(ctx, time.Now().UTC()) }()
+	select {
+	case <-slowStarted:
+	case <-ctx.Done():
+		close(releaseSlow)
+		t.Fatal("slow target not reached")
+	}
+	fastAccepted := false
+	until := time.Now().Add(2 * time.Second)
+	for time.Now().Before(until) {
+		if err = db.Pool.QueryRow(ctx, `SELECT status FROM `+pgx.Identifier{schema, "occurrences"}.Sanitize()+` WHERE occurrence_id=$1::uuid`, fastID).Scan(&status); err == nil && status == "accepted" {
+			fastAccepted = true
+			break
+		}
+		time.Sleep(10 * time.Millisecond)
+	}
+	close(releaseSlow)
+	if err = <-cycleDone; err != nil || !fastAccepted {
+		t.Fatalf("fast alias did not progress while slow was blocked: %v", err)
+	}
+	db.Close()
+	reopened, err := store.Open(ctx, dsn, schema, 8, true)
+	if err != nil {
+		t.Fatal("scheduler store did not reopen")
+	}
+	defer reopened.Close()
+	if err = reopened.Pool.QueryRow(ctx, `SELECT status FROM `+pgx.Identifier{schema, "occurrences"}.Sanitize()+` WHERE occurrence_id=$1::uuid`, fastID).Scan(&status); err != nil || status != "accepted" {
+		t.Fatalf("accepted outbox state was not durable across reopen: %q %v", status, err)
 	}
 }

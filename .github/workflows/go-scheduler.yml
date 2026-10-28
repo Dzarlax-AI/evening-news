@@ -5,32 +5,22 @@ on:
     branches: [main]
     paths:
       - 'go-scheduler/**'
+      - 'go-tools/**'
       - 'go-worker/**'
       - 'go-processing/**'
-      - 'news_aggregator/**'
       - 'web/**'
       - 'tests/**'
       - 'docker/**'
-      - 'scripts/run_go_scheduler_fixture_gate.py'
-      - 'scripts/run_background_worker_fixture_gate.py'
-      - 'scripts/scheduler_bridge.py'
-      - 'scripts/check_ghcr_tag_absent.py'
-      - 'tests/test_ghcr_tag_guard.py'
       - '.github/workflows/go-scheduler.yml'
   pull_request:
     paths:
       - 'go-scheduler/**'
+      - 'go-tools/**'
       - 'go-worker/**'
       - 'go-processing/**'
-      - 'news_aggregator/**'
       - 'web/**'
       - 'tests/**'
       - 'docker/**'
-      - 'scripts/run_go_scheduler_fixture_gate.py'
-      - 'scripts/run_background_worker_fixture_gate.py'
-      - 'scripts/scheduler_bridge.py'
-      - 'scripts/check_ghcr_tag_absent.py'
-      - 'tests/test_ghcr_tag_guard.py'
       - '.github/workflows/go-scheduler.yml'
 permissions:
   contents: read
@@ -55,12 +45,13 @@ jobs:
           --health-retries 10
     steps:
       - uses: actions/checkout@v4
-      - name: Test fail-closed GHCR SHA tag guard
-        run: python3 tests/test_ghcr_tag_guard.py
       - uses: actions/setup-go@v5
         with:
           go-version-file: go-scheduler/go.mod
           cache-dependency-path: go-scheduler/go.sum
+      - name: Test fail-closed GHCR SHA tag guard
+        working-directory: go-tools
+        run: go test -race ./registryguard ./cmd/check-ghcr-tag-absent
       - name: Unit, race, PostgreSQL, and static checks
         working-directory: go-scheduler
         env:

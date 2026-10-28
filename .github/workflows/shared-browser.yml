@@ -10,8 +10,9 @@ on:
       - 'scripts/launch_shadow_cloak.py'
       - 'scripts/shadow_cdp_relay.py'
       - 'scripts/shadow_x11_client.sh'
-      - 'tests/test_news_browser_container.py'
-      - 'tests/test_news_compose_native.py'
+      - 'go-tools/browsercontract/**'
+      - 'go-tools/go.mod'
+      - 'go-tools/go.sum'
       - '.github/workflows/shared-browser.yml'
   push:
     paths:
@@ -22,9 +23,16 @@ on:
       - 'scripts/launch_shadow_cloak.py'
       - 'scripts/shadow_cdp_relay.py'
       - 'scripts/shadow_x11_client.sh'
-      - 'tests/test_news_browser_container.py'
-      - 'tests/test_news_compose_native.py'
+      - 'go-tools/browsercontract/**'
+      - 'go-tools/go.mod'
+      - 'go-tools/go.sum'
       - '.github/workflows/shared-browser.yml'
+  workflow_dispatch:
+    inputs:
+      publish:
+        description: Publish a verified browser image from main
+        type: boolean
+        default: false
 
 permissions:
   contents: read
@@ -36,15 +44,10 @@ jobs:
     steps:
       - uses: actions/checkout@v4
       - uses: docker/setup-buildx-action@v3
-      - uses: actions/setup-python@v5
+      - uses: actions/setup-go@v5
         with:
-          python-version: '3.12'
-      - name: Install focused test runner
-        run: python -m pip install pytest
-      - name: Validate Compose merges and browser runtime
-        run: python -m pytest tests/test_news_compose_native.py tests/test_news_browser_container.py -q
-      - name: Check browser runtime syntax
-        run: python -m py_compile deploy/news-extractor/browser/entrypoint.py deploy/news-extractor/browser/policy.py
+          go-version-file: go-tools/go.mod
+          cache-dependency-path: go-tools/go.sum
       - name: Build browser image for inspection on pull requests and branch pushes
         uses: docker/build-push-action@v5
         with:
@@ -67,39 +70,80 @@ jobs:
             -m py_compile /opt/news-browser/entrypoint.py /opt/news-browser/policy.py
           docker run --rm --entrypoint python evening-news-browser:test-${GITHUB_SHA} \
             -c 'import sys; sys.path.insert(0, "/opt/news-browser"); import entrypoint, policy; print("browser imports ok")'
+      - name: Verify in-image policy, relay and Compose contracts
+        working-directory: go-tools
+        env:
+          NEWS_BROWSER_IMAGE: evening-news-browser:test-${{ github.sha }}
+          NEWS_BROWSER_CONTRACT_REQUIRED: '1'
+        run: |
+          go test -race -count=1 ./browsercontract
+          go vet ./browsercontract
 
   publish-candidate:
     needs: verify
-    if: github.event_name == 'push'
+    if: ${{ github.event_name == 'workflow_dispatch' && inputs.publish && github.ref == 'refs/heads/main' }}
     runs-on: ubuntu-latest
-    timeout-minutes: 20
+    timeout-minutes: 25
     permissions:
       contents: read
       packages: write
     steps:
       - uses: actions/checkout@v4
       - uses: docker/setup-buildx-action@v3
-      - uses: docker/login-action@v3
+      - uses: actions/setup-go@v5
         with:
-          registry: ghcr.io
-          username: ${{ github.actor }}
-          password: ${{ secrets.GITHUB_TOKEN }}
-      - name: Publish immutable SHA candidate for isolated Linux acceptance
-        id: image
+          go-version-file: go-tools/go.mod
+          cache-dependency-path: go-tools/go.sum
+      - name: Build the local candidate once
         uses: docker/build-push-action@v5
         with:
           context: .
           file: docker/Dockerfile.browser
           platforms: linux/amd64
-          push: true
-          tags: ghcr.io/dzarlax-ai/rss-browser:sha-${{ github.sha }}
+          push: false
+          load: true
+          tags: evening-news-browser:release-${{ github.sha }}
           labels: |
             org.opencontainers.image.source=${{ github.server_url }}/${{ github.repository }}
             org.opencontainers.image.revision=${{ github.sha }}
-      - name: Record exact browser candidate reference
+      - name: Inspect and import the local candidate
+        run: |
+          set -euo pipefail
+          image="evening-news-browser:release-${GITHUB_SHA}"
+          image_id="$(docker image inspect --format '{{.Id}}' "$image")"
+          [[ "$image_id" =~ ^sha256:[0-9a-f]{64}$ ]]
+          docker image inspect "$image" --format '{{json .Config.Entrypoint}} {{json .Config.Healthcheck.Test}}' | grep -F '"/opt/news-browser/entrypoint.py"'
+          docker run --rm --entrypoint python "$image" -m py_compile /opt/news-browser/entrypoint.py /opt/news-browser/policy.py
+          docker run --rm --entrypoint python "$image" -c 'import sys; sys.path.insert(0, "/opt/news-browser"); import entrypoint, policy; print("browser imports ok")'
+          printf 'BROWSER_CANDIDATE_ID=%s\n' "$image_id" >> "$GITHUB_ENV"
+      - name: Verify the local candidate's policy, relay and Compose contracts
+        working-directory: go-tools
         env:
-          IMAGE_DIGEST: ${{ steps.image.outputs.digest }}
-        run: printf 'ghcr.io/dzarlax-ai/rss-browser@%s\n' "$IMAGE_DIGEST" > browser-image.txt
+          NEWS_BROWSER_IMAGE: evening-news-browser:release-${{ github.sha }}
+          NEWS_BROWSER_CONTRACT_REQUIRED: '1'
+        run: |
+          go test -race -count=1 ./browsercontract
+          go vet ./browsercontract
+      - name: Verify candidate identity after testing
+        run: |
+          set -euo pipefail
+          test "$(docker image inspect --format '{{.Id}}' "evening-news-browser:release-${GITHUB_SHA}")" = "$BROWSER_CANDIDATE_ID"
+      - uses: docker/login-action@v3
+        with:
+          registry: ghcr.io
+          username: ${{ github.actor }}
+          password: ${{ secrets.GITHUB_TOKEN }}
+      - name: Publish the tested image contents and record its digest
+        run: |
+          set -euo pipefail
+          log_file="$(mktemp "$RUNNER_TEMP/browser-push.XXXXXX")"
+          trap 'rm -f "$log_file"' EXIT
+          image_ref="ghcr.io/dzarlax-ai/rss-browser:sha-${GITHUB_SHA}"
+          docker tag "$BROWSER_CANDIDATE_ID" "$image_ref"
+          docker push "$image_ref" | tee "$log_file"
+          digest="$(sed -nE 's/.*digest: (sha256:[0-9a-f]{64}).*/\1/p' "$log_file" | tail -n 1)"
+          [[ "$digest" =~ ^sha256:[0-9a-f]{64}$ ]]
+          printf 'ghcr.io/dzarlax-ai/rss-browser@%s\n' "$digest" > browser-image.txt
       - uses: actions/upload-artifact@v4
         with:
           name: browser-image-reference

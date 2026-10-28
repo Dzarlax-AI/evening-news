@@ -139,7 +139,7 @@ empty env file. Compose otherwise loads the repository `.env` implicitly.
 export EXTRACTOR_TEST_TOKEN=<dedicated-test-token>
 export EXTRACTOR_TEST_VERSION=<commit>
 docker compose --env-file /dev/null -f docker-compose.extractor-test.yml up -d --build --wait
-python scripts/smoke_extractor_service.py --endpoint http://127.0.0.1:18080 --expected-build "$EXTRACTOR_TEST_VERSION"
+(cd go-tools && go run ./cmd/smoke-extractor-service --endpoint http://127.0.0.1:18080 --expected-build "$EXTRACTOR_TEST_VERSION" --corpus ../tests/fixtures/go-parity/manifest.json)
 docker compose --env-file /dev/null -f docker-compose.extractor-test.yml down
 ```
 

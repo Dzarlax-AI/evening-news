@@ -1,0 +1,30 @@
+{
+  "history": {
+    "last_duration_seconds": 120.5,
+    "last_finished_at": "2026-10-23T16:02:00.000000Z",
+    "last_run": "2026-10-23T16:00:00.000000Z",
+    "last_status": "success",
+    "last_success_at": "2026-10-23T16:02:00.000000Z",
+    "schedule_key": "news:42",
+    "task_name": "news_digest"
+  },
+  "item": {
+    "calendar": {
+      "interval_minutes": 45,
+      "timezone": "Europe/Belgrade",
+      "type": "interval"
+    },
+    "enabled": true,
+    "next_due_at": "2026-10-23T17:30:19.728869Z",
+    "operation": "news_digest",
+    "payload": {
+      "run_processing": false,
+      "send_telegram": true,
+      "timeout_seconds": 120
+    },
+    "schedule_key": "news:42",
+    "target_alias": "news-worker"
+  },
+  "method": "original pure AST schedule helpers on synthetic row; no application import, DB or network",
+  "revision": "b9aa1a4637c676dac559719b51af352e481c0142"
+}

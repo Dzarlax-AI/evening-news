@@ -4,35 +4,29 @@ on:
   pull_request:
     paths:
       - 'go-ingestion/**'
+      - 'go-domain/**'
       - 'go-processing/**'
       - 'go/**'
       - 'go-worker/**'
-      - 'news_aggregator/**'
       - 'web/**'
       - 'docker/Dockerfile'
       - 'docker/Dockerfile.extractor'
       - 'deploy/news-ingestion/**'
-      - 'scripts/run_go_ingestion_fixture_gate.py'
       - 'tests/fixtures/go-ingestion/**'
-      - 'tests/test_go_ingestion_fixture_gate.py'
-      - 'tests/test_article_ingestion*'
       - '.github/workflows/go-article-ingestion.yml'
   push:
     branches: [main]
     paths:
       - 'go-ingestion/**'
+      - 'go-domain/**'
       - 'go-processing/**'
       - 'go/**'
       - 'go-worker/**'
-      - 'news_aggregator/**'
       - 'web/**'
       - 'docker/Dockerfile'
       - 'docker/Dockerfile.extractor'
       - 'deploy/news-ingestion/**'
-      - 'scripts/run_go_ingestion_fixture_gate.py'
       - 'tests/fixtures/go-ingestion/**'
-      - 'tests/test_go_ingestion_fixture_gate.py'
-      - 'tests/test_article_ingestion*'
       - '.github/workflows/go-article-ingestion.yml'
 permissions:
   contents: read
@@ -82,10 +76,6 @@ jobs:
         with:
           go-version-file: go-ingestion/go.mod
           cache-dependency-path: go-ingestion/go.sum
-      - uses: actions/setup-python@v5
-        with:
-          python-version: '3.12'
-      - run: python -m pip install -r requirements.txt
       - name: Go unit, PostgreSQL, race, and static checks
         working-directory: go-ingestion
         run: |
@@ -94,5 +84,12 @@ jobs:
           go vet ./...
           CGO_ENABLED=0 GOOS=linux GOARCH=amd64 go build -o /tmp/news-ingestion-linux-amd64 ./cmd/news-ingestion
           CGO_ENABLED=0 GOOS=linux GOARCH=arm64 go build -o /tmp/news-ingestion-linux-arm64 ./cmd/news-ingestion
-      - name: Python client, migration, callback, and privilege checks
-        run: python -m pytest -q tests/test_article_ingestion*.py tests/test_go_ingestion_fixture_gate.py
+      - uses: actions/setup-go@v5
+        with:
+          go-version-file: go-domain/go.mod
+          cache-dependency-path: go-domain/go.sum
+      - name: Native ingestion callback and migration checks
+        working-directory: go-domain
+        run: |
+          go test -race -count=1 -p=1 ./selectors ./learning ./migration
+          go vet ./selectors ./learning ./migration

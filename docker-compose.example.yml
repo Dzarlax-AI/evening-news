@@ -51,7 +51,7 @@ services:
       target: executor
       args:
         REVISION: ${REVISION:-local}
-    command: ["python", "-m", "news_aggregator.migrate"]
+    entrypoint: ["/usr/local/bin/news-migrate"]
     environment:
       DATABASE_URL: ${EXECUTOR_DATABASE_URL:?Set EXECUTOR_DATABASE_URL}
       ALLOW_CREATE_ALL: "true"
@@ -126,7 +126,7 @@ services:
       - executor_logs:/app/logs
     restart: unless-stopped
     healthcheck:
-      test: ["CMD", "python", "-c", "import json,os,urllib.request; req=urllib.request.Request('http://127.0.0.1:8100/internal/v1/status',headers={'Authorization':'Bearer '+os.environ['JOB_EXECUTOR_TOKEN']}); assert json.load(urllib.request.urlopen(req,timeout=5))['ready']"]
+      test: ["CMD", "/usr/local/bin/news-domain", "healthcheck"]
       interval: 10s
       timeout: 6s
       start_period: 30s

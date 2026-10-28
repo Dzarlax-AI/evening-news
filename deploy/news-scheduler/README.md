@@ -134,11 +134,11 @@ delete queue data, or replay an accepted occurrence.
 2. Take a fresh consistent News PostgreSQL snapshot and keep it in the
    protected on-host backup location. Restore it into a loopback-only isolated
    PostgreSQL 17 instance. Run
-   `scripts/scheduler_bridge.py rollback-inventory` against the paused
-   scheduler and that snapshot from a bridge container without production DB
-   credentials or egress. The read-only Python bridge container needs a bounded
-   writable temporary mount, for example `--tmpfs /tmp:rw,noexec,nosuid,nodev,size=16m`,
-   for import-time caches. Keep the resulting protected artifact on the host.
+   `go run ./cmd/scheduler-bridge rollback-inventory` from `go-tools` against
+   the paused scheduler and that snapshot with no production DB credentials or
+   egress. Supply `--api-url` and `--output`, the scheduler token, and the
+   loopback snapshot DSN as documented by the command. Keep the resulting
+   protected artifact on the host.
    It contains current calendars and due times, News job history, orphan
    schedule keys, and pending/blocked/accepted occurrence inventory. Expired
    leases remain visible. Retry only after an active lease or state change

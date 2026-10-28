@@ -1,0 +1,276 @@
+{
+  "revision": "b9aa1a4637c676dac559719b51af352e481c0142",
+  "only_synthetic_values": true,
+  "cases": [
+    {
+      "name": "special-values-and-role-dsns",
+      "input": {
+        "name": "news",
+        "services": {
+          "app": {
+            "image": "news/web:tag",
+            "env_file": [
+              {
+                "path": "/root/news/app.env",
+                "required": true
+              }
+            ],
+            "environment": {
+              "DATABASE_URL": "postgres://web",
+              "WEB_BACKEND_TOKEN": "dollar $; escaped $$; ${LITERAL}; quote ' \"; slash \\\\;\nline two",
+              "EMPTY_PRESENT": ""
+            },
+            "healthcheck": {
+              "test": [
+                "CMD-SHELL",
+                "echo $$HOME ${LITERAL} $VALUE"
+              ]
+            },
+            "command": [
+              "sh",
+              "-c",
+              "printf '$$HOME'"
+            ]
+          },
+          "executor": {
+            "image": "news/executor:tag",
+            "env_file": [
+              {
+                "path": "/root/news/executor.env",
+                "required": true
+              }
+            ],
+            "environment": {
+              "DATABASE_URL": "postgres://executor",
+              "GEMINI_API_KEY": "key"
+            },
+            "labels": {
+              "literal": "${RENDERED} and $$"
+            }
+          }
+        },
+        "networks": {
+          "default": {
+            "name": "news_default"
+          }
+        }
+      },
+      "candidate": {
+        "name": "news",
+        "services": {
+          "app": {
+            "image": "news/web:tag",
+            "environment": {
+              "DATABASE_URL": "${WEB_DATABASE_URL?Required by generated runtime environment}",
+              "WEB_BACKEND_TOKEN": "${WEB_BACKEND_TOKEN?Required by generated runtime environment}",
+              "EMPTY_PRESENT": "${EMPTY_PRESENT?Required by generated runtime environment}"
+            },
+            "healthcheck": {
+              "test": [
+                "CMD-SHELL",
+                "echo $$HOME ${LITERAL} $VALUE"
+              ]
+            },
+            "command": [
+              "sh",
+              "-c",
+              "printf '$$HOME'"
+            ]
+          },
+          "executor": {
+            "image": "news/executor:tag",
+            "environment": {
+              "DATABASE_URL": "${EXECUTOR_DATABASE_URL?Required by generated runtime environment}",
+              "GEMINI_API_KEY": "${GEMINI_API_KEY?Required by generated runtime environment}"
+            },
+            "labels": {
+              "literal": "${RENDERED} and $$"
+            }
+          }
+        },
+        "networks": {
+          "default": {
+            "name": "news_default"
+          }
+        }
+      },
+      "dotenv": "# Generated privately by prepare_runtime_env.py\n# app responsibility\nWEB_DATABASE_URL='postgres://web'\nWEB_BACKEND_TOKEN='dollar $; escaped $; ${LITERAL}; quote \\' \"; slash \\\\;\nline two'\nEMPTY_PRESENT=''\n\n# executor responsibility\nEXECUTOR_DATABASE_URL='postgres://executor'\nGEMINI_API_KEY='key'\n",
+      "audit": {
+        "format": "evening-news-runtime-env-audit-v1",
+        "project": "news",
+        "service_count": 2,
+        "services": {
+          "app": {
+            "environment_key_count": 3,
+            "key_mapping": {
+              "DATABASE_URL": "WEB_DATABASE_URL",
+              "WEB_BACKEND_TOKEN": "WEB_BACKEND_TOKEN",
+              "EMPTY_PRESENT": "EMPTY_PRESENT"
+            }
+          },
+          "executor": {
+            "environment_key_count": 2,
+            "key_mapping": {
+              "DATABASE_URL": "EXECUTOR_DATABASE_URL",
+              "GEMINI_API_KEY": "GEMINI_API_KEY"
+            }
+          }
+        },
+        "env_file_references": {
+          "app": [
+            "/root/news/app.env"
+          ],
+          "executor": [
+            "/root/news/executor.env"
+          ]
+        },
+        "secret_values_written_to_audit": false,
+        "secret_hashes_written_to_audit": false
+      }
+    },
+    {
+      "name": "distinct-token-aliases",
+      "input": {
+        "services": {
+          "web": {
+            "environment": {
+              "WEB_TOKEN_ALIAS": "same synthetic value"
+            }
+          },
+          "executor": {
+            "environment": {
+              "EXECUTOR_TOKEN_ALIAS": "same synthetic value"
+            }
+          }
+        }
+      },
+      "candidate": {
+        "services": {
+          "web": {
+            "environment": {
+              "WEB_TOKEN_ALIAS": "${WEB_TOKEN_ALIAS?Required by generated runtime environment}"
+            }
+          },
+          "executor": {
+            "environment": {
+              "EXECUTOR_TOKEN_ALIAS": "${EXECUTOR_TOKEN_ALIAS?Required by generated runtime environment}"
+            }
+          }
+        }
+      },
+      "dotenv": "# Generated privately by prepare_runtime_env.py\n# web responsibility\nWEB_TOKEN_ALIAS='same synthetic value'\n\n# executor responsibility\nEXECUTOR_TOKEN_ALIAS='same synthetic value'\n",
+      "audit": {
+        "format": "evening-news-runtime-env-audit-v1",
+        "project": "news",
+        "service_count": 2,
+        "services": {
+          "web": {
+            "environment_key_count": 1,
+            "key_mapping": {
+              "WEB_TOKEN_ALIAS": "WEB_TOKEN_ALIAS"
+            }
+          },
+          "executor": {
+            "environment_key_count": 1,
+            "key_mapping": {
+              "EXECUTOR_TOKEN_ALIAS": "EXECUTOR_TOKEN_ALIAS"
+            }
+          }
+        },
+        "env_file_references": {},
+        "secret_values_written_to_audit": false,
+        "secret_hashes_written_to_audit": false
+      }
+    },
+    {
+      "name": "collision",
+      "input": {
+        "name": "news",
+        "services": {
+          "app": {
+            "image": "news/web:tag",
+            "env_file": [
+              {
+                "path": "/root/news/app.env",
+                "required": true
+              }
+            ],
+            "environment": {
+              "DATABASE_URL": "postgres://web",
+              "WEB_BACKEND_TOKEN": "dollar $; escaped $$; ${LITERAL}; quote ' \"; slash \\\\;\nline two",
+              "EMPTY_PRESENT": ""
+            },
+            "healthcheck": {
+              "test": [
+                "CMD-SHELL",
+                "echo $$HOME ${LITERAL} $VALUE"
+              ]
+            },
+            "command": [
+              "sh",
+              "-c",
+              "printf '$$HOME'"
+            ]
+          },
+          "executor": {
+            "image": "news/executor:tag",
+            "env_file": [
+              {
+                "path": "/root/news/executor.env",
+                "required": true
+              }
+            ],
+            "environment": {
+              "DATABASE_URL": "postgres://executor",
+              "GEMINI_API_KEY": "key"
+            },
+            "labels": {
+              "literal": "${RENDERED} and $$"
+            }
+          },
+          "web": {
+            "environment": {
+              "DATABASE_URL": "another"
+            }
+          }
+        },
+        "networks": {
+          "default": {
+            "name": "news_default"
+          }
+        }
+      },
+      "error": "canonical_key_collision"
+    }
+  ],
+  "quotes": [
+    {
+      "input": "plain",
+      "quoted": "'plain'"
+    },
+    {
+      "input": "dollar $ and $$ and ${LITERAL}",
+      "quoted": "'dollar $ and $$ and ${LITERAL}'"
+    },
+    {
+      "input": "quote '",
+      "quoted": "'quote \\''"
+    },
+    {
+      "input": "trailing backslash \\",
+      "error": "unsupported_environment_value"
+    },
+    {
+      "input": "backslash before quote \\' and more",
+      "error": "unsupported_environment_value"
+    },
+    {
+      "input": "line one\nline two",
+      "quoted": "'line one\nline two'"
+    },
+    {
+      "input": "",
+      "quoted": "''"
+    }
+  ]
+}

@@ -105,7 +105,7 @@ News settings:
 | `SCHEDULED_JOBS_RECEIPT_LIMIT` | Durable receipt capacity, default and maximum 100,000 |
 | `SCHEDULER_HTTP_TIMEOUT_SECONDS` | Bounded scheduler client timeout, default 5 seconds |
 
-The offline `scheduler_bridge.py import` and `rollback-inventory` commands use
+The offline `go-tools/cmd/scheduler-bridge` import and `rollback-inventory` commands use
 HTTPS by default. Their explicit `--allow-http` opt-in is also supported for a
 scheduler API reachable only over an isolated private test or deployment
 network; never use it for a public or untrusted network path.
