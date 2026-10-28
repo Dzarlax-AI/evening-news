@@ -18,6 +18,8 @@ WORKDIR /src/go-domain
 COPY go-domain/go.mod go-domain/go.sum ./
 COPY go-editorial/ /src/go-editorial/
 COPY go/ /src/go/
+COPY go-tools/go.mod go-tools/go.sum /src/go-tools/
+COPY go-tools/incidentfilter/ /src/go-tools/incidentfilter/
 RUN go mod download && go mod verify
 COPY go-domain/ ./
 ARG TARGETOS

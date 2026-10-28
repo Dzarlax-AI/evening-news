@@ -1,5 +1,7 @@
 # Web and API components
 
+> Historical migration context: the Python executor and Unix child described below predate the current Go domain candidate. For its runtime and unfinished acceptance, see [Private Go domain runtime](go-domain-runtime.md).
+
 This document describes the local Compose architecture. It is not a production
 deployment record. The background runtime packaging in this branch has not
 been published or rolled out.

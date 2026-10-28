@@ -1,5 +1,7 @@
 # Background job worker
 
+> Historical migration context: the Python executor and Unix child described below predate the current Go domain candidate. For its runtime and unfinished acceptance, see [Private Go domain runtime](go-domain-runtime.md).
+
 The Go worker is the only process that owns and consumes the durable News job
 queue. The Python web app accepts jobs and reads their status. A separate,
 private Python executor performs the existing News operations after Go claims a

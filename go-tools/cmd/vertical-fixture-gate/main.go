@@ -254,6 +254,24 @@ func (g *gate) run() (resultErr error) {
 	if e != nil || afterPID != beforePID {
 		return errors.New("background PID changed during domain recovery")
 	}
+	for _, probe := range []struct {
+		token string
+		want  int
+	}{{"", 401}, {"Bearer fixture-only-article-ai-token", 401}, {"Bearer fixture-only-executor-token", 200}} {
+		status, body, err := g.request("GET", "http://executor:8100/internal/v1/status", probe.token, nil, nil)
+		if err != nil || status != probe.want {
+			return errors.New("domain status token boundary failed")
+		}
+		if probe.want == 200 {
+			var ready struct {
+				ID    string `json:"domain_instance_id"`
+				Ready bool   `json:"ready"`
+			}
+			if json.Unmarshal(body, &ready) != nil || !ready.Ready || !jobIDPattern.MatchString(ready.ID) {
+				return errors.New("domain status response invalid")
+			}
+		}
+	}
 	scheduler := func(method, path string, payload any, authenticated bool) (int, []byte, error) {
 		var raw []byte
 		if payload != nil {
@@ -1159,6 +1177,8 @@ func (g *gate) request(method, target, auth string, body []byte, headers map[str
 	base, role := "http://web:8000", "web"
 	if strings.HasPrefix(target, "http://background:8080/") {
 		base, role = "http://background:8080", "scheduler"
+	} else if strings.HasPrefix(target, "http://executor:8100/") {
+		base, role = "http://executor:8100", "domain"
 	}
 	if !strings.HasPrefix(target, base+"/") {
 		return 0, nil, errors.New("invalid fixture probe target")

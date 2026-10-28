@@ -6,6 +6,7 @@ import (
 	"crypto/subtle"
 	"encoding/json"
 	"errors"
+	"io"
 	"log"
 	"net"
 	"net/http"
@@ -31,6 +32,7 @@ import (
 	"github.com/Dzarlax-AI/evening-news/go-domain/telegramdelivery"
 	"github.com/Dzarlax-AI/evening-news/go-domain/terminalevents"
 	"github.com/Dzarlax-AI/evening-news/go-domain/webbackend"
+	"github.com/Dzarlax-AI/evening-news/go-tools/incidentfilter"
 	"github.com/jackc/pgx/v5/pgxpool"
 )
 
@@ -111,6 +113,9 @@ func (s *requests) beginDrain() <-chan struct{} {
 	return s.done
 }
 func main() {
+	if len(os.Args) > 1 && os.Args[1] == "incident-log-filter" {
+		os.Exit(incidentLogFilter(os.Args[2:], os.Stdin, os.Stdout))
+	}
 	if len(os.Args) == 2 && os.Args[1] == "healthcheck" {
 		if err := healthcheck(); err != nil {
 			log.Print("healthcheck failed")
@@ -126,6 +131,19 @@ func main() {
 		log.Print("news-domain stopped: ", err)
 		os.Exit(1)
 	}
+}
+
+func incidentLogFilter(args []string, in io.Reader, out io.Writer) int {
+	if len(args) != 2 || args[0] != "--role" {
+		return 2
+	}
+	if err := incidentfilter.Filter(in, out, args[1]); err != nil {
+		if err.Error() == "log_overflow" {
+			return 3
+		}
+		return 2
+	}
+	return 0
 }
 func run() error {
 	config, err := airuntime.DomainConfigFromEnv()

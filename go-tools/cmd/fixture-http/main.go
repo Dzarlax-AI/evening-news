@@ -46,6 +46,8 @@ func runWithClient(in io.Reader, out io.Writer, client httpDoer) error {
 	base := "http://web:8000"
 	if c.Target == "scheduler" {
 		base = "http://background:8080"
+	} else if c.Target == "domain" {
+		base = "http://executor:8100"
 	} else if c.Target != "" && c.Target != "web" {
 		return errors.New("invalid probe target")
 	}

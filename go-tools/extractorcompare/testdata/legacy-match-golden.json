@@ -1,0 +1,84 @@
+{
+  "revision": "b9aa1a4637c676dac559719b51af352e481c0142",
+  "method": "original pure AST helpers executed offline, no app import/network",
+  "cases": [
+    {
+      "expected": {
+        "state": "extracted",
+        "contains": [
+          "hello world"
+        ],
+        "fields": {
+          "title": "",
+          "nested": {
+            "a": [
+              1,
+              null
+            ]
+          }
+        }
+      },
+      "result": {
+        "content": "  hello\n world ",
+        "title": null,
+        "nested": {
+          "a": [
+            1,
+            ""
+          ],
+          "other": "x"
+        }
+      },
+      "state": "extracted",
+      "matched": true
+    },
+    {
+      "expected": {
+        "state": "failed",
+        "error": "quality_rejected",
+        "method": "readability",
+        "trace_contains": [
+          "readability"
+        ]
+      },
+      "result": {
+        "content": "",
+        "error": "prefix quality_rejected suffix",
+        "method_used": "readability",
+        "trace": [
+          "readability",
+          "end"
+        ]
+      },
+      "state": "failed",
+      "matched": true
+    },
+    {
+      "expected": {
+        "state": "extracted",
+        "contains": [
+          "required"
+        ]
+      },
+      "result": {
+        "state": "failed",
+        "content": ""
+      },
+      "state": "failed",
+      "matched": false
+    },
+    {
+      "expected": {
+        "state": "extracted",
+        "not_contains": [
+          "leak"
+        ]
+      },
+      "result": {
+        "content": "contains leak"
+      },
+      "state": "extracted",
+      "matched": false
+    }
+  ]
+}

@@ -21,6 +21,7 @@ require (
 require (
 	github.com/Dzarlax-AI/evening-news/go v0.0.0
 	github.com/Dzarlax-AI/evening-news/go-editorial v0.0.0
+	github.com/Dzarlax-AI/evening-news/go-tools v0.0.0
 	github.com/andybalholm/brotli v1.2.0
 	github.com/jackc/pgpassfile v1.0.0 // indirect
 	github.com/jackc/pgservicefile v0.0.0-20240606120523-5a60cdf6a761 // indirect
@@ -34,3 +35,5 @@ require (
 replace github.com/Dzarlax-AI/evening-news/go-editorial => ../go-editorial
 
 replace github.com/Dzarlax-AI/evening-news/go => ../go
+
+replace github.com/Dzarlax-AI/evening-news/go-tools => ../go-tools

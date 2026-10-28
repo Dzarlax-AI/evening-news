@@ -76,7 +76,17 @@ func configFromEnv(unixRPC bool) (Config, error) {
 	if !unixRPC && c.SiteBase == "" {
 		c.SiteBase = "https://news.dzarlax.dev"
 	}
-	c.TelegramRich = os.Getenv("TELEGRAM_RICH_MESSAGES_ENABLED") != "false"
+	c.TelegramRich = true
+	if raw, present := os.LookupEnv("TELEGRAM_RICH_MESSAGES_ENABLED"); present {
+		switch strings.ToLower(raw) {
+		case "1", "true", "yes", "on", "y", "t":
+			c.TelegramRich = true
+		case "0", "false", "no", "off", "n", "f":
+			c.TelegramRich = false
+		default:
+			return c, errors.New("ai_runtime_telegram_rich_configuration")
+		}
+	}
 	if (unixRPC && (c.Socket == "" || c.Token == "")) || c.DatabaseURL == "" || strings.TrimSpace(c.APIKey) == "" || c.Endpoint == "" || c.Model == "" {
 		return c, errors.New("ai_runtime_missing_configuration")
 	}

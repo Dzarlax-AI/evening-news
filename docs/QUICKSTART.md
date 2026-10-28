@@ -1,6 +1,6 @@
 # Local quick start
 
-The public web is served by `go-web`. The Python package provides the private domain executor, CLI, and one-shot database migration command. The former Python public web entrypoint has been removed.
+The public web is served by `go-web`. The development candidate uses the private Go domain executor and an explicit one-shot Go migration command. Its full image acceptance remains in progress.
 
 Follow the [README local development instructions](../README.md#local-development) for the complete required environment and local service stack:
 

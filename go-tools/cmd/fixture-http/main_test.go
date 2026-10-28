@@ -34,3 +34,18 @@ func TestBoundedProbe(t *testing.T) {
 		}
 	}
 }
+
+type domainFake struct{ t *testing.T }
+
+func (f domainFake) Do(r *http.Request) (*http.Response, error) {
+	if r.URL.String() != "http://executor:8100/internal/v1/status" || r.Header.Get("Authorization") != "Bearer fixture" {
+		f.t.Fatal("wrong domain probe")
+	}
+	return &http.Response{StatusCode: 200, Body: io.NopCloser(strings.NewReader(`{"ready":true}`))}, nil
+}
+func TestDomainProbeUsesOnlyFixedInternalTarget(t *testing.T) {
+	raw, _ := json.Marshal(command{Target: "domain", Method: "GET", Path: "/internal/v1/status", Authorization: "Bearer fixture"})
+	if err := runWithClient(bytes.NewReader(raw), io.Discard, domainFake{t}); err != nil {
+		t.Fatal(err)
+	}
+}

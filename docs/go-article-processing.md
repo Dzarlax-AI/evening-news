@@ -1,5 +1,7 @@
 # Go article processing
 
+> Historical migration context: the Python executor and Unix child described below predate the current Go domain candidate. For its runtime and unfinished acceptance, see [Private Go domain runtime](go-domain-runtime.md).
+
 The processing module and private HTTP contract remain in place. The current
 local Compose architecture runs it as a component of the single Go
 `background` runtime, not as a separate service container. See [Core image

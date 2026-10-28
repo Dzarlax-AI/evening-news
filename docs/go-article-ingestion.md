@@ -1,5 +1,7 @@
 # Go article ingestion
 
+> Historical migration context: the Python executor and Unix child described below predate the current Go domain candidate. For its runtime and unfinished acceptance, see [Private Go domain runtime](go-domain-runtime.md).
+
 The ingestion module and private HTTP contract remain in place. In the current
 local Compose architecture it runs as a component of the single Go
 `background` runtime, not as a separate service container. The approved image

@@ -1,4 +1,6 @@
-﻿# Docker README
+# Docker README
+
+> Historical migration context: the Python executor and Unix child described below predate the current Go domain candidate. For its runtime and unfinished acceptance, see [Private Go domain runtime](go-domain-runtime.md).
 
 This project ships with example Docker Compose files for production and development.
 

@@ -1,5 +1,7 @@
 # Private native runtime protocols
 
+> Historical migration context: the Python executor and Unix child described below predate the current Go domain candidate. For its runtime and unfinished acceptance, see [Private Go domain runtime](go-domain-runtime.md).
+
 The AI runtime is one long-lived Go child process inside the private Python domain container. Python owns callback v1 validation, media and delivery prompts, and PID 1. Go owns editorial snapshot and generation, immutable edition storage and Telegram delivery, as well as article analysis, category metadata caching, the legacy Gemini raw and structured transport, one shared sliding-window admission gate, one AI circuit breaker for former `AIClient` operations, and best-effort `ai_usage_tracking` writes. See [Go digest delivery](go-digest-delivery.md) for the workflow and receipt contract.
 
 The process listens only on an owner-controlled Unix domain socket. It does not expose TCP, a public endpoint, or an arbitrary HTTP proxy. Each boot receives a fresh bearer token from its parent. Every request, including status, requires `Authorization: Bearer <token>`. The token, provider key, provider endpoint credentials, DSN, request content, prompt, provider response body, and article data never appear in logs or error responses.

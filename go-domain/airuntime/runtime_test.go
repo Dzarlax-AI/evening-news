@@ -785,3 +785,32 @@ func TestGenerateTextDirectSharesUsageAndCancellation(t *testing.T) {
 		t.Fatal("accepted call after drain")
 	}
 }
+
+func TestDomainTelegramRichBooleanEnvironment(t *testing.T) {
+	t.Setenv("DATABASE_URL", "postgres://fixture:fixture@localhost/test")
+	t.Setenv("GEMINI_API_KEY", "fixture-key")
+	t.Setenv("GEMINI_API_ENDPOINT", "https://fixture.invalid/v1/models")
+	t.Setenv("SUMMARIZATION_MODEL", "fixture-model")
+	t.Setenv("NEWS_FIXTURE_MODE", "0")
+	for _, tc := range []struct {
+		value string
+		want  bool
+		valid bool
+	}{{"true", true, true}, {"False", false, true}, {"0", false, true}, {"NO", false, true}, {"off", false, true}, {"n", false, true}, {"f", false, true}, {"1", true, true}, {"YES", true, true}, {"on", true, true}, {"y", true, true}, {"t", true, true}, {"", false, false}, {"unknown", false, false}, {" true ", false, false}} {
+		t.Run(tc.value, func(t *testing.T) {
+			t.Setenv("TELEGRAM_RICH_MESSAGES_ENABLED", tc.value)
+			cfg, err := DomainConfigFromEnv()
+			if (err == nil) != tc.valid || (err == nil && cfg.TelegramRich != tc.want) {
+				t.Fatalf("value=%q rich=%v err=%v", tc.value, cfg.TelegramRich, err)
+			}
+		})
+	}
+	t.Setenv("TELEGRAM_RICH_MESSAGES_ENABLED", "true")
+	if err := os.Unsetenv("TELEGRAM_RICH_MESSAGES_ENABLED"); err != nil {
+		t.Fatal(err)
+	}
+	cfg, err := DomainConfigFromEnv()
+	if err != nil || !cfg.TelegramRich {
+		t.Fatalf("default rich=%v error=%v", cfg.TelegramRich, err)
+	}
+}

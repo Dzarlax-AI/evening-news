@@ -1,5 +1,7 @@
 # Evening News execution and orchestration contract
 
+> Historical migration context: the Python executor and Unix child described below predate the current Go domain candidate. For its runtime and unfinished acceptance, see [Private Go domain runtime](go-domain-runtime.md).
+
 Status: **migration contract**. Sections headed “Current” characterize the pre-migration Python baseline at commit `1443a32aeb53d73a3d27c69bae9c1a9c41369746`; they do not describe the new runtime. The settled integration boundary below describes the replacement. Pure synthetic snapshots characterize serialization and projection, while separate PostgreSQL and composed-runtime tests exercise fencing and execution.
 
 ## Current ownership and network boundary

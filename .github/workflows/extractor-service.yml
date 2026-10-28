@@ -4,6 +4,7 @@ on:
   pull_request:
     paths:
       - 'go/**'
+      - 'go-tools/**'
       - 'go-processing/**'
       - 'news_aggregator/extraction/**'
       - 'news_aggregator/telegram/**'
@@ -38,6 +39,7 @@ on:
   push:
     paths:
       - 'go/**'
+      - 'go-tools/**'
       - 'go-processing/**'
       - 'news_aggregator/extraction/**'
       - 'news_aggregator/telegram/**'
@@ -133,12 +135,19 @@ jobs:
           go mod verify
       - name: Test Python service integration
         run: python -m pytest tests -q
+      - name: Test Go fixture probes
+        working-directory: go-tools
+        run: |
+          go test -race ./extractorcompare ./extractorsmoke
+          go vet ./extractorcompare ./extractorsmoke
       - name: Build independent image and start isolated service
         run: docker compose --env-file /dev/null -f docker-compose.extractor-test.yml up -d --build --wait
-      - name: Smoke API through the Python client
-        run: python scripts/smoke_extractor_service.py --endpoint http://127.0.0.1:18080 --expected-build "$EXTRACTOR_TEST_VERSION"
+      - name: Smoke API through the Go client
+        working-directory: go-tools
+        run: go run ./cmd/smoke-extractor-service --endpoint http://127.0.0.1:18080 --expected-build "$EXTRACTOR_TEST_VERSION" --corpus ../tests/fixtures/go-parity/manifest.json
       - name: Compare captured input outside the processing pipeline
-        run: python scripts/compare_extractor_service.py --corpus tests/fixtures/extractor-service/source-content-smoke.json --cycles 6 --endpoint http://127.0.0.1:18080 --output artifacts/extractor-service-comparison.json
+        working-directory: go-tools
+        run: go run ./cmd/compare-extractor-service --corpus ../tests/fixtures/extractor-service/source-content-smoke.json --cycles 6 --endpoint http://127.0.0.1:18080 --output ../artifacts/extractor-service-comparison.json
       - name: Package verified CI candidate image (test only)
         run: |
           set -euo pipefail
