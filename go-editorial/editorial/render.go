@@ -10,7 +10,7 @@ import (
 	"unicode/utf16"
 )
 
-var generatedHTMLTags = regexp.MustCompile(`</?(?:b|a)(?: href="[^"]*")?>`)
+var generatedHTMLTags = regexp.MustCompile(`</?(?:b|i|a)(?: href="[^"]*")?>`)
 
 type briefGroup struct {
 	categoryID   string
@@ -19,9 +19,10 @@ type briefGroup struct {
 }
 
 type plainBlock struct {
-	html         string
-	categoryID   string
-	categoryName string
+	html          string
+	categoryID    string
+	categoryName  string
+	dividerBefore bool
 }
 
 func Render(s Snapshot, locale string, e Edition) (Rendered, error) {
@@ -65,10 +66,14 @@ func Render(s Snapshot, locale string, e Edition) (Rendered, error) {
 		blocks = append(blocks, plainBlock{html: "<b>Ещё коротко</b>"})
 		for _, group := range briefGroups {
 			rich.WriteString("<h3>" + html.EscapeString(group.categoryName) + "</h3>")
-			for _, story := range group.stories {
+			for i, story := range group.stories {
+				if i > 0 {
+					rich.WriteString("<hr>")
+					preview.WriteString("\n────────\n")
+				}
 				renderStoryRich(&rich, story, articles, e.SiteBaseURL, true)
 				renderStoryPreview(&preview, story, articles, e.SiteBaseURL, true)
-				blocks = append(blocks, plainBlock{html: storyPlainHTML(story, articles, e.SiteBaseURL, true), categoryID: group.categoryID, categoryName: group.categoryName})
+				blocks = append(blocks, plainBlock{html: storyPlainHTML(story, articles, e.SiteBaseURL, true), categoryID: group.categoryID, categoryName: group.categoryName, dividerBefore: i > 0})
 			}
 		}
 	}
@@ -108,7 +113,7 @@ func renderStoryRich(out *strings.Builder, story Story, articles map[string]Arti
 	if brief {
 		out.WriteString("<p>• <a href=\"" + html.EscapeString(internal) + "\">" + html.EscapeString(story.Summary) + "</a>")
 		if sources := storySourceNames(story, articles); len(sources) > 0 {
-			out.WriteString(" · " + escapeJoined(sources))
+			out.WriteString("<br><em>" + escapeJoined(sources) + "</em>")
 		}
 		out.WriteString("</p>")
 		return
@@ -126,7 +131,7 @@ func storyPlainHTML(story Story, articles map[string]Article, siteBaseURL string
 	if brief {
 		out.WriteString("• <a href=\"" + html.EscapeString(articleURL(siteBaseURL, primary.ID)) + "\">" + html.EscapeString(story.Summary) + "</a>")
 		if sources := storySourceNames(story, articles); len(sources) > 0 {
-			out.WriteString(" · " + escapeJoined(sources))
+			out.WriteString("\n<i>" + escapeJoined(sources) + "</i>")
 		}
 		return out.String()
 	}
@@ -141,11 +146,12 @@ func storyPlainHTML(story Story, articles map[string]Article, siteBaseURL string
 func renderStoryPreview(out *strings.Builder, story Story, articles map[string]Article, siteBaseURL string, brief bool) {
 	primary := articles[story.PrimaryArticleID]
 	if brief {
-		out.WriteString("• " + story.Summary + " — " + articleURL(siteBaseURL, primary.ID))
+		out.WriteString("• " + story.Summary + " — " + articleURL(siteBaseURL, primary.ID) + "\n")
 		if sources := storySourceNames(story, articles); len(sources) > 0 {
-			out.WriteString(" · " + strings.Join(sources, ", "))
+			out.WriteString(strings.Join(sources, ", ") + "\n")
+		} else {
+			out.WriteByte('\n')
 		}
-		out.WriteByte('\n')
 		return
 	}
 	out.WriteString("• " + story.Title + "\n" + articleURL(siteBaseURL, primary.ID) + "\n" + story.Summary + "\n")
@@ -192,8 +198,7 @@ func packPlainParts(blocks []plainBlock, editionURL string) ([]string, error) {
 	current := ""
 	currentCategory := ""
 	for _, block := range blocks {
-		prefix, nextCategory := categoryPrefix(block, currentCategory)
-		piece := prefix + block.html
+		piece, nextCategory := plainPiece(block, currentCategory)
 		candidate := piece
 		if current != "" {
 			candidate = current + "\n\n" + piece
@@ -207,8 +212,7 @@ func packPlainParts(blocks []plainBlock, editionURL string) ([]string, error) {
 			return nil, fmt.Errorf("render_story_too_large")
 		}
 		parts = append(parts, current+"\n\n"+footer)
-		prefix, nextCategory = categoryPrefix(block, "")
-		piece = prefix + block.html
+		piece, nextCategory = plainPiece(block, "")
 		if visibleCount(piece+"\n\n"+footer) > MaxPlainPart {
 			return nil, fmt.Errorf("render_story_too_large")
 		}
@@ -219,6 +223,15 @@ func packPlainParts(blocks []plainBlock, editionURL string) ([]string, error) {
 		parts = append(parts, current+"\n\n"+footer)
 	}
 	return parts, nil
+}
+
+func plainPiece(block plainBlock, currentCategory string) (piece, nextCategory string) {
+	category, nextCategory := categoryPrefix(block, currentCategory)
+	divider := ""
+	if block.dividerBefore && block.categoryID != "" && block.categoryID == currentCategory {
+		divider = "────────\n"
+	}
+	return category + divider + block.html, nextCategory
 }
 
 func categoryPrefix(block plainBlock, currentCategory string) (prefix, nextCategory string) {

@@ -152,8 +152,8 @@ func TestGenerateWithFakeProviderAndRenderSafeLinks(t *testing.T) {
 	if !strings.Contains(rendered.RichHTML, "https://news.example/digest/2026-10-27?edition=fixture") || !strings.Contains(rendered.PreviewText, s.EditionURL) {
 		t.Fatal("edition URL missing")
 	}
-	if !strings.Contains(rendered.RichHTML, " · Источник 5") || !strings.Contains(rendered.RichHTML, "&lt;img src=x onerror=alert(1)&gt; заявляет: это проверяется.") || strings.Contains(rendered.RichHTML, "&lt;script&gt;alert(1)&lt;/script&gt;") {
-		t.Fatal("compact brief did not use its escaped summary sentence, omit title, and inline publisher")
+	if !strings.Contains(rendered.RichHTML, "<br><em>Источник 5</em>") || !strings.Contains(rendered.RichHTML, "&lt;img src=x onerror=alert(1)&gt; заявляет: это проверяется.") || strings.Contains(rendered.RichHTML, "&lt;script&gt;alert(1)&lt;/script&gt;") {
+		t.Fatal("compact brief did not use its escaped summary sentence, omit title, and italicize the publisher on its own line")
 	}
 }
 
@@ -694,17 +694,30 @@ func TestRenderPlacesMainFirstAndGroupsBriefsBySuppliedCategory(t *testing.T) {
 	if strings.Index(part, "Событие номер 2") > strings.Index(part, "Ещё коротко") {
 		t.Fatal("plain parts did not put main stories first")
 	}
-	if !strings.Contains(part, `<a href="https://news.example/article/1001">В Караджорджевом парке посадили 117 282 дерева.</a> · Источник 1`) || strings.Contains(part, "Событие номер 1") || strings.Contains(part, "https://source.example/") {
+	if !strings.Contains(part, "<a href=\"https://news.example/article/1001\">В Караджорджевом парке посадили 117 282 дерева.</a>\n<i>Источник 1</i>") || strings.Contains(part, "Событие номер 1") || strings.Contains(part, "https://source.example/") {
 		t.Fatal("ordinary fallback lost internal headline link or included an original source URL")
 	}
 	if !strings.Contains(part, `Событие номер 2</a></b>`) || !strings.Contains(part, "Подтверждённый фрагмент материала 2.") {
 		t.Fatal("main story title and summary were changed by compact brief rendering")
 	}
-	if !strings.Contains(rendered.RichHTML, `<p>• <a href="https://news.example/article/1001">В Караджорджевом парке посадили 117 282 дерева.</a> · Источник 1</p>`) || !strings.Contains(rendered.PreviewText, `• В Караджорджевом парке посадили 117 282 дерева. — https://news.example/article/1001 · Источник 1`) {
-		t.Fatal("rich or preview brief did not render as one linked sentence with inline source")
+	if !strings.Contains(rendered.RichHTML, `<p>• <a href="https://news.example/article/1001">В Караджорджевом парке посадили 117 282 дерева.</a><br><em>Источник 1</em></p>`) ||
+		!strings.Contains(rendered.RichHTML, `</p><hr><p>• <a href="https://news.example/article/1003">Подтверждённый фрагмент материала 3.</a><br><em>Источник 3</em></p>`) ||
+		!strings.Contains(part, "В Караджорджевом парке посадили 117 282 дерева.</a>\n<i>Источник 1</i>\n\n────────\n• <a href=\"https://news.example/article/1003\">Подтверждённый фрагмент материала 3.") ||
+		!strings.Contains(rendered.PreviewText, "• В Караджорджевом парке посадили 117 282 дерева. — https://news.example/article/1001\nИсточник 1\n\n────────\n• Подтверждённый фрагмент материала 3. — https://news.example/article/1003\nИсточник 3") {
+		t.Fatalf("briefs do not render with source lines and separators between same-category items:\nrich=%s\nplain=%s\npreview=%s", rendered.RichHTML, part, rendered.PreviewText)
 	}
 	if strings.Contains(part, "<h2>") || strings.Contains(part, "<h3>") || strings.Contains(part, "<p>") || strings.Contains(part, "<ul>") {
 		t.Fatal("ordinary fallback contains unsupported block markup")
+	}
+}
+
+func TestVisibleCountStripsGeneratedItalicTagsButCountsLiteralTags(t *testing.T) {
+	if got, want := visibleCount("<i>Publisher &amp; Co</i>"), len([]rune("Publisher & Co")); got != want {
+		t.Fatalf("generated italic markup visible count = %d, want %d", got, want)
+	}
+	literal := html.EscapeString("<i>literal</i>")
+	if got, want := visibleCount(literal), len([]rune("<i>literal</i>")); got != want {
+		t.Fatalf("escaped literal tag visible count = %d, want %d", got, want)
 	}
 }
 

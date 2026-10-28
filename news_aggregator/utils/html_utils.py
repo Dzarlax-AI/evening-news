@@ -74,9 +74,9 @@ def validate_telegram_editorial_html(html: str, max_units: int = 4096) -> Option
     try:
         soup = BeautifulSoup(html, "html.parser")
         for tag in soup.find_all(True):
-            if tag.name not in {"b", "a"}:
+            if tag.name not in {"b", "i", "a"}:
                 return None
-            if tag.name == "b" and tag.attrs:
+            if tag.name in {"b", "i"} and tag.attrs:
                 return None
             if tag.name == "a":
                 if set(tag.attrs) != {"href"} or not isinstance(tag.get("href"), str):

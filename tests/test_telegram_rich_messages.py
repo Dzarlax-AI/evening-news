@@ -172,3 +172,11 @@ async def test_editorial_send_keeps_long_links_intact_and_rejects_oversize_witho
     rejected = await service.send_editorial_message(oversized)
     assert rejected.success is False
     assert len(fake_client.posts) == 1
+
+
+def test_editorial_fallback_allows_plain_italic_source_but_rejects_attributes():
+    content = '<a href="https://news.example/article/1">Новость 117 282</a>\n<i>Издание &amp; Co</i>'
+    assert validate_telegram_editorial_html(content) == content
+    assert validate_telegram_editorial_html('<i class="source">Издание</i>') is None
+    assert validate_telegram_editorial_html('<i onclick="alert(1)">Издание</i>') is None
+    assert validate_telegram_editorial_html('<i>' + ('😀' * 2049) + '</i>') is None
