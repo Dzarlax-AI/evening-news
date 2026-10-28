@@ -545,7 +545,7 @@ func TestMetadataInvalidationDuringRefreshDoesNotPublishStaleSnapshot(t *testing
 }
 
 func TestUDSAuthenticationSocketModeAndCleanup(t *testing.T) {
-	dir, err := os.MkdirTemp("/private/tmp", "ai-")
+	dir, err := os.MkdirTemp("/tmp", "ai-")
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -621,7 +621,7 @@ func TestUDSAuthenticationSocketModeAndCleanup(t *testing.T) {
 }
 
 func TestUDSCleanupNeverRemovesPreexistingOrReplacedPath(t *testing.T) {
-	dir, err := os.MkdirTemp("/private/tmp", "ai-path-")
+	dir, err := os.MkdirTemp("/tmp", "ai-path-")
 	if err != nil {
 		t.Fatal(err)
 	}
