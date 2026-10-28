@@ -477,7 +477,9 @@ class ConsolidatedBackgroundGate(GoWebGate):
         due = (datetime.now(timezone.utc) + timedelta(seconds=2)).isoformat(timespec="microseconds").replace("+00:00", "Z")
         schedule = {"schedule_key": "fixture:web-unavailable", "enabled": True,
                     "calendar": {"type": "interval", "timezone": "UTC", "interval_minutes": 1440},
-                    "target_alias": "news-worker", "operation": "telegram_digest", "payload": {},
+                    # Exercise durable outbox retention and exactly-once admission without
+                    # invoking the editorial/Telegram path before a ready edition exists.
+                    "target_alias": "news-worker", "operation": "reprocess_failed", "payload": {"dry_run": True},
                     "next_due_at": due}
         imported, _ = self.scheduler_request("POST", "/v1/import", {
             "expected_control_revision": paused["revision"], "items": [schedule],

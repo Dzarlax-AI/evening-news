@@ -116,6 +116,35 @@ def test_default_news_digest_gate_uses_python_queue_producer_and_precedes_ambigu
     assert 'result->>\'parts_sent\'' in source
 
 
+def test_web_unavailable_outbox_probe_uses_non_delivery_dry_run(monkeypatch, tmp_path):
+    from types import SimpleNamespace
+
+    module = load_gate_module()
+    gate = module.ConsolidatedBackgroundGate(dict(module.DEFAULT_IMAGES), tmp_path)
+    imported = []
+
+    def scheduler_request(method, path, body=None):
+        if path == "/v1/status":
+            return 200, {"control_revision": 0, "paused": False}
+        if path == "/v1/control":
+            return 200, {"revision": body["expected_revision"] + 1, "paused": body["paused"]}
+        if path == "/v1/import":
+            imported.extend(body["items"])
+            return 200, {}
+        if path.startswith("/v1/occurrences"):
+            return 200, {"occurrences": [{"schedule_key": "fixture:web-unavailable",
+                                          "status": "pending", "attempts": 1}]}
+        raise AssertionError("unexpected scheduler operation")
+
+    monkeypatch.setattr(gate, "scheduler_request", scheduler_request)
+    monkeypatch.setattr(gate, "docker", lambda *args, **kwargs: SimpleNamespace(returncode=1))
+    gate.arm_outbox_while_web_is_unavailable()
+    assert len(imported) == 1
+    assert imported[0]["operation"] == "reprocess_failed"
+    assert imported[0]["payload"] == {"dry_run": True}
+    assert gate.report["checks"]["web_unavailable_scheduler_dispatch_remains_pending"] is True
+
+
 def test_blocked_ai_timeout_captures_queued_job_and_worker_dispatch_diagnostics(monkeypatch, tmp_path):
     module = load_gate_module()
     gate = module.ConsolidatedBackgroundGate(dict(module.DEFAULT_IMAGES), tmp_path)
