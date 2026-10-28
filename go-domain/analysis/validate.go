@@ -99,7 +99,7 @@ func number(v any, fallback float64) float64 {
 	case int64:
 		f = float64(n)
 	case string:
-		parsed, err := strconv.ParseFloat(n, 64)
+		parsed, err := strconv.ParseFloat(strings.TrimSpace(n), 64)
 		if err != nil {
 			return fallback
 		}

@@ -141,3 +141,26 @@ func TestStructuredJSONPreservesLegacyFencedAndPrefixedExtraction(t *testing.T) 
 		}
 	}
 }
+
+func TestAnalyzeTrimsWhitespaceInLegacyNumericStrings(t *testing.T) {
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		body, _ := json.Marshal(map[string]any{
+			"candidates": []any{map[string]any{"content": map[string]any{"parts": []any{
+				map[string]string{"text": `{"summary":"ok","categories":["Business"],"is_advertisement":false,"category_confidence":" 0.72 "}`},
+			}}}},
+			"usageMetadata": map[string]any{"promptTokenCount": 1, "candidatesTokenCount": 1, "totalTokenCount": 2},
+		})
+		_, _ = w.Write(body)
+	}))
+	defer server.Close()
+	r := testRequest(server.URL + "/v1/models")
+	result, _, err := Analyze(context.Background(), r, ProviderConfig{
+		APIKey: "key", Model: r.Model, Endpoint: r.Endpoint, Client: server.Client(),
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if got := result["category_confidence"]; got != 0.72 {
+		t.Fatalf("category_confidence=%v, want 0.72", got)
+	}
+}
