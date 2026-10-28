@@ -20,8 +20,8 @@ import time
 import urllib.error
 import urllib.request
 
-GO_IMAGE = 'golang:1.25.6-bookworm@sha256:f4490d7b261d73af4543c46ac6597d7d101b6e1755bcdd8c5159fda7046b6b3e'
-GO_IMAGE_ID = 'sha256:5fa4affaa97b8f2ac6c9395a818712044c04d45197c9ebe645aa26322ef0e201'
+GO_IMAGE = 'golang:1.26.10-bookworm@sha256:386f0cbb8fb3402ff5a15048c96731e6ff37142d31182f3b72306359a1f5e9b7'
+GO_IMAGE_ID = 'sha256:a9daab691df2dfe118e5c6d3d6bd8fd6767ea2c9bf8fa3c9356161055dd7b97d'
 APP_IMAGE = 'ghcr.io/dzarlax-ai/rss-summarizer@sha256:b6abbb428543e846d0310b86ff41236a6df028985a00ebfe4714357d22e67060'
 APP_IMAGE_ID = 'sha256:990eea5e6c1ea30e68236cc11d7128ca904f707557dd1728aec01bda96d71bef'
 CLOAK_IMAGE = 'cloakhq/cloakbrowser:0.5.2@sha256:2c0d257802f54c4f86c9ccae336864baf63e118612732127cb96df35756a57a4'
