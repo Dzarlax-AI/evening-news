@@ -55,8 +55,8 @@ func Render(s Snapshot, locale string, e Edition) (Rendered, error) {
 	}
 	for _, story := range mains {
 		renderStoryRich(&rich, story, articles, e.SiteBaseURL, false)
-		renderStoryPreview(&preview, story, articles, e.SiteBaseURL)
-		blocks = append(blocks, plainBlock{html: storyPlainHTML(story, articles, e.SiteBaseURL)})
+		renderStoryPreview(&preview, story, articles, e.SiteBaseURL, false)
+		blocks = append(blocks, plainBlock{html: storyPlainHTML(story, articles, e.SiteBaseURL, false)})
 	}
 
 	if len(briefGroups) > 0 {
@@ -67,8 +67,8 @@ func Render(s Snapshot, locale string, e Edition) (Rendered, error) {
 			rich.WriteString("<h3>" + html.EscapeString(group.categoryName) + "</h3>")
 			for _, story := range group.stories {
 				renderStoryRich(&rich, story, articles, e.SiteBaseURL, true)
-				renderStoryPreview(&preview, story, articles, e.SiteBaseURL)
-				blocks = append(blocks, plainBlock{html: storyPlainHTML(story, articles, e.SiteBaseURL), categoryID: group.categoryID, categoryName: group.categoryName})
+				renderStoryPreview(&preview, story, articles, e.SiteBaseURL, true)
+				blocks = append(blocks, plainBlock{html: storyPlainHTML(story, articles, e.SiteBaseURL, true), categoryID: group.categoryID, categoryName: group.categoryName})
 			}
 		}
 	}
@@ -106,19 +106,30 @@ func renderStoryRich(out *strings.Builder, story Story, articles map[string]Arti
 	primary := articles[story.PrimaryArticleID]
 	internal := articleURL(siteBaseURL, primary.ID)
 	if brief {
-		out.WriteString("<p><b><a href=\"" + html.EscapeString(internal) + "\">" + html.EscapeString(story.Title) + "</a></b></p>")
-	} else {
-		out.WriteString("<h3><a href=\"" + html.EscapeString(internal) + "\">" + html.EscapeString(story.Title) + "</a></h3>")
+		out.WriteString("<p>• <a href=\"" + html.EscapeString(internal) + "\">" + html.EscapeString(story.Summary) + "</a>")
+		if sources := storySourceNames(story, articles); len(sources) > 0 {
+			out.WriteString(" · " + escapeJoined(sources))
+		}
+		out.WriteString("</p>")
+		return
 	}
+	out.WriteString("<h3><a href=\"" + html.EscapeString(internal) + "\">" + html.EscapeString(story.Title) + "</a></h3>")
 	out.WriteString("<p>" + html.EscapeString(story.Summary) + "</p>")
 	if sources := storySourceNames(story, articles); len(sources) > 0 {
 		out.WriteString("<p>" + sourceLabel(len(sources)) + ": " + escapeJoined(sources) + "</p>")
 	}
 }
 
-func storyPlainHTML(story Story, articles map[string]Article, siteBaseURL string) string {
+func storyPlainHTML(story Story, articles map[string]Article, siteBaseURL string, brief bool) string {
 	primary := articles[story.PrimaryArticleID]
 	var out strings.Builder
+	if brief {
+		out.WriteString("• <a href=\"" + html.EscapeString(articleURL(siteBaseURL, primary.ID)) + "\">" + html.EscapeString(story.Summary) + "</a>")
+		if sources := storySourceNames(story, articles); len(sources) > 0 {
+			out.WriteString(" · " + escapeJoined(sources))
+		}
+		return out.String()
+	}
 	out.WriteString("<b><a href=\"" + html.EscapeString(articleURL(siteBaseURL, primary.ID)) + "\">" + html.EscapeString(story.Title) + "</a></b>\n")
 	out.WriteString(html.EscapeString(story.Summary))
 	if sources := storySourceNames(story, articles); len(sources) > 0 {
@@ -127,8 +138,16 @@ func storyPlainHTML(story Story, articles map[string]Article, siteBaseURL string
 	return out.String()
 }
 
-func renderStoryPreview(out *strings.Builder, story Story, articles map[string]Article, siteBaseURL string) {
+func renderStoryPreview(out *strings.Builder, story Story, articles map[string]Article, siteBaseURL string, brief bool) {
 	primary := articles[story.PrimaryArticleID]
+	if brief {
+		out.WriteString("• " + story.Summary + " — " + articleURL(siteBaseURL, primary.ID))
+		if sources := storySourceNames(story, articles); len(sources) > 0 {
+			out.WriteString(" · " + strings.Join(sources, ", "))
+		}
+		out.WriteByte('\n')
+		return
+	}
 	out.WriteString("• " + story.Title + "\n" + articleURL(siteBaseURL, primary.ID) + "\n" + story.Summary + "\n")
 	if sources := storySourceNames(story, articles); len(sources) > 0 {
 		out.WriteString(sourceLabel(len(sources)) + ": " + strings.Join(sources, ", ") + "\n")

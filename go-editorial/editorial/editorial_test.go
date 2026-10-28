@@ -152,8 +152,8 @@ func TestGenerateWithFakeProviderAndRenderSafeLinks(t *testing.T) {
 	if !strings.Contains(rendered.RichHTML, "https://news.example/digest/2026-10-27?edition=fixture") || !strings.Contains(rendered.PreviewText, s.EditionURL) {
 		t.Fatal("edition URL missing")
 	}
-	if !strings.Contains(rendered.RichHTML, "Источник: Источник 5") {
-		t.Fatal("plain-text source names missing")
+	if !strings.Contains(rendered.RichHTML, " · Источник 5") || !strings.Contains(rendered.RichHTML, "&lt;img src=x onerror=alert(1)&gt; заявляет: это проверяется.") || strings.Contains(rendered.RichHTML, "&lt;script&gt;alert(1)&lt;/script&gt;") {
+		t.Fatal("compact brief did not use its escaped summary sentence, omit title, and inline publisher")
 	}
 }
 
@@ -472,6 +472,9 @@ func TestProviderEndpointAllowsConfiguredHTTPServiceNameAndRejectsMalformedURLs(
 
 func TestRenderLargeIssueSplitsOnlyAtStoryBoundaries(t *testing.T) {
 	s := syntheticSnapshot(42)
+	for i := range s.Articles {
+		s.Articles[i].Content = fmt.Sprintf("Новость %d: %s", i+1, strings.Repeat("событие ", 50))
+	}
 	stories := syntheticStories(t, s)
 	e, err := FinalizeEdition(s, "ru", stories, nil)
 	if err != nil {
@@ -547,6 +550,7 @@ func TestRenderPlacesMainFirstAndGroupsBriefsBySuppliedCategory(t *testing.T) {
 	s.Articles[3].CategoryID, s.Articles[3].CategoryName = "9", "Политика"
 	s.Articles[4].CategoryID, s.Articles[4].CategoryName = "8", "Культура"
 	s.Articles[4].Title = "Событие номер 5"
+	s.Articles[0].Content = "В Караджорджевом парке посадили 117 282 дерева."
 	story := func(i int, kind string) Story {
 		a := s.Articles[i]
 		return Story{Kind: kind, Title: a.Title, Summary: a.Content, PrimaryArticleID: a.ID, ArticleIDs: []string{a.ID}, Evidence: []Evidence{{ArticleID: a.ID, Quote: preferredEvidenceText(a)}}}
@@ -565,10 +569,10 @@ func TestRenderPlacesMainFirstAndGroupsBriefsBySuppliedCategory(t *testing.T) {
 	main2 := strings.Index(rendered.RichHTML, "Событие номер 4")
 	briefHeader := strings.Index(rendered.RichHTML, "Ещё коротко")
 	categoryTech := strings.Index(rendered.RichHTML, "<h3>Технологии</h3>")
-	brief1 := strings.Index(rendered.RichHTML, "Событие номер 1")
-	brief2 := strings.Index(rendered.RichHTML, "Событие номер 3")
+	brief1 := strings.Index(rendered.RichHTML, "В Караджорджевом парке посадили 117 282 дерева.")
+	brief2 := strings.Index(rendered.RichHTML, "Подтверждённый фрагмент материала 3.")
 	categoryCulture := strings.Index(rendered.RichHTML, "<h3>Культура</h3>")
-	brief3 := strings.Index(rendered.RichHTML, "Событие номер 5")
+	brief3 := strings.Index(rendered.RichHTML, "заявляет: это проверяется.")
 	if !(main1 >= 0 && main1 < main2 && main2 < briefHeader && briefHeader < categoryTech && categoryTech < brief1 && brief1 < brief2 && brief2 < categoryCulture && categoryCulture < brief3) {
 		t.Fatalf("unexpected rich order: %s", rendered.RichHTML)
 	}
@@ -576,8 +580,14 @@ func TestRenderPlacesMainFirstAndGroupsBriefsBySuppliedCategory(t *testing.T) {
 	if strings.Index(part, "Событие номер 2") > strings.Index(part, "Ещё коротко") {
 		t.Fatal("plain parts did not put main stories first")
 	}
-	if !strings.Contains(part, `<a href="https://news.example/article/1001">Событие номер 1</a>`) || !strings.Contains(part, `Источник: Источник 1`) || strings.Contains(part, "https://source.example/") {
+	if !strings.Contains(part, `<a href="https://news.example/article/1001">В Караджорджевом парке посадили 117 282 дерева.</a> · Источник 1`) || strings.Contains(part, "Событие номер 1") || strings.Contains(part, "https://source.example/") {
 		t.Fatal("ordinary fallback lost internal headline link or included an original source URL")
+	}
+	if !strings.Contains(part, `Событие номер 2</a></b>`) || !strings.Contains(part, "Подтверждённый фрагмент материала 2.") {
+		t.Fatal("main story title and summary were changed by compact brief rendering")
+	}
+	if !strings.Contains(rendered.RichHTML, `<p>• <a href="https://news.example/article/1001">В Караджорджевом парке посадили 117 282 дерева.</a> · Источник 1</p>`) || !strings.Contains(rendered.PreviewText, `• В Караджорджевом парке посадили 117 282 дерева. — https://news.example/article/1001 · Источник 1`) {
+		t.Fatal("rich or preview brief did not render as one linked sentence with inline source")
 	}
 	if strings.Contains(part, "<h2>") || strings.Contains(part, "<h3>") || strings.Contains(part, "<p>") || strings.Contains(part, "<ul>") {
 		t.Fatal("ordinary fallback contains unsupported block markup")

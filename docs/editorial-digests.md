@@ -12,7 +12,8 @@ The existing domain application supplies a fenced snapshot and stores a complete
 
 An edition records its UTC date and cutoff, explicit locale, policy version, article snapshot, deterministic snapshot/content hashes, stories, evidence references, exclusions, rendered representations and provider usage. New source collection must not change an already stored edition. Revisions are separate records. The current renderer supports only `ru` and rejects unsupported locales.
 
-- A story headline links to `/article/{primary_article_id}` on the configured site.
+- Main-story headlines and brief summary links lead to `/article/{primary_article_id}` on the configured site.
+- Main stories retain the usual headline, summary, and plain source names. Each brief renders its `summary` as one standalone linked sentence, then publisher name(s) inline; the brief `title` is not repeated in Telegram. Keep the summary self-contained with the actor or product and material figures when supported, while retaining title and summary separately on the web edition.
 - In Telegram, publisher names are plain text and repeated names within a story appear once. There are no per-story “Подробнее” links. Original URLs remain individually accessible on the web article and digest pages.
 - “Полный выпуск” links to `/digest/YYYY-MM-DD?edition=UUID`, selecting the stored edition.
 - Both Rich Message HTML and ordinary `sendMessage` HTML preserve the same link destinations. Parts split only between complete stories; text is never silently truncated.
