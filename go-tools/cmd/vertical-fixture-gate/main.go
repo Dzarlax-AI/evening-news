@@ -83,6 +83,21 @@ func (g *gate) diagnoseJob() {
 	for _, m := range matches {
 		fmt.Fprintf(os.Stderr, "fixture execution_phase=%s reason_code=%s sqlstate=%s\n", m[1], m[2], m[3])
 	}
+	domainID, e := g.docker(nil, "ps", "-aq", "executor")
+	if e != nil || domainID == "" {
+		return
+	}
+	domainLogs, _ := exec.Command("docker", "logs", "--tail", "200", domainID).CombinedOutput()
+	backupPatterns := []*regexp.Regexp{regexp.MustCompile(`backup failure phase=(config|database_version|staging|pg_dump|copy_inputs|archive|publish_fence|schedule_update) reason_code=(failed|cancelled|deadline)`), regexp.MustCompile(`backup pg_dump reason_code=(other|cancelled|deadline|client_missing|permission|authentication|version|connection)`)}
+	for _, pattern := range backupPatterns {
+		matches := pattern.FindAllString(string(domainLogs), -1)
+		if len(matches) > 10 {
+			matches = matches[len(matches)-10:]
+		}
+		for _, m := range matches {
+			fmt.Fprintln(os.Stderr, "fixture "+m)
+		}
+	}
 }
 
 func (g *gate) diagnose() {
@@ -110,7 +125,25 @@ func (g *gate) diagnose() {
 				break
 			}
 		}
-		fmt.Fprintf(os.Stderr, "fixture role=%s state=%s exit=%s oom=%s diagnostic=%s\n", role, fields[0], fields[1], fields[2], code)
+		stateErr := exec.Command("docker", "inspect", "--format", "{{json .State.Error}}", id)
+		stateRaw, _ := stateErr.Output()
+		var stateText string
+		_ = json.Unmarshal(stateRaw, &stateText)
+		stateCode := "none"
+		lower := strings.ToLower(stateText)
+		switch {
+		case strings.Contains(lower, "already allocated") || strings.Contains(lower, "address already in use"):
+			stateCode = "address_conflict"
+		case strings.Contains(lower, "mount"):
+			stateCode = "mount"
+		case strings.Contains(lower, "oci runtime"):
+			stateCode = "oci"
+		case strings.Contains(lower, "permission denied"):
+			stateCode = "permission"
+		case stateText != "":
+			stateCode = "other"
+		}
+		fmt.Fprintf(os.Stderr, "fixture role=%s state=%s exit=%s oom=%s diagnostic=%s state_error=%s\n", role, fields[0], fields[1], fields[2], code, stateCode)
 	}
 }
 
@@ -441,6 +474,35 @@ func (g *gate) run() (resultErr error) {
 	if json.Unmarshal([]byte(receipt), &summary) != nil || !summary.Valid || summary.Processed < 1 {
 		return errors.New("source receipts incomplete")
 	}
+	// The three Page Monitor sources intentionally start with inadequate
+	// selectors. At least two successful reparses but only one model study
+	// prove that the published analysis is reused by later callbacks.
+	studyStats, e := g.docker(nil, "exec", "-T", "postgres", "psql", "-U", "gate_user", "-d", "gate_db", "-qAtc", "SELECT count(*) FROM article_ingestion_source_runs sr JOIN article_ingestion_runs ir ON ir.id=sr.run_id JOIN sources s ON s.id=sr.source_id WHERE ir.job_id='"+job+"'::uuid AND s.source_type='custom' AND sr.state='succeeded' AND sr.candidates>=1 AND sr.selector_study_sha256 ~ '^[0-9a-f]{64}$'")
+	if e != nil {
+		return errors.New("selector study receipts unavailable")
+	}
+	studyCount, e := strconv.Atoi(studyStats)
+	if e != nil || studyCount < 2 {
+		return errors.New("selector reparses missing")
+	}
+	patterns, e := g.docker(nil, "exec", "-T", "postgres", "psql", "-U", "gate_user", "-d", "gate_db", "-qAtc", `SELECT count(*) FROM extraction_patterns WHERE domain='pm.fixture.test' AND discovered_by='ai' AND ((selector_pattern='.zx-entry' AND extraction_strategy='source_container' AND quality_score_avg>=0.99) OR (selector_pattern='.zx-title' AND extraction_strategy='source_title') OR (selector_pattern='.zx-time' AND extraction_strategy='source_date'))`)
+	if e != nil || patterns != "3" {
+		return errors.New("selector patterns not persisted")
+	}
+	providerCounters, e := g.docker(nil, "exec", "-T", "fake", "wget", "-q", "-O", "-", "http://127.0.0.1:8090/__gate/counters")
+	if e != nil {
+		return errors.New("selector provider counters unavailable")
+	}
+	var selectorStats struct {
+		Providers struct {
+			Studies        int `json:"selector_study"`
+			OriginalTitles int `json:"page_monitor_original_title"`
+		} `json:"providers"`
+	}
+	if json.Unmarshal([]byte(providerCounters), &selectorStats) != nil || selectorStats.Providers.Studies != 1 || selectorStats.Providers.OriginalTitles < 1 {
+		return errors.New("selector analysis cache or reparse not exercised")
+	}
+	fmt.Println("fixture stage=source_collection_and_selector_learning passed")
 	stopStart := time.Now()
 	if _, e = g.docker(nil, "stop", "--timeout", "30", "background"); e != nil || time.Since(stopStart) >= 30*time.Second {
 		return errors.New("idle background shutdown failed")
@@ -564,6 +626,7 @@ func (g *gate) run() (resultErr error) {
 	if e != nil || currentContainer != container {
 		return errors.New("active shutdown changed background container")
 	}
+	fmt.Println("fixture stage=idle_and_active_shutdown passed")
 	// Check only environment key names; never emit values from container config.
 	envRaw, e := exec.Command("docker", "inspect", "--format", "{{json .Config.Env}}", container).Output()
 	if e != nil {
@@ -771,6 +834,7 @@ func (g *gate) run() (resultErr error) {
 	if e != nil || e1 != nil || e2 != nil || e3 != nil || parts < 1 || editions != 1 || articles < 1 || afterSend <= beforeSend || afterEditorial <= beforeEditorial {
 		return errors.New("default digest did not generate and deliver")
 	}
+	fmt.Println("fixture stage=default_digest passed")
 	previous, e := pg(`SELECT COALESCE((SELECT id::text FROM editorial_digest_editions WHERE edition_date=(clock_timestamp() AT TIME ZONE 'UTC')::date AND locale='ru' ORDER BY created_at DESC,id DESC LIMIT 1),'')`)
 	if e != nil {
 		return errors.New("edition query failed")
@@ -918,6 +982,7 @@ func (g *gate) run() (resultErr error) {
 	if e != nil || afterTelegram != beforeTelegram+1 {
 		return errors.New("ambiguous delivery replayed")
 	}
+	fmt.Println("fixture stage=lease_loss_and_unknown_delivery passed")
 	// A 429 must be persisted as a definite rejection, with no immediate
 	// extra send by the same attempt.
 	rateEdition, e := enqueue("/api/v1/summaries/generate", "vertical-rate-edition-"+marker)
@@ -954,6 +1019,7 @@ func (g *gate) run() (resultErr error) {
 	if e != nil || rateProof != "1" {
 		return errors.New("rate limit receipt missing")
 	}
+	fmt.Println("fixture stage=rate_limit_delivery passed")
 	if e = telegramControl("normal"); e != nil {
 		return errors.New("rate limit fixture release failed")
 	}
@@ -1010,6 +1076,7 @@ func (g *gate) run() (resultErr error) {
 	if e != nil || afterReplay != partialAfter {
 		return errors.New("partial delivery replay sent again")
 	}
+	fmt.Println("fixture stage=partial_delivery_replay passed")
 	// Back up the synthetic database via the real job and strictly restore its
 	// SQL into a separate disposable database of the same server major.
 	backupJob, e := enqueue("/api/v1/backup", "vertical-backup-"+marker)
@@ -1081,6 +1148,7 @@ func (g *gate) run() (resultErr error) {
 	if e != nil || status != 409 {
 		return errors.New("worker restore boundary changed")
 	}
+	fmt.Println("fixture stage=backup_strict_restore passed")
 	if err := fixturegate.VerifyImages(refs, initial, inspect); err != nil {
 		return err
 	}
@@ -1159,7 +1227,7 @@ func prepare(g *gate) error {
 			return errors.New("fixture tool build failed")
 		}
 	}
-	cmd := exec.Command("openssl", "req", "-x509", "-newkey", "rsa:2048", "-nodes", "-days", "2", "-keyout", filepath.Join(g.dir, "fixture-ca.key"), "-out", filepath.Join(g.dir, "fixture-ca.crt"), "-subj", "/CN=go-web-fixture.test", "-addext", "subjectAltName=DNS:t.me,DNS:rss.fixture.test,DNS:pm.fixture.test,IP:11.203.254.243", "-addext", "basicConstraints=critical,CA:TRUE", "-addext", "keyUsage=critical,digitalSignature,keyCertSign,keyEncipherment", "-addext", "extendedKeyUsage=serverAuth")
+	cmd := exec.Command("openssl", "req", "-x509", "-newkey", "rsa:2048", "-nodes", "-days", "2", "-keyout", filepath.Join(g.dir, "fixture-ca.key"), "-out", filepath.Join(g.dir, "fixture-ca.crt"), "-subj", "/CN=go-web-fixture.test", "-addext", "subjectAltName=DNS:t.me,DNS:rss.fixture.test,DNS:pm.fixture.test,IP:11.203.254.230", "-addext", "basicConstraints=critical,CA:TRUE", "-addext", "keyUsage=critical,digitalSignature,keyCertSign,keyEncipherment", "-addext", "extendedKeyUsage=serverAuth")
 	if e := cmd.Run(); e != nil {
 		return errors.New("fixture certificate generation failed")
 	}
@@ -1194,7 +1262,7 @@ const composeTemplate = `services:
     entrypoint: ["/fixture/fixture-origin", "--cert", "/fixture/fixture-ca.crt", "--key", "/fixture/fixture-ca.key"]
     volumes: ["FIXTURE_DIR:/fixture:ro"]
     networks:
-      fixture: {ipv4_address: 11.203.254.243}
+      fixture: {ipv4_address: 11.203.254.230}
   fake:
     image: alpine:3.21
     entrypoint: ["/fixture/fixture-services"]
@@ -1209,7 +1277,7 @@ const composeTemplate = `services:
       EXTRACTOR_SERVICE_TOKEN: fixture-only-collector-token
       SSL_CERT_FILE: /fixture/fixture-ca.crt
     volumes: ["FIXTURE_DIR:/fixture:ro"]
-    extra_hosts: ["rss.fixture.test:11.203.254.243", "pm.fixture.test:11.203.254.243", "t.me:11.203.254.243"]
+    extra_hosts: ["rss.fixture.test:11.203.254.230", "pm.fixture.test:11.203.254.230", "t.me:11.203.254.230"]
     networks: [fixture]
   executor:
     image: evening-news-executor:consolidation-fixture
@@ -1328,5 +1396,5 @@ networks:
   fixture:
     internal: true
     ipam:
-      config: [{subnet: 11.203.254.240/28}]
+      config: [{subnet: 11.203.254.224/27, ip_range: 11.203.254.240/28}]
 `

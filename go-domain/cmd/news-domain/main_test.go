@@ -193,6 +193,8 @@ func TestDomainProcessStartupAndDrainPostgres(t *testing.T) {
 		}
 	}
 	var mutateSource atomic.Bool
+	var blockSelector atomic.Bool
+	providerStarted := make(chan struct{}, 1)
 	var selectorCalls atomic.Int32
 	var digestMode atomic.Bool
 	var mediaMode atomic.Bool
@@ -231,6 +233,11 @@ func TestDomainProcessStartupAndDrainPostgres(t *testing.T) {
 		requestBody, _ := io.ReadAll(r.Body)
 		if bytes.Contains(requestBody, []byte("Analyze this webpage")) {
 			selectorCalls.Add(1)
+			if blockSelector.Load() {
+				providerStarted <- struct{}{}
+				<-r.Context().Done()
+				return
+			}
 			if mutateSource.Load() {
 				if _, e := db.Exec(ctx, `UPDATE `+ident+`.sources SET config='{"enable_ai_analysis":false}' WHERE id=9`); e != nil {
 					t.Error(e)
@@ -420,6 +427,76 @@ func TestDomainProcessStartupAndDrainPostgres(t *testing.T) {
 		t.Fatalf("domain shutdown: %v", err)
 	}
 	waited = true
+	// Start a second process and revoke its dedicated advisory-lock session.
+	// The process must stop rather than continuing to accept private work.
+	lost := exec.Command(os.Args[0], "-test.run=^TestDomainProcessStartupAndDrainPostgres$")
+	lost.Env = cmd.Env
+	if err = lost.Start(); err != nil {
+		t.Fatal(err)
+	}
+	lostWaited := false
+	var doneLost chan error
+	defer func() {
+		if !lostWaited {
+			_ = lost.Process.Kill()
+			if doneLost != nil {
+				<-doneLost
+			} else {
+				_ = lost.Wait()
+			}
+		}
+	}()
+	until = time.Now().Add(8 * time.Second)
+	for time.Now().Before(until) {
+		r, _ := http.NewRequest(http.MethodGet, "http://"+address+"/internal/v1/status", nil)
+		r.Header.Set("Authorization", "Bearer fixture-executor-token")
+		v, e := client.Do(r)
+		if e == nil {
+			_ = v.Body.Close()
+			if v.StatusCode == 200 {
+				break
+			}
+		}
+		time.Sleep(50 * time.Millisecond)
+	}
+	blockSelector.Store(true)
+	pendingDone := make(chan struct{}, 1)
+	go func() {
+		r, _ := http.NewRequest(http.MethodPost, "http://"+address+"/internal/v1/ingestion/selectors", bytes.NewReader(payload))
+		r.Header.Set("Authorization", "Bearer fixture-executor-token")
+		v, _ := client.Do(r)
+		if v != nil {
+			_ = v.Body.Close()
+		}
+		pendingDone <- struct{}{}
+	}()
+	select {
+	case <-providerStarted:
+	case <-time.After(5 * time.Second):
+		t.Fatal("selector provider did not start")
+	}
+	var terminated bool
+	err = db.QueryRow(ctx, `SELECT pg_terminate_backend(pid) FROM pg_locks WHERE locktype='advisory' AND granted AND objsubid=2 AND classid=(((hashtext(current_database())::bigint+4294967296)%4294967296)::oid) AND objid=((((hashtext($1) # $2::integer)::bigint+4294967296)%4294967296)::oid) AND database=(SELECT oid FROM pg_database WHERE datname=current_database())`, schema, authority.ExecutorGuardXOR).Scan(&terminated)
+	if err != nil || !terminated {
+		t.Fatalf("fixture guard termination failed: %v", err)
+	}
+	doneLost = make(chan error, 1)
+	go func() { doneLost <- lost.Wait() }()
+	select {
+	case e := <-doneLost:
+		lostWaited = true
+		if e == nil {
+			t.Fatal("guard loss exited successfully")
+		}
+	case <-time.After(8 * time.Second):
+		t.Fatal("guard loss did not stop process")
+	}
+	select {
+	case <-pendingDone:
+	case <-time.After(5 * time.Second):
+		t.Fatal("active callback did not drain after guard loss")
+	}
+	blockSelector.Store(false)
 	cfg, err := pgxpool.ParseConfig(u.String())
 	if err != nil {
 		t.Fatal(err)

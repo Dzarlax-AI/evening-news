@@ -3,13 +3,16 @@ package backup
 
 import (
 	"archive/tar"
+	"bytes"
 	"compress/gzip"
 	"context"
 	"encoding/json"
 	"errors"
 	"github.com/Dzarlax-AI/evening-news/go-domain/authority"
 	"github.com/jackc/pgx/v5"
+	"github.com/jackc/pgx/v5/pgxpool"
 	"io"
+	"log"
 	"os"
 	"os/exec"
 	"path/filepath"
@@ -23,15 +26,28 @@ type Service struct{ Root, DatabaseURL, DumpBinary string }
 func New(root, dsn string) *Service {
 	return &Service{Root: root, DatabaseURL: dsn, DumpBinary: "pg_dump"}
 }
-func (s *Service) Create(ctx context.Context, f authority.Fence) (int64, error) {
+func (s *Service) Create(ctx context.Context, f authority.Fence) (size int64, returnedErr error) {
+	phase := "config"
+	defer func() {
+		if returnedErr != nil {
+			reason := "failed"
+			if errors.Is(returnedErr, context.Canceled) {
+				reason = "cancelled"
+			} else if errors.Is(returnedErr, context.DeadlineExceeded) {
+				reason = "deadline"
+			}
+			log.Printf("backup failure phase=%s reason_code=%s", phase, reason)
+		}
+	}()
 	cfg, err := pgx.ParseConfig(strings.Replace(s.DatabaseURL, "postgresql+asyncpg://", "postgres://", 1))
 	if err != nil {
 		return 0, errors.New("invalid backup database configuration")
 	}
+	phase = "database_version"
 	dumpBinary := s.DumpBinary
 	if os.Getenv("NEWS_BACKUP_MATCH_PG_MAJOR") == "1" && dumpBinary == "pg_dump" {
-		var serverVersion int
-		if err = f.Pool.QueryRow(ctx, "SHOW server_version_num").Scan(&serverVersion); err != nil {
+		serverVersion, e := serverVersionNumber(ctx, f.Pool)
+		if e != nil {
 			return 0, errors.New("database backup version unavailable")
 		}
 		switch serverVersion / 10000 {
@@ -41,6 +57,7 @@ func (s *Service) Create(ctx context.Context, f authority.Fence) (int64, error) 
 			return 0, errors.New("unsupported backup database version")
 		}
 	}
+	phase = "staging"
 	suffix := "_" + strings.ReplaceAll(f.JobID, "-", "") + "_a" + strconv.Itoa(f.AttemptGeneration)
 	stamp := time.Now().Format("20060102_150405")
 	base := "backup_" + stamp + suffix
@@ -60,15 +77,35 @@ func (s *Service) Create(ctx context.Context, f authority.Fence) (int64, error) 
 	}
 
 	defer dump.Close()
+	phase = "pg_dump"
 	cmd := exec.CommandContext(ctx, dumpBinary, "-h", cfg.Host, "-p", strconv.Itoa(int(cfg.Port)), "-U", cfg.User, "--no-owner", "--no-acl", cfg.Database)
 	cmd.Env = withoutEnv(os.Environ(), "PGPASSWORD")
 	cmd.Env = append(cmd.Env, "PGPASSWORD="+cfg.Password)
 	cmd.Stdout = dump
-	cmd.Stderr = io.Discard
+	var dumpStderr boundedBuffer
+	cmd.Stderr = &dumpStderr
 	cmd.WaitDelay = 2 * time.Second
 	err = cmd.Run()
 	closeErr := dump.Close()
 	if err != nil {
+		reason := "other"
+		switch {
+		case errors.Is(ctx.Err(), context.Canceled):
+			reason = "cancelled"
+		case errors.Is(ctx.Err(), context.DeadlineExceeded):
+			reason = "deadline"
+		case errors.Is(err, exec.ErrNotFound), errors.Is(err, os.ErrNotExist):
+			reason = "client_missing"
+		case strings.Contains(strings.ToLower(dumpStderr.String()), "permission denied"):
+			reason = "permission"
+		case strings.Contains(strings.ToLower(dumpStderr.String()), "authentication failed"):
+			reason = "authentication"
+		case strings.Contains(strings.ToLower(dumpStderr.String()), "server version"):
+			reason = "version"
+		case strings.Contains(strings.ToLower(dumpStderr.String()), "connection"):
+			reason = "connection"
+		}
+		log.Printf("backup pg_dump reason_code=%s", reason)
 		return 0, errors.New("database backup failed")
 	}
 	if closeErr != nil {
@@ -77,6 +114,7 @@ func (s *Service) Create(ctx context.Context, f authority.Fence) (int64, error) 
 	if ctx.Err() != nil {
 		return 0, ctx.Err()
 	}
+	phase = "copy_inputs"
 	for _, item := range []string{".env", "docker-compose.yml", "data", "logs"} {
 		source := filepath.Join(s.Root, item)
 		if _, e := os.Lstat(source); errors.Is(e, os.ErrNotExist) {
@@ -96,6 +134,7 @@ func (s *Service) Create(ctx context.Context, f authority.Fence) (int64, error) 
 	if err = os.WriteFile(filepath.Join(dir, "backup_info.json"), raw, 0600); err != nil {
 		return 0, err
 	}
+	phase = "archive"
 	staged := filepath.Join(root, "."+name+".working")
 	archive, err := os.OpenFile(staged, os.O_CREATE|os.O_EXCL|os.O_WRONLY, 0600)
 	if err != nil {
@@ -121,6 +160,7 @@ func (s *Service) Create(ctx context.Context, f authority.Fence) (int64, error) 
 	if err != nil {
 		return 0, err
 	}
+	phase = "publish_fence"
 	final := filepath.Join(root, name)
 	tx, err := f.Pool.Begin(ctx)
 	if err != nil {
@@ -140,10 +180,33 @@ func (s *Service) Create(ctx context.Context, f authority.Fence) (int64, error) 
 	if err = tx.Commit(ctx); err != nil {
 		return 0, err
 	}
+	phase = "schedule_update"
 	if err = s.updateConfig(ctx, f); err != nil {
 		return 0, err
 	}
 	return info.Size(), nil
+}
+
+func serverVersionNumber(ctx context.Context, pool *pgxpool.Pool) (int, error) {
+	var version int
+	err := pool.QueryRow(ctx, "SELECT current_setting('server_version_num')::integer").Scan(&version)
+	return version, err
+}
+
+// boundedBuffer captures only enough diagnostic bytes to classify pg_dump
+// failures. Its contents are never logged or returned.
+type boundedBuffer struct{ bytes.Buffer }
+
+func (b *boundedBuffer) Write(p []byte) (int, error) {
+	n := len(p)
+	if b.Len() < 8192 {
+		remaining := 8192 - b.Len()
+		if len(p) > remaining {
+			p = p[:remaining]
+		}
+		_, _ = b.Buffer.Write(p)
+	}
+	return n, nil
 }
 func withoutEnv(env []string, key string) []string {
 	out := make([]string, 0, len(env))

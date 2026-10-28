@@ -331,6 +331,9 @@ jobs:
         run: |
           docker buildx bake -f docker-bake.hcl --set '*.platform=linux/amd64' --load
           docker build --platform linux/amd64 -f docker/Dockerfile.extractor -t evening-news-collector:consolidation-fixture go
+      - name: Verify image contents and runtime identity
+        working-directory: go-tools
+        run: go run ./cmd/check-core-image-inventory
       - name: Run vertical candidate without issuing a release receipt
         env:
           NEWS_FIXTURE_PG_MAJOR: ${{ matrix.postgres }}

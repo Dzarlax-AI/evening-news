@@ -89,3 +89,29 @@ func TestCancelledCopyLeavesNoCompletedArchive(t *testing.T) {
 		t.Fatalf("canceled copy created output: %v", err)
 	}
 }
+
+func TestServerVersionNumberPostgres(t *testing.T) {
+	dsn := os.Getenv("TEST_DATABASE_URL")
+	if dsn == "" {
+		if os.Getenv("CI") != "" {
+			t.Fatal("TEST_DATABASE_URL required in CI")
+		}
+		t.Skip("TEST_DATABASE_URL not set")
+	}
+	cfg, err := pgxpool.ParseConfig(dsn)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if cfg.ConnConfig.Host != "127.0.0.1" && cfg.ConnConfig.Host != "localhost" && cfg.ConnConfig.Host != "::1" {
+		t.Fatal("loopback fixture required")
+	}
+	pool, err := pgxpool.NewWithConfig(context.Background(), cfg)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer pool.Close()
+	version, err := serverVersionNumber(context.Background(), pool)
+	if err != nil || version/10000 < 16 || version/10000 > 17 {
+		t.Fatalf("server version probe failed: version=%d error=%v", version, err)
+	}
+}

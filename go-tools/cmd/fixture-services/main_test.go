@@ -213,3 +213,12 @@ func TestPartialDeliveryAcceptsOneThenDisconnects(t *testing.T) {
 		t.Fatal("second message was not dropped")
 	}
 }
+func TestSelectorStudyReturnsFixturePatterns(t *testing.T) {
+	s := newState()
+	payload := map[string]any{"contents": []any{map[string]any{"parts": []any{map[string]any{"text": "Analyze this webpage to find the best CSS selectors"}}}}}
+	raw, _ := json.Marshal(payload)
+	r := post(s.provider, "/v1/models/fixture:generateContent", string(raw), "", "")
+	if r.Code != 200 || s.counters["selector_study"] != 1 || !strings.Contains(r.Body.String(), ".zx-entry") {
+		t.Fatal("selector fixture response missing")
+	}
+}

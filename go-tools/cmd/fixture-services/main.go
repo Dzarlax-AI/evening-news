@@ -36,7 +36,7 @@ type entry struct {
 
 func open() chan struct{} { c := make(chan struct{}); close(c); return c }
 func newState() *state {
-	return &state{counters: map[string]int{"source_probe": 0, "ingestion_stub_runs": 0, "extraction": 0, "gemini": 0, "editorial_gemini": 0, "telegram": 0}, telegram: map[string]int{"sendMessage": 0, "sendRichMessage": 0, "other": 0}, consumerMode: "normal", telegramMode: "normal", occurrences: map[string]entry{}, operations: map[string]int{}, ingestion: map[string]entry{}, gemini: open(), delivery: open(), consumer: open()}
+	return &state{counters: map[string]int{"source_probe": 0, "ingestion_stub_runs": 0, "extraction": 0, "gemini": 0, "editorial_gemini": 0, "telegram": 0, "selector_study": 0, "page_monitor_original_title": 0}, telegram: map[string]int{"sendMessage": 0, "sendRichMessage": 0, "other": 0}, consumerMode: "normal", telegramMode: "normal", occurrences: map[string]entry{}, operations: map[string]int{}, ingestion: map[string]entry{}, gemini: open(), delivery: open(), consumer: open()}
 }
 func reset(c *chan struct{}, blocked bool) {
 	select {
@@ -282,6 +282,30 @@ func (s *state) geminiRequest(w http.ResponseWriter, r *http.Request, p map[stri
 	release := s.gemini
 	s.mu.Unlock()
 	wait(release)
+	prompt := ""
+	if contents, ok := p["contents"].([]any); ok && len(contents) > 0 {
+		if content, ok := contents[0].(map[string]any); ok {
+			if parts, ok := content["parts"].([]any); ok && len(parts) > 0 {
+				if part, ok := parts[0].(map[string]any); ok {
+					prompt = text(part["text"])
+				}
+			}
+		}
+	}
+	if strings.Contains(prompt, "CSS selectors") {
+		s.mu.Lock()
+		s.counters["selector_study"]++
+		s.mu.Unlock()
+		result := map[string]any{"content_selectors": []string{".zx-entry"}, "title_selectors": []string{".zx-title"}, "date_selectors": []string{".zx-time"}, "confidence_scores": map[string]float64{".zx-entry": 0.99}, "page_type": "news", "reasoning": "Synthetic gate page has one article element per story.", "suggested_config": map[string]any{"max_articles_per_check": 2}}
+		raw, _ := json.Marshal(result)
+		write(w, 200, map[string]any{"candidates": []any{map[string]any{"content": map[string]any{"parts": []any{map[string]any{"text": string(raw)}}}}}})
+		return
+	}
+	if strings.Contains(prompt, "Learned Selector Gate Story") {
+		s.mu.Lock()
+		s.counters["page_monitor_original_title"]++
+		s.mu.Unlock()
+	}
 	config, _ := p["generationConfig"].(map[string]any)
 	schema, _ := config["responseSchema"].(map[string]any)
 	properties, _ := schema["properties"].(map[string]any)
