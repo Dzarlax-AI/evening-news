@@ -1110,8 +1110,50 @@ class ConsolidatedBackgroundGate(GoWebGate):
         self.check("blocked_fixture_job_finishes_after_lease_recovery", job.get("status") == "succeeded")
         self.report["recovery_fault_injection"] = "completed"
 
+    def prepare_ambiguous_delivery_edition(self):
+        """Generate a fresh edition through the real job path, preserving receipts."""
+        latest_sql = (
+            "SELECT id::text FROM editorial_digest_editions "
+            "WHERE edition_date=(clock_timestamp() AT TIME ZONE 'UTC')::date AND locale='ru' "
+            "ORDER BY created_at DESC,id DESC LIMIT 1"
+        )
+        previous_id = self.pg_value(latest_sql)
+        uuid_pattern = r"[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}"
+        if not isinstance(previous_id, str) or re.fullmatch(uuid_pattern, previous_id) is None:
+            raise GateFailure("ambiguous_delivery_previous_edition_missing")
+        accepted = self.exec_json(self.prefix + "-web", "enqueue-summaries",
+                                  "consolidated-fresh-edition-" + self.run_id)
+        response = accepted.get("response") if isinstance(accepted, dict) else None
+        job_id = response.get("job_id") if isinstance(response, dict) else None
+        if (not isinstance(accepted, dict) or accepted.get("http_status") != 202 or not isinstance(job_id, str)
+                or re.fullmatch(uuid_pattern, job_id) is None):
+            raise GateFailure("ambiguous_delivery_generation_job_not_accepted")
+        job = self.wait_job_http(job_id, timeout=180)
+        receipt = self.pg_value(
+            "SELECT e.id::text || '|' || e.attempt_generation::text || '|' || "
+            "j.attempt_generation::text || '|' || x.state "
+            "FROM editorial_digest_editions e JOIN background_jobs j ON j.id=e.job_id "
+            "JOIN background_job_executions x ON x.job_id=e.job_id "
+            "AND x.attempt_generation=e.attempt_generation "
+            "WHERE e.job_id='" + job_id + "'::uuid AND e.locale='ru'"
+        )
+        fields = receipt.split("|") if isinstance(receipt, str) else []
+        current_id = self.pg_value(latest_sql)
+        valid = (job.get("status") == "succeeded" and len(fields) == 4
+                 and re.fullmatch(uuid_pattern, fields[0]) is not None
+                 and fields[0] != previous_id and fields[0] == current_id
+                 and fields[1].isdigit() and int(fields[1]) > 0
+                 and fields[1] == fields[2] and fields[3] == "succeeded")
+        self.report["ambiguous_delivery_edition"] = {
+            "generation_status": job.get("status"),
+            "new_distinct_latest_edition": bool(valid),
+            "execution_receipt_succeeded": len(fields) == 4 and fields[3] == "succeeded",
+        }
+        self.check("ambiguous_delivery_uses_new_generated_edition", valid)
+
     def verify_ambiguous_delivery_recovery(self):
         """Lose the worker lease after fake Telegram accepts but before it replies."""
+        self.prepare_ambiguous_delivery_edition()
         self.control_fake_services(telegram_mode="accept_then_hold")
         before = self.fake_counters_http().get("providers", {}).get("telegram", 0)
         digest = self.exec_json(self.prefix + "-web", "enqueue-digest",

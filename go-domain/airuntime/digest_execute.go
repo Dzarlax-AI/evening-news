@@ -1,0 +1,142 @@
+package airuntime
+
+import (
+	"context"
+	"crypto/sha256"
+	"encoding/hex"
+	"encoding/json"
+	"errors"
+	"net/url"
+	"regexp"
+	"strings"
+	"time"
+
+	"github.com/Dzarlax-AI/evening-news/go-domain/authority"
+	"github.com/Dzarlax-AI/evening-news/go-domain/digestworkflow"
+	"github.com/Dzarlax-AI/evening-news/go-domain/telegramdelivery"
+	"github.com/Dzarlax-AI/evening-news/go-editorial/editorial"
+)
+
+func hashBytes(b []byte) string { h := sha256.Sum256(b); return hex.EncodeToString(h[:]) }
+func (s *Server) executeDigest(ctx context.Context, v digestInput, f authority.Fence) (map[string]any, error) {
+	if err := f.Check(ctx); err != nil {
+		return nil, err
+	}
+	endpoint, err := editorialEndpoint(s.config.Endpoint, s.config.DigestModel)
+	if err != nil && v.Operation == "summaries_generate" {
+		return nil, err
+	}
+	wf := digestworkflow.Workflow{Pool: s.db, Fence: f, SiteBase: s.config.SiteBase, Provider: editorial.ProviderConfig{APIKey: s.config.APIKey, Model: s.config.DigestModel, Endpoint: endpoint, Client: s.client}}
+	deadline, _ := time.Parse(time.RFC3339Nano, v.Envelope.Deadline)
+	identity := digestworkflow.Identity{JobID: v.Envelope.JobID, Attempt: v.Envelope.Attempt, DomainInstanceID: v.DomainInstanceID, Deadline: deadline}
+	switch v.Operation {
+	case "summary_status":
+		n, e := wf.Count(ctx, time.Now())
+		return map[string]any{"summaries_count": n}, e
+	case "summaries_generate":
+		n, e := wf.Generate(ctx, v.Envelope.JobID, v.Envelope.Attempt, v.OperationID, time.Now())
+		return map[string]any{"summaries_generated": n}, e
+	case "digest_prepare":
+		token, e := wf.Prepare(ctx, &s.digest.prepared, identity, time.Now())
+		return map[string]any{"prepared_token": token}, e
+	case "digest_publish":
+		var input struct {
+			Token string `json:"prepared_token"`
+		}
+		if json.Unmarshal(v.Input, &input) != nil {
+			return nil, digestworkflow.ErrPrepared
+		}
+		prepared, e := s.digest.prepared.Claim(input.Token, identity)
+		if e != nil {
+			return nil, e
+		}
+		destination, e := wf.Destination(ctx, s.config.TelegramMain, s.config.TelegramService)
+		if e != nil || s.config.TelegramToken == "" {
+			return nil, digestworkflow.ErrDestination
+		}
+		renderedBytes, e := json.Marshal(prepared.Rendered)
+		if e != nil {
+			return nil, e
+		}
+		renderHash := hashBytes(renderedBytes)
+		proposed, e := digestworkflow.NewUUID()
+		if e != nil {
+			return nil, e
+		}
+		store := telegramdelivery.PostgresStore{Pool: s.db, Fence: f, JobID: v.Envelope.JobID, AttemptGeneration: v.Envelope.Attempt, DomainInstanceID: v.DomainInstanceID}
+		intent, e := store.ResolveIntent(ctx, proposed, prepared.EditionID, hashBytes([]byte(destination)), renderHash)
+		if e != nil {
+			return nil, e
+		}
+		if intent.Completed {
+			return map[string]any{"success": true, "parts_sent": intent.PartsSent, "parts_total": intent.PartsSent, "rich_message": intent.RichMessage}, nil
+		}
+		delivery := telegramdelivery.Delivery{Store: store, Sender: telegramdelivery.Transport{Client: s.client, Admission: s.limiter, Endpoint: s.config.TelegramEndpoint, Token: s.config.TelegramToken}, Authority: f}
+		makePart := func(method string, index int, payload any) telegramdelivery.Part {
+			raw, _ := json.Marshal(payload)
+			return telegramdelivery.Part{Intent: intent.ID, Method: method, Index: index, PayloadHash: hashBytes(raw), Payload: payload}
+		}
+		if s.config.TelegramRich {
+			rich := makePart("sendRichMessage", 0, map[string]any{"chat_id": destination, "rich_message": map[string]string{"html": prepared.Rendered.RichHTML}})
+			state, e := delivery.SendPart(ctx, rich)
+			if e != nil {
+				if errors.Is(e, telegramdelivery.ErrRejected) {
+					return map[string]any{"success": false, "parts_sent": 0, "parts_total": 1, "rich_message": true}, nil
+				}
+				return nil, e
+			}
+			if state == telegramdelivery.Sent {
+				if e = store.Complete(ctx, intent.ID, 1, true); e != nil {
+					return nil, e
+				}
+				return map[string]any{"success": true, "parts_sent": 1, "parts_total": 1, "rich_message": true}, nil
+			}
+		}
+		parts := prepared.Rendered.PlainParts
+		sent := 0
+		for i, text := range parts {
+			part := makePart("sendMessage", i, map[string]any{"chat_id": destination, "text": text, "parse_mode": "HTML", "disable_web_page_preview": true})
+			state, e := delivery.SendPart(ctx, part)
+			if e != nil {
+				if errors.Is(e, telegramdelivery.ErrRejected) {
+					return map[string]any{"success": false, "parts_sent": sent, "parts_total": len(parts), "rich_message": false}, nil
+				}
+				return nil, e
+			}
+			if state != telegramdelivery.Sent {
+				return map[string]any{"success": false, "parts_sent": sent, "parts_total": len(parts), "rich_message": false}, nil
+			}
+			sent++
+		}
+		if e = store.Complete(ctx, intent.ID, sent, false); e != nil {
+			return nil, e
+		}
+		return map[string]any{"success": true, "parts_sent": sent, "parts_total": len(parts), "rich_message": false}, nil
+	}
+	return nil, digestworkflow.ErrInvalid
+}
+
+var digestModelPattern = regexp.MustCompile(`^[A-Za-z0-9._-]{1,128}$`)
+
+func editorialEndpoint(base, model string) (string, error) {
+	if !digestModelPattern.MatchString(model) {
+		return "", errors.New("invalid_endpoint")
+	}
+	u, err := url.Parse(base)
+	if err != nil || (u.Scheme != "http" && u.Scheme != "https") || u.Hostname() == "" || u.User != nil || u.RawQuery != "" || u.Fragment != "" {
+		return "", errors.New("invalid_endpoint")
+	}
+	path := strings.TrimRight(u.Path, "/")
+	suffix := "/" + model + ":generateContent"
+	if strings.HasSuffix(path, ":generateContent") {
+		if !strings.HasSuffix(path, suffix) {
+			return "", errors.New("invalid_endpoint")
+		}
+	} else if strings.HasSuffix(path, "/models") {
+		path += suffix
+	} else {
+		return "", errors.New("invalid_endpoint")
+	}
+	u.Path = path
+	return u.String(), nil
+}

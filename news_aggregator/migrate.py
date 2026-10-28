@@ -13,6 +13,7 @@ from .migrations.job_executor import JobExecutorMigration, ensure_job_executor_m
 from .migrations.article_ingestion import ArticleIngestionMigration, ensure_article_ingestion_migration
 from .migrations.article_processing import ArticleProcessingMigration, ensure_article_processing_service_migration
 from .migrations.editorial_digest import EditorialDigestMigration, ensure_editorial_digest_migration
+from .migrations.digest_delivery import DigestDeliveryMigration, ensure_digest_delivery_migration
 
 
 def build_migration_manager():
@@ -22,6 +23,7 @@ def build_migration_manager():
         ArticleProcessingStateMigration(), BackgroundJobsMigration(),
         ScheduledJobMetadataMigration(), JobExecutorMigration(),
         ArticleIngestionMigration(), ArticleProcessingMigration(), EditorialDigestMigration(),
+        DigestDeliveryMigration(),
     ):
         manager.register_migration(migration)
     return manager
@@ -35,7 +37,7 @@ async def run_migrations() -> dict:
         ensure_background_jobs_migration, ensure_scheduled_job_metadata_migration,
         ensure_job_executor_migration, ensure_article_ingestion_migration,
         ensure_article_processing_service_migration,
-        ensure_editorial_digest_migration,
+        ensure_editorial_digest_migration, ensure_digest_delivery_migration,
     ):
         ensure(results)
     return results

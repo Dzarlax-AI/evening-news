@@ -13,6 +13,8 @@ if role == "web":
     AIClient.__init__ = _forbid_web_ai_client
 
 if role in {"web", "executor"}:
+    os.environ["NEWS_FIXTURE_MODE"] = "1"
+    os.environ["NEWS_TEST_TELEGRAM_ENDPOINT"] = "http://fixture-services:8090/telegram"
     from news_aggregator.services.telegram_service import TelegramService
 
     _original_init = TelegramService.__init__

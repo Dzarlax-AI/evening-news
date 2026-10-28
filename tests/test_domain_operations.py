@@ -14,16 +14,6 @@ from news_aggregator.services import domain_operations as domain
 from news_aggregator.services.domain_fence import parse_envelope
 
 
-class FakeTelegramResult:
-    def __init__(self, success, status_code=None, description=None):
-        self.success = success
-        self.status_code = status_code
-        self.description = description
-
-    def __bool__(self):
-        return self.success
-
-
 def _envelope(kind_payload=None):
     return {
         "version": 1,
@@ -55,16 +45,13 @@ def _request(operation, operation_input=None, *, envelope=None, operation_id=Non
 def clear_local_receipts(monkeypatch):
     domain._RECORDS.clear()
     domain._ACTIVE.clear()
-    domain._PREPARED.clear()
     domain._RECORD_BYTES = 0
     domain._RESULT_BYTES = 0
-    domain._PREPARED_BYTES = 0
     yield
     for task in tuple(domain._ACTIVE.values()):
         task.cancel()
     domain._ACTIVE.clear()
     domain._RECORDS.clear()
-    domain._PREPARED.clear()
 
 
 def test_operation_wire_is_strict_and_fingerprint_is_compact_sorted_json():
@@ -340,77 +327,11 @@ def test_executor_routes_expose_leaf_api_without_python_job_lifecycle_routes():
 
 
 @pytest.mark.asyncio
-async def test_rich_digest_lost_ack_never_falls_back_to_html(monkeypatch):
-    class Service:
-        html_calls = 0
-
-        async def send_rich_message(self, _payload):
-            return FakeTelegramResult(False, status_code=None, description="connection reset")
-
-        async def send_message(self, _payload):
-            self.html_calls += 1
-            return FakeTelegramResult(True, status_code=200, description=None)
-
-    service = Service()
-    token = str(uuid.uuid4())
-    job_id = str(uuid.uuid4())
-    record = domain.OperationRecord(
-        job_id, 2, "digest_publish", str(uuid.uuid4()), str(domain.DOMAIN_INSTANCE_ID),
-        {}, "a" * 64, {"prepared_token": token}, datetime.now(timezone.utc) + timedelta(minutes=2),
-        datetime.now(timezone.utc) + timedelta(minutes=3),
-    )
-    domain._PREPARED[token] = domain.PreparedDigest(
-        job_id, 2, str(domain.DOMAIN_INSTANCE_ID), record.deadline,
-        {"rich_digest": {"html": "<p>synthetic</p>"}, "digest_content": "html fallback",
-         "digest_url": "https://example.test/digest", "split": False}, 32,
-    )
-    monkeypatch.setattr(domain, "_revalidate_context", lambda *_args: _immediate_none())
-    monkeypatch.setattr(domain, "_telegram_service_with_db_overrides", lambda: _immediate_value(service))
-    from news_aggregator.config import settings
-    monkeypatch.setattr(settings, "telegram_rich_messages_enabled", True)
-
-    with pytest.raises(domain.DeliveryOutcomeUnknown):
-        await domain._publish_digest(record, SimpleNamespace(context=object()))
-    assert service.html_calls == 0
-
-
-@pytest.mark.asyncio
-async def test_rich_digest_explicit_provider_rejection_keeps_html_fallback(monkeypatch):
-    class Service:
-        html_calls = 0
-
-        async def send_rich_message(self, _payload):
-            return FakeTelegramResult(False, status_code=400, description="unsupported method")
-
-        async def send_message(self, _payload):
-            self.html_calls += 1
-            return FakeTelegramResult(True, status_code=200, description=None)
-
-    service = Service()
-    token = str(uuid.uuid4())
-    now = datetime.now(timezone.utc)
-    record = domain.OperationRecord(
-        str(uuid.uuid4()), 2, "digest_publish", str(uuid.uuid4()), str(domain.DOMAIN_INSTANCE_ID),
-        {}, "a" * 64, {"prepared_token": token}, now + timedelta(minutes=2), now + timedelta(minutes=3),
-    )
-    domain._PREPARED[token] = domain.PreparedDigest(
-        record.job_id, 2, str(domain.DOMAIN_INSTANCE_ID), record.deadline,
-        {"rich_digest": {"html": "<p>synthetic</p>"}, "digest_content": "html fallback",
-         "digest_url": "https://example.test/digest", "split": False}, 32,
-    )
-    monkeypatch.setattr(domain, "_revalidate_context", lambda *_args: _immediate_none())
-    monkeypatch.setattr(domain, "_telegram_service_with_db_overrides", lambda: _immediate_value(service))
-    from news_aggregator.config import settings
-    monkeypatch.setattr(settings, "telegram_rich_messages_enabled", True)
-
-    result = await domain._publish_digest(record, SimpleNamespace(context=object()))
-    assert result["success"] is True
-    assert service.html_calls == 1
-
-
-async def _immediate_none():
-    return None
-
-
-async def _immediate_value(value):
-    return value
+async def test_digest_dispatch_uses_native_adapter(monkeypatch):
+    from unittest.mock import AsyncMock
+    native = AsyncMock(return_value={"summaries_count": 2})
+    monkeypatch.setattr("news_aggregator.services.ai_runtime.get_ai_runtime", lambda: SimpleNamespace(digest_operation=native))
+    record = SimpleNamespace(operation="summary_status", input={})
+    context = object()
+    assert await domain._dispatch_operation(record, context, object()) == {"summaries_count": 2}
+    native.assert_awaited_once_with(record, context)

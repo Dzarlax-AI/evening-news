@@ -1,13 +1,12 @@
 """Telegram service for sending news digests."""
 
 import logging
-import json
+import math
 from dataclasses import dataclass
 from typing import Optional, Dict, Any, List
 from datetime import datetime
 
 from ..config import settings
-from ..core.http_client import get_http_client
 from ..core.exceptions import TelegramError
 from ..utils.html_utils import (
     validate_telegram_editorial_html, validate_telegram_html,
@@ -25,6 +24,8 @@ class TelegramSendResult:
     status_code: Optional[int] = None
     error_code: Optional[int] = None
     description: Optional[str] = None
+    delivery_state: Optional[str] = None
+    retry_after_seconds: Optional[float] = None
 
     def __bool__(self) -> bool:
         return self.success
@@ -66,7 +67,6 @@ class TelegramService:
         if not all([self.bot_token, self.chat_id]):
             raise TelegramError("Telegram configuration incomplete")
 
-        self.api_url = f"https://api.telegram.org/bot{self.bot_token}"
 
     def _get_config(self, key: str) -> Optional[str]:
         """Get config value from settings / env."""
@@ -150,7 +150,7 @@ class TelegramService:
         if sent:
             return sent
 
-        if fallback_text:
+        if fallback_text and ((sent.delivery_state == "rejected" and sent.status_code != 429) or sent.description in {"empty HTML", "HTML validation failed"}):
             logging.warning("Telegram Rich Message failed; falling back to regular HTML message")
             return await self.send_message(fallback_text)
 
@@ -158,9 +158,9 @@ class TelegramService:
 
     async def send_service_message(self, text: str) -> TelegramSendResult:
         """Send message to the service channel (errors, alerts)."""
-        return await self._send_to_chat(text, self.service_chat_id)
+        return await self._send_to_chat(text, self.service_chat_id, channel="service")
 
-    async def _send_to_chat(self, text: str, chat_id: str, *, editorial: bool = False) -> TelegramSendResult:
+    async def _send_to_chat(self, text: str, chat_id: str, *, editorial: bool = False, channel: str = "main") -> TelegramSendResult:
         """Low-level send to a specific chat_id."""
         if not text or not str(text).strip():
             logging.warning("Telegram _send_to_chat called with empty text")
@@ -175,35 +175,24 @@ class TelegramService:
         if cleaned_text is None:
             cleaned_text = strip_html_tags(text)
 
-        url = f"{self.api_url}/sendMessage"
-        data = {
-            "chat_id": chat_id,
-            "text": cleaned_text,
-            "parse_mode": "HTML",
-            "disable_web_page_preview": True,
-        }
+        return await self._native_send(channel, "sendMessage", cleaned_text, chat_id)
 
+    async def _native_send(self, channel, method, text, chat_id, keyboard=None):
+        from .ai_runtime import get_ai_runtime, AIRuntimeError
         try:
-            async with get_http_client() as client:
-                response = await client.post(url, json=data)
-                async with response:
-                    error_text = await response.text()
-                    payload = self._decode_response(error_text)
-                    success = response.status == 200 and payload.get("ok", True) is True
-                    result = TelegramSendResult(
-                        success=success,
-                        method="sendMessage",
-                        chat_id=chat_id,
-                        status_code=response.status,
-                        error_code=payload.get("error_code"),
-                        description=payload.get("description"),
-                    )
-                    if not result:
-                        logging.error("Telegram API error: %s", result.error_summary())
-                    return result
-        except Exception as e:
-            logging.error(f"Telegram request failed: {e}")
-            return TelegramSendResult(False, "sendMessage", chat_id, description=str(e))
+            result = await get_ai_runtime().telegram_send(channel, method, text, keyboard)
+        except AIRuntimeError:
+            return TelegramSendResult(False, method, chat_id, description="delivery unknown")
+        state = result["state"]
+        status = result.get("status_code")
+        status = status if type(status) is int and 100 <= status <= 599 else None
+        error_code = result.get("error_code")
+        error_code = error_code if type(error_code) is int and 100 <= error_code <= 599 else None
+        after = result.get("retry_after_seconds")
+        after = float(after) if type(after) in (int, float) and math.isfinite(after) and after >= 0 else None
+        return TelegramSendResult(state == "sent", method, chat_id, status_code=status, error_code=error_code, retry_after_seconds=after,
+                                  description=None if state == "sent" else ("delivery rejected" if state == "rejected" else "delivery unknown"),
+                                  delivery_state=state)
 
     async def _send_rich_to_chat(self, html: str, chat_id: str) -> TelegramSendResult:
         """Low-level Rich Message send to a specific chat_id."""
@@ -216,46 +205,8 @@ class TelegramService:
             logging.warning("Telegram Rich Message HTML validation failed")
             return TelegramSendResult(False, "sendRichMessage", chat_id, description="HTML validation failed")
 
-        url = f"{self.api_url}/sendRichMessage"
-        data = {
-            "chat_id": chat_id,
-            "rich_message": {
-                "html": cleaned_html,
-            },
-        }
+        return await self._native_send("main", "sendRichMessage", cleaned_html, chat_id)
 
-        try:
-            async with get_http_client() as client:
-                response = await client.post(url, json=data)
-                async with response:
-                    error_text = await response.text()
-                    payload = self._decode_response(error_text)
-                    success = response.status == 200 and payload.get("ok", True) is True
-                    result = TelegramSendResult(
-                        success=success,
-                        method="sendRichMessage",
-                        chat_id=chat_id,
-                        status_code=response.status,
-                        error_code=payload.get("error_code"),
-                        description=payload.get("description"),
-                    )
-                    if not result:
-                        logging.error("Telegram Rich Message API error: %s", result.error_summary())
-                    return result
-        except Exception as e:
-            logging.error(f"Telegram Rich Message request failed: {e}")
-            return TelegramSendResult(False, "sendRichMessage", chat_id, description=str(e))
-
-    @staticmethod
-    def _decode_response(body: str) -> Dict[str, Any]:
-        if not body:
-            return {}
-        try:
-            payload = json.loads(body)
-            return payload if isinstance(payload, dict) else {}
-        except (TypeError, ValueError):
-            return {"description": body[:500]}
-    
     async def test_connection(self) -> TelegramSendResult:
         """Test Telegram bot connection by sending to the service channel."""
         try:
@@ -275,38 +226,7 @@ class TelegramService:
         if cleaned_message is None:
             cleaned_message = strip_html_tags(message)
 
-        try:
-            url = f"{self.api_url}/sendMessage"
-            payload = {
-                "chat_id": self.chat_id,
-                "text": cleaned_message,
-                "parse_mode": "HTML",
-                "disable_web_page_preview": True,
-            }
-            if inline_keyboard:
-                payload["reply_markup"] = {"inline_keyboard": inline_keyboard}
-
-            async with get_http_client() as client:
-                response = await client.post(url, json=payload)
-                async with response:
-                    error_text = await response.text()
-                    payload = self._decode_response(error_text)
-                    result = TelegramSendResult(
-                        success=response.status == 200 and payload.get("ok", True) is True,
-                        method="sendMessage",
-                        chat_id=self.chat_id,
-                        status_code=response.status,
-                        error_code=payload.get("error_code"),
-                        description=payload.get("description"),
-                    )
-                    if result:
-                        logging.info("Telegram message with keyboard sent successfully")
-                    else:
-                        logging.error("Telegram API error: %s", result.error_summary())
-                    return result
-        except Exception as e:
-            logging.error(f"Failed to send Telegram message with keyboard: {e}")
-            return TelegramSendResult(False, "sendMessage", self.chat_id, description=str(e))
+        return await self._native_send("main", "sendMessage", cleaned_message, self.chat_id, inline_keyboard)
 
 
 # Global Telegram service instance

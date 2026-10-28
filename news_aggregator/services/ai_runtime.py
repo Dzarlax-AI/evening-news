@@ -14,6 +14,7 @@ import uuid
 from datetime import datetime, timedelta, timezone
 from pathlib import Path
 from typing import Any
+from urllib.parse import urlencode
 
 import aiohttp
 
@@ -64,6 +65,14 @@ class AIRuntimeError(RuntimeError):
             "runtime_not_ready", "runtime_draining", "runtime_deadline", "runtime_invalid_input",
         } else "runtime_unavailable"
         super().__init__(self.code)
+
+
+class DigestOperationError(AIRuntimeError):
+    def __init__(self, code: str):
+        allowed = {"domain_operation_failed", "stale_fence", "authority_unavailable", "external_outcome_unknown",
+                   "prepared_digest_missing", "resource_limit", "editorial_not_ready", "editorial_resource_limit",
+                   "editorial_provider_timeout", "editorial_provider_unavailable", "editorial_invalid_result", "editorial_generation_failed"}
+        super().__init__(code if code in allowed else "domain_operation_failed")
 
 
 class AIRuntimeProviderError(APIError):
@@ -148,6 +157,18 @@ class AIRuntime:
         }
         if settings.gemini_api_key:
             env["GEMINI_API_KEY"] = settings.gemini_api_key
+        if os.environ.get("NEWS_FIXTURE_MODE") == "1":
+            env["NEWS_FIXTURE_MODE"] = "1"
+            env["NEWS_TEST_TELEGRAM_ENDPOINT"] = os.environ.get("NEWS_TEST_TELEGRAM_ENDPOINT", "")
+        if settings.telegram_token:
+            env["TELEGRAM_TOKEN"] = settings.telegram_token.get_secret_value()
+        if settings.telegram_chat_id:
+            env["TELEGRAM_CHAT_ID"] = settings.telegram_chat_id
+        if settings.telegram_service_chat_id:
+            env["TELEGRAM_SERVICE_CHAT_ID"] = settings.telegram_service_chat_id
+        env["DIGEST_MODEL"] = settings.digest_model
+        env["SITE_BASE_URL"] = settings.site_base_url
+        env["TELEGRAM_RICH_MESSAGES_ENABLED"] = str(settings.telegram_rich_messages_enabled).lower()
         if settings.local_category:
             env["LOCAL_CATEGORY"] = settings.local_category
         for key, value in (
@@ -295,6 +316,47 @@ class AIRuntime:
         finally:
             if task:
                 self._inflight.discard(task)
+
+    async def digest_operation(self, record, context) -> dict:
+        """Accept once; reconcile a lost ACK only by reading the same receipt."""
+        body = {"operation": record.operation, "operation_id": record.operation_id,
+                "domain_instance_id": record.domain_instance_id,
+                "envelope": record.expected_envelope,
+                "input_fingerprint": record.input_fingerprint, "input": record.input,
+                "kind": context.kind, "payload": context.payload,
+                "executor_backend_pid": context.executor_backend_pid}
+        key = f"{record.job_id}/{record.attempt_generation}/{record.operation}/{record.operation_id}"
+        path = "/v2/digest/operations?" + urlencode({"key": key, "domain_instance_id": record.domain_instance_id})
+        try:
+            receipt = await self._rpc("POST", "/v2/digest/operations", {"input": body}, timeout=4)
+        except AIRuntimeError:
+            receipt = await self._rpc("GET", path, timeout=4)
+        while True:
+            if (receipt.get("job_id") != record.job_id
+                    or receipt.get("attempt_generation") != record.attempt_generation
+                    or receipt.get("operation") != record.operation
+                    or receipt.get("operation_id") != record.operation_id
+                    or receipt.get("domain_instance_id") != record.domain_instance_id
+                    or receipt.get("input_fingerprint") != record.input_fingerprint):
+                raise AIRuntimeError("runtime_protocol_error")
+            state = receipt.get("state")
+            if state == "succeeded" and isinstance(receipt.get("result"), dict):
+                return receipt["result"]
+            if state == "failed":
+                raise DigestOperationError(receipt.get("error_code"))
+            if state != "running" or record.deadline <= datetime.now(timezone.utc):
+                raise AIRuntimeError("runtime_protocol_error")
+            await asyncio.sleep(min(0.5, max(0, (record.deadline - datetime.now(timezone.utc)).total_seconds())))
+            receipt = await self._rpc("GET", path, timeout=4)
+
+    async def telegram_send(self, channel: str, method: str, text: str, keyboard=None) -> dict:
+        body = {"channel": channel, "method": method, "text": text}
+        if keyboard:
+            body["keyboard"] = keyboard
+        result = await self._rpc("POST", "/v1/telegram/send", body, timeout=35)
+        if result.get("state") not in {"sent", "rejected", "unknown"}:
+            raise AIRuntimeError("runtime_protocol_error")
+        return result
 
     async def status(self) -> dict:
         return await self._rpc("GET", "/v1/status", timeout=2)

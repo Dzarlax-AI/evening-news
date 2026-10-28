@@ -8,7 +8,7 @@ def test_migration_bootstrap_registers_same_migrations_without_importing_main(mo
         "006_feed_performance_optimization", "007_scheduler_run_outcomes",
         "008_article_processing_state", "009_background_jobs",
         "010_scheduled_job_metadata", "011_job_executor", "012_article_ingestion",
-        "013_article_processing", "014_editorial_digest",
+        "013_article_processing", "014_editorial_digest", "015_digest_delivery",
     ]
 
 

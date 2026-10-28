@@ -31,10 +31,30 @@ type Config struct {
 	RPS                                                                int
 	InputRate, OutputRate, CachedRate                                  float64
 	DBMaxConns                                                         int32
+	TelegramToken, TelegramMain, TelegramService                       string
+	TelegramEndpoint                                                   string
+	DigestModel, SiteBase                                              string
+	TelegramRich                                                       bool
 }
 
 func ConfigFromEnv() (Config, error) {
 	c := Config{Socket: os.Getenv("NEWS_AI_SOCKET"), Token: os.Getenv("NEWS_AI_TOKEN"), DatabaseURL: normalizeDSN(os.Getenv("DATABASE_URL")), APIKey: os.Getenv("GEMINI_API_KEY"), Endpoint: os.Getenv("GEMINI_API_ENDPOINT"), Model: os.Getenv("SUMMARIZATION_MODEL"), LocalCategory: os.Getenv("LOCAL_CATEGORY"), RPS: 3, DBMaxConns: 2}
+	c.TelegramToken = os.Getenv("TELEGRAM_TOKEN")
+	c.TelegramMain = os.Getenv("TELEGRAM_CHAT_ID")
+	c.TelegramService = os.Getenv("TELEGRAM_SERVICE_CHAT_ID")
+	c.TelegramEndpoint = "https://api.telegram.org"
+	if os.Getenv("NEWS_FIXTURE_MODE") == "1" {
+		fixtureEndpoint := os.Getenv("NEWS_TEST_TELEGRAM_ENDPOINT")
+		u, err := url.Parse(fixtureEndpoint)
+		if err != nil || u.Scheme != "http" || (u.Hostname() != "127.0.0.1" && u.Hostname() != "localhost" && u.Hostname() != "fixture-services") || u.User != nil || u.RawQuery != "" || u.Fragment != "" {
+			return c, errors.New("ai_runtime_fixture_configuration")
+		}
+		c.TelegramEndpoint = fixtureEndpoint
+	}
+
+	c.DigestModel = os.Getenv("DIGEST_MODEL")
+	c.SiteBase = os.Getenv("SITE_BASE_URL")
+	c.TelegramRich = os.Getenv("TELEGRAM_RICH_MESSAGES_ENABLED") != "false"
 	if c.Socket == "" || c.Token == "" || c.DatabaseURL == "" || c.APIKey == "" || c.Endpoint == "" || c.Model == "" {
 		return c, errors.New("ai_runtime_missing_configuration")
 	}
@@ -86,6 +106,7 @@ type Server struct {
 	closing      chan struct{}
 	closeOnce    sync.Once
 	mux          *http.ServeMux
+	digest       *digestRegistry
 	usageMu      sync.RWMutex
 	usageClosed  bool
 	usageFailed  atomic.Uint64
@@ -106,10 +127,14 @@ type usageRecord struct {
 
 func NewServer(c Config, db *pgxpool.Pool) *Server {
 	s := &Server{config: c, db: db, limiter: NewSlidingWindow(c.RPS), breaker: NewBreaker(), metadata: NewMetadataStore(db), client: &http.Client{}, usage: make(chan usageRecord, 64), closing: make(chan struct{}), mux: http.NewServeMux()}
+	s.digest = &digestRegistry{entries: make(map[string]*digestReceipt)}
+	s.mux.HandleFunc("POST /v2/digest/operations", s.digestAccept)
+	s.mux.HandleFunc("GET /v2/digest/operations", s.digestStatus)
 	s.mux.HandleFunc("GET /v1/status", s.status)
 	s.mux.HandleFunc("POST /v1/analyze", s.analyze)
 	s.mux.HandleFunc("POST /v1/generate", s.generate)
 	s.mux.HandleFunc("POST /v1/permit", s.permit)
+	s.mux.HandleFunc("POST /v1/telegram/send", s.telegramSend)
 	s.mux.HandleFunc("POST /v1/categories/invalidate", s.invalidate)
 	return s
 }

@@ -513,3 +513,58 @@ def test_active_sigterm_origin_serves_only_valid_synthetic_markers():
     assert b"Synthetic active SIGTERM fixture" in document
     assert len(document) > 1000
     assert origin.active_sigterm_document("INVALID") is None
+
+
+def test_ambiguous_delivery_generates_fresh_edition_before_provider_hold(monkeypatch, tmp_path):
+    import pytest
+
+    module = load_gate_module()
+    gate = module.ConsolidatedBackgroundGate(dict(module.DEFAULT_IMAGES), tmp_path)
+    old_id = "00000000-0000-0000-0000-000000000001"
+    new_id = "00000000-0000-0000-0000-000000000002"
+    job_id = "00000000-0000-0000-0000-000000000003"
+    events = []
+    values = iter([old_id, new_id + "|2|2|succeeded", new_id])
+
+    def pg_value(sql):
+        events.append(("sql", sql))
+        assert not any(word in sql.upper() for word in ("DELETE", "TRUNCATE", "UPDATE"))
+        return next(values)
+
+    def exec_json(container, action, key):
+        events.append(("enqueue", action))
+        if action == "enqueue-summaries":
+            assert "fresh-edition" in key
+            return {"http_status": 202, "response": {"job_id": job_id}}
+        assert action == "enqueue-digest"
+        raise module.GateFailure("stop_after_order_check")
+
+    monkeypatch.setattr(gate, "pg_value", pg_value)
+    monkeypatch.setattr(gate, "exec_json", exec_json)
+    monkeypatch.setattr(gate, "wait_job_http", lambda job, timeout: events.append(("wait", job)) or {"status": "succeeded"})
+    monkeypatch.setattr(gate, "control_fake_services", lambda **kwargs: events.append(("provider", kwargs["telegram_mode"])))
+    monkeypatch.setattr(gate, "fake_counters_http", lambda: {"providers": {"telegram": 0}})
+    with pytest.raises(module.GateFailure, match="stop_after_order_check"):
+        gate.verify_ambiguous_delivery_recovery()
+    assert events.index(("enqueue", "enqueue-summaries")) < events.index(("wait", job_id))
+    assert events.index(("wait", job_id)) < events.index(("provider", "accept_then_hold"))
+    assert events.index(("provider", "accept_then_hold")) < events.index(("enqueue", "enqueue-digest"))
+    assert gate.report["checks"]["ambiguous_delivery_uses_new_generated_edition"] is True
+
+
+def test_ambiguous_delivery_rejects_reused_edition_without_enabling_hold(monkeypatch, tmp_path):
+    import pytest
+
+    module = load_gate_module()
+    gate = module.ConsolidatedBackgroundGate(dict(module.DEFAULT_IMAGES), tmp_path)
+    edition = "00000000-0000-0000-0000-000000000001"
+    job_id = "00000000-0000-0000-0000-000000000003"
+    values = iter([edition, edition + "|1|1|succeeded", edition])
+    monkeypatch.setattr(gate, "pg_value", lambda sql: next(values))
+    monkeypatch.setattr(gate, "exec_json", lambda *args: {"http_status": 202, "response": {"job_id": job_id}})
+    monkeypatch.setattr(gate, "wait_job_http", lambda *args, **kwargs: {"status": "succeeded"})
+    modes = []
+    monkeypatch.setattr(gate, "control_fake_services", lambda **kwargs: modes.append(kwargs))
+    with pytest.raises(module.GateFailure, match="ambiguous_delivery_uses_new_generated_edition"):
+        gate.verify_ambiguous_delivery_recovery()
+    assert modes == []

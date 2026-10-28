@@ -146,6 +146,8 @@ def main():
     elif action == "enqueue-process":
         key = sys.argv[2]
         status, value = request("POST", "/api/v1/process/run", payload={}, key=key)
+    elif action == "enqueue-summaries":
+        status, value = request("POST", "/api/v1/summaries/generate", payload={}, key=sys.argv[2])
     elif action == "enqueue-digest":
         status, value = request("POST", "/api/v1/telegram/send-digest", payload={}, key=sys.argv[2])
     elif action == "reprocess":

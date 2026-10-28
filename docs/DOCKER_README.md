@@ -29,9 +29,12 @@ AI / rate limiting:
 All three settings default to `gemini-3.5-flash-lite`. Combined article summarization and categorization use `SUMMARIZATION_MODEL`; editorial digest generation uses `DIGEST_MODEL`. `CATEGORIZATION_MODEL` is retained for compatibility and does not independently control the combined article-analysis request.
 
 The private executor passes provider settings to one long-lived `news-ai-runtime`
-child over an authenticated Unix socket. The child handles article analysis and
-the legacy Gemini text/structured prompts. It and Telegram POST requests share
-the configured `RPS` gate. The runtime pool is reserved from the existing
+child over an authenticated Unix socket. The child handles editorial snapshot,
+generation and Telegram delivery, article analysis, and the legacy Gemini
+text/structured prompts. Telegram and the existing AI consumers share the
+configured `RPS` gate. The bot token and destinations are passed explicitly to
+the private child, and receipt-backed digest delivery is described in
+[Go digest delivery](go-digest-delivery.md). The runtime pool is reserved from the existing
 `DB_POOL_SIZE + DB_MAX_OVERFLOW` total; configuration must leave at least two
 Python connections for the executor guard and ordinary operations.
 

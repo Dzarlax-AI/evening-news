@@ -1,0 +1,576 @@
+[
+  {
+    "case": "ok",
+    "mode": "editorial",
+    "response_status": 200,
+    "response_body": "{\"ok\":true,\"result\":{\"message_id\":51}}",
+    "legacy_success": true,
+    "posts": [
+      {
+        "method": "sendMessage",
+        "payload": {
+          "chat_id": "@fixture-main",
+          "text": "<b>Главное</b>\n<a href=\"https://news.fixture.test/article/41\">Новость</a>\n<i>Источник</i>",
+          "parse_mode": "HTML",
+          "disable_web_page_preview": true
+        }
+      }
+    ]
+  },
+  {
+    "case": "ok",
+    "mode": "rich",
+    "response_status": 200,
+    "response_body": "{\"ok\":true,\"result\":{\"message_id\":51}}",
+    "legacy_success": true,
+    "posts": [
+      {
+        "method": "sendRichMessage",
+        "payload": {
+          "chat_id": "@fixture-main",
+          "rich_message": {
+            "html": "<h2>Главное</h2><p>Новость</p>"
+          }
+        }
+      }
+    ]
+  },
+  {
+    "case": "ok",
+    "mode": "keyboard",
+    "response_status": 200,
+    "response_body": "{\"ok\":true,\"result\":{\"message_id\":51}}",
+    "legacy_success": true,
+    "posts": [
+      {
+        "method": "sendMessage",
+        "payload": {
+          "chat_id": "@fixture-main",
+          "text": "Сервис",
+          "parse_mode": "HTML",
+          "disable_web_page_preview": true,
+          "reply_markup": {
+            "inline_keyboard": [
+              [
+                {
+                  "text": "Открыть",
+                  "url": "https://news.fixture.test"
+                }
+              ]
+            ]
+          }
+        }
+      }
+    ]
+  },
+  {
+    "case": "ok",
+    "mode": "service",
+    "response_status": 200,
+    "response_body": "{\"ok\":true,\"result\":{\"message_id\":51}}",
+    "legacy_success": true,
+    "posts": [
+      {
+        "method": "sendMessage",
+        "payload": {
+          "chat_id": "@fixture-service",
+          "text": "Проверка состояния",
+          "parse_mode": "HTML",
+          "disable_web_page_preview": true
+        }
+      }
+    ]
+  },
+  {
+    "case": "empty200",
+    "mode": "editorial",
+    "response_status": 200,
+    "response_body": "",
+    "legacy_success": true,
+    "posts": [
+      {
+        "method": "sendMessage",
+        "payload": {
+          "chat_id": "@fixture-main",
+          "text": "<b>Главное</b>\n<a href=\"https://news.fixture.test/article/41\">Новость</a>\n<i>Источник</i>",
+          "parse_mode": "HTML",
+          "disable_web_page_preview": true
+        }
+      }
+    ]
+  },
+  {
+    "case": "empty200",
+    "mode": "rich",
+    "response_status": 200,
+    "response_body": "",
+    "legacy_success": true,
+    "posts": [
+      {
+        "method": "sendRichMessage",
+        "payload": {
+          "chat_id": "@fixture-main",
+          "rich_message": {
+            "html": "<h2>Главное</h2><p>Новость</p>"
+          }
+        }
+      }
+    ]
+  },
+  {
+    "case": "empty200",
+    "mode": "keyboard",
+    "response_status": 200,
+    "response_body": "",
+    "legacy_success": true,
+    "posts": [
+      {
+        "method": "sendMessage",
+        "payload": {
+          "chat_id": "@fixture-main",
+          "text": "Сервис",
+          "parse_mode": "HTML",
+          "disable_web_page_preview": true,
+          "reply_markup": {
+            "inline_keyboard": [
+              [
+                {
+                  "text": "Открыть",
+                  "url": "https://news.fixture.test"
+                }
+              ]
+            ]
+          }
+        }
+      }
+    ]
+  },
+  {
+    "case": "empty200",
+    "mode": "service",
+    "response_status": 200,
+    "response_body": "",
+    "legacy_success": true,
+    "posts": [
+      {
+        "method": "sendMessage",
+        "payload": {
+          "chat_id": "@fixture-service",
+          "text": "Проверка состояния",
+          "parse_mode": "HTML",
+          "disable_web_page_preview": true
+        }
+      }
+    ]
+  },
+  {
+    "case": "malformed200",
+    "mode": "editorial",
+    "response_status": 200,
+    "response_body": "not-json",
+    "legacy_success": true,
+    "posts": [
+      {
+        "method": "sendMessage",
+        "payload": {
+          "chat_id": "@fixture-main",
+          "text": "<b>Главное</b>\n<a href=\"https://news.fixture.test/article/41\">Новость</a>\n<i>Источник</i>",
+          "parse_mode": "HTML",
+          "disable_web_page_preview": true
+        }
+      }
+    ]
+  },
+  {
+    "case": "malformed200",
+    "mode": "rich",
+    "response_status": 200,
+    "response_body": "not-json",
+    "legacy_success": true,
+    "posts": [
+      {
+        "method": "sendRichMessage",
+        "payload": {
+          "chat_id": "@fixture-main",
+          "rich_message": {
+            "html": "<h2>Главное</h2><p>Новость</p>"
+          }
+        }
+      }
+    ]
+  },
+  {
+    "case": "malformed200",
+    "mode": "keyboard",
+    "response_status": 200,
+    "response_body": "not-json",
+    "legacy_success": true,
+    "posts": [
+      {
+        "method": "sendMessage",
+        "payload": {
+          "chat_id": "@fixture-main",
+          "text": "Сервис",
+          "parse_mode": "HTML",
+          "disable_web_page_preview": true,
+          "reply_markup": {
+            "inline_keyboard": [
+              [
+                {
+                  "text": "Открыть",
+                  "url": "https://news.fixture.test"
+                }
+              ]
+            ]
+          }
+        }
+      }
+    ]
+  },
+  {
+    "case": "malformed200",
+    "mode": "service",
+    "response_status": 200,
+    "response_body": "not-json",
+    "legacy_success": true,
+    "posts": [
+      {
+        "method": "sendMessage",
+        "payload": {
+          "chat_id": "@fixture-service",
+          "text": "Проверка состояния",
+          "parse_mode": "HTML",
+          "disable_web_page_preview": true
+        }
+      }
+    ]
+  },
+  {
+    "case": "missing_ok200",
+    "mode": "editorial",
+    "response_status": 200,
+    "response_body": "{}",
+    "legacy_success": true,
+    "posts": [
+      {
+        "method": "sendMessage",
+        "payload": {
+          "chat_id": "@fixture-main",
+          "text": "<b>Главное</b>\n<a href=\"https://news.fixture.test/article/41\">Новость</a>\n<i>Источник</i>",
+          "parse_mode": "HTML",
+          "disable_web_page_preview": true
+        }
+      }
+    ]
+  },
+  {
+    "case": "missing_ok200",
+    "mode": "rich",
+    "response_status": 200,
+    "response_body": "{}",
+    "legacy_success": true,
+    "posts": [
+      {
+        "method": "sendRichMessage",
+        "payload": {
+          "chat_id": "@fixture-main",
+          "rich_message": {
+            "html": "<h2>Главное</h2><p>Новость</p>"
+          }
+        }
+      }
+    ]
+  },
+  {
+    "case": "missing_ok200",
+    "mode": "keyboard",
+    "response_status": 200,
+    "response_body": "{}",
+    "legacy_success": true,
+    "posts": [
+      {
+        "method": "sendMessage",
+        "payload": {
+          "chat_id": "@fixture-main",
+          "text": "Сервис",
+          "parse_mode": "HTML",
+          "disable_web_page_preview": true,
+          "reply_markup": {
+            "inline_keyboard": [
+              [
+                {
+                  "text": "Открыть",
+                  "url": "https://news.fixture.test"
+                }
+              ]
+            ]
+          }
+        }
+      }
+    ]
+  },
+  {
+    "case": "missing_ok200",
+    "mode": "service",
+    "response_status": 200,
+    "response_body": "{}",
+    "legacy_success": true,
+    "posts": [
+      {
+        "method": "sendMessage",
+        "payload": {
+          "chat_id": "@fixture-service",
+          "text": "Проверка состояния",
+          "parse_mode": "HTML",
+          "disable_web_page_preview": true
+        }
+      }
+    ]
+  },
+  {
+    "case": "reject400",
+    "mode": "editorial",
+    "response_status": 400,
+    "response_body": "{\"ok\":false,\"error_code\":400}",
+    "legacy_success": false,
+    "posts": [
+      {
+        "method": "sendMessage",
+        "payload": {
+          "chat_id": "@fixture-main",
+          "text": "<b>Главное</b>\n<a href=\"https://news.fixture.test/article/41\">Новость</a>\n<i>Источник</i>",
+          "parse_mode": "HTML",
+          "disable_web_page_preview": true
+        }
+      }
+    ]
+  },
+  {
+    "case": "reject400",
+    "mode": "rich",
+    "response_status": 400,
+    "response_body": "{\"ok\":false,\"error_code\":400}",
+    "legacy_success": false,
+    "posts": [
+      {
+        "method": "sendRichMessage",
+        "payload": {
+          "chat_id": "@fixture-main",
+          "rich_message": {
+            "html": "<h2>Главное</h2><p>Новость</p>"
+          }
+        }
+      }
+    ]
+  },
+  {
+    "case": "reject400",
+    "mode": "keyboard",
+    "response_status": 400,
+    "response_body": "{\"ok\":false,\"error_code\":400}",
+    "legacy_success": false,
+    "posts": [
+      {
+        "method": "sendMessage",
+        "payload": {
+          "chat_id": "@fixture-main",
+          "text": "Сервис",
+          "parse_mode": "HTML",
+          "disable_web_page_preview": true,
+          "reply_markup": {
+            "inline_keyboard": [
+              [
+                {
+                  "text": "Открыть",
+                  "url": "https://news.fixture.test"
+                }
+              ]
+            ]
+          }
+        }
+      }
+    ]
+  },
+  {
+    "case": "reject400",
+    "mode": "service",
+    "response_status": 400,
+    "response_body": "{\"ok\":false,\"error_code\":400}",
+    "legacy_success": false,
+    "posts": [
+      {
+        "method": "sendMessage",
+        "payload": {
+          "chat_id": "@fixture-service",
+          "text": "Проверка состояния",
+          "parse_mode": "HTML",
+          "disable_web_page_preview": true
+        }
+      }
+    ]
+  },
+  {
+    "case": "rate429",
+    "mode": "editorial",
+    "response_status": 429,
+    "response_body": "{\"ok\":false,\"parameters\":{\"retry_after\":7}}",
+    "legacy_success": false,
+    "posts": [
+      {
+        "method": "sendMessage",
+        "payload": {
+          "chat_id": "@fixture-main",
+          "text": "<b>Главное</b>\n<a href=\"https://news.fixture.test/article/41\">Новость</a>\n<i>Источник</i>",
+          "parse_mode": "HTML",
+          "disable_web_page_preview": true
+        }
+      }
+    ]
+  },
+  {
+    "case": "rate429",
+    "mode": "rich",
+    "response_status": 429,
+    "response_body": "{\"ok\":false,\"parameters\":{\"retry_after\":7}}",
+    "legacy_success": false,
+    "posts": [
+      {
+        "method": "sendRichMessage",
+        "payload": {
+          "chat_id": "@fixture-main",
+          "rich_message": {
+            "html": "<h2>Главное</h2><p>Новость</p>"
+          }
+        }
+      }
+    ]
+  },
+  {
+    "case": "rate429",
+    "mode": "keyboard",
+    "response_status": 429,
+    "response_body": "{\"ok\":false,\"parameters\":{\"retry_after\":7}}",
+    "legacy_success": false,
+    "posts": [
+      {
+        "method": "sendMessage",
+        "payload": {
+          "chat_id": "@fixture-main",
+          "text": "Сервис",
+          "parse_mode": "HTML",
+          "disable_web_page_preview": true,
+          "reply_markup": {
+            "inline_keyboard": [
+              [
+                {
+                  "text": "Открыть",
+                  "url": "https://news.fixture.test"
+                }
+              ]
+            ]
+          }
+        }
+      }
+    ]
+  },
+  {
+    "case": "rate429",
+    "mode": "service",
+    "response_status": 429,
+    "response_body": "{\"ok\":false,\"parameters\":{\"retry_after\":7}}",
+    "legacy_success": false,
+    "posts": [
+      {
+        "method": "sendMessage",
+        "payload": {
+          "chat_id": "@fixture-service",
+          "text": "Проверка состояния",
+          "parse_mode": "HTML",
+          "disable_web_page_preview": true
+        }
+      }
+    ]
+  },
+  {
+    "case": "server500",
+    "mode": "editorial",
+    "response_status": 500,
+    "response_body": "{\"ok\":false}",
+    "legacy_success": false,
+    "posts": [
+      {
+        "method": "sendMessage",
+        "payload": {
+          "chat_id": "@fixture-main",
+          "text": "<b>Главное</b>\n<a href=\"https://news.fixture.test/article/41\">Новость</a>\n<i>Источник</i>",
+          "parse_mode": "HTML",
+          "disable_web_page_preview": true
+        }
+      }
+    ]
+  },
+  {
+    "case": "server500",
+    "mode": "rich",
+    "response_status": 500,
+    "response_body": "{\"ok\":false}",
+    "legacy_success": false,
+    "posts": [
+      {
+        "method": "sendRichMessage",
+        "payload": {
+          "chat_id": "@fixture-main",
+          "rich_message": {
+            "html": "<h2>Главное</h2><p>Новость</p>"
+          }
+        }
+      }
+    ]
+  },
+  {
+    "case": "server500",
+    "mode": "keyboard",
+    "response_status": 500,
+    "response_body": "{\"ok\":false}",
+    "legacy_success": false,
+    "posts": [
+      {
+        "method": "sendMessage",
+        "payload": {
+          "chat_id": "@fixture-main",
+          "text": "Сервис",
+          "parse_mode": "HTML",
+          "disable_web_page_preview": true,
+          "reply_markup": {
+            "inline_keyboard": [
+              [
+                {
+                  "text": "Открыть",
+                  "url": "https://news.fixture.test"
+                }
+              ]
+            ]
+          }
+        }
+      }
+    ]
+  },
+  {
+    "case": "server500",
+    "mode": "service",
+    "response_status": 500,
+    "response_body": "{\"ok\":false}",
+    "legacy_success": false,
+    "posts": [
+      {
+        "method": "sendMessage",
+        "payload": {
+          "chat_id": "@fixture-service",
+          "text": "Проверка состояния",
+          "parse_mode": "HTML",
+          "disable_web_page_preview": true
+        }
+      }
+    ]
+  }
+]

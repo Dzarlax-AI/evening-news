@@ -1,0 +1,61 @@
+{
+  "rows": [
+    {
+      "article_id": 41,
+      "title": "Новая модель & инструменты",
+      "summary": "Краткое готовое саммари.",
+      "content": "Оригинал: не отправлять модели",
+      "url": "https://source.test/a?x=1&y=2",
+      "source_name": "Источник «А»",
+      "category_id": 3,
+      "category_name": "Tech",
+      "category_display_name": "Технологии",
+      "confidence": 0.8
+    },
+    {
+      "article_id": 42,
+      "title": "Вест из Србије",
+      "summary": "Сохранённый русский пересказ.",
+      "content": "Оригинални текст.",
+      "url": "https://source.test/b",
+      "source_name": "Serbia",
+      "category_id": 7,
+      "category_name": "Serbia",
+      "category_display_name": null,
+      "confidence": null
+    }
+  ],
+  "articles": [
+    {
+      "id": "41",
+      "title": "Новая модель & инструменты",
+      "summary": "Краткое готовое саммари.",
+      "content": "Оригинал: не отправлять модели",
+      "source_name": "Источник «А»",
+      "url": "https://source.test/a?x=1&y=2",
+      "category_id": "3",
+      "category_name": "Технологии"
+    },
+    {
+      "id": "42",
+      "title": "Вест из Србије",
+      "summary": "Сохранённый русский пересказ.",
+      "content": "Оригинални текст.",
+      "source_name": "Serbia",
+      "url": "https://source.test/b",
+      "category_id": "7",
+      "category_name": "Сербия"
+    }
+  ],
+  "identity": {
+    "job_id": "00000000-0000-0000-0000-000000000001",
+    "attempt_generation": 2,
+    "operation_id": "00000000-0000-0000-0000-000000000003"
+  },
+  "edition_id": "5838fca0-029c-53cf-bd1a-b482c392ef94",
+  "edition_url": "https://news.fixture.test/digest/2026-10-28?edition=5838fca0-029c-53cf-bd1a-b482c392ef94",
+  "category_labels": [
+    "Технологии",
+    "Сербия"
+  ]
+}

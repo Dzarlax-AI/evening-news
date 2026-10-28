@@ -29,9 +29,9 @@ label carries that same source revision.
 
 The `web` and `background` images do not install Python, provider libraries,
 Go compilers, or PostgreSQL backup tools. The executor target now includes the
-bounded `/usr/local/bin/news-editorial` CLI for digest generation and rendering
-and `/usr/local/bin/news-ai-runtime` for private article and legacy Gemini
-transport;
+`/usr/local/bin/news-editorial` diagnostic CLI and the long-lived
+`/usr/local/bin/news-ai-runtime` for editorial workflow, Telegram delivery,
+private article analysis and Gemini transport;
 this candidate change does not by itself confirm a production rollout. It does
 not include web assets, development scripts, or Go build tools. `requirements.txt` is for
 local tests; runtime builds install only `requirements-runtime.txt`.

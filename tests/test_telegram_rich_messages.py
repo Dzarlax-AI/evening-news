@@ -71,30 +71,18 @@ def test_summary_to_rich_blocks_escapes_text_and_groups_bullets():
 @pytest.mark.asyncio
 async def test_send_rich_message_uses_sendrichmessage_payload(monkeypatch):
     service = make_service()
-    fake_client = _FakeClient()
-
-    def fake_get_http_client():
-        return fake_client
-
-    monkeypatch.setattr("news_aggregator.services.telegram_service.get_http_client", fake_get_http_client)
-
+    fake = AsyncMock(return_value={"state": "sent", "status_code": 200})
+    monkeypatch.setattr("news_aggregator.services.ai_runtime.get_ai_runtime", lambda: type("Runtime", (), {"telegram_send": fake})())
     sent = await service.send_rich_message("<h2>Digest</h2><p>Hello</p>")
-
     assert sent.success is True
-    assert sent.status_code == 200
-    assert len(fake_client.posts) == 1
-    url, payload = fake_client.posts[0]
-    assert url == "https://api.telegram.org/bottoken/sendRichMessage"
-    assert payload["chat_id"] == "@news"
-    assert payload["rich_message"]["html"] == "<h2>Digest</h2><p>Hello</p>"
-    assert "parse_mode" not in payload
+    fake.assert_awaited_once_with("main", "sendRichMessage", "<h2>Digest</h2><p>Hello</p>", None)
 
 
 @pytest.mark.asyncio
 async def test_send_rich_message_falls_back_to_regular_message():
     service = make_service()
     rich_failure = TelegramSendResult(
-        False, "sendRichMessage", "@news", status_code=404, description="not found"
+        False, "sendRichMessage", "@news", status_code=404, description="delivery rejected", delivery_state="rejected"
     )
     fallback_success = TelegramSendResult(True, "sendMessage", "@news", status_code=200)
     service._send_rich_to_chat = AsyncMock(return_value=rich_failure)
@@ -111,27 +99,13 @@ async def test_send_rich_message_falls_back_to_regular_message():
 async def test_send_message_preserves_telegram_error_details(monkeypatch):
     service = make_service()
 
-    class FailedResponse(_FakeResponse):
-        status = 400
-
-        async def text(self):
-            return '{"ok":false,"error_code":400,"description":"Bad Request: chat not found"}'
-
-    class FailedClient(_FakeClient):
-        async def post(self, url, json):
-            return FailedResponse()
-
-    monkeypatch.setattr(
-        "news_aggregator.services.telegram_service.get_http_client",
-        lambda: FailedClient(),
-    )
-
+    fake = AsyncMock(return_value={"state": "rejected", "status_code": 400})
+    monkeypatch.setattr("news_aggregator.services.ai_runtime.get_ai_runtime", lambda: type("Runtime", (), {"telegram_send": fake})())
     result = await service.send_message("Digest")
-
     assert result.success is False
     assert result.status_code == 400
-    assert result.error_code == 400
-    assert result.description == "Bad Request: chat not found"
+    assert result.delivery_state == "rejected"
+    assert result.description == "delivery rejected"
 
 
 def test_editorial_validator_preserves_literal_entities_and_rejects_oversize_or_unsafe_markup():
@@ -150,8 +124,8 @@ def test_editorial_validator_preserves_literal_entities_and_rejects_oversize_or_
 @pytest.mark.asyncio
 async def test_editorial_send_keeps_long_links_intact_and_rejects_oversize_without_http(monkeypatch):
     service = make_service()
-    fake_client = _FakeClient()
-    monkeypatch.setattr("news_aggregator.services.telegram_service.get_http_client", lambda: fake_client)
+    fake = AsyncMock(return_value={"state": "sent", "status_code": 200})
+    monkeypatch.setattr("news_aggregator.services.ai_runtime.get_ai_runtime", lambda: type("Runtime", (), {"telegram_send": fake})())
     headline = "Т" * 3700
     source = "Источник " * 15
     footer = "Полный выпуск"
@@ -162,16 +136,12 @@ async def test_editorial_send_keeps_long_links_intact_and_rejects_oversize_witho
     )
     result = await service.send_editorial_message(message)
     assert result.success
-    assert len(fake_client.posts) == 1
-    assert fake_client.posts[0][1]["text"] == message
-    assert headline in fake_client.posts[0][1]["text"]
-    assert source in fake_client.posts[0][1]["text"]
-    assert footer in fake_client.posts[0][1]["text"]
+    fake.assert_awaited_once_with("main", "sendMessage", message, None)
 
     oversized = "<b>" + ("я" * 4097) + "</b>"
     rejected = await service.send_editorial_message(oversized)
     assert rejected.success is False
-    assert len(fake_client.posts) == 1
+    assert fake.await_count == 1
 
 
 def test_editorial_fallback_allows_plain_italic_source_but_rejects_attributes():
@@ -180,3 +150,12 @@ def test_editorial_fallback_allows_plain_italic_source_but_rejects_attributes():
     assert validate_telegram_editorial_html('<i class="source">Издание</i>') is None
     assert validate_telegram_editorial_html('<i onclick="alert(1)">Издание</i>') is None
     assert validate_telegram_editorial_html('<i>' + ('😀' * 2049) + '</i>') is None
+
+@pytest.mark.asyncio
+async def test_service_intent_survives_equal_initial_destinations(monkeypatch):
+    service = make_service()
+    service.service_chat_id = service.chat_id
+    fake = AsyncMock(return_value={"state": "sent", "status_code": 200})
+    monkeypatch.setattr("news_aggregator.services.ai_runtime.get_ai_runtime", lambda: type("Runtime", (), {"telegram_send": fake})())
+    assert await service.send_service_message("Alert")
+    fake.assert_awaited_once_with("service", "sendMessage", "Alert", None)

@@ -22,3 +22,8 @@ if role in {"web", "worker", "executor"}:
         self.api_url = os.environ["BG_GATE_TELEGRAM_URL"]
 
     TelegramService.__init__ = _fixture_telegram_init
+
+# The native child uses the same fake provider as the legacy fixture.
+if os.environ.get("BG_GATE_TELEGRAM_URL"):
+    os.environ["NEWS_FIXTURE_MODE"] = "1"
+    os.environ["NEWS_TEST_TELEGRAM_ENDPOINT"] = os.environ["BG_GATE_TELEGRAM_URL"].split("/bot", 1)[0]

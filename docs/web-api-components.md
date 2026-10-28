@@ -14,7 +14,7 @@ been published or rolled out.
 | Schedule dispatch | Go `background` process | Scheduler API and dispatch component; scheduler state remains in its separate PostgreSQL database |
 | Collection and ingestion | Go `background` process | Ingestion listener, RSS/Atom, public Telegram and Page Monitor adapters, source progress, and fenced article persistence |
 | Article processing | Go `background` process | Processing listener, article selection, state transitions, retries, and article/category persistence; AI analysis calls the private executor |
-| Private domain operations | Existing `executor` runtime with Python PID 1 and one long-lived Go AI child | Fixed operation and claim boundaries, native article-analysis and Gemini transport, shared provider admission and breaker, metadata and best-effort usage persistence, Telegram delivery, diagnostics, and backup operations |
+| Private domain operations | Existing `executor` runtime with Python PID 1 and one long-lived Go AI child | Fixed operation and claim boundaries, native editorial workflow, receipt-backed Telegram delivery, article analysis and Gemini transport, shared provider admission and breaker, metadata and best-effort usage persistence, diagnostics, and backup operations |
 | Extraction | Separate Go `extractor` process | Bounded HTTP extraction. The example Compose profile uses HTTP-only extraction. |
 | Schema bootstrap | One-shot `migrate` command using the executor image | Existing database initialization, versioned migrations, and required schema checks before schema consumers start |
 
@@ -52,7 +52,7 @@ flowchart LR
     Executor -->|authenticated Unix socket| AIRuntime[Native AI runtime]
     AIRuntime --> AI[Gemini provider]
     AIRuntime <--> NewsDB
-    Executor --> Telegram[Telegram delivery]
+    AIRuntime --> Telegram[Telegram delivery]
     Executor <--> NewsDB
     Web <--> Scheduler
     Scheduler <--> SchedulerDB[(Scheduler PostgreSQL)]
@@ -116,8 +116,8 @@ web gets a separate `WEB_BACKEND_TOKEN` for its fixed executor origin:
 | `ARTICLE_PROCESSING_URL` / `ARTICLE_PROCESSING_TOKEN` | Executor-to-background processing boundary |
 | `SCHEDULER_API_URL` / `SCHEDULER_API_TOKEN` | Web and executor scheduler client configuration |
 
-Provider keys such as `GEMINI_API_KEY` and `TELEGRAM_TOKEN` remain on the
-executor. They are not required by the Go web or background image. The full
+Provider keys such as `GEMINI_API_KEY` and `TELEGRAM_TOKEN` remain in the
+private executor; the parent passes the token explicitly to its native child. They are not required by the Go web or background image. The full
 local example is in [`docker-compose.example.yml`](../docker-compose.example.yml).
 
 ## Local checks
