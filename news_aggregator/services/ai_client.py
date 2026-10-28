@@ -2,7 +2,6 @@
 
 import asyncio
 import json
-import math
 from typing import Optional, Dict, Any
 
 import logging
@@ -736,7 +735,7 @@ class AIClient:
             return False
 
     async def analyze_article_complete(self, title: str, content: str, url: str,
-                                       original_context: str = None) -> Dict[str, Any]:
+                                       original_context: str = None, deadline=None) -> Dict[str, Any]:
         """
         Complete article analysis with combined prompts - categorization, summarization,
         advertisement detection, and date extraction in one API call.
@@ -757,7 +756,7 @@ class AIClient:
             is_scientific_source = url and any(domain in url.lower() for domain in ['nplus1.ru', 'arxiv.org', 'nature.com', 'sciencedirect.com'])
             
             if is_scientific_source and title and len(title.strip()) > 20:
-                logger.info(f"  🧬 Scientific source detected - analyzing informative title: '{title[:50]}...'")
+                logger.info("Scientific source detected: analyzing informative title")
                 # Use title as content for analysis
                 content = title
             else:
@@ -765,177 +764,46 @@ class AIClient:
                 return {'summary': None, 'categories': [], 'is_advertisement': None,
                         '_insufficient_content': True}
         
-        max_retries = 0
-        for attempt in range(max_retries + 1):
-            try:
-                # Build enhanced combined prompt with dynamic category metadata
-                prompt = await self._build_combined_analysis_prompt_enhanced(title, content, url, original_context=original_context)
-                logger.info(f"  🚀 Using enhanced prompt with category metadata")
-                retry_text = f" (attempt {attempt + 1}/{max_retries + 1})" if attempt > 0 else ""
-                logger.info(f"  🧠 Combined AI analysis for article{retry_text}...")
-                logger.info(f"  📄 Content length: {len(content)} characters")
-                logger.info(f"  📝 Title: {title[:100]}...")
-                # Extract domain for tracking
-                from urllib.parse import urlparse
-                domain = urlparse(url).netloc if url else "unknown"
+        from datetime import datetime, timedelta, timezone
+        from urllib.parse import urlsplit
+        from .article_analysis import ArticleAnalysisError, analyze_article
 
-                # JSON schema for structured output
-                schema = {
-                    "type": "object",
-                    "properties": {
-                        "optimized_title": {"type": ["string", "null"]},
-                        "summary": {"type": ["string", "null"]},
-                        "categories": {
-                            "type": "array",
-                            "items": {"type": "string"}
-                        },
-                        "category_confidences": {
-                            "type": "array",
-                            "items": {"type": "number"}
-                        },
-                        "category": {"type": ["string", "null"]},
-                        "category_confidence": {"type": "number"},
-                        "summary_confidence": {"type": "number"},
-                        "original_categories": {
-                            "type": "array",
-                            "items": {"type": "string"}
-                        },
-                        "is_advertisement": {"type": "boolean"},
-                        "ad_type": {"type": "string"},
-                        "ad_confidence": {"type": "number"},
-                        "ad_reasoning": {"type": "string"},
-                        "publication_date": {"type": ["string", "null"]},
-                        "content_quality": {"type": "number"},
-                        "confidence": {"type": "number"}
-                    },
-                    "required": ["summary", "categories", "is_advertisement"],
-                    "additionalProperties": True
-                }
-
-                if self.supports_structured_output:
-                    # Gemini: use structured output for guaranteed JSON
-                    response_data = await self._make_structured_ai_request(
-                        prompt,
-                        model=self.summarization_model,
-                        schema=schema,
-                        analysis_type="combined_analysis",
-                        domain=domain
-                    )
-                    result = response_data.get("result") or {}
-                    logger.info(f"  ✅ Combined analysis (structured) successful")
-                    # Load valid categories from cache
-                    from .category_cache import get_category_cache
-                    category_cache = get_category_cache()
-                    valid_categories = await category_cache.get_categories()
-                    return self._validate_analysis_result(result, title, content, valid_categories)
-
-                # Constructor / other: fallback to text parsing
-                response_data = await self._make_raw_ai_request(
-                    prompt,
-                    analysis_type="combined_analysis",
-                    domain=domain
-                )
-                response = ''
-                if response_data and 'choices' in response_data and response_data['choices']:
-                    response = response_data['choices'][0]['message']['content']
-                
-                if not response:
-                    logger.error(f"  ❌ Empty response from AI")
-                    if attempt < max_retries:
-                        logger.info(f"  🔄 Retrying in 2 seconds...")
-                        await asyncio.sleep(2)
-                        continue
-                    return self._get_fallback_analysis()
-                
-                # Parse JSON response - extract from markdown code block if needed
-                try:
-                    json_str = self._extract_json_from_response(response)
-                    result = json.loads(json_str)
-                    logger.info(f"  ✅ Combined analysis successful")
-                    # Validate and clean results
-                    # Load valid categories from cache
-                    from .category_cache import get_category_cache
-                    category_cache = get_category_cache()
-                    valid_categories = await category_cache.get_categories()
-                    return self._validate_analysis_result(result, title, content, valid_categories)
-
-                except json.JSONDecodeError as e:
-                    logger.warning(f"  ⚠️ JSON parsing error: {e}")
-                    logger.info(f"  📄 Raw response: {response[:200]}...")
-                    if attempt < max_retries:
-                        logger.info(f"  🔄 Retrying in 2 seconds...")
-                        await asyncio.sleep(2)
-                        continue
-                    return self._parse_fallback_response(response)
-                    
-            except ResourceLimitError:
-                raise
-            except Exception as e:
-                logger.error(f"  ❌ Error in combined analysis: {e}")
-                if attempt < max_retries:
-                    logger.info(f"  🔄 Retrying in 2 seconds...")
-                    await asyncio.sleep(2)
-                    continue
-                return {**self._get_fallback_analysis(),
-                        '_processing_error': type(e).__name__,
-                        '_processing_terminal': getattr(e, 'status_code', None) in {400, 413, 422},
-                        '_retry_after_seconds': getattr(e, 'retry_after_seconds', None)}
-        
-        # Fallback if all retries failed
-        return self._get_fallback_analysis()
-    
-    async def _build_combined_analysis_prompt_enhanced(self, title: str, content: str, url: str,
-                                                       original_context: str = None) -> str:
-        """Build enhanced combined prompt using dynamic category metadata."""
-        from .prompts import NewsPrompts, PromptBuilder
-        source_context = PromptBuilder.build_source_context(url)
-        return await NewsPrompts.unified_article_analysis_enhanced(title, content, url, source_context, original_context=original_context)
-    
-    
-    def _validate_analysis_result(self, result: Dict[str, Any], title: str = None, content: str = None, valid_categories = None) -> Dict[str, Any]:
-        """Validate and clean analysis result."""
-        # Safe float conversion with fallback
-        def safe_float(value, default=0.0):
-            try:
-                if value is None or isinstance(value, bool):
-                    return default
-                value = float(value)
-                return value if math.isfinite(value) else default
-            except (TypeError, ValueError, OverflowError):
-                return default
-
-        # Import category parser
-        from .category_parser import parse_category
-
-        # Extract categories from new format (categories array) or fallback to old format
-        categories = result.get('categories', [])
-        if not categories:
-            # Fallback to single category field for backward compatibility
-            single_category = result.get('category')
-            if single_category:
-                categories = [single_category]
-        
-        # Get first category as primary for legacy compatibility
-        primary_category = categories[0] if categories else None
-        
-        return {
-            'optimized_title': (result.get('optimized_title') or '').strip() or None,  # Add optimized title support
-            'summary': (result.get('summary') or '').strip() or None,
-            'category': primary_category,  # Return primary category for processing by orchestrator
-            'categories': categories,  # New: support multiple categories
-            'category_confidences': result.get('category_confidences', []),  # New: confidence scores
-            'category_confidence': max(0.0, min(1.0, safe_float(result.get('category_confidence'), 0.8))),
-            'summary_confidence': max(0.0, min(1.0, safe_float(result.get('summary_confidence'), 0.8))),
-            'categories_parsed': parse_category(primary_category, valid_categories=valid_categories, title=title, content=content[:500] if content else None, return_multiple=True),
-            'original_categories': result.get('original_categories', []),  # Enhanced: AI descriptive categories before mapping
-            'is_advertisement': result.get('is_advertisement') if type(result.get('is_advertisement')) is bool else None,
-            'ad_type': result.get('ad_type', 'news_article'),
-            'ad_confidence': max(0.0, min(1.0, safe_float(result.get('ad_confidence'), 0.0))),
-            'ad_reasoning': (result.get('ad_reasoning') or '').strip() or 'Combined analysis',
-            'publication_date': result.get('publication_date'),
-            'content_quality': max(0.0, min(1.0, safe_float(result.get('content_quality'), 0.7))),
-            'confidence': max(0.0, min(1.0, safe_float(result.get('confidence'), 0.8)))  # Legacy field
-        }
+        if deadline is None:
+            deadline = datetime.now(timezone.utc) + timedelta(seconds=132)
+        try:
+            result = await analyze_article(
+                title, content, url, original_context,
+                api_key=self.api_key,
+                model=self.summarization_model,
+                endpoint=str(self.endpoint).rstrip("/"),
+                max_text_chars=settings.extraction_text_max_chars,
+                deadline=deadline,
+                on_usage=lambda usage: self._track_ai_usage(
+                    {"usage": usage}, "combined_analysis", urlsplit(url).netloc or "unknown"
+                ),
+            )
+            return result
+        except ResourceLimitError:
+            raise
+        except ArticleAnalysisError as exc:
+            from ..core.exceptions import APIError
+            error = APIError(exc.code, status_code=exc.status_code)
+            error.retry_after_seconds = exc.retry_after_seconds
+            logger.warning("Combined article analysis failed (%s)", exc.code)
+            return {
+                **self._get_fallback_analysis(),
+                "_processing_error": type(error).__name__,
+                "_processing_terminal": error.status_code in {400, 413, 422},
+                "_retry_after_seconds": error.retry_after_seconds,
+            }
+        except Exception as exc:
+            logger.error("Combined article analysis failed (%s)", type(exc).__name__)
+            return {
+                **self._get_fallback_analysis(),
+                "_processing_error": type(exc).__name__,
+                "_processing_terminal": getattr(exc, "status_code", None) in {400, 413, 422},
+                "_retry_after_seconds": getattr(exc, "retry_after_seconds", None),
+            }
     
     def _get_fallback_analysis(self) -> Dict[str, Any]:
         """Get fallback analysis when AI fails."""
@@ -980,33 +848,6 @@ class AIClient:
 
         return text
 
-    def _parse_fallback_response(self, response: str) -> Dict[str, Any]:
-        """Try to parse non-JSON response as fallback."""
-        result = self._get_fallback_analysis()
-        
-        # Try to extract some info from text response
-        response_lower = response.lower()
-        
-        # Extract category
-        for category in ['business', 'tech', 'science', 'serbia']:
-            if category in response_lower:
-                category_name = category.title()
-                result['category'] = category_name  # For backward compatibility
-                result['categories'] = [category_name]  # New array format
-                result['category_confidences'] = [0.7]  # Moderate confidence for fallback detection
-                break
-        
-        # Extract advertisement detection
-        if any(word in response_lower for word in ['advertisement', 'promotional', 'marketing', 'ad']):
-            result['is_advertisement'] = True
-            result['ad_confidence'] = 0.7
-        
-        # Use first sentences as summary
-        sentences = response.split('.')[:3]
-        if sentences:
-            result['summary'] = '. '.join(sentences[:2]).strip() + '.'
-        
-        return result
 
 
 # Global AI client instance

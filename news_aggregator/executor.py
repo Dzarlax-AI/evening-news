@@ -949,7 +949,8 @@ async def article_ai_callback(request: Request):
         elif operation == "analyze":
             from .services.ai_client import get_ai_client
             result = await get_ai_client().analyze_article_complete(
-                data["title"], data["content"], data["url"], original_context=data.get("original_context"))
+                data["title"], data["content"], data["url"],
+                original_context=data.get("original_context"), deadline=deadline)
         else:
             try:
                 learned_selector, learned_method = await _take_article_ai_context(body)
