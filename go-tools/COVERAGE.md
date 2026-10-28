@@ -26,13 +26,12 @@ legacy database conversion helper. PostgreSQL is the current database; the
 supported schema migration path is `news-migrate`. No current documentation or
 workflow invokes the legacy converter.
 
-`scripts/run_go_cloak_linux_gate.py` and the native shadow/soak tools remain as
-isolated browser and extractor test infrastructure. Their recovery checks concern
-the native extractor/Cloak worker; manifest verification and generic Go preflight
-support that stand. The current News job pipeline and roles are covered by the Go
-image gate and component suites. These browser tools have no dependency on the
-retired application Python package. The pinned historical test image remains
-browser-test infrastructure and is not a current runtime image.
+The historical Python benchmark, shadow, soak and supervisor experiments are
+retired. `go-tools/browsercontract` verifies the unchanged shared-browser image
+and Compose contracts, and `go-tools/cloakfixture` owns the isolated native
+Cloak fixture gate. The shared browser retains its four required Python runtime
+files; no repository-wide zero-Python claim is made. Exact-head Linux CI must
+validate the new browser checks before they are accepted.
 
 | Existing caller or behavior | Go candidate | Evidence and remaining gap |
 | --- | --- | --- |
@@ -74,12 +73,13 @@ fixture files. The grouped evidence below is paired with the file-level retireme
 | One-shot schema bootstrap and migrations | `go-domain/migration/*test.go`, `go-domain/cmd/news-migrate` | Fresh and existing PostgreSQL 16/17 parity and privileges |
 | Job execution, worker leasing and background lifecycle | `go-execution/*test.go`, `go-worker/internal/worker/*test.go`, `go-background/internal/runtime/*test.go` | PG16/17 image lease loss, shutdown and recovery phases passed at `06f79a0`; current-head CI remains required |
 | Ingestion and source receipts | `go-ingestion/internal/ingest/*test.go`, `go-ingestion/internal/store/*test.go`, `go/service/*test.go`, `go/extractor/*test.go` | Eight synthetic sources passed the real image pipeline on PG16/17 at `cce1736`; isolated browser coverage remains separate |
-| Browser target isolation | `go/transport/native_browser_test.go` (`TestNativeBrowserConcurrentRendersUseIndependentTargets`) | Fake CDP checks two simultaneous renders use independent targets; the protected browser workflow remains separate. Dedicated live Cloak probes require an explicitly supplied isolated endpoint and are not claimed here. |
+| Browser target isolation | `go/transport/native_browser_test.go` (`TestNativeBrowserConcurrentRendersUseIndependentTargets`), `go-tools/cloakfixture` | Fake CDP checks two simultaneous renders use independent targets. The new isolated Cloak fixture gate is wired into CI; its current-head Linux result is pending. No local live browser run is claimed. |
 | Schedule dispatch, pause, import and replay | `go-scheduler/internal/store/integration_test.go` (`TestPostgresPersistenceAndFencing`), `go-scheduler/internal/dispatch/dispatcher_integration_test.go` (`TestDispatcherMeasuresRetryAndLeaseFromResponseCompletion`), `go-web/internal/schedules/*test.go` | Store test covers durable generation, capacity and lease fencing; dispatcher test covers retry, malformed receipt, unauthorized delivery, fast-alias progress during a blocked slow alias and accepted outbox persistence after reopening on real PG16 and fake HTTP. The candidate gate covers unavailable-web outbox retention, pause/import and due dispatch. |
 | Public and admin routes and authentication | `go-web/internal/httpui/*test.go`, `go-web/internal/auth/*test.go`, `go-web/internal/repositories/*test.go`, `go-domain/webbackend/*test.go` | Payload and role compatibility in the integrated image gate |
 
-The protected shared-browser Python entrypoint, policy, Dockerfile, workflow,
-associated tests and `scripts/shadow_cdp_relay.py` are not candidates for
-retirement. Archives and historical documents are not rewritten to change
-language statistics. Browser-only tools need an explicit caller and coverage
-review before any retirement decision.
+The shared-browser entrypoint, policy, launcher, relay, Dockerfile and X11 shim
+remain unchanged as runtime dependencies. The old Python test and experiment
+helpers are retired; Go-owned browser contract and Cloak fixture tests replace
+their current checks. Archives and historical documents are not rewritten to
+change language statistics. The new image and isolated-network checks require
+current-head Linux CI; they have not been run against a live browser locally.

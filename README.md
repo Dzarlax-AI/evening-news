@@ -115,7 +115,7 @@ docker compose -f docker-compose.example.yml -f docker-compose.dev.yml up --buil
 
 The Go components can be checked independently with `go test -race ./...`, `go vet ./...`, and `go mod verify` from each module directory. PostgreSQL integration tests require `TEST_DATABASE_URL` to point to a dedicated loopback test database. Do not use a production or shared database.
 
-The application runtime and core tooling use Go; isolated browser-testing infrastructure retains Python. Exact-head image acceptance and CI remain pending; see [the Go tooling coverage map](go-tools/COVERAGE.md) for verified checks and remaining validation.
+The News application and its tooling use Go. The separate shared browser retains its existing Python runtime; its isolated contract and Cloak fixture checks use Go. Exact-head CI remains pending; see [the Go tooling coverage map](go-tools/COVERAGE.md) for verified checks and remaining validation.
 
 ## Configuration and documentation
 

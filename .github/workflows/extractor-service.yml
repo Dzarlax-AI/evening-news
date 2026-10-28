@@ -6,22 +6,10 @@ on:
       - 'go/**'
       - 'go-tools/**'
       - 'go-processing/**'
-      - 'tests/test_extractor_service*'
-      - 'tests/test_telegram*'
-      - 'tests/test_page_monitor*'
-      - 'tests/test_source_manager*'
-      - 'tests/test_public_feed_template_security.py'
       - 'go-web/templates/public/fragments/feed_core.html'
-      - 'tests/test_browser*'
-      - 'tests/test_native*'
-      - 'tests/test_shadow_cdp_relay*'
-      - 'tests/test_linux_vps_gate_harness.py'
-      - 'tests/test_processing_batches.py'
       - 'tests/fixtures/**'
-      - 'scripts/native_*.py'
-      - 'scripts/run_native_*.py'
-      - 'scripts/run_go_cloak_linux_gate.py'
       - 'scripts/shadow_cdp_relay.py'
+      - 'scripts/shadow_x11_client.sh'
       - 'deploy/news-extractor/**'
       - 'docker/Dockerfile.extractor'
       - 'docker-compose.extractor-test.yml'
@@ -31,22 +19,10 @@ on:
       - 'go/**'
       - 'go-tools/**'
       - 'go-processing/**'
-      - 'tests/test_extractor_service*'
-      - 'tests/test_telegram*'
-      - 'tests/test_page_monitor*'
-      - 'tests/test_source_manager*'
-      - 'tests/test_public_feed_template_security.py'
       - 'go-web/templates/public/fragments/feed_core.html'
-      - 'tests/test_browser*'
-      - 'tests/test_native*'
-      - 'tests/test_shadow_cdp_relay*'
-      - 'tests/test_linux_vps_gate_harness.py'
-      - 'tests/test_processing_batches.py'
       - 'tests/fixtures/**'
-      - 'scripts/native_*.py'
-      - 'scripts/run_native_*.py'
-      - 'scripts/run_go_cloak_linux_gate.py'
       - 'scripts/shadow_cdp_relay.py'
+      - 'scripts/shadow_x11_client.sh'
       - 'deploy/news-extractor/**'
       - 'docker/Dockerfile.extractor'
       - 'docker-compose.extractor-test.yml'
@@ -201,22 +177,33 @@ jobs:
         with:
           go-version-file: go/go.mod
           cache-dependency-path: go/go.sum
-      - uses: actions/setup-python@v5
-        with:
-          python-version: '3.12'
       - name: Build candidate binaries for the isolated native gate
         run: |
           CGO_ENABLED=0 GOOS=linux GOARCH=amd64 go build -C go -o /tmp/concurrency-extract-service ./cmd/extract-service
           CGO_ENABLED=0 GOOS=linux GOARCH=amd64 go build -C go -o /tmp/concurrency-extract-egress ./cmd/extract-egress
+      - uses: actions/setup-go@v5
+        with:
+          go-version-file: go-tools/go.mod
+          cache-dependency-path: go-tools/go.sum
+      - name: Build the Go fixture gate
+        run: CGO_ENABLED=0 GOOS=linux GOARCH=amd64 go build -C go-tools -o /tmp/cloak-fixture ./cmd/cloak-fixture
+      - name: Ensure isolated network tools are available
+        run: |
+          set -euo pipefail
+          command -v nsenter
+          if ! command -v nft >/dev/null; then
+            sudo apt-get update
+            sudo apt-get install -y nftables
+          fi
       - name: Fetch test runtime images without publishing candidates
         run: |
           docker pull --platform linux/amd64 cloakhq/cloakbrowser:0.5.2@sha256:2c0d257802f54c4f86c9ccae336864baf63e118612732127cb96df35756a57a4
-          docker pull --platform linux/amd64 python:3.12-alpine
           docker pull --platform linux/amd64 alpine:3.21
       - name: Compare one and two Cloak tabs with an independent CDP peer
         run: |
+          mkdir -p artifacts
           native_gate_status=0
-          sudo env "PATH=$PATH" python scripts/native_cloak_concurrency_gate.py --worker-binary /tmp/concurrency-extract-service --egress-binary /tmp/concurrency-extract-egress --output artifacts/native-cloak-concurrency.json || native_gate_status=$?
+          sudo env "PATH=$PATH" /tmp/cloak-fixture gate --worker-binary /tmp/concurrency-extract-service --egress-binary /tmp/concurrency-extract-egress --fixture-binary /tmp/cloak-fixture --relay-script scripts/shadow_cdp_relay.py --x11-script scripts/shadow_x11_client.sh --output artifacts/native-cloak-concurrency.json || native_gate_status=$?
           if [ -f artifacts/native-cloak-concurrency.json ]; then
             sudo chown "$(id -u):$(id -g)" artifacts/native-cloak-concurrency.json
           fi
@@ -228,3 +215,6 @@ jobs:
           name: native-cloak-concurrency-evidence
           path: artifacts/native-cloak-concurrency.json
           if-no-files-found: warn
+      - name: Remove owned fixture binaries
+        if: always()
+        run: rm -f /tmp/concurrency-extract-service /tmp/concurrency-extract-egress /tmp/cloak-fixture

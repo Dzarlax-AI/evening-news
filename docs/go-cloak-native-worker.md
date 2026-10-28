@@ -1,5 +1,7 @@
 # Experimental native Go/Cloak worker
 
+> Historical development record: the Python benchmark, shadow and soak helpers described below have been retired. Current isolated browser checks use the Go tooling; these past results do not establish current acceptance.
+
 The user approved the [implementation plan](ai-plans/2026-10-16-go-cloak-native-worker.html).
 This backend is experimental and disabled by default. No production configuration,
 profile, secret, container, database or delivery path has been changed.
@@ -77,19 +79,19 @@ is unchanged. The October 23, 2026 rollout explicitly configured production for
 two renders; the repository default remains one. PR #17 updated only the News app
 and extractor, preserving the browser and its other clients.
 
-The isolated concurrency gate is `scripts/native_cloak_concurrency_gate.py`.
-It takes prebuilt Linux/amd64 worker and egress binaries, uses the pinned Cloak
-image and cached helper images, and creates only internal, owned Docker networks.
-An independent CDP peer holds a disposable context while News runs its one/two
+The current isolated concurrency gate is `go run ./cmd/cloak-fixture gate` from
+`go-tools`; its Linux CI acceptance remains pending. The retired
+`scripts/native_cloak_concurrency_gate.py` took prebuilt Linux/amd64 worker and egress binaries, used the pinned Cloak
+image and cached helper images, and created only internal, owned Docker networks.
+An independent CDP peer held a disposable context while News ran its one/two
 render profiles, cancellation and rejection checks. This models shared-browser
-coexistence; it does not exercise the real Readeck application or prove the
-production firewall policy. Reports distinguish ARM64 emulation from native
+coexistence; it did not exercise the real Readeck application or prove the
+production firewall policy. Reports distinguished ARM64 emulation from native
 Linux, and browser peak memory is cumulative across both profiles.
 
-On Linux CI the gate runs as root so its private `0700` bind-mounted fixture
-files are accessible to root-owned containers with all capabilities dropped.
-The report is returned to the CI user before artifact upload. Container memory
-caps and private file permissions remain unchanged.
+The historical Linux CI gate ran as root so its private `0700` bind-mounted fixture
+files were accessible to root-owned containers with all capabilities dropped.
+The report was returned to the CI user before artifact upload.
 
 Native discovery requests explicitly close their HTTP connection. Read-only
 `/json/version` discovery and the initial CDP WebSocket handshake can retry
@@ -153,9 +155,9 @@ production reliability claim.
 
 ## Benchmark and remaining gates
 
-`scripts/benchmark_native_cloak.py` now provides fixed-corpus Go-only (`C`)
-controller runs; `tests/fixtures/native-cloak/origin.py` serves controlled HTTPS
-pages. The A/B/D comparison tools and Python observer have been retired. Results
+The retired `scripts/benchmark_native_cloak.py` provided fixed-corpus Go-only (`C`)
+controller runs; the retired `tests/fixtures/native-cloak/origin.py` served controlled HTTPS
+pages. The A/B/D comparison tools and Python observer have also been retired. Results
 below from earlier A/B/C/D runs are historical evidence, not a runnable current
 acceptance profile.
 Real cgroup-v2 counters are required: absent data fails instead of becoming zero.
@@ -164,7 +166,7 @@ samples yield the maximum observed sum; `memory.peak` is a separate container
 lifetime peak, not a sum claimed as a simultaneous system peak. Reports exclude
 URL/body/credentials and distinguish short smoke from independent fresh runs.
 
-Current acceptance uses the Go service and its native profile. Three independent
+The historical acceptance profile used the Go service and its native profile. Three independent
 repeats require fresh external containers, not a loop labeled as independent
 inside one process.
 
@@ -192,13 +194,13 @@ Latest equal-limit B/C results, one-second cgroup samples:
 | Job latency p95 | 1.527 s | 1.480 s |
 
 The independent component maxima do not necessarily occur at the same instant.
-Browser variation between runs is material. The Python application remains after
-extraction is moved, and C excludes the Python load generator: these numbers are
+Browser variation between runs is material. At the time, the Python application remained after
+extraction was moved, and C excluded the Python load generator: these numbers are
 not proof of a whole-application saving. No kernel peak is available on this host.
 
-The reviewed `scripts/soak_native_cloak.py` requires a new empty output directory
-and one uninterrupted run; old reports cannot reset or contribute elapsed time.
-It checks readiness and cgroup OOM deltas, fails without retry/restart, and bounds
+The retired `scripts/soak_native_cloak.py` required a new empty output directory
+and one uninterrupted run; old reports could not reset or contribute elapsed time.
+It checked readiness and cgroup OOM deltas, failed without retry/restart, and bounded
 reports to 2048 batches / 256 MiB. The 180-second live driver smoke completed
 33 one-case batches and four final-idle samples with no OOM or failures. The
 HTTP-only real API smoke of the current binary also passed.
