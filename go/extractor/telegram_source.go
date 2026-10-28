@@ -41,6 +41,80 @@ type TelegramArticle struct {
 	RawData     map[string]any   `json:"raw_data"`
 }
 
+// ParseTelegramPostMedia extracts media from the exact captured post without
+// requiring article text or a publication date. A missing post is distinct from
+// a present post with no media. Poll, location and contact pseudo-URLs use the
+// existing stable Go identities; the old Python hashes varied across processes.
+func ParseTelegramPostMedia(pageHTML, pageURL, postID string) ([]map[string]any, bool, error) {
+	return ParseTelegramPostMediaBounded(pageHTML, pageURL, postID, telegramSourceMaxBytes)
+}
+
+// ParseTelegramPostMediaBounded uses the caller's configured page-byte limit.
+func ParseTelegramPostMediaBounded(pageHTML, pageURL, postID string, maxBytes int) ([]map[string]any, bool, error) {
+	if maxBytes < 1 || len(pageHTML) > maxBytes {
+		return nil, false, ErrTelegramByteLimit
+	}
+	if strings.TrimSpace(pageHTML) == "" || strings.TrimSpace(postID) == "" {
+		return nil, false, ErrTelegramInvalidInput
+	}
+	u, err := url.Parse(pageURL)
+	if err != nil || (u.Scheme != "http" && u.Scheme != "https") || u.Host == "" {
+		return nil, false, ErrTelegramInvalidInput
+	}
+	doc, err := goquery.NewDocumentFromReader(strings.NewReader(pageHTML))
+	if err != nil {
+		return nil, false, ErrTelegramMalformed
+	}
+	var selected *goquery.Selection
+	doc.Find("[data-post]").EachWithBreak(func(_ int, msg *goquery.Selection) bool {
+		if msg.AttrOr("data-post", "") == postID {
+			selected = msg
+			return false
+		}
+		return true
+	})
+	if selected == nil {
+		return nil, false, nil
+	}
+	media := telegramSourceMedia(selected, pageURL)
+	// The historical Python refresh only accepts a sticker when the matched
+	// wrapper contains an img; a bare matching img has no descendant img.
+	// Keep the existing channel collector unchanged and adapt only this path.
+	stickerURLs := map[string]bool{}
+	for _, selector := range []string{".tgme_widget_message_sticker", ".sticker_wrap", ".animated_sticker", ".message_sticker"} {
+		selected.Find(selector).Each(func(_ int, wrapper *goquery.Selection) {
+			img := wrapper.Find("img").First()
+			raw := img.AttrOr("src", img.AttrOr("data-src", ""))
+			if value := telegramNormalizeURL(raw, pageURL); value != "" {
+				stickerURLs[value] = true
+			}
+		})
+	}
+	filtered := make([]map[string]any, 0, len(media))
+	for _, item := range media {
+		kind, _ := item["type"].(string)
+		if kind == "audio" {
+			value, _ := item["url"].(string)
+			selected.Find("audio[src]").EachWithBreak(func(_ int, element *goquery.Selection) bool {
+				if telegramNormalizeURL(element.AttrOr("src", ""), pageURL) == value {
+					item["source"] = "direct_audio"
+					return false
+				}
+				return true
+			})
+		}
+		if kind == "sticker" || kind == "animated_sticker" {
+			value, _ := item["url"].(string)
+			if !stickerURLs[value] {
+				continue
+			}
+			item["thumbnail"] = value
+		}
+		filtered = append(filtered, item)
+	}
+	return filtered, true, nil
+}
+
 // ParseTelegramChannel extracts ordered posts from captured Telegram channel HTML.
 // fallbackTime is used only for posts whose page markup has no parseable date.
 func ParseTelegramChannel(pageHTML, pageURL, sourceName string, limit int, fallbackTime time.Time) ([]TelegramArticle, error) {

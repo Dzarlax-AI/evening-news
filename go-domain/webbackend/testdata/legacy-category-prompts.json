@@ -1,0 +1,71 @@
+{
+  "revision": "b9aa1a4637c676dac559719b51af352e481c0142",
+  "method": "original category f-string AST + actual _call_summary_llm system prefix",
+  "temperature": 0.2,
+  "max_tokens": 1000,
+  "cases": [
+    {
+      "name": "plain",
+      "ai_category": "AI tools",
+      "usage_count": 7,
+      "examples": [
+        "News A",
+        "News B",
+        "News C",
+        "News D"
+      ],
+      "categories": [
+        "AI (ИИ)",
+        "Tech (Технологии)",
+        "Other (Другое)"
+      ],
+      "full_prompt": "You are a news categorization expert. Analyze categories and provide accurate mappings. Always respond with valid JSON.\n\nAnalyze this AI-generated category and suggest the top 3 most appropriate mappings to our fixed categories.\n\nAI CATEGORY: \"AI tools\"\nUSAGE COUNT: 7 articles\nEXAMPLE ARTICLES: ['News A', 'News B', 'News C']\n\nAVAILABLE FIXED CATEGORIES:\n- AI (ИИ)\n- Tech (Технологии)\n- Other (Другое)\n\nTASK: Provide 3 ranked suggestions for mapping this AI category to fixed categories.\n\nResponse in JSON format:\n{\n    \"suggestions\": [\n        {\"category\": \"Most appropriate category name (exact match from list above)\", \"confidence\": 0.85, \"reasoning\": \"Brief explanation why this is the best match\"},\n        {\"category\": \"Second best category name\", \"confidence\": 0.65, \"reasoning\": \"Brief explanation for second choice\"},\n        {\"category\": \"Third alternative category name\", \"confidence\": 0.45, \"reasoning\": \"Brief explanation for third choice\"}\n    ]\n}\n\nRequirements:\n- Always provide exactly 3 suggestions\n- Categories must be exact matches from the available list\n- Confidence scores should reflect semantic similarity\n- Consider semantic similarity, example articles context, and categorization patterns\n- Order suggestions by confidence (highest first)"
+    },
+    {
+      "name": "quotes",
+      "ai_category": "Сербия",
+      "usage_count": 2,
+      "examples": [
+        "Apple's announcement",
+        "Quoted \"headline\"",
+        "Line\nbreak"
+      ],
+      "categories": [
+        "AI (ИИ)",
+        "Tech (Технологии)",
+        "Other (Другое)"
+      ],
+      "full_prompt": "You are a news categorization expert. Analyze categories and provide accurate mappings. Always respond with valid JSON.\n\nAnalyze this AI-generated category and suggest the top 3 most appropriate mappings to our fixed categories.\n\nAI CATEGORY: \"Сербия\"\nUSAGE COUNT: 2 articles\nEXAMPLE ARTICLES: [\"Apple's announcement\", 'Quoted \"headline\"', 'Line\\nbreak']\n\nAVAILABLE FIXED CATEGORIES:\n- AI (ИИ)\n- Tech (Технологии)\n- Other (Другое)\n\nTASK: Provide 3 ranked suggestions for mapping this AI category to fixed categories.\n\nResponse in JSON format:\n{\n    \"suggestions\": [\n        {\"category\": \"Most appropriate category name (exact match from list above)\", \"confidence\": 0.85, \"reasoning\": \"Brief explanation why this is the best match\"},\n        {\"category\": \"Second best category name\", \"confidence\": 0.65, \"reasoning\": \"Brief explanation for second choice\"},\n        {\"category\": \"Third alternative category name\", \"confidence\": 0.45, \"reasoning\": \"Brief explanation for third choice\"}\n    ]\n}\n\nRequirements:\n- Always provide exactly 3 suggestions\n- Categories must be exact matches from the available list\n- Confidence scores should reflect semantic similarity\n- Consider semantic similarity, example articles context, and categorization patterns\n- Order suggestions by confidence (highest first)"
+    },
+    {
+      "name": "unicode-controls",
+      "ai_category": "Unicode",
+      "usage_count": 1,
+      "examples": [
+        "x y",
+        "a\tb",
+        "emoji 📰"
+      ],
+      "categories": [
+        "AI (ИИ)",
+        "Tech (Технологии)",
+        "Other (Другое)"
+      ],
+      "full_prompt": "You are a news categorization expert. Analyze categories and provide accurate mappings. Always respond with valid JSON.\n\nAnalyze this AI-generated category and suggest the top 3 most appropriate mappings to our fixed categories.\n\nAI CATEGORY: \"Unicode\"\nUSAGE COUNT: 1 articles\nEXAMPLE ARTICLES: ['x\\u2028y', 'a\\tb', 'emoji 📰']\n\nAVAILABLE FIXED CATEGORIES:\n- AI (ИИ)\n- Tech (Технологии)\n- Other (Другое)\n\nTASK: Provide 3 ranked suggestions for mapping this AI category to fixed categories.\n\nResponse in JSON format:\n{\n    \"suggestions\": [\n        {\"category\": \"Most appropriate category name (exact match from list above)\", \"confidence\": 0.85, \"reasoning\": \"Brief explanation why this is the best match\"},\n        {\"category\": \"Second best category name\", \"confidence\": 0.65, \"reasoning\": \"Brief explanation for second choice\"},\n        {\"category\": \"Third alternative category name\", \"confidence\": 0.45, \"reasoning\": \"Brief explanation for third choice\"}\n    ]\n}\n\nRequirements:\n- Always provide exactly 3 suggestions\n- Categories must be exact matches from the available list\n- Confidence scores should reflect semantic similarity\n- Consider semantic similarity, example articles context, and categorization patterns\n- Order suggestions by confidence (highest first)"
+    },
+    {
+      "name": "empty-examples",
+      "ai_category": "Other",
+      "usage_count": 1,
+      "examples": [
+        ""
+      ],
+      "categories": [
+        "AI (ИИ)",
+        "Tech (Технологии)",
+        "Other (Другое)"
+      ],
+      "full_prompt": "You are a news categorization expert. Analyze categories and provide accurate mappings. Always respond with valid JSON.\n\nAnalyze this AI-generated category and suggest the top 3 most appropriate mappings to our fixed categories.\n\nAI CATEGORY: \"Other\"\nUSAGE COUNT: 1 articles\nEXAMPLE ARTICLES: ['']\n\nAVAILABLE FIXED CATEGORIES:\n- AI (ИИ)\n- Tech (Технологии)\n- Other (Другое)\n\nTASK: Provide 3 ranked suggestions for mapping this AI category to fixed categories.\n\nResponse in JSON format:\n{\n    \"suggestions\": [\n        {\"category\": \"Most appropriate category name (exact match from list above)\", \"confidence\": 0.85, \"reasoning\": \"Brief explanation why this is the best match\"},\n        {\"category\": \"Second best category name\", \"confidence\": 0.65, \"reasoning\": \"Brief explanation for second choice\"},\n        {\"category\": \"Third alternative category name\", \"confidence\": 0.45, \"reasoning\": \"Brief explanation for third choice\"}\n    ]\n}\n\nRequirements:\n- Always provide exactly 3 suggestions\n- Categories must be exact matches from the available list\n- Confidence scores should reflect semantic similarity\n- Consider semantic similarity, example articles context, and categorization patterns\n- Order suggestions by confidence (highest first)"
+    }
+  ]
+}

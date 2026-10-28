@@ -1,0 +1,74 @@
+package backup
+
+import (
+	"context"
+	"os"
+	"path/filepath"
+	"testing"
+
+	"github.com/Dzarlax-AI/evening-news/go-domain/authority"
+	"github.com/jackc/pgx/v5/pgxpool"
+)
+
+func TestCopyTreeDereferencesSymlinksAndRejectsCycles(t *testing.T) {
+	root := t.TempDir()
+	source := filepath.Join(root, "source")
+	if err := os.Mkdir(source, 0700); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(filepath.Join(source, "file"), []byte("fixture"), 0600); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.Symlink("file", filepath.Join(source, "link")); err != nil {
+		t.Fatal(err)
+	}
+	dst := filepath.Join(root, "copy")
+	if err := copyTree(context.Background(), source, dst); err != nil {
+		t.Fatal(err)
+	}
+	info, err := os.Lstat(filepath.Join(dst, "link"))
+	if err != nil || !info.Mode().IsRegular() {
+		t.Fatalf("link not dereferenced: %v %v", info, err)
+	}
+	data, err := os.ReadFile(filepath.Join(dst, "link"))
+	if err != nil || string(data) != "fixture" {
+		t.Fatalf("data=%q err=%v", data, err)
+	}
+	if err = os.WriteFile(filepath.Join(root, "outside"), []byte("private"), 0600); err != nil {
+		t.Fatal(err)
+	}
+	if err = os.Symlink(filepath.Join(root, "outside"), filepath.Join(source, "escape")); err != nil {
+		t.Fatal(err)
+	}
+	if err = copyTree(context.Background(), source, filepath.Join(root, "escaped")); err == nil {
+		t.Fatal("external symlink accepted")
+	}
+	if err = os.Remove(filepath.Join(source, "escape")); err != nil {
+		t.Fatal(err)
+	}
+	if err = os.Symlink(".", filepath.Join(source, "cycle")); err != nil {
+		t.Fatal(err)
+	}
+	if err = copyTree(context.Background(), source, filepath.Join(root, "cyclic")); err == nil {
+		t.Fatal("directory cycle accepted")
+	}
+}
+
+func TestBackupVersionProbeFailureDoesNotCreateStaging(t *testing.T) {
+	t.Setenv("NEWS_BACKUP_MATCH_PG_MAJOR", "1")
+	root := t.TempDir()
+	pool, err := pgxpool.New(context.Background(), "postgres://fixture:fixture@127.0.0.1:1/gate_db?sslmode=disable")
+	if err != nil {
+		t.Fatal(err)
+	}
+	pool.Close()
+	svc := New(root, "postgres://fixture:fixture@127.0.0.1:1/gate_db?sslmode=disable")
+	_, err = svc.Create(context.Background(), authority.Fence{Pool: pool})
+	if err == nil || err.Error() != "database backup version unavailable" {
+		t.Fatalf("unexpected error: %v", err)
+	}
+	entries, err := os.ReadDir(root)
+	if err != nil || len(entries) != 0 {
+		t.Fatalf("staging created on version error: %v %v", entries, err)
+	}
+}

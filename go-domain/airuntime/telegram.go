@@ -1,8 +1,11 @@
 package airuntime
 
 import (
+	"context"
 	"encoding/json"
+	"errors"
 	"net/http"
+	"time"
 
 	"github.com/Dzarlax-AI/evening-news/go-domain/digestworkflow"
 	"github.com/Dzarlax-AI/evening-news/go-domain/telegramdelivery"
@@ -29,9 +32,39 @@ func (s *Server) telegramSend(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	defer cancel()
-	if (v.Channel != "main" && v.Channel != "service") || (v.Method != "sendMessage" && v.Method != "sendRichMessage") || v.Text == "" || len(v.Text) > 1<<20 || s.config.TelegramToken == "" {
+	result, err := s.sendTelegram(ctx, v)
+	if err != nil {
 		writeJSON(w, 400, errorEnvelope("invalid_input", 400))
 		return
+	}
+	writeJSON(w, 200, map[string]any{"version": 1, "ok": true, "result": map[string]any{"state": result.State, "status_code": result.StatusCode, "error_code": result.ErrorCode, "message_id": result.MessageID, "retry_after_seconds": result.RetryAfterSeconds}})
+}
+
+// SendServiceTest shares the existing Telegram rate limiter and cancellation
+// policy. A caller must track this operation during drain.
+func (s *Server) SendServiceTest(ctx context.Context, text string) (telegramdelivery.Result, error) {
+	if s.draining.Load() {
+		return telegramdelivery.Result{}, errors.New("runtime_draining")
+	}
+	if deadline, ok := ctx.Deadline(); !ok || !deadline.After(time.Now()) {
+		return telegramdelivery.Result{}, errors.New("invalid_deadline")
+	}
+	ctx, cancel := context.WithTimeout(ctx, 30*time.Second)
+	stop := make(chan struct{})
+	go func() {
+		select {
+		case <-s.closing:
+			cancel()
+		case <-ctx.Done():
+		case <-stop:
+		}
+	}()
+	defer func() { close(stop); cancel() }()
+	return s.sendTelegram(ctx, telegramRequest{Channel: "service", Method: "sendMessage", Text: text})
+}
+func (s *Server) sendTelegram(ctx context.Context, v telegramRequest) (telegramdelivery.Result, error) {
+	if (v.Channel != "main" && v.Channel != "service") || (v.Method != "sendMessage" && v.Method != "sendRichMessage") || v.Text == "" || len(v.Text) > 1<<20 || s.config.TelegramToken == "" {
+		return telegramdelivery.Result{}, errors.New("invalid_input")
 	}
 	var mainOverride, serviceOverride string
 	// A failed settings lookup occurs before any provider request. Match the
@@ -66,8 +99,7 @@ func (s *Server) telegramSend(w http.ResponseWriter, r *http.Request) {
 
 	main, service, err := digestworkflow.Destinations(mainOverride, serviceOverride, s.config.TelegramMain, s.config.TelegramService)
 	if err != nil {
-		writeJSON(w, 400, errorEnvelope("invalid_input", 400))
-		return
+		return telegramdelivery.Result{}, errors.New("invalid_input")
 	}
 	chat := main
 	if v.Channel == "service" {
@@ -76,8 +108,7 @@ func (s *Server) telegramSend(w http.ResponseWriter, r *http.Request) {
 	var payload any
 	if v.Method == "sendRichMessage" {
 		if len(v.Keyboard) > 0 {
-			writeJSON(w, 400, errorEnvelope("invalid_input", 400))
-			return
+			return telegramdelivery.Result{}, errors.New("invalid_input")
 		}
 		payload = map[string]any{"chat_id": chat, "rich_message": map[string]string{"html": v.Text}}
 	} else {
@@ -85,13 +116,11 @@ func (s *Server) telegramSend(w http.ResponseWriter, r *http.Request) {
 		if len(v.Keyboard) > 0 {
 			var keyboard any
 			if json.Unmarshal(v.Keyboard, &keyboard) != nil {
-				writeJSON(w, 400, errorEnvelope("invalid_input", 400))
-				return
+				return telegramdelivery.Result{}, errors.New("invalid_input")
 			}
 			data["reply_markup"] = map[string]any{"inline_keyboard": keyboard}
 		}
 		payload = data
 	}
-	result := (telegramdelivery.Transport{Client: s.client, Admission: s.limiter, Endpoint: s.config.TelegramEndpoint, Token: s.config.TelegramToken}).Send(ctx, v.Method, payload)
-	writeJSON(w, 200, map[string]any{"version": 1, "ok": true, "result": map[string]any{"state": result.State, "status_code": result.StatusCode, "error_code": result.ErrorCode, "message_id": result.MessageID, "retry_after_seconds": result.RetryAfterSeconds}})
+	return (telegramdelivery.Transport{Client: s.client, Admission: s.limiter, Endpoint: s.config.TelegramEndpoint, Token: s.config.TelegramToken}).Send(ctx, v.Method, payload), nil
 }

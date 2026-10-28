@@ -13,6 +13,7 @@ on:
       - 'go-execution/**'
       - 'go-editorial/**'
       - 'go-domain/**'
+      - 'go-tools/**'
       - 'go/**'
       - 'go-ingestion/**'
       - 'go-processing/**'
@@ -50,6 +51,7 @@ on:
       - 'go-execution/**'
       - 'go-editorial/**'
       - 'go-domain/**'
+      - 'go-tools/**'
       - 'go/**'
       - 'go-ingestion/**'
       - 'go-processing/**'
@@ -296,3 +298,34 @@ jobs:
           name: release-core-fixture-${{ github.sha }}
           path: artifacts/go-background-fixture/
           if-no-files-found: ignore
+
+  vertical-candidate:
+    # Development evidence only: the gate exits nonzero until all fault phases
+    # exist, and it does not write a release acceptance receipt.
+    if: ${{ github.event_name == 'pull_request' }}
+    runs-on: ubuntu-latest
+    timeout-minutes: 35
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          persist-credentials: false
+          ref: ${{ github.event.pull_request.head.sha }}
+      - uses: actions/setup-go@v5
+        with:
+          go-version-file: go-tools/go.mod
+          cache-dependency-path: go-tools/go.sum
+      - uses: docker/setup-buildx-action@v3
+      - name: Build fixture tools
+        working-directory: go-tools
+        run: go build -o "$RUNNER_TEMP/news-vertical-fixture-gate" ./cmd/vertical-fixture-gate
+      - name: Pull isolated fixture infrastructure
+        run: docker pull postgres:17-alpine && docker pull alpine:3.21
+      - name: Build candidate images
+        env:
+          REVISION: ${{ github.event.pull_request.head.sha }}
+          PLATFORM: linux/amd64
+        run: |
+          docker buildx bake -f docker-bake.hcl --set '*.platform=linux/amd64' --load
+          docker build --platform linux/amd64 -f docker/Dockerfile.extractor -t evening-news-collector:consolidation-fixture go
+      - name: Run vertical candidate without issuing a release receipt
+        run: "$RUNNER_TEMP/news-vertical-fixture-gate"

@@ -692,3 +692,96 @@ func TestDeadlineIsBoundedAndStatusRequiresBearer(t *testing.T) {
 }
 
 var _ = analysis.Usage{}
+
+func TestAnalyzeArticleDirectUsesSharedRuntime(t *testing.T) {
+	s := NewServer(Config{APIKey: "fixture", Endpoint: "https://fixture.invalid/v1/models", Model: "fixture-model", RPS: 100}, nil)
+	var calls atomic.Int32
+	s.client = &http.Client{Transport: roundTripFunc(func(req *http.Request) (*http.Response, error) {
+		calls.Add(1)
+		return response(200, nil, `{"candidates":[{"content":{"parts":[{"text":"{\"summary\":\"ok\",\"categories\":[\"Business\"],\"is_advertisement\":false}"}]}}],"usageMetadata":{"promptTokenCount":10,"candidatesTokenCount":20}}`), nil
+	})}
+	ctx, cancel := context.WithTimeout(context.Background(), time.Minute)
+	defer cancel()
+	result, usage, err := s.AnalyzeArticle(ctx, ArticleInput{Title: "Fixture", Content: strings.Repeat("synthetic content ", 6), URL: "https://example.test/story"})
+	if err != nil || result["summary"] != "ok" || usage == nil || calls.Load() != 1 {
+		t.Fatalf("result=%v usage=%v calls=%d err=%v", result, usage, calls.Load(), err)
+	}
+	if len(s.usage) != 1 {
+		t.Fatalf("usage events = %d", len(s.usage))
+	}
+}
+
+func TestDirectAnalyzeCancelsOnDrain(t *testing.T) {
+	s := NewServer(Config{APIKey: "fixture", Endpoint: "https://fixture.invalid/v1/models", Model: "fixture-model", RPS: 100}, nil)
+	started := make(chan struct{})
+	s.client = &http.Client{Transport: roundTripFunc(func(req *http.Request) (*http.Response, error) {
+		close(started)
+		<-req.Context().Done()
+		return nil, req.Context().Err()
+	})}
+	ctx, cancel := context.WithTimeout(context.Background(), time.Minute)
+	defer cancel()
+	finished := make(chan error, 1)
+	go func() {
+		_, _, err := s.AnalyzeArticle(ctx, ArticleInput{Title: "Fixture", Content: strings.Repeat("synthetic content ", 6), URL: "https://example.test/story"})
+		finished <- err
+	}()
+	select {
+	case <-started:
+	case <-time.After(2 * time.Second):
+		t.Fatal("provider did not start")
+	}
+	s.draining.Store(true)
+	close(s.closing)
+	select {
+	case err := <-finished:
+		if err == nil {
+			t.Fatal("draining call succeeded")
+		}
+	case <-time.After(2 * time.Second):
+		t.Fatal("drain did not cancel call")
+	}
+	if _, _, err := s.AnalyzeArticle(ctx, ArticleInput{}); err == nil {
+		t.Fatal("accepted call after drain")
+	}
+}
+
+func TestAnalyzeCallbackPreservesProviderFallback(t *testing.T) {
+	s := NewServer(Config{APIKey: "fixture", Endpoint: "https://fixture.invalid/v1/models", Model: "fixture-model", RPS: 100}, nil)
+	s.client = &http.Client{Transport: roundTripFunc(func(*http.Request) (*http.Response, error) {
+		return response(429, http.Header{"Retry-After": []string{"12"}}, `{}`), nil
+	})}
+	ctx, cancel := context.WithTimeout(context.Background(), time.Minute)
+	defer cancel()
+	got, err := s.AnalyzeCallback(ctx, ArticleInput{Title: "Fixture", Content: strings.Repeat("synthetic content ", 6), URL: "https://example.test/story"})
+	if err != nil || got["_processing_error"] != "APIError" || got["_processing_terminal"] != false || got["category"] != "Other" {
+		t.Fatalf("fallback=%v err=%v", got, err)
+	}
+	retry, ok := got["_retry_after_seconds"].(*float64)
+	if !ok || retry == nil || *retry != 12 {
+		t.Fatalf("retry=%v", got["_retry_after_seconds"])
+	}
+}
+
+func TestGenerateTextDirectSharesUsageAndCancellation(t *testing.T) {
+	s := NewServer(Config{APIKey: "fixture", Endpoint: "https://fixture.invalid/v1/models", Model: "fixture-model", RPS: 100}, nil)
+	var request map[string]any
+	s.client = &http.Client{Transport: roundTripFunc(func(r *http.Request) (*http.Response, error) {
+		_ = json.NewDecoder(r.Body).Decode(&request)
+		return response(200, nil, `{"candidates":[{"content":{"parts":[{"text":"fixture result"}]}}],"usageMetadata":{"promptTokenCount":2,"candidatesTokenCount":3}}`), nil
+	})}
+	ctx, cancel := context.WithTimeout(context.Background(), time.Minute)
+	defer cancel()
+	text, err := s.GenerateText(ctx, "fixture prompt", "example.test")
+	if err != nil || text != "fixture result" || len(s.usage) != 1 {
+		t.Fatalf("text=%q usage=%d err=%v", text, len(s.usage), err)
+	}
+	settings := request["generationConfig"].(map[string]any)
+	if settings["temperature"] != 0.1 || settings["maxOutputTokens"] != float64(2000) {
+		t.Fatalf("settings=%v", settings)
+	}
+	s.BeginDrain()
+	if _, err = s.GenerateText(ctx, "fixture prompt", "example.test"); err == nil {
+		t.Fatal("accepted call after drain")
+	}
+}
