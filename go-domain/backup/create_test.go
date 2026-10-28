@@ -2,6 +2,7 @@ package backup
 
 import (
 	"context"
+	"errors"
 	"os"
 	"path/filepath"
 	"testing"
@@ -70,5 +71,21 @@ func TestBackupVersionProbeFailureDoesNotCreateStaging(t *testing.T) {
 	entries, err := os.ReadDir(root)
 	if err != nil || len(entries) != 0 {
 		t.Fatalf("staging created on version error: %v %v", entries, err)
+	}
+}
+
+func TestCancelledCopyLeavesNoCompletedArchive(t *testing.T) {
+	source := filepath.Join(t.TempDir(), "input")
+	if err := os.WriteFile(source, []byte("synthetic fixture"), 0600); err != nil {
+		t.Fatal(err)
+	}
+	target := filepath.Join(t.TempDir(), "output")
+	ctx, cancel := context.WithCancel(context.Background())
+	cancel()
+	if err := copyTree(ctx, source, target); !errors.Is(err, context.Canceled) {
+		t.Fatalf("copy error=%v", err)
+	}
+	if _, err := os.Stat(target); !os.IsNotExist(err) {
+		t.Fatalf("canceled copy created output: %v", err)
 	}
 }

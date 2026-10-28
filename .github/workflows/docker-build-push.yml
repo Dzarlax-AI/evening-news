@@ -305,6 +305,10 @@ jobs:
     if: ${{ github.event_name == 'pull_request' }}
     runs-on: ubuntu-latest
     timeout-minutes: 35
+    strategy:
+      fail-fast: false
+      matrix:
+        postgres: ['16', '17']
     steps:
       - uses: actions/checkout@v4
         with:
@@ -319,7 +323,7 @@ jobs:
         working-directory: go-tools
         run: go build -o "$RUNNER_TEMP/news-vertical-fixture-gate" ./cmd/vertical-fixture-gate
       - name: Pull isolated fixture infrastructure
-        run: docker pull postgres:17-alpine && docker pull alpine:3.21
+        run: docker pull postgres:${{ matrix.postgres }}-alpine && docker pull alpine:3.21
       - name: Build candidate images
         env:
           REVISION: ${{ github.event.pull_request.head.sha }}
@@ -328,4 +332,6 @@ jobs:
           docker buildx bake -f docker-bake.hcl --set '*.platform=linux/amd64' --load
           docker build --platform linux/amd64 -f docker/Dockerfile.extractor -t evening-news-collector:consolidation-fixture go
       - name: Run vertical candidate without issuing a release receipt
+        env:
+          NEWS_FIXTURE_PG_MAJOR: ${{ matrix.postgres }}
         run: "$RUNNER_TEMP/news-vertical-fixture-gate"

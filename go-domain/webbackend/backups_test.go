@@ -91,3 +91,36 @@ func TestUploadAtomicAndRejectsUnsafeName(t *testing.T) {
 		t.Fatalf("staging left behind: %v %v", entries, err)
 	}
 }
+
+func TestCanceledUploadRemovesStagingAndDoesNotReplaceBackup(t *testing.T) {
+	root := t.TempDir()
+	existing := filepath.Join(root, "keep.tar.gz")
+	if err := os.WriteFile(existing, []byte("existing"), 0600); err != nil {
+		t.Fatal(err)
+	}
+	var body bytes.Buffer
+	m := multipart.NewWriter(&body)
+	p, err := m.CreateFormFile("file", "keep.tar.gz")
+	if err != nil {
+		t.Fatal(err)
+	}
+	_, _ = p.Write([]byte("replacement"))
+	_ = m.Close()
+	ctx, cancel := context.WithCancel(context.Background())
+	cancel()
+	r := httptest.NewRequest("POST", "/internal/web/v1/backups/upload", &body).WithContext(ctx)
+	r.Header.Set("Content-Type", m.FormDataContentType())
+	w := httptest.NewRecorder()
+	(&Server{Guard: testGuard{}, BackupRoot: root}).Handler().ServeHTTP(w, r)
+	if w.Code != 500 {
+		t.Fatalf("canceled upload status=%d", w.Code)
+	}
+	got, err := os.ReadFile(existing)
+	if err != nil || string(got) != "existing" {
+		t.Fatalf("existing backup changed: %v", err)
+	}
+	entries, err := os.ReadDir(root)
+	if err != nil || len(entries) != 1 {
+		t.Fatalf("staging not cleaned: %v", err)
+	}
+}

@@ -6,12 +6,15 @@ used. Never attach the whole file to every container with `env_file`.
 
 ## Prepare a private candidate
 
+The Go helper is a development candidate; its Docker Compose round-trip has
+not yet passed the final image acceptance gate.
+
 Run the helper on the host that has the current production Compose file and
 its environment files. Choose a new output directory; the helper refuses to
 overwrite one:
 
 ```sh
-python3 scripts/prepare_runtime_env.py \
+go -C go-tools run ./cmd/prepare-runtime-env \
   --compose /root/news/docker-compose.yml \
   --output-dir /root/news/env-candidate-2026-10-26 \
   --project news

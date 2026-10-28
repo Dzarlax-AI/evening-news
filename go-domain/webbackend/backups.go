@@ -1,6 +1,7 @@
 package webbackend
 
 import (
+	"context"
 	"fmt"
 	"io"
 
@@ -16,6 +17,18 @@ import (
 	"strings"
 	"time"
 )
+
+type cancelReader struct {
+	ctx    context.Context
+	reader io.Reader
+}
+
+func (r cancelReader) Read(p []byte) (int, error) {
+	if err := r.ctx.Err(); err != nil {
+		return 0, err
+	}
+	return r.reader.Read(p)
+}
 
 var backupName = regexp.MustCompile(`^[A-Za-z0-9][A-Za-z0-9_.-]{0,180}\.tar\.gz$`)
 
@@ -223,7 +236,7 @@ func (s *Server) upload(w http.ResponseWriter, r *http.Request) {
 	temp := file.Name()
 	defer os.Remove(temp)
 	defer file.Close()
-	size, err := io.CopyBuffer(file, io.LimitReader(part, 64*1024*1024+1), make([]byte, 64*1024))
+	size, err := io.CopyBuffer(file, io.LimitReader(cancelReader{ctx: r.Context(), reader: part}, 64*1024*1024+1), make([]byte, 64*1024))
 	if err != nil {
 		reject(w, 500, "Backup upload failed")
 		return

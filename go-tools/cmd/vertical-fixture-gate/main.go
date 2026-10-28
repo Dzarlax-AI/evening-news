@@ -12,8 +12,6 @@ import (
 	"errors"
 	"fmt"
 	"github.com/Dzarlax-AI/evening-news/go-tools/fixturegate"
-	"io"
-	"net/http"
 	"os"
 	"os/exec"
 	"path/filepath"
@@ -176,26 +174,29 @@ func (g *gate) run() (resultErr error) {
 	if _, e := g.docker(nil, "up", "-d", "--pull", "never", "web"); e != nil {
 		return e
 	}
-	var port string
-	for i := 0; i < 10; i++ {
-		port, e = g.docker(nil, "port", "web", "8000")
-		if e == nil && port != "" {
-			break
-		}
-		if i == 9 {
-			return errors.New("web published port unavailable")
-		}
-		time.Sleep(time.Second)
+	internal, e := exec.Command("docker", "network", "inspect", "--format", "{{.Internal}}", g.project+"_fixture").Output()
+	if e != nil || strings.TrimSpace(string(internal)) != "true" {
+		return errors.New("fixture network not internal")
 	}
-	idx := strings.LastIndex(port, ":")
-	if idx < 0 {
-		return errors.New("web port unavailable")
+	for _, role := range []string{"postgres", "origin", "fake", "collector", "executor", "background", "web"} {
+		id, e := g.docker(nil, "ps", "-q", role)
+		if e != nil || id == "" {
+			return errors.New("fixture container missing")
+		}
+		raw, e := exec.Command("docker", "inspect", "--format", "{{json .HostConfig.PortBindings}}", id).Output()
+		if e != nil {
+			return errors.New("fixture port inspection failed")
+		}
+		var bindings map[string]any
+		if json.Unmarshal(raw, &bindings) != nil || len(bindings) != 0 {
+			return errors.New("fixture host port exposed")
+		}
 	}
-	base := "http://127.0.0.1:" + port[idx+1:]
-	client := &http.Client{Timeout: 10 * time.Second, CheckRedirect: func(*http.Request, []*http.Request) error { return http.ErrUseLastResponse }}
+	base := "http://web:8000"
+
 	var job string
 	for i := 0; i < 120; i++ {
-		status, _, e := request(client, "GET", base+"/health", "", nil, nil)
+		status, _, e := g.request("GET", base+"/health", "", nil, nil)
 		if e == nil && status == 200 {
 			break
 		}
@@ -204,9 +205,73 @@ func (g *gate) run() (resultErr error) {
 		}
 		time.Sleep(time.Second)
 	}
+	// Pause, import twice and resume an actual scheduler-owned future instant.
+	scheduler := func(method, path string, payload any, authenticated bool) (int, []byte, error) {
+		var raw []byte
+		if payload != nil {
+			raw, _ = json.Marshal(payload)
+		}
+		token := ""
+		if authenticated {
+			token = "Bearer fixture-scheduler-only"
+		}
+		return g.request(method, "http://background:8080"+path, token, raw, nil)
+	}
+	status, _, e := scheduler("GET", "/v1/status", nil, false)
+	if e != nil || status != 401 {
+		return errors.New("scheduler authentication boundary failed")
+	}
+	status, raw, e := scheduler("GET", "/v1/status", nil, true)
+	var initialControl struct {
+		Revision int `json:"control_revision"`
+	}
+	if e != nil || status != 200 || json.Unmarshal(raw, &initialControl) != nil {
+		return errors.New("scheduler status unavailable")
+	}
+	status, raw, e = scheduler("PUT", "/v1/control", map[string]any{"expected_revision": initialControl.Revision, "paused": true}, true)
+	var paused struct {
+		Revision int  `json:"revision"`
+		Paused   bool `json:"paused"`
+	}
+	if e != nil || status != 200 || json.Unmarshal(raw, &paused) != nil || !paused.Paused || paused.Revision != initialControl.Revision+1 {
+		return errors.New("scheduler pause failed")
+	}
+	due := time.Now().UTC().Add(24 * time.Hour).Truncate(time.Microsecond)
+	schedule := map[string]any{"schedule_key": "fixture:consolidated-due", "enabled": true, "calendar": map[string]any{"type": "interval", "timezone": "UTC", "interval_minutes": 1440}, "target_alias": "news-worker", "operation": "news_processing", "payload": map[string]any{}, "next_due_at": due.Format(time.RFC3339Nano)}
+	imp := map[string]any{"expected_control_revision": paused.Revision, "items": []any{schedule}}
+	status, _, e = scheduler("POST", "/v1/import", imp, true)
+	if e != nil || status != 200 {
+		return errors.New("scheduler import failed")
+	}
+	status, raw, e = scheduler("POST", "/v1/import", imp, true)
+	var replay struct {
+		Unchanged []any `json:"unchanged"`
+	}
+	if e != nil || status != 200 || json.Unmarshal(raw, &replay) != nil || len(replay.Unchanged) != 1 {
+		return errors.New("scheduler import replay changed")
+	}
+	status, raw, e = scheduler("GET", "/v1/schedules/fixture:consolidated-due", nil, true)
+	var fetched struct {
+		NextDueAt time.Time `json:"next_due_at"`
+	}
+	if e != nil || status != 200 || json.Unmarshal(raw, &fetched) != nil || !fetched.NextDueAt.Equal(due) {
+		return errors.New("scheduler due instant changed")
+	}
+	status, raw, e = scheduler("PUT", "/v1/control", map[string]any{"expected_revision": paused.Revision, "paused": false}, true)
+	var resumed struct {
+		Revision int  `json:"revision"`
+		Paused   bool `json:"paused"`
+	}
+	if e != nil || status != 200 || json.Unmarshal(raw, &resumed) != nil || resumed.Paused || resumed.Revision != paused.Revision+1 {
+		return errors.New("scheduler resume failed")
+	}
+	status, raw, e = scheduler("PUT", "/v1/control", map[string]any{"expected_revision": resumed.Revision, "paused": true}, true)
+	if e != nil || status != 200 || json.Unmarshal(raw, &paused) != nil || !paused.Paused {
+		return errors.New("scheduler repause failed")
+	}
 	auth := "Basic Zml4dHVyZS1hZG1pbjpmaXh0dXJlLWFkbWluLXBhc3N3b3Jk"
 	for i := 0; i < 120; i++ {
-		status, body, e := request(client, "POST", base+"/api/v1/process/run", auth, []byte(`{}`), map[string]string{"Idempotency-Key": "vertical-fixture-job"})
+		status, body, e := g.request("POST", base+"/api/v1/process/run", auth, []byte(`{}`), map[string]string{"Idempotency-Key": "vertical-fixture-job"})
 		if e == nil && status == 202 {
 			var v struct {
 				Job string `json:"job_id"`
@@ -223,7 +288,7 @@ func (g *gate) run() (resultErr error) {
 		time.Sleep(time.Second)
 	}
 	for i := 0; i < 180; i++ {
-		status, body, e := request(client, "GET", base+"/api/v1/jobs/"+job, auth, nil, nil)
+		status, body, e := g.request("GET", base+"/api/v1/jobs/"+job, auth, nil, nil)
 		if e == nil && status == 200 {
 			var v struct {
 				Status string `json:"status"`
@@ -314,7 +379,7 @@ func (g *gate) run() (resultErr error) {
 	if e != nil || articleID == "" {
 		return errors.New("active shutdown article seed failed")
 	}
-	status, body, e := request(client, "POST", base+"/api/v1/articles/"+articleID+"/reprocess", auth, []byte(`{"force":false}`), map[string]string{"Idempotency-Key": "active-term-fixture-" + marker})
+	status, body, e := g.request("POST", base+"/api/v1/articles/"+articleID+"/reprocess", auth, []byte(`{"force":false}`), map[string]string{"Idempotency-Key": "active-term-fixture-" + marker})
 	if e != nil || status != 202 {
 		return errors.New("active shutdown job not accepted")
 	}
@@ -349,7 +414,7 @@ func (g *gate) run() (resultErr error) {
 		return errors.New("active background restart failed")
 	}
 	for i := 0; i < 180; i++ {
-		status, body, e := request(client, "GET", base+"/api/v1/jobs/"+active.Job, auth, nil, nil)
+		status, body, e := g.request("GET", base+"/api/v1/jobs/"+active.Job, auth, nil, nil)
 		if e == nil && status == 200 {
 			var v struct {
 				Status, JobID string `json:"-"`
@@ -407,7 +472,7 @@ func (g *gate) run() (resultErr error) {
 		return g.docker(nil, "exec", "-T", "postgres", "psql", "-U", "gate_user", "-d", "gate_db", "-qAtc", sql)
 	}
 	enqueue := func(path, key string) (string, error) {
-		status, body, e := request(client, "POST", base+path, auth, []byte(`{}`), map[string]string{"Idempotency-Key": key})
+		status, body, e := g.request("POST", base+path, auth, []byte(`{}`), map[string]string{"Idempotency-Key": key})
 		if e != nil || status != 202 {
 			return "", errors.New("fixture job not accepted")
 		}
@@ -421,7 +486,7 @@ func (g *gate) run() (resultErr error) {
 	}
 	waitJob := func(id, want string) error {
 		for i := 0; i < 180; i++ {
-			status, body, e := request(client, "GET", base+"/api/v1/jobs/"+id, auth, nil, nil)
+			status, body, e := g.request("GET", base+"/api/v1/jobs/"+id, auth, nil, nil)
 			if e == nil && status == 200 {
 				var v struct {
 					Status string `json:"status"`
@@ -461,7 +526,7 @@ func (g *gate) run() (resultErr error) {
 	}
 	occurrence := "00000000-0000-4000-8000-000000000071"
 	envelope, _ := json.Marshal(map[string]any{"version": 1, "occurrence_id": occurrence, "schedule_key": "news:news_digest", "schedule_revision": 1, "scheduled_for": time.Now().UTC().Format(time.RFC3339), "operation": "news_digest", "payload": map[string]any{}})
-	status, body, e = request(client, "POST", base+"/api/v1/internal/scheduled-jobs", "Bearer fixture-only-scheduled-jobs-token", envelope, map[string]string{"Idempotency-Key": occurrence})
+	status, body, e = g.request("POST", base+"/api/v1/internal/scheduled-jobs", "Bearer fixture-only-scheduled-jobs-token", envelope, map[string]string{"Idempotency-Key": occurrence})
 	if e != nil || status != 202 {
 		return errors.New("default digest job not accepted")
 	}
@@ -670,34 +735,113 @@ func (g *gate) run() (resultErr error) {
 	if e = telegramControl("normal"); e != nil {
 		return errors.New("rate limit fixture release failed")
 	}
+	// Back up the synthetic database via the real job and strictly restore its
+	// SQL into a separate disposable database of the same server major.
+	backupJob, e := enqueue("/api/v1/backup", "vertical-backup-"+marker)
+	if e != nil {
+		return e
+	}
+	if e = waitJob(backupJob, "succeeded"); e != nil {
+		return errors.New("fixture backup job failed")
+	}
+	archive, e := g.docker(nil, "exec", "-T", "executor", "find", "/app/backups", "-maxdepth", "1", "-type", "f", "-name", "*"+strings.ReplaceAll(backupJob, "-", "")+"_a*.tar.gz")
+	if e != nil || strings.Contains(archive, "\n") || !strings.HasPrefix(archive, "/app/backups/news_aggregator_backup_") {
+		return errors.New("fixture backup archive missing")
+	}
+	members, e := g.docker(nil, "exec", "-T", "executor", "tar", "-tzf", archive)
+	if e != nil {
+		return errors.New("fixture backup archive invalid")
+	}
+	sqlMember := ""
+	for _, member := range strings.Split(members, "\n") {
+		if strings.HasSuffix(member, "/database.sql") {
+			if sqlMember != "" || strings.HasPrefix(member, "/") || strings.Contains(member, "..") {
+				return errors.New("fixture backup SQL member invalid")
+			}
+			sqlMember = member
+		}
+	}
+	if sqlMember == "" {
+		return errors.New("fixture backup SQL missing")
+	}
+	if _, e = g.docker(nil, "exec", "-T", "postgres", "createdb", "-U", "gate_user", "gate_restore"); e != nil {
+		return errors.New("fixture restore database failed")
+	}
+	composeArgs := []string{"compose", "--project-name", g.project, "--file", g.compose}
+	restoreCtx, restoreCancel := context.WithTimeout(context.Background(), 120*time.Second)
+	defer restoreCancel()
+	extract := exec.CommandContext(restoreCtx, "docker", append(append([]string{}, composeArgs...), "exec", "-T", "executor", "tar", "-xOzf", archive, sqlMember)...)
+	restore := exec.CommandContext(restoreCtx, "docker", append(append([]string{}, composeArgs...), "exec", "-T", "postgres", "psql", "-X", "-v", "ON_ERROR_STOP=1", "-U", "gate_user", "-d", "gate_restore")...)
+	pipe, e := extract.StdoutPipe()
+	if e != nil {
+		return errors.New("fixture restore stream failed")
+	}
+	restore.Stdin = pipe
+	if e = restore.Start(); e != nil {
+		return errors.New("fixture restore process failed")
+	}
+	if e = extract.Start(); e != nil {
+		_ = restore.Process.Kill()
+		_ = restore.Wait()
+		return errors.New("fixture extraction process failed")
+	}
+	extractErr := extract.Wait()
+	restoreErr := restore.Wait()
+	if extractErr != nil || restoreErr != nil {
+		return errors.New("fixture strict restore failed")
+	}
+	restored, e := g.docker(nil, "exec", "-T", "postgres", "psql", "-U", "gate_user", "-d", "gate_restore", "-qAtc", `SELECT (SELECT count(*) FROM sources WHERE enabled)::text || '|' || (SELECT count(*) FROM articles WHERE processed)::text`)
+	if e != nil {
+		return errors.New("fixture restored database query failed")
+	}
+	restoredCounts := strings.Split(restored, "|")
+	if len(restoredCounts) != 2 || restoredCounts[0] != "8" {
+		return errors.New("fixture restored source count invalid")
+	}
+	restoredProcessed, e := strconv.Atoi(restoredCounts[1])
+	if e != nil || restoredProcessed < 1 {
+		return errors.New("fixture restored article count invalid")
+	}
+	status, _, e = g.request("POST", base+"/api/v1/backup/restore?filename=fixture.tar.gz", auth, []byte(`{}`), nil)
+	if e != nil || status != 409 {
+		return errors.New("worker restore boundary changed")
+	}
 	if err := fixturegate.VerifyImages(refs, initial, inspect); err != nil {
 		return err
 	}
 	fmt.Println("Vertical fixture job and eight source receipts passed; this is not release acceptance.")
 	return errors.New("remaining fault and lifecycle acceptance phases not implemented")
 }
-func request(c *http.Client, method, url, auth string, body []byte, headers map[string]string) (int, []byte, error) {
-	r, e := http.NewRequest(method, url, bytes.NewReader(body))
+func (g *gate) request(method, target, auth string, body []byte, headers map[string]string) (int, []byte, error) {
+	base, role := "http://web:8000", "web"
+	if strings.HasPrefix(target, "http://background:8080/") {
+		base, role = "http://background:8080", "scheduler"
+	}
+	if !strings.HasPrefix(target, base+"/") {
+		return 0, nil, errors.New("invalid fixture probe target")
+	}
+	input, e := json.Marshal(struct {
+		Target, Method, Path, Authorization string
+		Body                                []byte
+		Headers                             map[string]string
+	}{role, method, strings.TrimPrefix(target, base), auth, body, headers})
 	if e != nil {
 		return 0, nil, e
 	}
-	if auth != "" {
-		r.Header.Set("Authorization", auth)
-	}
-	if body != nil {
-		r.Header.Set("Content-Type", "application/json")
-	}
-	for k, v := range headers {
-		r.Header.Set(k, v)
-	}
-	resp, e := c.Do(r)
+	output, e := g.docker(input, "exec", "-T", "fake", "/fixture/fixture-http")
 	if e != nil {
 		return 0, nil, e
 	}
-	defer resp.Body.Close()
-	out, e := io.ReadAll(io.LimitReader(resp.Body, 1024*1024))
-	return resp.StatusCode, out, e
+	var result struct {
+		Status int    `json:"status"`
+		Body   []byte `json:"body"`
+	}
+	if json.Unmarshal([]byte(output), &result) != nil {
+		return 0, nil, errors.New("invalid fixture probe response")
+	}
+	return result.Status, result.Body, nil
 }
+
 func main() { os.Exit(realMain()) }
 func realMain() int {
 	var nonce [8]byte
@@ -732,7 +876,7 @@ GRANT SELECT,INSERT,UPDATE ON TABLE public.background_job_executions TO fixture_
 GRANT SELECT,UPDATE ON TABLE public.schedule_settings,public.articles TO fixture_execution_runtime;`
 
 func prepare(g *gate) error {
-	for _, name := range []string{"fixture-origin", "fixture-services", "seed-fixture-sources", "check-fixture-receipts", "fixture-worker-lock"} {
+	for _, name := range []string{"fixture-origin", "fixture-services", "seed-fixture-sources", "check-fixture-receipts", "fixture-worker-lock", "fixture-http"} {
 		cmd := exec.Command("go", "build", "-o", filepath.Join(g.dir, name), "./cmd/"+name)
 		cmd.Dir = "go-tools"
 		cmd.Env = append(os.Environ(), "GOOS=linux", "GOARCH=amd64", "CGO_ENABLED=0")
@@ -753,12 +897,21 @@ func prepare(g *gate) error {
 	if e := os.Chmod(filepath.Join(g.dir, "fixture-ca.crt"), 0444); e != nil {
 		return e
 	}
-	return os.WriteFile(g.compose, []byte(strings.ReplaceAll(composeTemplate, "FIXTURE_DIR", g.dir)), 0600)
+	major := os.Getenv("NEWS_FIXTURE_PG_MAJOR")
+	if major == "" {
+		major = "17"
+	}
+	if major != "16" && major != "17" {
+		return errors.New("fixture postgres version invalid")
+	}
+	config := strings.ReplaceAll(composeTemplate, "FIXTURE_DIR", g.dir)
+	config = strings.ReplaceAll(config, "FIXTURE_PG_IMAGE", "postgres:"+major+"-alpine")
+	return os.WriteFile(g.compose, []byte(config), 0600)
 }
 
 const composeTemplate = `services:
   postgres:
-    image: postgres:17-alpine
+    image: FIXTURE_PG_IMAGE
     environment: {POSTGRES_USER: gate_user, POSTGRES_PASSWORD: fixture-only-password, POSTGRES_DB: gate_db}
     networks: [fixture]
   origin:
@@ -895,7 +1048,6 @@ const composeTemplate = `services:
       TRUSTED_HOSTS: 127.0.0.1,localhost,web
       TRUST_FORWARD_AUTH: 'false'
       DEVELOPMENT: 'true'
-    ports: ["127.0.0.1::8000"]
     networks: [fixture]
 networks:
   fixture:
