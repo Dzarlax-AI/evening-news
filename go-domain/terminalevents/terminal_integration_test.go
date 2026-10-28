@@ -6,12 +6,15 @@ import (
 	"encoding/json"
 	"fmt"
 	"github.com/Dzarlax-AI/evening-news/go-domain/migration"
+	"github.com/Dzarlax-AI/evening-news/go-domain/telegramdelivery"
 	"github.com/jackc/pgx/v5"
 	"github.com/jackc/pgx/v5/pgxpool"
+	"net/http"
 	"net/http/httptest"
 	"net/url"
 	"os"
 	"strings"
+	"sync/atomic"
 	"testing"
 	"time"
 )
@@ -151,6 +154,41 @@ func TestFinalizedSourceWarningAndNoReplayPostgres(t *testing.T) {
 	server.ServeHTTP(w, req)
 	if w.Code != 200 || count != 2 || !strings.Contains(w.Body.String(), `"alert_state":"unknown"`) {
 		t.Fatalf("uncertain send status=%d count=%d body=%s", w.Code, count, w.Body.String())
+	}
+	// The provider accepts the request and disconnects before a response. The
+	// persisted event must become unknown and replay must not send again.
+	var calls atomic.Int32
+	provider := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		calls.Add(1)
+		conn, _, e := w.(http.Hijacker).Hijack()
+		if e != nil {
+			t.Error(e)
+			return
+		}
+		_ = conn.Close()
+	}))
+	defer provider.Close()
+	transport := telegramdelivery.Transport{Endpoint: provider.URL, Token: "fixture-token", Client: provider.Client()}
+	networkServer := New("fixture-token", pool, fixtureGuard{}, fixtureAuthority{instance}, func(ctx context.Context, title, message string) bool {
+		return transport.Send(ctx, "sendMessage", map[string]any{"chat_id": "fixture", "text": message}).State == telegramdelivery.Sent
+	})
+	networkJob := "10000000-0000-4000-8000-000000000005"
+	if _, err = pool.Exec(ctx, `INSERT INTO background_jobs(id,kind,payload,idempotency_key,state,owner_generation,attempt_generation,result,schedule_key) VALUES($1::uuid,'source_test','{}',$2,'failed',1,1,'{"status":"warning"}'::jsonb,'fixture-network')`, networkJob, networkJob); err != nil {
+		t.Fatal(err)
+	}
+	if _, err = pool.Exec(ctx, `INSERT INTO background_job_executions(job_id,attempt_generation,envelope_sha256,executor_instance_id,state,legacy_completion_applied_at,legacy_alert_state) VALUES($1,1,$2,$3,'failed',now(),'pending')`, networkJob, hash, instance); err != nil {
+		t.Fatal(err)
+	}
+	networkEvent := Event{1, networkJob, 1, owner, 1, wp, instance, ep}
+	networkBody, _ := json.Marshal(networkEvent)
+	for i := 0; i < 2; i++ {
+		r := httptest.NewRequest("POST", "/internal/v1/domain-events/finalized", bytes.NewReader(networkBody))
+		r.Header.Set("Authorization", "Bearer fixture-token")
+		out := httptest.NewRecorder()
+		networkServer.ServeHTTP(out, r)
+		if out.Code != 200 || !strings.Contains(out.Body.String(), `"alert_state":"unknown"`) || calls.Load() != 1 {
+			t.Fatalf("network replay step=%d status=%d calls=%d", i, out.Code, calls.Load())
+		}
 	}
 	if _, err = worker.Exec(ctx, `SELECT pg_advisory_unlock(hashtext(current_database()),hashtext(current_schema()))`); err != nil {
 		t.Fatal(err)

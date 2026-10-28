@@ -23,7 +23,7 @@ import (
 
 var jobIDPattern = regexp.MustCompile(`^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$`)
 
-type gate struct{ project, dir, compose string }
+type gate struct{ project, dir, compose, diagnosticJob string }
 
 func (g *gate) docker(input []byte, args ...string) (string, error) {
 	ctx, cancel := context.WithTimeout(context.Background(), 120*time.Second)
@@ -36,6 +36,55 @@ func (g *gate) docker(input []byte, args ...string) (string, error) {
 	}
 	return strings.TrimSpace(string(out)), nil
 }
+func (g *gate) diagnoseJob() {
+	if !jobIDPattern.MatchString(g.diagnosticJob) {
+		return
+	}
+	job := g.diagnosticJob
+	query := `SELECT json_build_object('kind',CASE WHEN kind ~ '^[a-z_]{1,48}$' THEN kind ELSE NULL END,'state',CASE WHEN state ~ '^[a-z_]{1,32}$' THEN state ELSE NULL END,'attempt_generation',attempt_generation,'owner_generation',owner_generation,'error_code',CASE WHEN error_code ~ '^[a-z0-9_]{1,64}$' THEN error_code ELSE NULL END)::text FROM background_jobs WHERE id='` + job + `'::uuid`
+	out, e := g.docker(nil, "exec", "-T", "postgres", "psql", "-U", "gate_user", "-d", "gate_db", "-qAtc", query)
+	if e == nil {
+		var v map[string]any
+		if json.Unmarshal([]byte(out), &v) == nil {
+			safe, _ := json.Marshal(v)
+			fmt.Fprintf(os.Stderr, "fixture job=%s\n", safe)
+		}
+	}
+	for _, table := range []string{"background_job_executions", "article_ingestion_runs", "article_processing_runs"} {
+		query = `SELECT COALESCE(json_agg(json_build_object('attempt',attempt_generation,'state',CASE WHEN state ~ '^[a-z_]{1,32}$' THEN state ELSE NULL END,'error_code',CASE WHEN error_code ~ '^[a-z0-9_]{1,64}$' THEN error_code ELSE NULL END)),'[]'::json)::text FROM (SELECT attempt_generation,state,error_code FROM ` + table + ` WHERE job_id='` + job + `'::uuid ORDER BY attempt_generation LIMIT 20) x`
+		out, e = g.docker(nil, "exec", "-T", "postgres", "psql", "-U", "gate_user", "-d", "gate_db", "-qAtc", query)
+		if e == nil {
+			var v []any
+			if json.Unmarshal([]byte(out), &v) == nil {
+				safe, _ := json.Marshal(v)
+				fmt.Fprintf(os.Stderr, "fixture %s=%s\n", table, safe)
+			}
+		}
+	}
+	query = `SELECT COALESCE(json_agg(json_build_object('state',state,'error_code',code,'count',n)),'[]'::json)::text FROM (SELECT CASE WHEN sr.state ~ '^[a-z_]{1,32}$' THEN sr.state ELSE NULL END state, CASE WHEN sr.error_code ~ '^[a-z0-9_]{1,64}$' THEN sr.error_code ELSE NULL END code,count(*) n FROM article_ingestion_source_runs sr JOIN article_ingestion_runs ir ON ir.id=sr.run_id WHERE ir.job_id='` + job + `'::uuid GROUP BY 1,2 LIMIT 20) x`
+	out, e = g.docker(nil, "exec", "-T", "postgres", "psql", "-U", "gate_user", "-d", "gate_db", "-qAtc", query)
+	if e == nil {
+		var v []any
+		if json.Unmarshal([]byte(out), &v) == nil {
+			safe, _ := json.Marshal(v)
+			fmt.Fprintf(os.Stderr, "fixture source_error_counts=%s\n", safe)
+		}
+	}
+	id, e := g.docker(nil, "ps", "-aq", "background")
+	if e != nil || id == "" {
+		return
+	}
+	logs, _ := exec.Command("docker", "logs", "--tail", "500", id).CombinedOutput()
+	pattern := regexp.MustCompile(`execution operation failed phase=([a-z_]{1,48}) reason_code=([a-z_]{1,64})(?: sqlstate=([0-9A-Z]{5}))?`)
+	matches := pattern.FindAllStringSubmatch(string(logs), -1)
+	if len(matches) > 50 {
+		matches = matches[len(matches)-50:]
+	}
+	for _, m := range matches {
+		fmt.Fprintf(os.Stderr, "fixture execution_phase=%s reason_code=%s sqlstate=%s\n", m[1], m[2], m[3])
+	}
+}
+
 func (g *gate) diagnose() {
 	for _, role := range []string{"postgres", "origin", "fake", "collector", "executor", "background", "web"} {
 		id, e := g.docker(nil, "ps", "-aq", role)
@@ -77,6 +126,7 @@ func (g *gate) run() (resultErr error) {
 	}
 	defer func() {
 		if resultErr != nil {
+			g.diagnoseJob()
 			g.diagnose()
 		}
 		if _, err := g.docker(nil, "down", "--volumes", "--remove-orphans"); err != nil {
@@ -171,6 +221,78 @@ func (g *gate) run() (resultErr error) {
 	if e != nil || afterPID != beforePID {
 		return errors.New("background PID changed during domain recovery")
 	}
+	scheduler := func(method, path string, payload any, authenticated bool) (int, []byte, error) {
+		var raw []byte
+		if payload != nil {
+			raw, _ = json.Marshal(payload)
+		}
+		token := ""
+		if authenticated {
+			token = "Bearer fixture-scheduler-only"
+		}
+		return g.request(method, "http://background:8080"+path, token, raw, nil)
+	}
+	status, raw, e := scheduler("GET", "/v1/status", nil, true)
+	var preControl struct {
+		Revision int  `json:"control_revision"`
+		Paused   bool `json:"paused"`
+	}
+	if e != nil || status != 200 || json.Unmarshal(raw, &preControl) != nil || preControl.Paused {
+		return errors.New("scheduler initial state invalid")
+	}
+	status, raw, e = scheduler("PUT", "/v1/control", map[string]any{"expected_revision": preControl.Revision, "paused": true}, true)
+	var prePaused struct {
+		Revision int  `json:"revision"`
+		Paused   bool `json:"paused"`
+	}
+	if e != nil || status != 200 || json.Unmarshal(raw, &prePaused) != nil || !prePaused.Paused {
+		return errors.New("scheduler pre-web pause failed")
+	}
+	preSchedule := map[string]any{"schedule_key": "fixture:web-unavailable", "enabled": true, "calendar": map[string]any{"type": "interval", "timezone": "UTC", "interval_minutes": 1440}, "target_alias": "news-worker", "operation": "reprocess_failed", "payload": map[string]any{"dry_run": true}, "next_due_at": time.Now().UTC().Add(2 * time.Second).Truncate(time.Microsecond).Format(time.RFC3339Nano)}
+	status, _, e = scheduler("POST", "/v1/import", map[string]any{"expected_control_revision": prePaused.Revision, "items": []any{preSchedule}}, true)
+	if e != nil || status != 200 {
+		return errors.New("scheduler pre-web import failed")
+	}
+	status, _, e = scheduler("PUT", "/v1/control", map[string]any{"expected_revision": prePaused.Revision, "paused": false}, true)
+	if e != nil || status != 200 {
+		return errors.New("scheduler pre-web resume failed")
+	}
+	type occurrenceRecord struct {
+		ID       string `json:"occurrence_id"`
+		Job      string `json:"job_id"`
+		State    string `json:"status"`
+		Attempts int    `json:"attempts"`
+		Key      string `json:"schedule_key"`
+	}
+	getOccurrence := func(key string) (occurrenceRecord, error) {
+		status, raw, e := scheduler("GET", "/v1/occurrences?limit=100", nil, true)
+		if e != nil || status != 200 {
+			return occurrenceRecord{}, errors.New("scheduler occurrences unavailable")
+		}
+		var v struct {
+			Occurrences []occurrenceRecord `json:"occurrences"`
+		}
+		if json.Unmarshal(raw, &v) != nil {
+			return occurrenceRecord{}, errors.New("scheduler occurrence payload invalid")
+		}
+		for _, o := range v.Occurrences {
+			if o.Key == key {
+				return o, nil
+			}
+		}
+		return occurrenceRecord{}, nil
+	}
+	var retained occurrenceRecord
+	for i := 0; i < 30; i++ {
+		retained, e = getOccurrence("fixture:web-unavailable")
+		if e == nil && retained.State == "pending" && retained.Attempts >= 1 {
+			break
+		}
+		if i == 29 {
+			return errors.New("scheduler did not retain unavailable web outbox")
+		}
+		time.Sleep(time.Second)
+	}
 	if _, e := g.docker(nil, "up", "-d", "--pull", "never", "web"); e != nil {
 		return e
 	}
@@ -205,23 +327,23 @@ func (g *gate) run() (resultErr error) {
 		}
 		time.Sleep(time.Second)
 	}
-	// Pause, import twice and resume an actual scheduler-owned future instant.
-	scheduler := func(method, path string, payload any, authenticated bool) (int, []byte, error) {
-		var raw []byte
-		if payload != nil {
-			raw, _ = json.Marshal(payload)
+	for i := 0; i < 90; i++ {
+		retained, e = getOccurrence("fixture:web-unavailable")
+		if e == nil && retained.State == "accepted" && jobIDPattern.MatchString(retained.ID) && jobIDPattern.MatchString(retained.Job) {
+			break
 		}
-		token := ""
-		if authenticated {
-			token = "Bearer fixture-scheduler-only"
+		if i == 89 {
+			return errors.New("scheduler outbox did not recover after web start")
 		}
-		return g.request(method, "http://background:8080"+path, token, raw, nil)
+		time.Sleep(time.Second)
 	}
-	status, _, e := scheduler("GET", "/v1/status", nil, false)
+	// Pause, import twice and resume an actual scheduler-owned future instant.
+
+	status, _, e = scheduler("GET", "/v1/status", nil, false)
 	if e != nil || status != 401 {
 		return errors.New("scheduler authentication boundary failed")
 	}
-	status, raw, e := scheduler("GET", "/v1/status", nil, true)
+	status, raw, e = scheduler("GET", "/v1/status", nil, true)
 	var initialControl struct {
 		Revision int `json:"control_revision"`
 	}
@@ -280,6 +402,7 @@ func (g *gate) run() (resultErr error) {
 				return errors.New("invalid accepted job")
 			}
 			job = v.Job
+			g.diagnosticJob = job
 			break
 		}
 		if i == 119 {
@@ -389,6 +512,7 @@ func (g *gate) run() (resultErr error) {
 	if json.Unmarshal(body, &active) != nil || !jobIDPattern.MatchString(active.Job) {
 		return errors.New("active shutdown job invalid")
 	}
+	g.diagnosticJob = active.Job
 	for i := 0; i < 90; i++ {
 		n, e := counters()
 		if e == nil && n > before {
@@ -440,6 +564,28 @@ func (g *gate) run() (resultErr error) {
 	if e != nil || currentContainer != container {
 		return errors.New("active shutdown changed background container")
 	}
+	// Check only environment key names; never emit values from container config.
+	envRaw, e := exec.Command("docker", "inspect", "--format", "{{json .Config.Env}}", container).Output()
+	if e != nil {
+		return errors.New("background environment unavailable")
+	}
+	var envList []string
+	if json.Unmarshal(envRaw, &envList) != nil {
+		return errors.New("background environment invalid")
+	}
+	envKeys := map[string]bool{}
+	for _, item := range envList {
+		parts := strings.SplitN(item, "=", 2)
+		envKeys[parts[0]] = true
+	}
+	for _, key := range []string{"WORKER_DATABASE_URL", "EXECUTION_DATABASE_URL", "SCHEDULER_DATABASE_URL", "INGESTION_DATABASE_URL", "PROCESSING_DATABASE_URL"} {
+		if !envKeys[key] {
+			return errors.New("scoped background DSN missing")
+		}
+	}
+	if envKeys["DATABASE_URL"] {
+		return errors.New("generic background DSN present")
+	}
 	// Verify each background component uses its own scoped DB login and the
 	// worker has no article-table privileges.
 	roleRows, e := g.docker(nil, "exec", "-T", "postgres", "psql", "-U", "gate_user", "-d", "gate_db", "-qAtc", `SELECT usename,datname,count(*) FROM pg_stat_activity WHERE usename IN ('fixture_worker_runtime','fixture_execution_runtime','fixture_scheduler_runtime','news_ingestion_runtime','news_processing_runtime') GROUP BY usename,datname ORDER BY usename,datname`)
@@ -482,6 +628,7 @@ func (g *gate) run() (resultErr error) {
 		if json.Unmarshal(body, &v) != nil || !jobIDPattern.MatchString(v.Job) {
 			return "", errors.New("fixture job identity invalid")
 		}
+		g.diagnosticJob = v.Job
 		return v.Job, nil
 	}
 	waitJob := func(id, want string) error {
@@ -503,6 +650,75 @@ func (g *gate) run() (resultErr error) {
 			time.Sleep(time.Second)
 		}
 		return errors.New("fixture job timed out")
+	}
+	if e = waitJob(retained.Job, "succeeded"); e != nil {
+		return errors.New("retained outbox job failed")
+	}
+	retainedCount, e := pg("SELECT count(*) FROM scheduler_occurrence_receipts WHERE occurrence_id='" + retained.ID + "'::uuid")
+	if e != nil || retainedCount != "1" {
+		return errors.New("retained outbox receipt count invalid")
+	}
+	// Exercise scheduler dispatch through the real web receiver and wait for
+	// the resulting durable job before resuming the fault scenarios.
+	dispatchSchedule := map[string]any{"schedule_key": "fixture:consolidated-dispatch", "enabled": true, "calendar": map[string]any{"type": "interval", "timezone": "UTC", "interval_minutes": 1440}, "target_alias": "news-worker", "operation": "news_processing", "payload": map[string]any{}, "next_due_at": time.Now().UTC().Add(3 * time.Second).Truncate(time.Microsecond).Format(time.RFC3339Nano)}
+	status, _, e = scheduler("POST", "/v1/import", map[string]any{"expected_control_revision": paused.Revision, "items": []any{dispatchSchedule}}, true)
+	if e != nil || status != 200 {
+		return errors.New("scheduler dispatch import failed")
+	}
+	status, raw, e = scheduler("PUT", "/v1/control", map[string]any{"expected_revision": paused.Revision, "paused": false}, true)
+	if e != nil || status != 200 || json.Unmarshal(raw, &resumed) != nil || resumed.Paused {
+		return errors.New("scheduler dispatch resume failed")
+	}
+	var dispatch struct {
+		ID       string `json:"occurrence_id"`
+		Job      string `json:"job_id"`
+		State    string `json:"status"`
+		Attempts int    `json:"attempts"`
+	}
+	for i := 0; i < 60; i++ {
+		status, raw, e = scheduler("GET", "/v1/occurrences?limit=100", nil, true)
+		if e == nil && status == 200 {
+			var result struct {
+				Occurrences []struct {
+					ID       string `json:"occurrence_id"`
+					Job      string `json:"job_id"`
+					State    string `json:"status"`
+					Attempts int    `json:"attempts"`
+					Key      string `json:"schedule_key"`
+				} `json:"occurrences"`
+			}
+			if json.Unmarshal(raw, &result) == nil {
+				for _, o := range result.Occurrences {
+					if o.Key == "fixture:consolidated-dispatch" {
+						dispatch.ID, dispatch.Job, dispatch.State, dispatch.Attempts = o.ID, o.Job, o.State, o.Attempts
+					}
+				}
+			}
+		}
+		if dispatch.State == "accepted" {
+			break
+		}
+		if dispatch.State == "blocked" {
+			return errors.New("scheduler occurrence blocked")
+		}
+		if i == 59 {
+			return errors.New("scheduler dispatch timed out")
+		}
+		time.Sleep(time.Second)
+	}
+	if !jobIDPattern.MatchString(dispatch.ID) || !jobIDPattern.MatchString(dispatch.Job) || dispatch.Attempts < 1 {
+		return errors.New("scheduler occurrence invalid")
+	}
+	status, raw, e = scheduler("PUT", "/v1/control", map[string]any{"expected_revision": resumed.Revision, "paused": true}, true)
+	if e != nil || status != 200 || json.Unmarshal(raw, &paused) != nil || !paused.Paused {
+		return errors.New("scheduler pause after dispatch failed")
+	}
+	if e = waitJob(dispatch.Job, "succeeded"); e != nil {
+		return errors.New("scheduled job did not complete")
+	}
+	receipts, e := pg("SELECT count(*) FROM scheduler_occurrence_receipts WHERE occurrence_id='" + dispatch.ID + "'::uuid")
+	if e != nil || receipts != "1" {
+		return errors.New("scheduled job receipt count invalid")
 	}
 	defaultCounters := func() (int, int, error) {
 		out, e := g.docker(nil, "exec", "-T", "fake", "wget", "-q", "-O", "-", "http://127.0.0.1:8090/__gate/counters")
@@ -536,6 +752,7 @@ func (g *gate) run() (resultErr error) {
 	if json.Unmarshal(body, &scheduled) != nil || !jobIDPattern.MatchString(scheduled.Job) {
 		return errors.New("default digest job invalid")
 	}
+	g.diagnosticJob = scheduled.Job
 	if e = waitJob(scheduled.Job, "succeeded"); e != nil {
 		return errors.New("default digest job failed")
 	}
@@ -710,6 +927,11 @@ func (g *gate) run() (resultErr error) {
 	if e = waitJob(rateEdition, "succeeded"); e != nil {
 		return errors.New("rate limit edition failed")
 	}
+	rateEditionID, e := pg("SELECT id::text FROM editorial_digest_editions WHERE job_id='" + rateEdition + "'::uuid AND locale='ru'")
+	if e != nil || !jobIDPattern.MatchString(rateEditionID) || rateEditionID == fresh {
+		return errors.New("rate limit edition not fresh")
+	}
+
 	if e = telegramControl("rate_limit"); e != nil {
 		return errors.New("rate limit fixture control failed")
 	}
@@ -721,8 +943,8 @@ func (g *gate) run() (resultErr error) {
 	if e != nil {
 		return e
 	}
-	if e = waitJob(rateJob, "failed"); e != nil {
-		return errors.New("rate limit delivery did not fail")
+	if e = waitJob(rateJob, "delivery_unknown"); e != nil {
+		return errors.New("rate limit delivery terminal state invalid")
 	}
 	rateAfter, e := telegramCount()
 	if e != nil || rateAfter != rateBefore+1 {
@@ -734,6 +956,59 @@ func (g *gate) run() (resultErr error) {
 	}
 	if e = telegramControl("normal"); e != nil {
 		return errors.New("rate limit fixture release failed")
+	}
+	// Build enough bounded synthetic stories for several plain-message parts,
+	// then lose the second provider response after the first was delivered.
+	partialSeed := `WITH inserted AS (INSERT INTO articles(source_id,title,url,content,summary,fetched_at,processed,summary_processed,category_processed,ad_processed,processing_state,processing_attempts,is_advertisement) SELECT (SELECT id FROM sources WHERE name='Go Web Gate RSS 1' LIMIT 1),'Synthetic partial fixture story '||n,'https://rss.fixture.test/partial/` + marker + `/'||n,'Synthetic source reports a fictional technology development with a clear evidence sentence.','Synthetic source reports a fictional technology development with a clear evidence sentence.',clock_timestamp() AT TIME ZONE 'UTC',true,true,true,true,'completed',0,false FROM generate_series(1,100) n RETURNING id) INSERT INTO article_categories(article_id,category_id,confidence,ai_category,created_at) SELECT id,(SELECT id FROM categories WHERE name='Tech'),1,'Tech',clock_timestamp() AT TIME ZONE 'UTC' FROM inserted`
+	if _, e = pg(partialSeed); e != nil {
+		return errors.New("partial delivery fixture seed failed")
+	}
+	partialEdition, e := enqueue("/api/v1/summaries/generate", "vertical-partial-edition-"+marker)
+	if e != nil {
+		return e
+	}
+	if e = waitJob(partialEdition, "succeeded"); e != nil {
+		return errors.New("partial delivery edition failed")
+	}
+	partialEditionID, e := pg("SELECT id::text FROM editorial_digest_editions WHERE job_id='" + partialEdition + "'::uuid AND locale='ru'")
+	if e != nil || !jobIDPattern.MatchString(partialEditionID) || partialEditionID == rateEditionID {
+		return errors.New("partial delivery edition not fresh")
+	}
+	if e = telegramControl("accept_one_then_unknown"); e != nil {
+		return errors.New("partial delivery fixture control failed")
+	}
+	partialBefore, e := telegramCount()
+	if e != nil {
+		return errors.New("partial delivery counter unavailable")
+	}
+	partialJob, e := enqueue("/api/v1/telegram/send-digest", "vertical-partial-delivery-"+marker)
+	if e != nil {
+		return e
+	}
+	if e = waitJob(partialJob, "delivery_unknown"); e != nil {
+		return errors.New("partial delivery state invalid")
+	}
+	partialAfter, e := telegramCount()
+	if e != nil || partialAfter != partialBefore+2 {
+		return errors.New("partial delivery provider count invalid")
+	}
+	partialProof, e := pg("SELECT count(*) FILTER (WHERE state='sent')::text || '|' || count(*) FILTER (WHERE state IN ('unknown','sending'))::text FROM digest_delivery_parts WHERE job_id='" + partialJob + "'::uuid")
+	if e != nil || partialProof != "1|1" {
+		return errors.New("partial delivery receipts invalid")
+	}
+	if e = telegramControl("normal"); e != nil {
+		return errors.New("partial delivery fixture release failed")
+	}
+	replayJob, e := enqueue("/api/v1/telegram/send-digest", "vertical-partial-replay-"+marker)
+	if e != nil {
+		return e
+	}
+	if e = waitJob(replayJob, "delivery_unknown"); e != nil {
+		return errors.New("partial delivery replay state invalid")
+	}
+	afterReplay, e := telegramCount()
+	if e != nil || afterReplay != partialAfter {
+		return errors.New("partial delivery replay sent again")
 	}
 	// Back up the synthetic database via the real job and strictly restore its
 	// SQL into a separate disposable database of the same server major.

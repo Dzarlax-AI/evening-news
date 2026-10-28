@@ -6,8 +6,8 @@ used. Never attach the whole file to every container with `env_file`.
 
 ## Prepare a private candidate
 
-The Go helper is a development candidate; its Docker Compose round-trip has
-not yet passed the final image acceptance gate.
+The Go helper is a development candidate. A synthetic Docker Compose round-trip
+passed locally; the final migration and image acceptance gates are still open.
 
 Run the helper on the host that has the current production Compose file and
 its environment files. Choose a new output directory; the helper refuses to

@@ -1,8 +1,10 @@
 package main
 
 import (
+	"bufio"
 	"context"
 	"encoding/json"
+	"net"
 	"net/http"
 	"net/http/httptest"
 	"strings"
@@ -184,5 +186,30 @@ func TestTelegramHoldSurvivesClientCancellation(t *testing.T) {
 	case <-done:
 	case <-time.After(time.Second):
 		t.Fatal("hold did not release")
+	}
+}
+
+type hijackRecorder struct {
+	*httptest.ResponseRecorder
+	hijacked bool
+}
+
+func (w *hijackRecorder) Hijack() (net.Conn, *bufio.ReadWriter, error) {
+	a, b := net.Pipe()
+	_ = b.Close()
+	w.hijacked = true
+	return a, bufio.NewReadWriter(bufio.NewReader(a), bufio.NewWriter(a)), nil
+}
+func TestPartialDeliveryAcceptsOneThenDisconnects(t *testing.T) {
+	s := newState()
+	post(s.provider, "/__gate/control", `{"telegram_mode":"accept_one_then_unknown"}`, "", "")
+	one := post(s.provider, "/telegram/botfixture/sendMessage", `{}`, "", "")
+	if one.Code != 200 {
+		t.Fatal(one.Code)
+	}
+	w := &hijackRecorder{ResponseRecorder: httptest.NewRecorder()}
+	s.provider(w, httptest.NewRequest("POST", "/telegram/botfixture/sendMessage", strings.NewReader(`{}`)))
+	if !w.hijacked || s.counters["telegram"] != 2 {
+		t.Fatal("second message was not dropped")
 	}
 }

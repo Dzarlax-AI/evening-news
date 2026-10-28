@@ -23,6 +23,7 @@ type state struct {
 	telegram                   map[string]int
 	consumerMode, telegramMode string
 	consumerRequests           int
+	partialCalls               int
 	occurrences                map[string]entry
 	operations                 map[string]int
 	ingestion                  map[string]entry
@@ -144,8 +145,9 @@ func (s *state) provider(w http.ResponseWriter, r *http.Request) {
 		case "accept_then_hold":
 			s.telegramMode = mode
 			reset(&s.delivery, true)
-		case "normal", "release", "rate_limit":
+		case "normal", "release", "rate_limit", "accept_one_then_unknown":
 			s.telegramMode = mode
+			s.partialCalls = 0
 			reset(&s.delivery, false)
 		}
 		s.mu.Unlock()
@@ -250,7 +252,18 @@ func (s *state) provider(w http.ResponseWriter, r *http.Request) {
 		id := s.counters["telegram"]
 		release := s.delivery
 		mode := s.telegramMode
+		if mode == "accept_one_then_unknown" {
+			s.partialCalls++
+		}
+		partialCall := s.partialCalls
 		s.mu.Unlock()
+		if mode == "accept_one_then_unknown" && partialCall > 1 {
+			conn, _, err := w.(http.Hijacker).Hijack()
+			if err == nil {
+				_ = conn.Close()
+			}
+			return
+		}
 		if mode == "rate_limit" {
 			w.Header().Set("Retry-After", "1")
 			write(w, 429, map[string]any{"ok": false, "error_code": 429, "parameters": map[string]any{"retry_after": 1}})
