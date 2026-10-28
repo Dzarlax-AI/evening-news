@@ -25,9 +25,8 @@ func TestPostgresMetadataAndUsageStores(t *testing.T) {
 		}
 		t.Skip("TEST_DATABASE_URL not set; PostgreSQL integration is opt-in")
 	}
-	u, err := url.Parse(dsn)
-	if err != nil || (u.Hostname() != "localhost" && u.Hostname() != "127.0.0.1" && u.Hostname() != "::1") {
-		t.Fatal("TEST_DATABASE_URL must use loopback host")
+	if err := validateLoopbackTestDatabaseDSN(dsn); err != nil {
+		t.Fatal("TEST_DATABASE_URL must use a direct loopback connection")
 	}
 	ctx, cancel := context.WithTimeout(context.Background(), 20*time.Second)
 	defer cancel()
@@ -101,10 +100,21 @@ func TestPostgresMetadataAndUsageStores(t *testing.T) {
 		t.Fatal("metadata invalidation did not clear cache")
 	}
 	server := NewServer(Config{InputRate: .5, OutputRate: 1.5, CachedRate: .1}, pool)
+	longDomain := "https://news.example/" + strings.Repeat("x", 400)
+	server.storeUsage(usageRecord{domain: longDomain, analysisType: "synthetic_test", usage: analysis.Usage{PromptTokens: 9, CompletionTokens: 3, TotalTokens: 12}})
+	if server.usageFailed.Load() != 1 {
+		t.Fatalf("overlong legacy usage domain failures=%d, want 1", server.usageFailed.Load())
+	}
+	unicodeDomain := strings.Repeat("é", 200) // 200 PostgreSQL characters, 400 UTF-8 bytes.
+	server.storeUsage(usageRecord{domain: unicodeDomain, analysisType: "synthetic_test", usage: analysis.Usage{PromptTokens: 1, CompletionTokens: 1, TotalTokens: 2}})
+	var unicodeRows int
+	if err = pool.QueryRow(ctx, "SELECT count(*) FROM ai_usage_tracking WHERE domain=$1", unicodeDomain).Scan(&unicodeRows); err != nil || unicodeRows != 1 {
+		t.Fatalf("multibyte domain insert rows=%d err=%v", unicodeRows, err)
+	}
 	record := usageRecord{domain: "fixture.invalid", analysisType: "synthetic_test", usage: analysis.Usage{PromptTokens: 9, CompletionTokens: 3, CachedTokens: 2, TotalTokens: 14}}
 	server.storeUsage(record)
-	if server.usageFailed.Load() != 0 {
-		t.Fatal("best-effort usage INSERT failed")
+	if server.usageFailed.Load() != 1 {
+		t.Fatalf("later valid usage write changed failure count: %d", server.usageFailed.Load())
 	}
 	var tokens int
 	var cost string
@@ -121,5 +131,40 @@ func TestPostgresMetadataAndUsageStores(t *testing.T) {
 	}
 	if _, err = OpenDatabase(ctx, Config{DatabaseURL: dsn, DBMaxConns: 3}); err == nil || !strings.Contains(err.Error(), "pool") {
 		t.Fatalf("pool limit was not enforced: %v", err)
+	}
+}
+
+func validateLoopbackTestDatabaseDSN(dsn string) error {
+	u, err := url.Parse(dsn)
+	if err != nil || (u.Hostname() != "localhost" && u.Hostname() != "127.0.0.1" && u.Hostname() != "::1") {
+		return fmt.Errorf("non-loopback database URL")
+	}
+	query, err := url.ParseQuery(u.RawQuery)
+	if err != nil {
+		return fmt.Errorf("invalid database URL query")
+	}
+	for key := range query {
+		switch strings.ToLower(key) {
+		case "host", "hostaddr", "service", "servicefile":
+			return fmt.Errorf("database URL query can override routing")
+		}
+	}
+	return nil
+}
+
+func TestValidateLoopbackTestDatabaseDSN(t *testing.T) {
+	if err := validateLoopbackTestDatabaseDSN("postgres://fixture:fixture@[::1]:5432/testdb?application_name=fixture"); err != nil {
+		t.Fatalf("direct IPv6 loopback was rejected: %v", err)
+	}
+	for _, dsn := range []string{
+		"postgres://fixture:fixture@localhost:5432/testdb?host=remote.example",
+		"postgres://fixture:fixture@127.0.0.1:5432/testdb?host=127.0.0.1&host=remote.example",
+		"postgres://fixture:fixture@localhost:5432/testdb?hostaddr=203.0.113.10",
+		"postgres://fixture:fixture@localhost:5432/testdb?service=remote",
+		"postgres://fixture:fixture@localhost:5432/testdb?servicefile=%2Ftmp%2Fpg_service.conf",
+	} {
+		if err := validateLoopbackTestDatabaseDSN(dsn); err == nil {
+			t.Errorf("unsafe routing override accepted: %s", dsn)
+		}
 	}
 }

@@ -100,6 +100,7 @@ class AIRuntime:
         self._ready = False
         self._on_child_exit = None
         self._inflight: set[asyncio.Task] = set()
+        self._notify_tasks: set[asyncio.Task] = set()
 
     @property
     def ready(self) -> bool:
@@ -211,7 +212,9 @@ class AIRuntime:
                     await callback()
                 except Exception:
                     logger.error("native AI runtime exit handler failed")
-            asyncio.create_task(notify_executor())
+            task = asyncio.create_task(notify_executor())
+            self._notify_tasks.add(task)
+            task.add_done_callback(self._notify_tasks.discard)
 
     async def _rpc(self, method: str, path: str, body: dict | None = None,
                    *, timeout: float = 42, require_ready: bool = True) -> dict:

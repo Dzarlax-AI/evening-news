@@ -1,4 +1,5 @@
 import asyncio
+import gc
 import json
 import os
 import shlex
@@ -308,11 +309,30 @@ async def test_runtime_child_death_marks_not_ready_and_notifies_executor(tmp_pat
     monkeypatch.setattr(module.settings, "ai_output_cost_per_1m", None)
     monkeypatch.setattr(module.settings, "ai_cached_input_cost_per_1m", None)
     runtime = AIRuntime(str(_fake_runtime_binary(tmp_path)))
-    stopped = asyncio.Event()
-    await runtime.start(on_child_exit=lambda: _async_set(stopped))
-    runtime.process.kill()
-    await asyncio.wait_for(stopped.wait(), 2)
+    callback_started = asyncio.Event()
+    allow_callback_finish = asyncio.Event()
+    callback_finished = asyncio.Event()
+
+    async def on_child_exit():
+        callback_started.set()
+        await allow_callback_finish.wait()
+        callback_finished.set()
+
+    await runtime.start(on_child_exit=on_child_exit)
+    original_process = runtime.process
+    original_process.kill()
+    await asyncio.wait_for(callback_started.wait(), 2)
     assert runtime.ready is False
+    assert runtime.process is original_process
+    assert len(runtime._notify_tasks) == 1
+    notification = next(iter(runtime._notify_tasks))
+    gc.collect()
+    assert not notification.done()
+    allow_callback_finish.set()
+    await asyncio.wait_for(notification, 2)
+    await asyncio.wait_for(callback_finished.wait(), 2)
+    assert not runtime._notify_tasks
+    assert runtime.process is original_process
     await runtime.stop()
 
 
@@ -346,7 +366,3 @@ async def test_canceling_one_rpc_keeps_shared_runtime_alive(tmp_path, monkeypatc
     )
     assert result["choices"][0]["message"]["content"] == "ok"
     await runtime.stop()
-
-
-async def _async_set(event):
-    event.set()
