@@ -164,3 +164,51 @@ func TestAnalyzeTrimsWhitespaceInLegacyNumericStrings(t *testing.T) {
 		t.Fatalf("category_confidence=%v, want 0.72", got)
 	}
 }
+
+func TestAnalyzeAcceptsLiteralPercentInArticlePath(t *testing.T) {
+	for _, articleURL := range []string{
+		"https://example.test/deal-100%-off",
+		"https://example.test/path?discount=100%",
+		"https://example.test/path#offer-100%",
+	} {
+		t.Run(articleURL, func(t *testing.T) {
+			requests := 0
+			server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+				requests++
+				_, _ = w.Write([]byte(providerResponse(`"promptTokenCount":1,"candidatesTokenCount":1,"totalTokenCount":2`)))
+			}))
+			defer server.Close()
+			r := testRequest(server.URL + "/v1/models")
+			r.URL = articleURL
+			result, _, err := Analyze(context.Background(), r, ProviderConfig{
+				APIKey: "key", Model: r.Model, Endpoint: r.Endpoint, Client: server.Client(),
+			})
+			if err != nil {
+				t.Fatal(err)
+			}
+			if result["summary"] != "ok" || requests != 1 {
+				t.Fatalf("result=%#v provider requests=%d", result, requests)
+			}
+		})
+	}
+}
+
+func TestAnalyzeRejectsInvalidArticleURLs(t *testing.T) {
+	for _, rawURL := range []string{
+		"https://exa%mple.test/path%",          // invalid escape in authority
+		"https://user:pass@example.test/path%", // userinfo remains forbidden
+		"https:///empty-host/path%",
+		"ftp://example.test/path%",
+		"https://example.test/path\x00%",
+	} {
+		t.Run(rawURL, func(t *testing.T) {
+			r := testRequest("https://provider.example/v1/models")
+			r.URL = rawURL
+			_, _, err := Analyze(context.Background(), r, ProviderConfig{})
+			var analysisErr *AnalysisError
+			if !errors.As(err, &analysisErr) || analysisErr.Detail.Code != CodeInvalidInput {
+				t.Fatalf("Analyze error = %#v, want %s", err, CodeInvalidInput)
+			}
+		})
+	}
+}

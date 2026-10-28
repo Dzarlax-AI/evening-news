@@ -3,6 +3,7 @@ package analysis
 import (
 	"errors"
 	"net/url"
+	"strings"
 )
 
 const (
@@ -75,7 +76,39 @@ func validateRequest(r Request) error {
 
 func validHTTPURL(raw string) bool {
 	u, err := url.Parse(raw)
-	return err == nil && (u.Scheme == "http" || u.Scheme == "https") && u.Hostname() != "" && u.User == nil
+	if err == nil {
+		return (u.Scheme == "http" || u.Scheme == "https") && u.Hostname() != "" && u.User == nil
+	}
+	var escapeErr url.EscapeError
+	if !errors.As(err, &escapeErr) {
+		return false
+	}
+	return validHTTPURLWithPathOrFragmentEscape(raw)
+}
+
+func isValidHTTPAuthority(u *url.URL) bool {
+	return (u.Scheme == "http" || u.Scheme == "https") && u.Hostname() != "" && u.User == nil
+}
+
+func validHTTPURLWithPathOrFragmentEscape(raw string) bool {
+	schemeEnd := strings.Index(raw, "://")
+	if schemeEnd <= 0 {
+		return false
+	}
+	rest := raw[schemeEnd+3:]
+	authorityEnd := strings.IndexAny(rest, "/?#")
+	if authorityEnd < 0 {
+		authorityEnd = len(rest)
+	}
+	if authorityEnd == 0 {
+		return false
+	}
+	authority := rest[:authorityEnd]
+	parsedAuthority, err := url.Parse(raw[:schemeEnd+3] + authority)
+	if err != nil || !isValidHTTPAuthority(parsedAuthority) {
+		return false
+	}
+	return true
 }
 
 func requiredConfig(config ProviderConfig) error {
