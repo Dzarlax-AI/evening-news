@@ -6,6 +6,7 @@ import (
 	"bytes"
 	"context"
 	"crypto/rand"
+	"crypto/sha256"
 	"encoding/hex"
 	"encoding/json"
 	"errors"
@@ -16,9 +17,13 @@ import (
 	"os"
 	"os/exec"
 	"path/filepath"
+	"regexp"
+	"strconv"
 	"strings"
 	"time"
 )
+
+var jobIDPattern = regexp.MustCompile(`^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$`)
 
 type gate struct{ project, dir, compose string }
 
@@ -33,6 +38,35 @@ func (g *gate) docker(input []byte, args ...string) (string, error) {
 	}
 	return strings.TrimSpace(string(out)), nil
 }
+func (g *gate) diagnose() {
+	for _, role := range []string{"postgres", "origin", "fake", "collector", "executor", "background", "web"} {
+		id, e := g.docker(nil, "ps", "-aq", role)
+		if e != nil || id == "" {
+			fmt.Fprintf(os.Stderr, "fixture role=%s state=absent\n", role)
+			continue
+		}
+		raw, e := exec.Command("docker", "inspect", "--format", `{{.State.Status}} {{.State.ExitCode}} {{.State.OOMKilled}}`, id).Output()
+		if e != nil {
+			fmt.Fprintf(os.Stderr, "fixture role=%s state=unknown\n", role)
+			continue
+		}
+		fields := strings.Fields(string(raw))
+		if len(fields) != 3 || !map[string]bool{"created": true, "running": true, "exited": true, "restarting": true, "dead": true, "paused": true}[fields[0]] || !regexp.MustCompile(`^[0-9]{1,3}$`).MatchString(fields[1]) || (fields[2] != "true" && fields[2] != "false") {
+			fmt.Fprintf(os.Stderr, "fixture role=%s state=unknown\n", role)
+			continue
+		}
+		logs, _ := exec.Command("docker", "logs", "--tail", "80", id).CombinedOutput()
+		code := "none"
+		for _, candidate := range []struct{ needle, code string }{{"DATABASE_URL is required", "database_config"}, {"ADMIN_PASSWORD is required", "admin_config"}, {"WEB_BACKEND_URL and WEB_BACKEND_TOKEN", "backend_config"}, {"database unavailable", "database_unavailable"}, {"invalid runtime configuration", "runtime_config"}, {"invalid extractor configuration", "collector_config"}, {"invalid extractor token", "collector_token"}, {"address already in use", "address_in_use"}, {"permission denied", "permission_denied"}, {"no such file or directory", "missing_file"}, {"connection refused", "connection_refused"}, {"schema", "schema_error"}} {
+			if strings.Contains(strings.ToLower(string(logs)), strings.ToLower(candidate.needle)) {
+				code = candidate.code
+				break
+			}
+		}
+		fmt.Fprintf(os.Stderr, "fixture role=%s state=%s exit=%s oom=%s diagnostic=%s\n", role, fields[0], fields[1], fields[2], code)
+	}
+}
+
 func (g *gate) run() (resultErr error) {
 	refs := map[string]string{"web": "evening-news-web:consolidation-fixture", "background": "evening-news-background:consolidation-fixture", "executor": "evening-news-executor:consolidation-fixture"}
 	inspect := func(args ...string) (string, error) {
@@ -44,6 +78,9 @@ func (g *gate) run() (resultErr error) {
 		return err
 	}
 	defer func() {
+		if resultErr != nil {
+			g.diagnose()
+		}
 		if _, err := g.docker(nil, "down", "--volumes", "--remove-orphans"); err != nil {
 			resultErr = errors.New("fixture cleanup failed")
 		}
@@ -93,12 +130,62 @@ func (g *gate) run() (resultErr error) {
 	if _, e := g.docker(nil, "run", "--rm", "--no-deps", "seed"); e != nil {
 		return errors.New("seed failed")
 	}
-	if _, e := g.docker(nil, "up", "-d", "--pull", "never", "executor", "background", "web"); e != nil {
+	if _, e := g.docker(nil, "up", "-d", "--pull", "never", "background"); e != nil {
 		return e
 	}
-	port, e := g.docker(nil, "port", "web", "8000")
-	if e != nil {
+	for i := 0; i < 90; i++ {
+		if _, e := g.docker(nil, "exec", "-T", "background", "wget", "-q", "-O", "/dev/null", "http://127.0.0.1:8095/healthz"); e == nil {
+			break
+		}
+		if i == 89 {
+			return errors.New("background liveness unavailable without domain")
+		}
+		time.Sleep(time.Second)
+	}
+	if _, e := g.docker(nil, "exec", "-T", "background", "/news-background", "healthcheck"); e == nil {
+		return errors.New("background ready without domain")
+	}
+	container, e := g.docker(nil, "ps", "-q", "background")
+	if e != nil || container == "" {
+		return errors.New("background container missing")
+	}
+	inspectPID := func() (string, error) {
+		out, e := exec.Command("docker", "inspect", "--format", "{{.State.Pid}}", container).Output()
+		return strings.TrimSpace(string(out)), e
+	}
+	beforePID, e := inspectPID()
+	if e != nil || beforePID == "0" || beforePID == "" {
+		return errors.New("background PID missing")
+	}
+	if _, e := g.docker(nil, "up", "-d", "--pull", "never", "executor"); e != nil {
 		return e
+	}
+	for i := 0; i < 90; i++ {
+		if _, e := g.docker(nil, "exec", "-T", "background", "/news-background", "healthcheck"); e == nil {
+			break
+		}
+		if i == 89 {
+			return errors.New("background readiness unavailable with domain")
+		}
+		time.Sleep(time.Second)
+	}
+	afterPID, e := inspectPID()
+	if e != nil || afterPID != beforePID {
+		return errors.New("background PID changed during domain recovery")
+	}
+	if _, e := g.docker(nil, "up", "-d", "--pull", "never", "web"); e != nil {
+		return e
+	}
+	var port string
+	for i := 0; i < 10; i++ {
+		port, e = g.docker(nil, "port", "web", "8000")
+		if e == nil && port != "" {
+			break
+		}
+		if i == 9 {
+			return errors.New("web published port unavailable")
+		}
+		time.Sleep(time.Second)
 	}
 	idx := strings.LastIndex(port, ":")
 	if idx < 0 {
@@ -124,7 +211,7 @@ func (g *gate) run() (resultErr error) {
 			var v struct {
 				Job string `json:"job_id"`
 			}
-			if json.Unmarshal(body, &v) != nil || v.Job == "" {
+			if json.Unmarshal(body, &v) != nil || !jobIDPattern.MatchString(v.Job) {
 				return errors.New("invalid accepted job")
 			}
 			job = v.Job
@@ -165,6 +252,423 @@ func (g *gate) run() (resultErr error) {
 	}
 	if json.Unmarshal([]byte(receipt), &summary) != nil || !summary.Valid || summary.Processed < 1 {
 		return errors.New("source receipts incomplete")
+	}
+	stopStart := time.Now()
+	if _, e = g.docker(nil, "stop", "--timeout", "30", "background"); e != nil || time.Since(stopStart) >= 30*time.Second {
+		return errors.New("idle background shutdown failed")
+	}
+	exitCode, e := exec.Command("docker", "inspect", "--format", "{{.State.ExitCode}}", container).Output()
+	if e != nil || strings.TrimSpace(string(exitCode)) != "0" {
+		return errors.New("idle background shutdown exit failed")
+	}
+	if _, e = g.docker(nil, "start", "background"); e != nil {
+		return errors.New("background restart failed")
+	}
+	for i := 0; i < 90; i++ {
+		if _, e = g.docker(nil, "exec", "-T", "background", "/news-background", "healthcheck"); e == nil {
+			break
+		}
+		if i == 89 {
+			return errors.New("background readiness after restart failed")
+		}
+		time.Sleep(time.Second)
+	}
+	currentContainer, e := g.docker(nil, "ps", "-q", "background")
+	if e != nil || currentContainer != container {
+		return errors.New("background container changed during restart")
+	}
+	// Hold a fresh article during a real AI callback, then stop and restart the
+	// same background container. The fake counts acceptance before blocking.
+	counters := func() (int, error) {
+		out, e := g.docker(nil, "exec", "-T", "fake", "wget", "-q", "-O", "-", "http://127.0.0.1:8090/__gate/counters")
+		if e != nil {
+			return 0, e
+		}
+		var v struct {
+			Providers struct {
+				Gemini int `json:"gemini"`
+			} `json:"providers"`
+		}
+		if json.Unmarshal([]byte(out), &v) != nil {
+			return 0, errors.New("fixture counters invalid")
+		}
+		return v.Providers.Gemini, nil
+	}
+	control := func(mode string) error {
+		_, e := g.docker(nil, "exec", "-T", "fake", "wget", "-q", "-O", "/dev/null", "--header=Content-Type: application/json", "--post-data={\"gemini_mode\":\""+mode+"\"}", "http://127.0.0.1:8090/__gate/control")
+		return e
+	}
+	before, e := counters()
+	if e != nil {
+		return errors.New("fixture counters unavailable")
+	}
+	if e = control("block"); e != nil {
+		return errors.New("fixture AI hold unavailable")
+	}
+	defer control("release")
+	marker := g.project[len(g.project)-12:]
+	content := strings.Repeat("This is a synthetic fixture article created only for the disposable active shutdown test. Its unique body ensures the article has not passed through prior processing. ", 10) + marker
+	digest := sha256.Sum256([]byte(content))
+	sql := fmt.Sprintf(`INSERT INTO articles (source_id,title,url,content,fetched_at,processed,summary_processed,category_processed,ad_processed,processing_state,processing_attempts,hash_content,is_advertisement,ad_confidence,media_files) SELECT id,'Synthetic active SIGTERM fixture %s','https://rss.fixture.test/active-sigterm/%s','%s',clock_timestamp() AT TIME ZONE 'UTC',false,false,false,false,'pending',0,'%x',false,0,'[]'::jsonb FROM sources WHERE name='Go Web Gate RSS 1' RETURNING id`, marker, marker, content, digest)
+	articleID, e := g.docker(nil, "exec", "-T", "postgres", "psql", "-U", "gate_user", "-d", "gate_db", "-qAtc", sql)
+	if e != nil || articleID == "" {
+		return errors.New("active shutdown article seed failed")
+	}
+	status, body, e := request(client, "POST", base+"/api/v1/articles/"+articleID+"/reprocess", auth, []byte(`{"force":false}`), map[string]string{"Idempotency-Key": "active-term-fixture-" + marker})
+	if e != nil || status != 202 {
+		return errors.New("active shutdown job not accepted")
+	}
+	var active struct {
+		Job string `json:"job_id"`
+	}
+	if json.Unmarshal(body, &active) != nil || !jobIDPattern.MatchString(active.Job) {
+		return errors.New("active shutdown job invalid")
+	}
+	for i := 0; i < 90; i++ {
+		n, e := counters()
+		if e == nil && n > before {
+			break
+		}
+		if i == 89 {
+			return errors.New("active shutdown job did not reach fake AI")
+		}
+		time.Sleep(time.Second)
+	}
+	stopStart = time.Now()
+	if _, e = g.docker(nil, "stop", "--timeout", "30", "background"); e != nil || time.Since(stopStart) >= 30*time.Second {
+		return errors.New("active background shutdown failed")
+	}
+	exitCode, e = exec.Command("docker", "inspect", "--format", "{{.State.ExitCode}}", container).Output()
+	if e != nil || strings.TrimSpace(string(exitCode)) != "0" {
+		return errors.New("active background shutdown exit failed")
+	}
+	if e = control("release"); e != nil {
+		return errors.New("fixture AI release failed")
+	}
+	if _, e = g.docker(nil, "start", "background"); e != nil {
+		return errors.New("active background restart failed")
+	}
+	for i := 0; i < 180; i++ {
+		status, body, e := request(client, "GET", base+"/api/v1/jobs/"+active.Job, auth, nil, nil)
+		if e == nil && status == 200 {
+			var v struct {
+				Status, JobID string `json:"-"`
+			}
+			var wire map[string]any
+			if json.Unmarshal(body, &wire) == nil {
+				v.Status, _ = wire["status"].(string)
+				v.JobID, _ = wire["job_id"].(string)
+				if v.Status == "succeeded" && v.JobID == active.Job {
+					break
+				}
+				if v.Status == "failed" || v.Status == "delivery_unknown" {
+					return errors.New("active shutdown job recovery failed")
+				}
+			}
+		}
+		if i == 179 {
+			return errors.New("active shutdown job recovery timed out")
+		}
+		time.Sleep(time.Second)
+	}
+	currentContainer, e = g.docker(nil, "ps", "-q", "background")
+	if e != nil || currentContainer != container {
+		return errors.New("active shutdown changed background container")
+	}
+	// Verify each background component uses its own scoped DB login and the
+	// worker has no article-table privileges.
+	roleRows, e := g.docker(nil, "exec", "-T", "postgres", "psql", "-U", "gate_user", "-d", "gate_db", "-qAtc", `SELECT usename,datname,count(*) FROM pg_stat_activity WHERE usename IN ('fixture_worker_runtime','fixture_execution_runtime','fixture_scheduler_runtime','news_ingestion_runtime','news_processing_runtime') GROUP BY usename,datname ORDER BY usename,datname`)
+	if e != nil {
+		return errors.New("runtime database roles unavailable")
+	}
+	expectedDB := map[string]string{"fixture_worker_runtime": "gate_db", "fixture_execution_runtime": "gate_db", "fixture_scheduler_runtime": "gate_scheduler", "news_ingestion_runtime": "gate_db", "news_processing_runtime": "gate_db"}
+	caps := map[string]int{"fixture_worker_runtime": 4, "fixture_execution_runtime": 3, "fixture_scheduler_runtime": 3, "news_ingestion_runtime": 3, "news_processing_runtime": 3}
+	seen := map[string]bool{}
+	for _, line := range strings.Split(roleRows, "\n") {
+		fields := strings.Split(line, "|")
+		if len(fields) != 3 {
+			return errors.New("runtime database roles invalid")
+		}
+		count, e := strconv.Atoi(fields[2])
+		if e != nil || expectedDB[fields[0]] != fields[1] || count < 1 || count > caps[fields[0]] || seen[fields[0]] {
+			return errors.New("runtime database roles invalid")
+		}
+		seen[fields[0]] = true
+	}
+	if len(seen) != 5 {
+		return errors.New("runtime database roles missing")
+	}
+	privilege, e := g.docker(nil, "exec", "-T", "postgres", "psql", "-U", "gate_user", "-d", "gate_db", "-qAtc", `SELECT (has_table_privilege('fixture_worker_runtime','public.articles','SELECT') OR has_table_privilege('fixture_worker_runtime','public.articles','INSERT') OR has_table_privilege('fixture_worker_runtime','public.articles','UPDATE') OR has_table_privilege('fixture_worker_runtime','public.articles','DELETE'))::text`)
+	if e != nil || privilege != "false" {
+		return errors.New("worker article privilege exceeded")
+	}
+	// Generate a fresh immutable edition via the real web/job/domain path.
+	pg := func(sql string) (string, error) {
+		return g.docker(nil, "exec", "-T", "postgres", "psql", "-U", "gate_user", "-d", "gate_db", "-qAtc", sql)
+	}
+	enqueue := func(path, key string) (string, error) {
+		status, body, e := request(client, "POST", base+path, auth, []byte(`{}`), map[string]string{"Idempotency-Key": key})
+		if e != nil || status != 202 {
+			return "", errors.New("fixture job not accepted")
+		}
+		var v struct {
+			Job string `json:"job_id"`
+		}
+		if json.Unmarshal(body, &v) != nil || !jobIDPattern.MatchString(v.Job) {
+			return "", errors.New("fixture job identity invalid")
+		}
+		return v.Job, nil
+	}
+	waitJob := func(id, want string) error {
+		for i := 0; i < 180; i++ {
+			status, body, e := request(client, "GET", base+"/api/v1/jobs/"+id, auth, nil, nil)
+			if e == nil && status == 200 {
+				var v struct {
+					Status string `json:"status"`
+				}
+				if json.Unmarshal(body, &v) == nil {
+					if v.Status == want {
+						return nil
+					}
+					if v.Status == "failed" || v.Status == "delivery_unknown" || v.Status == "interrupted" {
+						return errors.New("fixture job terminal state mismatch")
+					}
+				}
+			}
+			time.Sleep(time.Second)
+		}
+		return errors.New("fixture job timed out")
+	}
+	defaultCounters := func() (int, int, error) {
+		out, e := g.docker(nil, "exec", "-T", "fake", "wget", "-q", "-O", "-", "http://127.0.0.1:8090/__gate/counters")
+		if e != nil {
+			return 0, 0, e
+		}
+		var v struct {
+			Providers struct {
+				Telegram  int `json:"telegram"`
+				Editorial int `json:"editorial_gemini"`
+			} `json:"providers"`
+		}
+		if json.Unmarshal([]byte(out), &v) != nil {
+			return 0, 0, errors.New("fixture counters invalid")
+		}
+		return v.Providers.Telegram, v.Providers.Editorial, nil
+	}
+	beforeSend, beforeEditorial, e := defaultCounters()
+	if e != nil {
+		return errors.New("fixture counters unavailable")
+	}
+	occurrence := "00000000-0000-4000-8000-000000000071"
+	envelope, _ := json.Marshal(map[string]any{"version": 1, "occurrence_id": occurrence, "schedule_key": "news:news_digest", "schedule_revision": 1, "scheduled_for": time.Now().UTC().Format(time.RFC3339), "operation": "news_digest", "payload": map[string]any{}})
+	status, body, e = request(client, "POST", base+"/api/v1/internal/scheduled-jobs", "Bearer fixture-only-scheduled-jobs-token", envelope, map[string]string{"Idempotency-Key": occurrence})
+	if e != nil || status != 202 {
+		return errors.New("default digest job not accepted")
+	}
+	var scheduled struct {
+		Job string `json:"job_id"`
+	}
+	if json.Unmarshal(body, &scheduled) != nil || !jobIDPattern.MatchString(scheduled.Job) {
+		return errors.New("default digest job invalid")
+	}
+	if e = waitJob(scheduled.Job, "succeeded"); e != nil {
+		return errors.New("default digest job failed")
+	}
+	defaultProof, e := pg("SELECT COALESCE(j.result->>'parts_sent','') || '|' || count(e.id)::text || '|' || COALESCE(max(jsonb_array_length(e.snapshot->'articles')),0)::text FROM background_jobs j LEFT JOIN editorial_digest_editions e ON e.job_id=j.id AND e.locale='ru' WHERE j.id='" + scheduled.Job + "'::uuid GROUP BY j.id")
+	if e != nil {
+		return errors.New("default digest receipt unavailable")
+	}
+	fields := strings.Split(defaultProof, "|")
+	if len(fields) != 3 {
+		return errors.New("default digest receipt invalid")
+	}
+	parts, e1 := strconv.Atoi(fields[0])
+	editions, e2 := strconv.Atoi(fields[1])
+	articles, e3 := strconv.Atoi(fields[2])
+	afterSend, afterEditorial, e := defaultCounters()
+	if e != nil || e1 != nil || e2 != nil || e3 != nil || parts < 1 || editions != 1 || articles < 1 || afterSend <= beforeSend || afterEditorial <= beforeEditorial {
+		return errors.New("default digest did not generate and deliver")
+	}
+	previous, e := pg(`SELECT COALESCE((SELECT id::text FROM editorial_digest_editions WHERE edition_date=(clock_timestamp() AT TIME ZONE 'UTC')::date AND locale='ru' ORDER BY created_at DESC,id DESC LIMIT 1),'')`)
+	if e != nil {
+		return errors.New("edition query failed")
+	}
+	generation, e := enqueue("/api/v1/summaries/generate", "vertical-fresh-edition-"+marker)
+	if e != nil {
+		return e
+	}
+	if e = waitJob(generation, "succeeded"); e != nil {
+		return errors.New("edition generation failed")
+	}
+	fresh, e := pg("SELECT e.id::text FROM editorial_digest_editions e JOIN background_job_executions x ON x.job_id=e.job_id AND x.attempt_generation=e.attempt_generation WHERE e.job_id='" + generation + "'::uuid AND e.locale='ru' AND x.state='succeeded'")
+	if e != nil || !jobIDPattern.MatchString(fresh) || fresh == previous {
+		return errors.New("fresh edition receipt missing")
+	}
+	latest, e := pg(`SELECT COALESCE((SELECT id::text FROM editorial_digest_editions WHERE edition_date=(clock_timestamp() AT TIME ZONE 'UTC')::date AND locale='ru' ORDER BY created_at DESC,id DESC LIMIT 1),'')`)
+	if e != nil || latest != fresh {
+		return errors.New("fresh edition is not latest")
+	}
+	// Provider accepts one message and withholds its response. Force loss of
+	// the worker lease while it is in flight, then require unknown without replay.
+	telegramCount := func() (int, error) {
+		out, e := g.docker(nil, "exec", "-T", "fake", "wget", "-q", "-O", "-", "http://127.0.0.1:8090/__gate/counters")
+		if e != nil {
+			return 0, e
+		}
+		var v struct {
+			Providers struct {
+				Telegram int `json:"telegram"`
+			} `json:"providers"`
+		}
+		if json.Unmarshal([]byte(out), &v) != nil {
+			return 0, errors.New("invalid fixture counters")
+		}
+		return v.Providers.Telegram, nil
+	}
+	telegramControl := func(mode string) error {
+		_, e := g.docker(nil, "exec", "-T", "fake", "wget", "-q", "-O", "/dev/null", "--header=Content-Type: application/json", "--post-data={\"telegram_mode\":\""+mode+"\"}", "http://127.0.0.1:8090/__gate/control")
+		return e
+	}
+	if e = telegramControl("accept_then_hold"); e != nil {
+		return errors.New("telegram hold failed")
+	}
+	defer telegramControl("release")
+	beforeTelegram, e := telegramCount()
+	if e != nil {
+		return errors.New("telegram counter unavailable")
+	}
+	delivery, e := enqueue("/api/v1/telegram/send-digest", "vertical-unknown-delivery-"+marker)
+	if e != nil {
+		return e
+	}
+	for i := 0; i < 90; i++ {
+		n, e := telegramCount()
+		if e == nil && n == beforeTelegram+1 {
+			break
+		}
+		if e == nil && n > beforeTelegram+1 {
+			return errors.New("duplicate telegram before lease loss")
+		}
+		if i == 89 {
+			return errors.New("fake telegram did not accept")
+		}
+		time.Sleep(time.Second)
+	}
+	leasePID, e := inspectPID()
+	if e != nil || leasePID == "" || leasePID == "0" {
+		return errors.New("worker process unavailable")
+	}
+	leaseBefore, e := pg("SELECT generation::text || '|' || lock_backend_pid::text FROM background_worker_status WHERE id=1")
+	if e != nil || leaseBefore == "" {
+		return errors.New("worker lease unavailable")
+	}
+	lockName := g.project + "-worker-lock"
+	lockID, e := g.docker(nil, "run", "-d", "--name", lockName, "--no-deps", "lock")
+	if e != nil || lockID == "" {
+		return errors.New("worker lock helper failed")
+	}
+	defer func() { _ = exec.Command("docker", "rm", "-f", lockID).Run() }()
+	for i := 0; i < 30; i++ {
+		out, _ := exec.Command("docker", "logs", lockID).Output()
+		if strings.Contains(string(out), "fixture_lock_acquired") {
+			break
+		}
+		if i == 29 {
+			return errors.New("worker lock not acquired")
+		}
+		time.Sleep(time.Second)
+	}
+	readinessLost := false
+	for i := 0; i < 22; i++ {
+		if _, e = g.docker(nil, "exec", "-T", "background", "/news-background", "healthcheck"); e != nil {
+			readinessLost = true
+			break
+		}
+		time.Sleep(time.Second)
+	}
+	if !readinessLost {
+		return errors.New("lease loss did not drop readiness")
+	}
+	lockExit, e := exec.Command("docker", "wait", lockID).Output()
+	if e != nil || strings.TrimSpace(string(lockExit)) != "0" {
+		return errors.New("worker lock helper failed")
+	}
+	for i := 0; i < 90; i++ {
+		if _, e = g.docker(nil, "exec", "-T", "background", "/news-background", "healthcheck"); e == nil {
+			break
+		}
+		if i == 89 {
+			return errors.New("worker did not recover")
+		}
+		time.Sleep(time.Second)
+	}
+	leaseAfter, e := pg("SELECT generation::text || '|' || lock_backend_pid::text FROM background_worker_status WHERE id=1")
+	if e != nil {
+		return errors.New("worker lease not replaced")
+	}
+	beforeFields, afterFields := strings.Split(leaseBefore, "|"), strings.Split(leaseAfter, "|")
+	if len(beforeFields) != 2 || len(afterFields) != 2 {
+		return errors.New("worker lease snapshot invalid")
+	}
+	beforeGeneration, e1 := strconv.Atoi(beforeFields[0])
+	afterGeneration, e2 := strconv.Atoi(afterFields[0])
+	oldPID, e3 := strconv.Atoi(beforeFields[1])
+	newPID, e4 := strconv.Atoi(afterFields[1])
+	if e1 != nil || e2 != nil || e3 != nil || e4 != nil || oldPID <= 0 || newPID <= 0 || afterGeneration <= beforeGeneration || newPID == oldPID {
+		return errors.New("worker lease not replaced")
+	}
+	oldSessions, e := pg(fmt.Sprintf("SELECT count(*) FROM pg_stat_activity WHERE pid=%d", oldPID))
+	if e != nil || oldSessions != "0" {
+		return errors.New("old worker session not released")
+	}
+	pidAfter, e := inspectPID()
+	if e != nil || pidAfter != leasePID {
+		return errors.New("worker recovery changed process")
+	}
+	if e = telegramControl("release"); e != nil {
+		return errors.New("telegram release failed")
+	}
+	if e = waitJob(delivery, "delivery_unknown"); e != nil {
+		return errors.New("ambiguous delivery not marked unknown")
+	}
+	time.Sleep(2 * time.Second)
+	afterTelegram, e := telegramCount()
+	if e != nil || afterTelegram != beforeTelegram+1 {
+		return errors.New("ambiguous delivery replayed")
+	}
+	// A 429 must be persisted as a definite rejection, with no immediate
+	// extra send by the same attempt.
+	rateEdition, e := enqueue("/api/v1/summaries/generate", "vertical-rate-edition-"+marker)
+	if e != nil {
+		return e
+	}
+	if e = waitJob(rateEdition, "succeeded"); e != nil {
+		return errors.New("rate limit edition failed")
+	}
+	if e = telegramControl("rate_limit"); e != nil {
+		return errors.New("rate limit fixture control failed")
+	}
+	rateBefore, e := telegramCount()
+	if e != nil {
+		return errors.New("rate limit counter unavailable")
+	}
+	rateJob, e := enqueue("/api/v1/telegram/send-digest", "vertical-rate-delivery-"+marker)
+	if e != nil {
+		return e
+	}
+	if e = waitJob(rateJob, "failed"); e != nil {
+		return errors.New("rate limit delivery did not fail")
+	}
+	rateAfter, e := telegramCount()
+	if e != nil || rateAfter != rateBefore+1 {
+		return errors.New("rate limited delivery replayed")
+	}
+	rateProof, e := pg("SELECT count(*) FROM digest_delivery_parts WHERE job_id='" + rateJob + "'::uuid AND state='rejected' AND status_code=429 AND retry_after_seconds>0")
+	if e != nil || rateProof != "1" {
+		return errors.New("rate limit receipt missing")
+	}
+	if e = telegramControl("normal"); e != nil {
+		return errors.New("rate limit fixture release failed")
 	}
 	if err := fixturegate.VerifyImages(refs, initial, inspect); err != nil {
 		return err
@@ -228,7 +732,7 @@ GRANT SELECT,INSERT,UPDATE ON TABLE public.background_job_executions TO fixture_
 GRANT SELECT,UPDATE ON TABLE public.schedule_settings,public.articles TO fixture_execution_runtime;`
 
 func prepare(g *gate) error {
-	for _, name := range []string{"fixture-origin", "fixture-services", "seed-fixture-sources", "check-fixture-receipts"} {
+	for _, name := range []string{"fixture-origin", "fixture-services", "seed-fixture-sources", "check-fixture-receipts", "fixture-worker-lock"} {
 		cmd := exec.Command("go", "build", "-o", filepath.Join(g.dir, name), "./cmd/"+name)
 		cmd.Dir = "go-tools"
 		cmd.Env = append(os.Environ(), "GOOS=linux", "GOARCH=amd64", "CGO_ENABLED=0")
@@ -307,6 +811,12 @@ const composeTemplate = `services:
     image: alpine:3.21
     entrypoint: ["/fixture/seed-fixture-sources"]
     environment: {FIXTURE_DATABASE_URL: 'postgres://gate_user:fixture-only-password@postgres:5432/gate_db?sslmode=disable', NEWS_FIXTURE_CONFIRM: disposable-fixture-only}
+    volumes: ["FIXTURE_DIR:/fixture:ro"]
+    networks: [fixture]
+  lock:
+    image: alpine:3.21
+    entrypoint: ["/fixture/fixture-worker-lock"]
+    environment: {FIXTURE_DATABASE_URL: 'postgres://fixture_worker_runtime:fixture-only-password@postgres:5432/gate_db?sslmode=disable', NEWS_FIXTURE_CONFIRM: disposable-fixture-only}
     volumes: ["FIXTURE_DIR:/fixture:ro"]
     networks: [fixture]
   receipt:
