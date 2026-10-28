@@ -96,247 +96,6 @@ except Exception:
 '''
 
 
-def observer_extraction_mounts(stage: Path) -> list[str]:
-    """Mount the staged Python extraction paths under test into the observer."""
-    extraction = stage / 'benchmark/news_aggregator/extraction'
-    return [
-        str(extraction / 'service_client.py') + ':/app/news_aggregator/extraction/service_client.py:ro',
-        str(extraction / 'extraction_utils.py') + ':/app/news_aggregator/extraction/extraction_utils.py:ro',
-    ]
-
-
-def observer_core_extractor_mounts(stage: Path) -> list[str]:
-    """Mount current config and production CoreExtractor for isolated routed tests."""
-    return [
-        str(stage / 'benchmark/news_aggregator/config.py') + ':/app/news_aggregator/config.py:ro',
-        str(stage / 'benchmark/news_aggregator/extraction/core_extractor.py') +
-        ':/app/news_aggregator/extraction/core_extractor.py:ro',
-    ]
-
-
-CORE_EXTRACTOR_NATIVE_RECEIPT_FLAGS = (
-    'production_core_route','real_http_client','native_browser_requested','positive_article',
-    'cookie_confirmed','metadata_present','publisher_auth_rejected','python_browser_imported',
-    'ai_db_telegram_imported','browser_generation_unchanged')
-
-
-def validate_core_extractor_native_receipt(value: object) -> dict:
-    fields=set(CORE_EXTRACTOR_NATIVE_RECEIPT_FLAGS)|{
-        'state','publisher_auth_code','python_fallback_calls','success_record_count',
-        'learned_pattern_lookups','learning_backend','article_characters'}
-    if not isinstance(value,dict) or set(value)!=fields or value.get('state')!='passed':
-        raise StandError('core_extractor_native_receipt_invalid')
-    for key in CORE_EXTRACTOR_NATIVE_RECEIPT_FLAGS:
-        expected=False if key in {'python_browser_imported','ai_db_telegram_imported'} else True
-        if value.get(key) is not expected:
-            raise StandError('core_extractor_native_receipt_invalid')
-    if (value.get('publisher_auth_code') not in {'upstream_auth_required','native_browser_http_rejected'}
-            or value.get('learning_backend')!='in_memory'
-            or type(value.get('python_fallback_calls')) is not int or value['python_fallback_calls']!=0
-            or type(value.get('success_record_count')) is not int or value['success_record_count']!=1
-            or type(value.get('learned_pattern_lookups')) is not int or value['learned_pattern_lookups']!=2
-            or type(value.get('article_characters')) is not int
-            or not 200<=value['article_characters']<=100000):
-        raise StandError('core_extractor_native_receipt_invalid')
-    return value
-
-
-def read_core_extractor_native_receipt(path: Path) -> dict:
-    try:
-        if (path.is_symlink() or not path.is_file() or path.stat().st_size>2048
-                or path.stat().st_mode & 0o077):
-            raise ValueError
-        value=json.loads(path.read_text())
-    except (OSError,ValueError,TypeError):
-        raise StandError('core_extractor_native_receipt_invalid') from None
-    if isinstance(value,dict) and value.get('state')=='failed':
-        failure_keys={'state','phase','failure_type','failure_code','python_fallback_calls'}
-        if (set(value)==failure_keys
-                and value.get('phase') in {'setup','production_imports','positive_article','publisher_auth_rejection'}
-                and value.get('failure_type') in {'AssertionError','BrowserUnavailableError','ConnectionError',
-                    'ExtractionServiceError','ImportError','KeyError','ModuleNotFoundError',
-                    'RuntimeError','TimeoutError','ValueError','GateAbort','other'}
-                and value.get('failure_code') in {'other_error','service_error','native_browser_timeout',
-                    'native_browser_unavailable','native_browser_http_rejected','native_browser_no_content',
-                    'native_browser_policy_denied','positive_article_validation_failed','cookie_proof_missing',
-                    'publisher_auth_succeeded','publisher_auth_failure_unexpected',
-                    'unexpected_fallback_or_learning_counts','unexpected_production_dependency_import',
-                    'browser_generation_changed'}
-                and type(value.get('python_fallback_calls')) is int
-                and 0<=value['python_fallback_calls']<=1):
-            raise StandError('core_extractor_native_gate_failed')
-        raise StandError('core_extractor_native_receipt_invalid')
-    return validate_core_extractor_native_receipt(value)
-
-
-CORE_EXTRACTOR_NATIVE_GATE = r'''import asyncio,hashlib,json,os,sys,types,urllib.request
-
-phase='setup'
-failure_code='other_error'
-failure_type='other'
-python_fallback_calls=0
-service_error_type=None
-
-class GateAbort(Exception): pass
-
-def write_receipt(value):
-    raw=(json.dumps(value,separators=(',',':'))+'\n').encode()
-    fd=os.open('/out/core-extractor-native.json',os.O_WRONLY|os.O_CREAT|os.O_EXCL|os.O_NOFOLLOW,0o600)
-    try:
-        os.fchmod(fd,0o600); os.write(fd,raw); os.fsync(fd)
-    finally: os.close(fd)
-
-def safe_failure(exc):
-    name=type(exc).__name__
-    allowed={'AssertionError','BrowserUnavailableError','ConnectionError','ExtractionServiceError',
-             'ImportError','KeyError','ModuleNotFoundError','RuntimeError','TimeoutError',
-             'ValueError','GateAbort'}
-    return name if name in allowed else 'other'
-
-def generation():
-    endpoint=os.environ.get('BROWSER_WS_ENDPOINT','').rstrip('/')+'/json/version'
-    with urllib.request.urlopen(endpoint,timeout=2) as response:
-        if response.status!=200: raise RuntimeError('discovery_unavailable')
-        raw=response.read(16385)
-    if len(raw)>16384: raise RuntimeError('discovery_unavailable')
-    value=json.loads(raw)
-    websocket=value.get('webSocketDebuggerUrl') if isinstance(value,dict) else None
-    if not isinstance(websocket,str) or len(websocket)>2048: raise RuntimeError('discovery_unavailable')
-    return hashlib.sha256(websocket.encode()).hexdigest()
-
-async def run():
-    global phase,failure_code,python_fallback_calls,service_error_type
-    expected=sys.argv[1] if len(sys.argv)==2 else ''
-    token=os.environ.get('EXTRACTOR_SERVICE_TOKEN','')
-    if len(expected)!=64 or any(ch not in '0123456789abcdef' for ch in expected) or not token:
-        raise RuntimeError('gate_configuration_invalid')
-    os.environ.update({
-        'EXTRACTION_SERVICE_MODE':'go','EXTRACTION_SERVICE_NATIVE_BROWSER':'true',
-        'EXTRACTION_SERVICE_PYTHON_FALLBACK':'false',
-        'EXTRACTION_SERVICE_URL':'http://127.0.0.1:8080',
-        'EXTRACTION_SERVICE_TOKEN':token,
-        'EXTRACTION_SERVICE_TIMEOUT_SECONDS':'30',
-        'EXTRACTION_SERVICE_TOTAL_BUDGET_SECONDS':'30',
-    })
-    # Preseed only packages whose __init__ modules otherwise load the DB-backed
-    # extraction facade or browser strategies. CoreExtractor and its service
-    # client are imported from the mounted production files below.
-    def package(name,path):
-        module=types.ModuleType(name); module.__path__=[path]; module.__package__=name
-        sys.modules[name]=module
-    package('news_aggregator.extraction','/app/news_aggregator/extraction')
-    package('news_aggregator.services','/app/news_aggregator/services')
-    class Memory:
-        def __init__(self): self.successes=0; self.pattern_reads=0
-        async def get_successful_pattern(self,domain):
-            self.pattern_reads+=1
-            return {'selector':'article','method':'browser_rendering'}
-        async def record_extraction_attempt(self,attempt): self.successes+=1
-        async def degrade_pattern(self,*_args): pass
-    memory=Memory()
-    memory_module=types.ModuleType('news_aggregator.services.extraction_memory')
-    class ExtractionAttempt:
-        def __init__(self,**values): self.values=values
-    async def get_memory(): return memory
-    memory_module.ExtractionAttempt=ExtractionAttempt
-    memory_module.get_extraction_memory=get_memory
-    sys.modules[memory_module.__name__]=memory_module
-    tracker=types.SimpleNamespace(update_domain_stats=lambda **_values:None)
-    tracker_module=types.ModuleType('news_aggregator.services.domain_stability_tracker')
-    async def get_tracker(): return tracker
-    tracker_module.get_stability_tracker=get_tracker
-    sys.modules[tracker_module.__name__]=tracker_module
-    logger_module=types.ModuleType('news_aggregator.extraction.extraction_logger')
-    logger_module.get_extraction_logger=lambda:None
-    sys.modules[logger_module.__name__]=logger_module
-    phase='production_imports'
-    from news_aggregator.config import get_settings
-    from news_aggregator.extraction.core_extractor import CoreExtractor
-    from news_aggregator.extraction.extraction_utils import ExtractionUtils
-    from news_aggregator.extraction.service_client import ExtractionServiceError
-    service_error_type=ExtractionServiceError
-    settings=get_settings()
-    if (settings.extraction_service_mode!='go' or not settings.extraction_service_native_browser
-            or settings.extraction_service_python_fallback
-            or settings.extraction_service_url!='http://127.0.0.1:8080'):
-        raise RuntimeError('native_route_configuration_invalid')
-    forbidden=('news_aggregator.services.ai_client','news_aggregator.services.ai_extraction_optimizer',
-        'news_aggregator.services.smart_filter','news_aggregator.database','news_aggregator.telegram')
-    def forbidden_imports():
-        return any(name in sys.modules for name in forbidden)
-    def python_browser_imported():
-        return any(name.startswith('news_aggregator.core.browser_pool') for name in sys.modules)
-    if forbidden_imports() or python_browser_imported():
-        raise RuntimeError('unexpected_production_dependency_import')
-    async def unused_close(): pass
-    core=CoreExtractor(ExtractionUtils(),None,types.SimpleNamespace(close_browser=unused_close))
-    async def forbidden_python_fallback(*_args,**_kwargs):
-        global python_fallback_calls
-        python_fallback_calls+=1
-        raise RuntimeError('python_fallback_invoked')
-    core._extract_article_content_python=forbidden_python_fallback
-    phase='positive_article'
-    start_generation=generation()
-    if start_generation!=expected: raise RuntimeError('browser_generation_changed')
-    try:
-        result=await asyncio.wait_for(core.extract_article_content_with_metadata(
-            'https://native-fixture.test/js-article'),timeout=31)
-    except ExtractionServiceError as exc:
-        failure_code=exc.code if exc.code in {'native_browser_timeout','native_browser_unavailable',
-            'native_browser_http_rejected','native_browser_no_content','native_browser_policy_denied'} else 'service_error'
-        raise GateAbort() from None
-    content=result.get('content') if isinstance(result,dict) else None
-    title=result.get('title') if isinstance(result,dict) else None
-    if not isinstance(content,str) or len(content)<200 or not isinstance(title,str) or not title.strip():
-        failure_code='positive_article_validation_failed'; raise GateAbort()
-    if 'cookie confirmed' not in content.casefold():
-        failure_code='cookie_proof_missing'; raise GateAbort()
-    phase='publisher_auth_rejection'
-    publisher_auth_code=None
-    try:
-        await asyncio.wait_for(core.extract_article_content_with_metadata(
-            'https://native-fixture.test/origin-auth'),timeout=31)
-        failure_code='publisher_auth_succeeded'; raise GateAbort()
-    except ExtractionServiceError as exc:
-        if exc.code not in {'upstream_auth_required','native_browser_http_rejected'} or exc.retryable:
-            failure_code='publisher_auth_failure_unexpected'; raise GateAbort() from None
-        publisher_auth_code=exc.code
-    if python_fallback_calls!=0 or memory.successes!=1 or memory.pattern_reads!=2:
-        failure_code='unexpected_fallback_or_learning_counts'; raise GateAbort()
-    if forbidden_imports() or python_browser_imported():
-        failure_code='unexpected_production_dependency_import'; raise GateAbort()
-    end_generation=generation()
-    if end_generation!=expected:
-        failure_code='browser_generation_changed'; raise GateAbort()
-    return {
-        'state':'passed','production_core_route':True,'real_http_client':True,
-        'native_browser_requested':True,'positive_article':True,'cookie_confirmed':True,
-        'metadata_present':True,'publisher_auth_rejected':True,
-        'publisher_auth_code':publisher_auth_code,
-        'python_fallback_calls':python_fallback_calls,
-        'success_record_count':1,'learned_pattern_lookups':2,
-        'learning_backend':'in_memory','python_browser_imported':False,
-        'ai_db_telegram_imported':False,'browser_generation_unchanged':True,
-        'article_characters':len(content),
-    }
-
-try:
-    value=asyncio.run(run())
-    write_receipt(value)
-except BaseException as exc:
-    failure_type=safe_failure(exc)
-    code=failure_code if failure_code in {'other_error','service_error','native_browser_timeout',
-        'native_browser_unavailable','native_browser_http_rejected','native_browser_no_content',
-        'native_browser_policy_denied','positive_article_validation_failed','cookie_proof_missing',
-        'publisher_auth_succeeded','publisher_auth_failure_unexpected',
-        'unexpected_fallback_or_learning_counts','unexpected_production_dependency_import',
-        'browser_generation_changed'} else 'other_error'
-    try: write_receipt({'state':'failed','phase':phase,'failure_type':failure_type,'failure_code':code,
-                        'python_fallback_calls':python_fallback_calls})
-    except Exception: pass
-'''
-
-
 CONTROLLED_CRASH_HELPER = r'''import asyncio,ipaddress,json,os,stat
 from urllib.parse import urlsplit
 import aiohttp
@@ -1436,16 +1195,13 @@ finally: sock.close()
                            '128m' if self.bounded_profile else '256m')
         observer_cpu = ('0.25' if self.quality_profile else
                         '0.125' if self.bounded_profile else '0.25')
-        production_core_mounts=(observer_core_extractor_mounts(self.stage)
-                                if getattr(self,'worker_recovery_gate',False) else [])
         self.observer = self.run('observer',APP,['7200'],network='container:'+control['name'],
             memory=observer_memory,
             cpu=observer_cpu,
             pids=64 if self.bounded_profile else 128,
-            mounts=[bench_mount,bin_mount,*observer_extraction_mounts(self.stage),
-                    *production_core_mounts,str(self.run_dir)+':/out',
+            mounts=[bench_mount,bin_mount,str(self.run_dir)+':/out',
                     '/sys/fs/cgroup:/host-cg:ro'] + ([str(self.corpus)+':/corpus/corpus.json:ro',str(self.captures)+':/captures']
-                    if hasattr(self,'corpus') else []),env=['PYTHONPATH=/app','BROWSER_WS_ENDPOINT='+chrome_endpoint,
+                    if hasattr(self,'corpus') else []),env=['PYTHONPATH=/bench','BROWSER_WS_ENDPOINT='+chrome_endpoint,
                     'EXTRACTION_SERVICE_MODE=go','EXTRACTION_SERVICE_PYTHON_FALLBACK=false',
                     'SCHEDULER_ENABLED=false'],extra=env_mount)
         self.verify_ns(self.observer,control['name'])
@@ -1532,40 +1288,43 @@ while True:
         self.write_manifest('controlled_browser_gate_passed')
         return result
 
-    def production_core_extractor_native_gate(self, browser_generation):
-        """Route fixed success and auth-failure fixtures through production Python into Go/Cloak."""
-        self.check_budget()
-        path=self.run_dir/'core-extractor-native.json'
-        if path.exists() or path.is_symlink():
-            raise StandError('core_extractor_native_receipt_stale')
-        if not isinstance(browser_generation,str) or not re.fullmatch('[0-9a-f]{64}',browser_generation):
-            raise StandError('core_extractor_native_browser_generation_invalid')
-        self.check_runtime()
-        try:
-            self.docker('exec',self.observer,'python','-c',CORE_EXTRACTOR_NATIVE_GATE,
-                        browser_generation,timeout=75)
-        except (StandError,subprocess.TimeoutExpired,subprocess.CalledProcessError):
-            raise StandError('core_extractor_native_gate_failed') from None
-        receipt=read_core_extractor_native_receipt(path)
-        self.check_runtime()
-        self.check_budget()
-        return receipt
-
     @staticmethod
     def browser_request_script():
-        return '''import json,os,sys,time,urllib.request,urllib.error
+        return '''import json,os,re,sys,time,urllib.request,urllib.error
 route,prefix=sys.argv[1:3]
 payload={'request_id':prefix+'-'+route+'-'+str(time.monotonic_ns()),'url':'https://native-fixture.test/'+route,
          'strategy':'browser_rendering','source_type':'article','use_browser':True,'budget_ms':30000}
 req=urllib.request.Request('http://127.0.0.1:8080/v1/extract',data=json.dumps(payload).encode(),
  headers={'Content-Type':'application/json','Authorization':'Bearer '+os.environ['EXTRACTOR_TEST_TOKEN']})
+class NoRedirect(urllib.request.HTTPRedirectHandler):
+ def redirect_request(self,req,fp,code,msg,headers,newurl): return None
+opener=urllib.request.build_opener(urllib.request.ProxyHandler({}),NoRedirect())
 try:
- with urllib.request.urlopen(req,timeout=35) as response: status=response.status; value=json.load(response)
-except urllib.error.HTTPError as response: status=response.code; value=json.load(response)
+ with opener.open(req,timeout=35) as response: status=response.status; raw=response.read(5*1024*1024+1)
+except urllib.error.HTTPError as response:
+ if 300<=response.code<400: raise ValueError('fixture_redirect_rejected') from None
+ status=response.code; raw=response.read(5*1024*1024+1)
+if len(raw)>5*1024*1024: raise ValueError('fixture_response_too_large')
+value=json.loads(raw)
+if not isinstance(value,dict): raise ValueError('fixture_response_invalid')
+if status==200 and (value.get('contract_version')!='1' or value.get('request_id')!=payload['request_id']
+        or value.get('original_url')!=payload['url'] or not isinstance(value.get('result'),dict)):
+ raise ValueError('fixture_response_invalid')
 content=value.get('result',{}).get('content','') or ''
-print(json.dumps({'status':status,'outcome':value.get('outcome'),
- 'error':(value.get('error') or {}).get('code') or (value.get('result') or {}).get('error'),
- 'chars':len(content),'cookie_confirmed':'cookie confirmed' in content}))
+if not isinstance(content,str) or len(content)>100000: raise ValueError('fixture_response_invalid')
+error=(value.get('error') or {}).get('code') or (value.get('result') or {}).get('error')
+if error is not None and (not isinstance(error,str) or not re.fullmatch(r'[a-z][a-z0-9_]{0,47}',error)):
+ error='other'
+outcome=value.get('outcome')
+if outcome is not None and outcome not in ('success','rejected','failed','needs_selector_study'):
+ outcome='other'
+retryable=(value.get('error') or {}).get('retryable')
+if type(retryable) is not bool: retryable=None
+print(json.dumps({'status':status,'outcome':outcome,
+ 'error':error,
+ 'chars':len(content),'cookie_confirmed':'cookie confirmed' in content.casefold(),
+ 'title_present':isinstance(value.get('result',{}).get('title'),str) and bool(value['result']['title'].strip()),
+ 'retryable':retryable}))
 '''
 
     @staticmethod
@@ -1576,10 +1335,14 @@ payload={'request_id':prefix+'-'+route+'-'+str(time.monotonic_ns()),'url':'https
          'strategy':'browser_rendering','source_type':'article','use_browser':True,'budget_ms':30000}
 req=urllib.request.Request('http://127.0.0.1:8080/v1/extract',data=json.dumps(payload).encode(),
  headers={'Content-Type':'application/json','Authorization':'Bearer '+os.environ['EXTRACTOR_TEST_TOKEN']})
+class NoRedirect(urllib.request.HTTPRedirectHandler):
+ def redirect_request(self,req,fp,code,msg,headers,newurl): return None
+opener=urllib.request.build_opener(urllib.request.ProxyHandler({}),NoRedirect())
 transport_unavailable=False
 try:
- with urllib.request.urlopen(req,timeout=3) as response: status=response.status; value=json.load(response)
+ with opener.open(req,timeout=3) as response: status=response.status; value=json.load(response)
 except urllib.error.HTTPError as response:
+ if 300<=response.code<400: raise ValueError('fixture_redirect_rejected') from None
  status=response.code; value=json.load(response)
 except urllib.error.URLError as error:
  if not isinstance(error.reason,ConnectionRefusedError): raise
@@ -1672,10 +1435,6 @@ print(json.dumps({'status':status,'outcome':value.get('outcome'),
                 raise StandError('native_browser_generation_invalid')
             return generation
         generation=browser_generation()
-        if getattr(self, 'worker_recovery_gate', False):
-            self.production_core_extractor_native_gate(generation)
-            if browser_generation()!=generation:
-                raise StandError('core_extractor_native_browser_generation_changed')
         crash_recovered=False
         crash_helper_receipt_verified=False
         routes=[('js-article','js-article'),('wire-limit','wire-limit'),
@@ -1697,7 +1456,9 @@ print(json.dumps({'status':status,'outcome':value.get('outcome'),
             results.append(result)
             (self.run_dir/'browser-gate.json').write_text(json.dumps(results,indent=2)+'\n')
             if case in ('js-article','js-article-after-wire-limit','js-article-after-crash'):
-                if result['outcome']!='success' or not result['cookie_confirmed']:
+                if (result['outcome']!='success' or result.get('status')!=200
+                        or result.get('chars',0)<200 or result.get('title_present') is not True
+                        or result.get('cookie_confirmed') is not True):
                     raise StandError('positive_native_browser_gate_failed')
                 if case=='js-article-after-crash':
                     if not crash_recovered or browser_generation()!=generation:
@@ -1731,8 +1492,13 @@ print(json.dumps({'status':status,'outcome':value.get('outcome'),
                     expected={'upstream_auth_required','native_browser_http_rejected'}
                 if result['outcome']=='success' or result['error'] not in expected:
                     raise StandError('adversarial_browser_gate_failed')
+                if route=='origin-auth' and (result.get('status')!=200 or result.get('chars')!=0
+                                             or result.get('retryable') is not False):
+                    raise StandError('adversarial_browser_gate_failed')
             self.wait_http(self.observer,'http://127.0.0.1:8080/health/ready')
             self.check_budget()
+        if browser_generation()!=generation:
+            raise StandError('native_browser_generation_changed')
         if getattr(self, 'worker_recovery_gate', False):
             self.synthetic_worker_recovery_gate(post, generation)
         else:

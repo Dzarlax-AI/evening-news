@@ -20,8 +20,9 @@ type command struct {
 	Headers                             map[string]string
 }
 type reply struct {
-	Status int    `json:"status"`
-	Body   []byte `json:"body"`
+	Status    int    `json:"status"`
+	Body      []byte `json:"body"`
+	HasCookie bool   `json:"has_cookie"`
 }
 
 type httpDoer interface {
@@ -77,7 +78,7 @@ func runWithClient(in io.Reader, out io.Writer, client httpDoer) error {
 	if e != nil || len(body) > 1024*1024 {
 		return errors.New("probe response invalid")
 	}
-	return json.NewEncoder(out).Encode(reply{resp.StatusCode, body})
+	return json.NewEncoder(out).Encode(reply{resp.StatusCode, body, len(resp.Header.Values("Set-Cookie")) != 0})
 }
 func main() {
 	if run(os.Stdin, os.Stdout) != nil {

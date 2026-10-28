@@ -236,7 +236,7 @@ async def test_readiness_requires_no_fixture_selector(monkeypatch):
 
 @pytest.mark.asyncio
 async def test_c_client_deadline_stops_variant_before_another_dispatch(monkeypatch):
-    from news_aggregator.extraction.service_client import ExtractionServiceClient, ExtractionServiceError
+    from scripts.native_browser_fixture_client import ExtractionServiceClient, ExtractionServiceError
 
     async def expired(*args,**kwargs):
         raise ExtractionServiceError('deadline_exceeded', True)
@@ -273,7 +273,7 @@ async def test_c_outer_deadline_records_partial_case_and_stops(tmp_path,monkeypa
 @pytest.mark.asyncio
 @pytest.mark.parametrize('ready', [True, False])
 async def test_owned_crash_is_one_failed_job_only_after_readiness(monkeypatch, ready):
-    from news_aggregator.extraction.service_client import ExtractionServiceClient
+    from scripts.native_browser_fixture_client import ExtractionServiceClient
     calls = []
     async def crashed(*args, **kwargs):
         calls.append('extract')
@@ -298,7 +298,7 @@ async def test_owned_crash_is_one_failed_job_only_after_readiness(monkeypatch, r
 @pytest.mark.asyncio
 @pytest.mark.parametrize('bad', [{'outcome': 'success'}, {'content': 'partial'}, {'retryable': True}])
 async def test_crash_response_never_accepts_output_or_replay(monkeypatch, bad):
-    from news_aggregator.extraction.service_client import ExtractionServiceClient
+    from scripts.native_browser_fixture_client import ExtractionServiceClient
     async def invalid(*args, **kwargs):
         return {'outcome': bad.get('outcome', 'failed'),
                 'result': {'state': 'failed', 'content': bad.get('content', '')},

@@ -13,7 +13,6 @@ import (
 	"net/http/httptest"
 	"net/url"
 	"os"
-	"os/exec"
 	"regexp"
 	"strings"
 	"sync/atomic"
@@ -285,33 +284,7 @@ func TestReceiptAndFencePostgres(t *testing.T) {
 	if _, err = pool.Exec(ctx, `INSERT INTO background_job_executions VALUES($1,1,$2,$3,1,$4,'running')`, childJob, execID, owner, deadline); err != nil {
 		t.Fatal("child receipt fixture failed")
 	}
-	if binary := os.Getenv("NEWS_AI_RUNTIME_BINARY"); binary != "" {
-		fixtureURL, err := url.Parse(dsn)
-		if err != nil {
-			t.Fatal("fixture URL invalid")
-		}
-		q := fixtureURL.Query()
-		q.Set("search_path", schema)
-		fixtureURL.RawQuery = q.Encode()
-		probe, _ := json.Marshal(map[string]any{"database_url": fixtureURL.String(), "provider": provider.URL, "executor_pid": ep, "envelope": map[string]any{"version": 1, "job_id": childJob, "attempt_generation": 1, "owner_id": owner, "generation": 1, "backend_pid": wp, "executor_instance_id": execID, "deadline_at": deadline.Format(time.RFC3339Nano)}})
-		python := os.Getenv("DIGEST_PROBE_PYTHON")
-		if python == "" {
-			python = "python3"
-		}
-		cmd := exec.CommandContext(ctx, python, "../../tests/fixtures/digest-native/child_probe.py")
-		cmd.Env = append(os.Environ(), "DIGEST_PROBE_INPUT="+string(probe), "PYTHONPATH=../..")
-		if output, err := cmd.CombinedOutput(); err != nil {
-			t.Fatalf("Python Unix child fixture failed: %s", output)
-		}
-		if providerCalls.Load() != 2 {
-			t.Fatal("Python child did not reach fake Gemini")
-		}
-		if telegramCalls.Load() != 2 {
-			t.Fatal("Python child did not reach fake Telegram")
-		}
-	} else if os.Getenv("NEWS_AI_RUNTIME_INTEGRATION_REQUIRED") == "1" {
-		t.Fatal("native runtime binary required")
-	}
+
 	edition = digestworkflow.EditionID(job, 1, "00000000-0000-0000-0000-000000000006")
 	store := telegramdelivery.PostgresStore{Pool: pool, Fence: fence, JobID: job, AttemptGeneration: 1, DomainInstanceID: "00000000-0000-0000-0000-000000000007"}
 	hash := strings.Repeat("a", 64)

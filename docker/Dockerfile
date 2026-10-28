@@ -3,7 +3,7 @@
 ARG GO_BUILD_IMAGE=golang:1.25.6-alpine
 ARG GO_DOMAIN_BUILD_IMAGE=golang:1.26.10-alpine
 
-FROM ${GO_BUILD_IMAGE} AS go-web-build
+FROM --platform=$BUILDPLATFORM ${GO_BUILD_IMAGE} AS go-web-build
 WORKDIR /src
 COPY go-web/go.mod go-web/go.sum ./
 RUN go mod download && go mod verify
@@ -13,7 +13,7 @@ ARG TARGETARCH
 RUN CGO_ENABLED=0 GOOS=${TARGETOS} GOARCH=${TARGETARCH} \
     go build -trimpath -ldflags="-s -w" -o /out/news-web ./cmd/news-web
 
-FROM ${GO_DOMAIN_BUILD_IMAGE} AS go-domain-build
+FROM --platform=$BUILDPLATFORM ${GO_DOMAIN_BUILD_IMAGE} AS go-domain-build
 WORKDIR /src/go-domain
 COPY go-domain/go.mod go-domain/go.sum ./
 COPY go-editorial/ /src/go-editorial/
@@ -29,7 +29,7 @@ RUN CGO_ENABLED=0 GOOS=${TARGETOS} GOARCH=${TARGETARCH} \
     CGO_ENABLED=0 GOOS=${TARGETOS} GOARCH=${TARGETARCH} \
     go build -trimpath -ldflags="-s -w" -o /out/news-migrate ./cmd/news-migrate
 
-FROM ${GO_BUILD_IMAGE} AS go-background-build
+FROM --platform=$BUILDPLATFORM ${GO_BUILD_IMAGE} AS go-background-build
 WORKDIR /src/go-background
 # Local replacements must be present before go mod download.
 COPY go-background/go.mod go-background/go.sum ./

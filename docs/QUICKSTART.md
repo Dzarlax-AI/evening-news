@@ -8,6 +8,6 @@ Follow the [README local development instructions](../README.md#local-developmen
 docker compose -f docker-compose.example.yml -f docker-compose.dev.yml up --build
 ```
 
-Compose runs `python -m news_aggregator.migrate` once before schema consumers start. The web service exposes port 8000. The private executor listens on port 8100 inside the service network and requires its service credentials; do not expose it publicly.
+Compose runs `/usr/local/bin/news-migrate` once before schema consumers start. The web service exposes port 8000. The private executor listens on port 8100 inside the service network and requires its service credentials; do not expose it publicly.
 
 For the component boundaries, private backend configuration, and local verification commands, see [Web/API components](web-api-components.md). This local setup does not deploy production or configure browser rendering.

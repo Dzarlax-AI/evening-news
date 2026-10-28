@@ -17,14 +17,13 @@ browser builds retain their own responsibilities and release paths.
 
 ## Current status
 
-This is an incomplete migration candidate. Linux CI has built the three core
-images, but the integrated vertical pipeline has not passed, and the complete
-fault, recovery, PostgreSQL 16/17 backup and restore, and image acceptance
-gates remain outstanding. The legacy Python fixture gate and associated CI
-paths remain until equivalent behavior is proven. The PR-only development
-gate does not produce a release acceptance receipt and intentionally fails
-until all required phases are implemented and validated. See the
-[tooling coverage map](../go-tools/COVERAGE.md) for current evidence and gaps.
+This is a migration candidate awaiting exact-head CI and independent review.
+Earlier PG16 and PG17 image jobs passed the implemented synthetic pipeline,
+delivery fault, shutdown and strict backup/restore phases, then stopped at the
+temporary acceptance marker. The current Go-only gate adds final web checks
+and writes a receipt only after all its phases, image identity checks and
+cleanup succeed. Its current-head result has not yet been established. See
+the [tooling coverage map](../go-tools/COVERAGE.md) for scoped evidence.
 
 No image may be released based on a build alone. A release workflow must verify
 all required tests and the full isolated fixture against the exact built image

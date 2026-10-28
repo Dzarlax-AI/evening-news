@@ -24,6 +24,7 @@ import (
 	"github.com/Dzarlax-AI/evening-news/go-domain/callbacks"
 	"github.com/Dzarlax-AI/evening-news/go-domain/digestworkflow"
 	"github.com/Dzarlax-AI/evening-news/go-domain/domainops"
+	"github.com/Dzarlax-AI/evening-news/go-domain/envbool"
 	"github.com/Dzarlax-AI/evening-news/go-domain/extractorclient"
 	"github.com/Dzarlax-AI/evening-news/go-domain/learning"
 	"github.com/Dzarlax-AI/evening-news/go-domain/media"
@@ -232,16 +233,9 @@ func run() error {
 	memory.Guard = guard
 	mux.Handle("POST /internal/v1/article-ai", &callbacks.Handler{Token: aiToken, Guard: guard, Authority: execution, Pool: pool, Admission: callbacks.NewAdmission(16, 64, 1024*1024), Compute: &callbacks.ArticleCompute{Runtime: runtime, Learning: memory, MaxTextChars: limit}})
 	mux.Handle("POST /internal/v1/ingestion/selectors", &selectors.Handler{Token: jobToken, Guard: guard, Authority: execution, Pool: pool, Store: memory, Analyzer: selectors.NewAnalyzer(runtime)})
-	allowCreateAll := true
-	if value := strings.ToLower(strings.TrimSpace(os.Getenv("ALLOW_CREATE_ALL"))); value != "" {
-		switch value {
-		case "1", "true", "yes", "on", "y", "t":
-			allowCreateAll = true
-		case "0", "false", "no", "off", "n", "f":
-			allowCreateAll = false
-		default:
-			return errors.New("invalid ALLOW_CREATE_ALL")
-		}
+	allowCreateAll, err := envbool.Read("ALLOW_CREATE_ALL", true)
+	if err != nil {
+		return errors.New("invalid ALLOW_CREATE_ALL")
 	}
 	worker := os.Getenv("BACKGROUND_EXECUTION_MODE") != "embedded"
 	web := &webbackend.Server{Guard: guard, Pool: pool, Runtime: runtime, Worker: worker, AllowCreateAll: allowCreateAll, TelegramToken: config.TelegramToken, ChatID: config.TelegramMain, ServiceChatID: config.TelegramService}

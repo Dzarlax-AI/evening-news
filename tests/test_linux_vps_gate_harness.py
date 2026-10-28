@@ -7,6 +7,7 @@ import unittest
 from unittest.mock import Mock, patch
 import hashlib
 import json
+import pytest
 
 from scripts import native_shadow_stand as stand_module
 from scripts import run_go_cloak_linux_gate as gate
@@ -916,6 +917,7 @@ class BoundedProfileTests(unittest.TestCase):
             (stage/'benchmark/go/go.mod').write_text('module fixture\n')
             (stage/'benchmark/scripts/native_shadow_stand.py').write_text('')
             (stage/'benchmark/scripts/shadow_cdp_relay.py').write_text('')
+            (stage/'benchmark/scripts/native_browser_fixture_client.py').write_text('')
             (stage/gate.BINARY_MANIFEST_NAME).write_text('{}')
             gate.ensure_stage(stage, runtime_only=True)
             self.assertFalse((stage/'gopath').exists())
@@ -1224,3 +1226,23 @@ class BoundedProfileTests(unittest.TestCase):
 
 if __name__ == '__main__':
     unittest.main()
+
+
+def test_source_manifest_requires_and_verifies_standalone_fixture_client(tmp_path):
+    import hashlib
+    stage = tmp_path
+    client = stage / 'benchmark/scripts/native_browser_fixture_client.py'
+    client.parent.mkdir(parents=True)
+    client.write_text('fixture-only\n')
+    path = stage / 'source-manifest.json'
+    path.write_text(json.dumps({'base_commit': gate.BASE_COMMIT, 'source_sha256': {
+        'benchmark/scripts/other.py': 'a' * 64}}))
+    with pytest.raises(gate.GateError, match='source_manifest_fixture_client_missing'):
+        gate.verify_source_manifest(stage)
+    digest = hashlib.sha256(client.read_bytes()).hexdigest()
+    path.write_text(json.dumps({'base_commit': gate.BASE_COMMIT, 'source_sha256': {
+        'benchmark/scripts/native_browser_fixture_client.py': digest}}))
+    assert len(gate.verify_source_manifest(stage)) == 64
+    client.write_text('tampered\n')
+    with pytest.raises(gate.GateError, match='source_manifest_hash_mismatch'):
+        gate.verify_source_manifest(stage)

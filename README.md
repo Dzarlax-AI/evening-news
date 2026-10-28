@@ -115,7 +115,7 @@ docker compose -f docker-compose.example.yml -f docker-compose.dev.yml up --buil
 
 The Go components can be checked independently with `go test -race ./...`, `go vet ./...`, and `go mod verify` from each module directory. PostgreSQL integration tests require `TEST_DATABASE_URL` to point to a dedicated loopback test database. Do not use a production or shared database.
 
-The image acceptance gate and migration coverage are still being completed; see [the Go tooling coverage map](go-tools/COVERAGE.md) for verified checks and outstanding work. The legacy Python tests and CI paths remain until equivalent checks are established.
+The application runtime and core tooling use Go; isolated browser-testing infrastructure retains Python. Exact-head image acceptance and CI remain pending; see [the Go tooling coverage map](go-tools/COVERAGE.md) for verified checks and remaining validation.
 
 ## Configuration and documentation
 

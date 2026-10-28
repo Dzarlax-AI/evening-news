@@ -324,7 +324,10 @@ def _native_ready_gate(*, now: float, started: float, stable_since: float,
 
 
 async def _run_service_case(url: str, endpoint: str, token: str) -> dict[str, Any]:
-    from news_aggregator.extraction.service_client import ExtractionServiceClient
+    try:
+        from scripts.native_browser_fixture_client import ExtractionServiceClient
+    except ImportError:
+        from native_browser_fixture_client import ExtractionServiceClient
     client = ExtractionServiceClient(endpoint, token)
     data = await client.extract(url, timeout_seconds=30, strategy="browser_rendering",
                                 source_type="article", use_browser=True)

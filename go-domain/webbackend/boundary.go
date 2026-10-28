@@ -6,17 +6,101 @@ import (
 	"context"
 	"crypto/subtle"
 	"encoding/json"
+	"errors"
 	"io"
+	"net"
 	"net/http"
 	"os"
 	"strconv"
+	"sync"
 	"time"
 )
 
 type Boundary struct {
-	Token  string
-	Worker bool
-	Next   http.Handler
+	Token           string
+	Worker          bool
+	Next            http.Handler
+	timeoutOverride time.Duration
+}
+
+// deadlineWriter streams responses without buffering the backup archive. Once
+// the deadline wins, late handler writes are rejected and cannot race a 504.
+type deadlineWriter struct {
+	mu               sync.Mutex
+	w                http.ResponseWriter
+	ctx              context.Context
+	header           http.Header
+	started, expired bool
+}
+
+func (w *deadlineWriter) Header() http.Header { return w.header }
+func (w *deadlineWriter) WriteHeader(code int) {
+	w.mu.Lock()
+	defer w.mu.Unlock()
+	if w.started || w.expired || w.ctx.Err() != nil {
+		return
+	}
+	for key, values := range w.header {
+		w.w.Header()[key] = append([]string(nil), values...)
+	}
+	w.started = true
+	w.w.WriteHeader(code)
+}
+func (w *deadlineWriter) Write(p []byte) (int, error) {
+	w.mu.Lock()
+	defer w.mu.Unlock()
+	if w.expired || w.ctx.Err() != nil {
+		return 0, http.ErrHandlerTimeout
+	}
+	if !w.started {
+		for key, values := range w.header {
+			w.w.Header()[key] = append([]string(nil), values...)
+		}
+		w.started = true
+		w.w.WriteHeader(http.StatusOK)
+	}
+	return w.w.Write(p)
+}
+func (w *deadlineWriter) Flush() {
+	w.mu.Lock()
+	defer w.mu.Unlock()
+	if w.expired || w.ctx.Err() != nil {
+		return
+	}
+	if !w.started {
+		for key, values := range w.header {
+			w.w.Header()[key] = append([]string(nil), values...)
+		}
+		w.started = true
+		w.w.WriteHeader(http.StatusOK)
+	}
+	_ = http.NewResponseController(w.w).Flush()
+}
+func (w *deadlineWriter) expire(detail string) {
+	w.mu.Lock()
+	defer w.mu.Unlock()
+	w.expired = true
+	if !w.started {
+		_ = http.NewResponseController(w.w).SetWriteDeadline(time.Now().Add(time.Second))
+		body, _ := json.Marshal(map[string]string{"detail": detail})
+		body = append(body, '\n')
+		w.w.Header().Set("Content-Type", "application/json")
+		w.w.Header().Set("Content-Length", strconv.Itoa(len(body)))
+		w.w.WriteHeader(http.StatusGatewayTimeout)
+		_, _ = w.w.Write(body)
+		_ = http.NewResponseController(w.w).Flush()
+	}
+}
+
+func timeoutDetail(method string) string {
+	if method == http.MethodGet || method == http.MethodHead {
+		return "Operation timed out"
+	}
+	return "Operation timed out; outcome may be unknown. Verify before retrying."
+}
+func timedOut(err error, ctx context.Context) bool {
+	var netErr net.Error
+	return ctx.Err() == context.DeadlineExceeded || (errors.As(err, &netErr) && netErr.Timeout())
 }
 
 func reject(w http.ResponseWriter, status int, detail string) {
@@ -57,6 +141,9 @@ func (b Boundary) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 	} else if r.Method == http.MethodGet {
 		timeout = 120 * time.Second
 	}
+	if b.timeoutOverride > 0 {
+		timeout = b.timeoutOverride
+	}
 	lengths := r.Header.Values("Content-Length")
 	if len(lengths) > 1 {
 		reject(w, 400, "Invalid Content-Length")
@@ -91,8 +178,8 @@ func (b Boundary) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 		defer func() { temp.Close(); os.Remove(name) }()
 		n, err := io.CopyBuffer(temp, io.LimitReader(r.Body, limit+1), make([]byte, 64*1024))
 		if err != nil {
-			if ctx.Err() == context.DeadlineExceeded {
-				reject(w, 504, "Operation timed out; outcome may be unknown. Verify before retrying.")
+			if timedOut(err, ctx) {
+				reject(w, 504, timeoutDetail(r.Method))
 			}
 			return
 		}
@@ -108,12 +195,8 @@ func (b Boundary) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 	} else {
 		data, err := io.ReadAll(io.LimitReader(r.Body, limit+1))
 		if err != nil {
-			if ctx.Err() == context.DeadlineExceeded {
-				detail := "Operation timed out; outcome may be unknown. Verify before retrying."
-				if r.Method == http.MethodGet || r.Method == http.MethodHead {
-					detail = "Operation timed out"
-				}
-				reject(w, 504, detail)
+			if timedOut(err, ctx) {
+				reject(w, 504, timeoutDetail(r.Method))
 			}
 			return
 		}
@@ -123,8 +206,42 @@ func (b Boundary) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 		}
 		r.Body = io.NopCloser(bytes.NewReader(data))
 	}
+	// The body has been fully captured. Leaving the socket read deadline in
+	// place can cancel an otherwise active request while its handler runs.
+	_ = http.NewResponseController(w).SetReadDeadline(time.Time{})
+	if ctx.Err() == context.DeadlineExceeded {
+		reject(w, 504, timeoutDetail(r.Method))
+		return
+	}
 	if ctx.Err() != nil {
 		return
 	}
-	b.Next.ServeHTTP(w, r)
+	output := &deadlineWriter{w: w, ctx: ctx, header: make(http.Header)}
+	done := make(chan any, 1)
+	go func() {
+		defer func() { done <- recover() }()
+		b.Next.ServeHTTP(output, r)
+	}()
+	select {
+	case panicValue := <-done:
+		if panicValue != nil {
+			panic(panicValue)
+		}
+		if ctx.Err() == context.DeadlineExceeded {
+			output.expire(timeoutDetail(r.Method))
+		}
+	case <-ctx.Done():
+		// Unblock any in-progress socket write before serializing shutdown.
+		_ = http.NewResponseController(w).SetWriteDeadline(time.Now())
+		if ctx.Err() == context.DeadlineExceeded {
+			output.expire(timeoutDetail(r.Method))
+		} else {
+			output.mu.Lock()
+			output.expired = true
+			output.mu.Unlock()
+		}
+		// Keep the outer request tracker and upload staging alive until the
+		// handler actually exits, including when it ignores cancellation.
+		<-done
+	}
 }

@@ -7,6 +7,7 @@ import (
 	"os"
 	"strings"
 
+	"github.com/Dzarlax-AI/evening-news/go-domain/envbool"
 	"github.com/Dzarlax-AI/evening-news/go-domain/migration"
 	"github.com/jackc/pgx/v5/pgxpool"
 )
@@ -22,16 +23,9 @@ func run() error {
 	if dsn == "" {
 		return fmt.Errorf("DATABASE_URL required")
 	}
-	allow := true
-	if raw := strings.ToLower(strings.TrimSpace(os.Getenv("ALLOW_CREATE_ALL"))); raw != "" {
-		switch raw {
-		case "1", "true", "yes", "on", "y", "t":
-			allow = true
-		case "0", "false", "no", "off", "n", "f":
-			allow = false
-		default:
-			return fmt.Errorf("invalid ALLOW_CREATE_ALL")
-		}
+	allow, err := envbool.Read("ALLOW_CREATE_ALL", true)
+	if err != nil {
+		return fmt.Errorf("invalid ALLOW_CREATE_ALL")
 	}
 	cfg, err := pgxpool.ParseConfig(dsn)
 	if err != nil {

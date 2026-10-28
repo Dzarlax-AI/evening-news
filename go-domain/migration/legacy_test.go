@@ -46,8 +46,14 @@ func TestEarlyMigrationPreservesCompletedRowsAndRetryBudget(t *testing.T) {
 	}
 	for _, m := range append(earlyMigrations(), backgroundMigration(), schedulerMigration(), executionMigration(), ingestionMigration(), processingMigration(), editorialMigration(), deliveryMigration()) {
 		needed, err := m.Needed(ctx, tx)
-		if err != nil || !needed {
+		if err != nil {
 			t.Fatalf("%s needed=%v: %v", m.ID, needed, err)
+		}
+		if !needed {
+			var siblingIndex bool
+			if m.ID != "006_feed_performance_optimization" || tx.QueryRow(ctx, `SELECT EXISTS (SELECT 1 FROM pg_indexes WHERE schemaname<>current_schema() AND indexname='idx_articles_fetched_at_desc')`).Scan(&siblingIndex) != nil || !siblingIndex {
+				t.Fatalf("%s unexpectedly not needed", m.ID)
+			}
 		}
 		if _, err = m.Apply(ctx, tx); err != nil {
 			t.Fatalf("%s apply: %v", m.ID, err)
@@ -105,8 +111,30 @@ func TestBootstrapAndRerun(t *testing.T) {
 	}
 	defer pool.Close()
 	first, err := Run(ctx, pool, true, false)
-	if err != nil || len(first.Errors) != 0 || len(first.MigrationsRun) != 7 {
+	if err != nil || len(first.Errors) != 0 {
 		t.Fatalf("first run: %+v %v", first, err)
+	}
+	// The legacy 006 check intentionally searches pg_indexes across schemas.
+	// An already-migrated sibling schema can therefore cause 006 to be skipped.
+	migrationIDs := map[string]bool{}
+	for _, item := range first.MigrationsRun {
+		id, _ := item["id"].(string)
+		migrationIDs[id] = true
+	}
+	for _, id := range []string{"009_background_jobs", "010_scheduled_job_metadata", "012_article_ingestion", "013_article_processing", "014_editorial_digest", "015_digest_delivery"} {
+		if !migrationIDs[id] {
+			t.Fatalf("required migration %s did not run", id)
+		}
+	}
+	if migrationIDs["006_feed_performance_optimization"] {
+		if len(migrationIDs) != 7 {
+			t.Fatalf("unexpected migration set: %+v", first.MigrationsRun)
+		}
+	} else {
+		var siblingIndex bool
+		if err = pool.QueryRow(ctx, `SELECT EXISTS (SELECT 1 FROM pg_indexes WHERE schemaname<>current_schema() AND indexname='idx_articles_fetched_at_desc')`).Scan(&siblingIndex); err != nil || !siblingIndex || len(migrationIDs) != 6 {
+			t.Fatalf("006 was skipped without legacy sibling-index condition: %v", err)
+		}
 	}
 	second, err := Run(ctx, pool, true, false)
 	if err != nil || len(second.MigrationsRun) != 0 || len(second.Errors) != 0 {

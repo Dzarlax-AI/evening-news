@@ -1,5 +1,4 @@
-// vertical-fixture-gate exercises the initial image pipeline only. It never
-// writes a release acceptance receipt: recovery and fault phases are separate.
+// vertical-fixture-gate validates the isolated core image pipeline.
 package main
 
 import (
@@ -10,8 +9,8 @@ import (
 	"encoding/hex"
 	"encoding/json"
 	"errors"
+	"flag"
 	"fmt"
-	"github.com/Dzarlax-AI/evening-news/go-tools/fixturegate"
 	"os"
 	"os/exec"
 	"path/filepath"
@@ -19,11 +18,16 @@ import (
 	"strconv"
 	"strings"
 	"time"
+
+	"github.com/Dzarlax-AI/evening-news/go-tools/fixturegate"
 )
 
 var jobIDPattern = regexp.MustCompile(`^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$`)
 
-type gate struct{ project, dir, compose, diagnosticJob string }
+type gate struct {
+	project, dir, compose, diagnosticJob string
+	accepted                             map[string]fixturegate.Image
+}
 
 func (g *gate) docker(input []byte, args ...string) (string, error) {
 	ctx, cancel := context.WithTimeout(context.Background(), 120*time.Second)
@@ -443,6 +447,72 @@ func (g *gate) run() (resultErr error) {
 		return errors.New("scheduler repause failed")
 	}
 	auth := "Basic Zml4dHVyZS1hZG1pbjpmaXh0dXJlLWFkbWluLXBhc3N3b3Jk"
+	status, _, cookie, e := g.requestWithCookie("GET", base+"/", "", nil, nil)
+	if e != nil || status != 200 || cookie {
+		return errors.New("public web cookie boundary failed")
+	}
+	status, _, e = g.request("GET", base+"/auth/me", "", nil, nil)
+	if e != nil || status != 401 {
+		return errors.New("web identity authentication failed")
+	}
+	status, openapiBody, e := g.request("GET", base+"/openapi.json", "", nil, nil)
+	var openapi struct {
+		Paths map[string]map[string]json.RawMessage `json:"paths"`
+	}
+	if e != nil || status != 200 || json.Unmarshal(openapiBody, &openapi) != nil || len(openapi.Paths["/api/v1/articles/{article_id}/reprocess"]["post"]) == 0 {
+		return errors.New("web reprocess OpenAPI contract failed")
+	}
+	status, body, e := g.request("POST", base+"/auth/login", auth, nil, nil)
+	var login struct {
+		Token string `json:"access_token"`
+		Type  string `json:"token_type"`
+	}
+	if e != nil || status != 200 || json.Unmarshal(body, &login) != nil || login.Token == "" || login.Type != "bearer" {
+		return errors.New("web login failed")
+	}
+	bearer := "Bearer " + login.Token
+	status, body, e = g.request("GET", base+"/auth/me", bearer, nil, nil)
+	var identity struct {
+		Username string `json:"username"`
+	}
+	if e != nil || status != 200 || json.Unmarshal(body, &identity) != nil || identity.Username != "fixture-admin" {
+		return errors.New("web identity failed")
+	}
+	status, _, cookie, e = g.requestWithCookie("GET", base+"/admin/", auth, nil, nil)
+	if e != nil || status != 200 || !cookie {
+		return errors.New("web admin failed")
+	}
+	status, body, e = g.request("POST", base+"/api/v1/sources", bearer, []byte(`{"name":"Go Web API fixture source","source_type":"rss","url":"https://rss.fixture.test/rss.xml?edition=one","is_active":true,"update_interval":3600}`), nil)
+	var source struct {
+		ID int64 `json:"id"`
+	}
+	if e != nil || (status != 200 && status != 201) || json.Unmarshal(body, &source) != nil || source.ID < 1 {
+		return errors.New("web source create failed")
+	}
+	status, _, e = g.request("PATCH", fmt.Sprintf("%s/api/v1/sources/%d/toggle", base, source.ID), bearer, nil, nil)
+	if e != nil || status != 200 {
+		return errors.New("web source toggle failed")
+	}
+	status, body, e = g.request("GET", base+"/api/v1/sources", bearer, nil, nil)
+	var sourceList struct {
+		Sources []struct {
+			ID     int64 `json:"id"`
+			Active bool  `json:"is_active"`
+		} `json:"sources"`
+	}
+	if e != nil || status != 200 || json.Unmarshal(body, &sourceList) != nil {
+		return errors.New("web source list failed")
+	}
+	foundInactive := false
+	for _, item := range sourceList.Sources {
+		if item.ID == source.ID && !item.Active {
+			foundInactive = true
+		}
+	}
+	if !foundInactive {
+		return errors.New("web source persistence failed")
+	}
+	fmt.Println("fixture stage=web_auth_and_source_crud passed")
 	for i := 0; i < 120; i++ {
 		status, body, e := g.request("POST", base+"/api/v1/process/run", auth, []byte(`{}`), map[string]string{"Idempotency-Key": "vertical-fixture-job"})
 		if e == nil && status == 202 {
@@ -582,7 +652,7 @@ func (g *gate) run() (resultErr error) {
 	if e != nil || articleID == "" {
 		return errors.New("active shutdown article seed failed")
 	}
-	status, body, e := g.request("POST", base+"/api/v1/articles/"+articleID+"/reprocess", auth, []byte(`{"force":false}`), map[string]string{"Idempotency-Key": "active-term-fixture-" + marker})
+	status, body, e = g.request("POST", base+"/api/v1/articles/"+articleID+"/reprocess", auth, []byte(`{"force":false}`), map[string]string{"Idempotency-Key": "active-term-fixture-" + marker})
 	if e != nil || status != 202 {
 		return errors.New("active shutdown job not accepted")
 	}
@@ -1170,10 +1240,16 @@ func (g *gate) run() (resultErr error) {
 	if err := fixturegate.VerifyImages(refs, initial, inspect); err != nil {
 		return err
 	}
-	fmt.Println("Vertical fixture job and eight source receipts passed; this is not release acceptance.")
-	return errors.New("remaining fault and lifecycle acceptance phases not implemented")
+	g.accepted = initial
+	fmt.Println("fixture stage=image_identity passed")
+	return nil
 }
 func (g *gate) request(method, target, auth string, body []byte, headers map[string]string) (int, []byte, error) {
+	status, result, _, err := g.requestWithCookie(method, target, auth, body, headers)
+	return status, result, err
+}
+
+func (g *gate) requestWithCookie(method, target, auth string, body []byte, headers map[string]string) (int, []byte, bool, error) {
 	base, role := "http://web:8000", "web"
 	if strings.HasPrefix(target, "http://background:8080/") {
 		base, role = "http://background:8080", "scheduler"
@@ -1181,7 +1257,7 @@ func (g *gate) request(method, target, auth string, body []byte, headers map[str
 		base, role = "http://executor:8100", "domain"
 	}
 	if !strings.HasPrefix(target, base+"/") {
-		return 0, nil, errors.New("invalid fixture probe target")
+		return 0, nil, false, errors.New("invalid fixture probe target")
 	}
 	input, e := json.Marshal(struct {
 		Target, Method, Path, Authorization string
@@ -1189,24 +1265,31 @@ func (g *gate) request(method, target, auth string, body []byte, headers map[str
 		Headers                             map[string]string
 	}{role, method, strings.TrimPrefix(target, base), auth, body, headers})
 	if e != nil {
-		return 0, nil, e
+		return 0, nil, false, e
 	}
 	output, e := g.docker(input, "exec", "-T", "fake", "/fixture/fixture-http")
 	if e != nil {
-		return 0, nil, e
+		return 0, nil, false, e
 	}
 	var result struct {
-		Status int    `json:"status"`
-		Body   []byte `json:"body"`
+		Status    int    `json:"status"`
+		Body      []byte `json:"body"`
+		HasCookie bool   `json:"has_cookie"`
 	}
 	if json.Unmarshal([]byte(output), &result) != nil {
-		return 0, nil, errors.New("invalid fixture probe response")
+		return 0, nil, false, errors.New("invalid fixture probe response")
 	}
-	return result.Status, result.Body, nil
+	return result.Status, result.Body, result.HasCookie, nil
 }
 
 func main() { os.Exit(realMain()) }
 func realMain() int {
+	outputDir := flag.String("output-dir", "", "private directory for the acceptance receipt")
+	flag.Parse()
+	if *outputDir == "" || flag.NArg() != 0 {
+		fmt.Fprintln(os.Stderr, "vertical fixture gate failed: output directory required")
+		return 1
+	}
 	var nonce [8]byte
 	if _, e := rand.Read(nonce[:]); e != nil {
 		return 1
@@ -1222,6 +1305,14 @@ func realMain() int {
 	}
 	if e != nil {
 		fmt.Fprintln(os.Stderr, "vertical fixture gate failed:", e)
+		return 1
+	}
+	if e = os.RemoveAll(dir); e != nil {
+		fmt.Fprintln(os.Stderr, "vertical fixture gate failed: temporary cleanup failed")
+		return 1
+	}
+	if e = fixturegate.WriteReceipt(*outputDir, g.accepted); e != nil {
+		fmt.Fprintln(os.Stderr, "vertical fixture gate failed: acceptance receipt unavailable")
 		return 1
 	}
 	return 0

@@ -20,139 +20,13 @@ def policy(role, bootstrap=False):
     return stand.nft_policy(role,'172.22.0.2','172.22.0.3','172.22.0.4',bootstrap=bootstrap,host_ips=['65.109.0.90'])
 
 
-def test_observer_mounts_staged_python_extraction_sources_read_only(tmp_path):
-    assert stand.observer_extraction_mounts(tmp_path) == [
-        str(tmp_path/'benchmark/news_aggregator/extraction/service_client.py') +
-        ':/app/news_aggregator/extraction/service_client.py:ro',
-        str(tmp_path/'benchmark/news_aggregator/extraction/extraction_utils.py') +
-        ':/app/news_aggregator/extraction/extraction_utils.py:ro',
-    ]
-    assert all(path.endswith(':ro') for path in stand.observer_extraction_mounts(tmp_path))
-
-
-def test_go_native_browser_route_gate_runs_after_origin_is_ready(tmp_path):
-    events=[]
-    instance=object.__new__(stand.Stand)
-    instance.stage=tmp_path
-    instance.run_dir=tmp_path
-    instance.anchors={'gateway':{'name':'gateway-test','ip':'172.22.0.4'},
-                      'control':{'ip':'172.22.0.2'}}
-    instance.app='pinned-app'
-    instance.worker_recovery_gate=True
-    instance.bounded_profile=True
-    instance.observer='observer-test'
-    def run(suffix,*args,**kwargs):
-        assert suffix=='origin'
-        assert kwargs['network']=='container:gateway-test'
-        events.append('origin_started')
-        return 'origin-test'
-    instance.run=run
-    instance.verify_ns=lambda *_args: events.append('origin_namespace_verified') or 123
-    def wait_listener(role,port,uid):
-        assert (role,port,uid)==('gateway',443,0)
-        events.append('origin_listener_ready')
-    instance.wait_listener=wait_listener
-    generation='a'*64
-    def docker(*args,**kwargs):
-        assert args[:3]==('exec','observer-test','python')
-        events.append('browser_generation_read')
-        return json.dumps({'browser_generation':generation})
-    instance.docker=docker
-    def native_gate(_generation):
-        events.append('native_route_gate')
-        raise stand.StandError('stop_after_order_check')
-    instance.production_core_extractor_native_gate=native_gate
-    with pytest.raises(stand.StandError,match='stop_after_order_check'):
-        instance._controlled_browser_routes()
-    assert events==['origin_started','origin_namespace_verified','origin_listener_ready',
-                    'browser_generation_read','native_route_gate']
-
-
-def test_core_extractor_native_gate_uses_current_production_route_and_no_python_browser():
-    script=stand.CORE_EXTRACTOR_NATIVE_GATE
-    assert 'from news_aggregator.extraction.core_extractor import CoreExtractor' in script
-    assert 'from news_aggregator.extraction.service_client import ExtractionServiceError' in script
-    assert 'from news_aggregator.extraction.extraction_utils import ExtractionUtils' in script
-    assert 'core.extract_article_content_with_metadata(' in script
-    assert "'https://native-fixture.test/js-article'" in script
-    assert "'https://native-fixture.test/origin-auth'" in script
-    assert 'cookie confirmed' in script
-    assert 'python_fallback_calls' in script and 'forbidden_python_fallback' in script
-    assert 'asyncio.wait_for' in script
-    assert 'news_aggregator.core.browser_pool' in script
-    assert "os.open('/out/core-extractor-native.json'" in script
-    assert 'print(' not in script and 'benchmark_native' not in script
-
-
-def _core_native_receipt():
-    receipt={key:True for key in stand.CORE_EXTRACTOR_NATIVE_RECEIPT_FLAGS}
-    receipt.update({
-        'state':'passed','publisher_auth_code':'upstream_auth_required',
-        'python_fallback_calls':0,'success_record_count':1,'learned_pattern_lookups':2,
-        'learning_backend':'in_memory','article_characters':512,
-    })
-    receipt['python_browser_imported']=False
-    receipt['ai_db_telegram_imported']=False
-    return receipt
-
-
-def test_core_extractor_native_receipt_is_strict_and_sanitized(tmp_path):
-    receipt=_core_native_receipt()
-    assert stand.validate_core_extractor_native_receipt(receipt)==receipt
-    receipt['article']='raw article text'
-    with pytest.raises(stand.StandError,match='core_extractor_native_receipt_invalid'):
-        stand.validate_core_extractor_native_receipt(receipt)
-
-    failed={'state':'failed','phase':'positive_article','failure_type':'RuntimeError',
-        'failure_code':'cookie_proof_missing','python_fallback_calls':0}
-    path=tmp_path/'failed.json'
-    path.write_text(json.dumps(failed)); path.chmod(0o600)
-    with pytest.raises(stand.StandError,match='core_extractor_native_gate_failed'):
-        stand.read_core_extractor_native_receipt(path)
-    failed['diagnostic']='raw URL or exception'
-    path.write_text(json.dumps(failed)); path.chmod(0o600)
-    with pytest.raises(stand.StandError,match='core_extractor_native_receipt_invalid'):
-        stand.read_core_extractor_native_receipt(path)
-
-
-def test_core_extractor_native_gate_runs_only_in_worker_recovery_profile(tmp_path):
-    mounts=stand.observer_core_extractor_mounts(tmp_path)
-    assert mounts==[
-        str(tmp_path/'benchmark/news_aggregator/config.py')+':/app/news_aggregator/config.py:ro',
-        str(tmp_path/'benchmark/news_aggregator/extraction/core_extractor.py')+
-        ':/app/news_aggregator/extraction/core_extractor.py:ro',
-    ]
-    assert stand.observer_extraction_mounts(tmp_path)==[
-        str(tmp_path/'benchmark/news_aggregator/extraction/service_client.py')+
-        ':/app/news_aggregator/extraction/service_client.py:ro',
-        str(tmp_path/'benchmark/news_aggregator/extraction/extraction_utils.py')+
-        ':/app/news_aggregator/extraction/extraction_utils.py:ro',
-    ]
-
-
-def test_core_extractor_native_gate_invocation_requires_worker_recovery_and_accepts_complete_receipt(
-        tmp_path):
-    instance=stand.Stand.__new__(stand.Stand)
-    instance.run_dir=tmp_path
-    instance.observer='owned-observer'
-    instance.check_budget=lambda:None
-    instance.check_runtime=lambda:None
-    generation='a'*64
-    calls=[]
-    def docker(*args,**kwargs):
-        calls.append((args,kwargs))
-        path=tmp_path/'core-extractor-native.json'
-        path.write_text(json.dumps(_core_native_receipt())+'\n')
-        path.chmod(0o600)
-        return ''
-    instance.docker=docker
-    receipt=stand.Stand.production_core_extractor_native_gate(instance,generation)
-    assert receipt==_core_native_receipt()
-    assert len(calls)==1
-    assert calls[0][0][:4]==('exec','owned-observer','python','-c')
-    assert calls[0][0][4]==stand.CORE_EXTRACTOR_NATIVE_GATE
-    assert calls[0][0][5]==generation
-    assert calls[0][1]['timeout']==75
+def test_direct_browser_fixture_request_reports_only_bounded_evidence():
+    script = stand.Stand.browser_request_script()
+    assert "'strategy':'browser_rendering'" in script
+    assert "'use_browser':True" in script
+    assert "'title_present'" in script and "'cookie_confirmed'" in script
+    assert "'retryable'" in script
+    assert 'news_aggregator' not in script
 
 
 def test_diagnostic_logs_verify_worker_and_capture_both_docker_streams(monkeypatch):
@@ -931,7 +805,7 @@ def _controlled_gate_stand(tmp_path, monkeypatch, *, wire_ok=True, ready=True, c
         events.append(('request', route))
         if route == 'js-article':
             return json.dumps({'status': 200, 'outcome': 'success', 'error': None,
-                               'chars': 100, 'cookie_confirmed': True})
+                               'chars': 250, 'cookie_confirmed': True, 'title_present': True})
         if route == 'wire-limit':
             error = 'resource_limit' if wire_ok else 'native_browser_unavailable'
             return json.dumps({'status': 200, 'outcome': 'rejected', 'error': error,
@@ -944,7 +818,7 @@ def _controlled_gate_stand(tmp_path, monkeypatch, *, wire_ok=True, ready=True, c
                     'origin-auth': 'native_browser_http_rejected'}
         return json.dumps({'status': 200, 'outcome': 'rejected',
                            'error': expected.get(route, 'public_url_denied'),
-                           'chars': 0, 'cookie_confirmed': False})
+                           'chars': 0, 'cookie_confirmed': False, 'retryable': False})
 
     instance.docker = docker
     instance.synthetic_overload_gate = lambda _post: events.append(('overload',))
@@ -967,24 +841,12 @@ def test_controlled_gate_wire_limit_recovers_on_same_browser_before_overload(tmp
 
 
 @pytest.mark.parametrize('worker_recovery_gate', [False, True])
-def test_production_core_extractor_gate_is_scoped_to_worker_recovery_profile(
-        tmp_path, monkeypatch, worker_recovery_gate):
+def test_direct_go_routes_keep_worker_recovery_and_overload_gates(tmp_path, monkeypatch, worker_recovery_gate):
     instance, events = _controlled_gate_stand(tmp_path, monkeypatch)
-    instance.worker_recovery_gate=worker_recovery_gate
-    instance.production_core_extractor_native_gate=lambda value: events.append(('core-native-gate',value))
-    instance.synthetic_worker_recovery_gate=lambda *_args: events.append(('worker-recovery',))
+    instance.worker_recovery_gate = worker_recovery_gate
+    instance.synthetic_worker_recovery_gate = lambda *_args: events.append(('worker-recovery',))
     instance._controlled_browser_routes()
-    gate_events=[event for event in events if event[0]=='core-native-gate']
-    if worker_recovery_gate:
-        assert gate_events==[('core-native-gate','a'*64)]
-        listener_index=events.index(('listener-ready','gateway',443,0))
-        assert listener_index<events.index(gate_events[0])
-        assert events.index(gate_events[0])<next(i for i,event in enumerate(events)
-                                                   if event[0]=='request')
-        assert ('worker-recovery',) in events
-    else:
-        assert gate_events==[]
-        assert ('overload',) in events
+    assert ('worker-recovery',) in events if worker_recovery_gate else ('overload',) in events
 
 
 @pytest.mark.parametrize(('wire_ok', 'ready', 'error'), [
@@ -1176,3 +1038,113 @@ def test_uncertain_crash_cannot_dispatch_next_article(tmp_path, monkeypatch, kwa
         ('request', 'js-article'), ('request', 'js-article')]
     assert ('overload',) not in events
     assert not (tmp_path/'crash-recovery.json').exists()
+
+
+@pytest.mark.parametrize(('field', 'value'), [('title_present', False), ('chars', 199), ('cookie_confirmed', False)])
+def test_direct_native_positive_requires_metadata_and_cookie(tmp_path, monkeypatch, field, value):
+    instance, _ = _controlled_gate_stand(tmp_path, monkeypatch)
+    old = instance.docker
+    def changed(*args, **kwargs):
+        raw = old(*args, **kwargs)
+        if len(args) >= 7 and args[5] == 'js-article':
+            data = json.loads(raw)
+            data[field] = value
+            return json.dumps(data)
+        return raw
+    instance.docker = changed
+    with pytest.raises(stand.StandError, match='positive_native_browser_gate_failed'):
+        instance._controlled_browser_routes()
+
+
+def test_direct_native_auth_failure_must_be_terminal_and_empty(tmp_path, monkeypatch):
+    instance, _ = _controlled_gate_stand(tmp_path, monkeypatch)
+    old = instance.docker
+    def changed(*args, **kwargs):
+        raw = old(*args, **kwargs)
+        if len(args) >= 7 and args[5] == 'origin-auth':
+            data = json.loads(raw)
+            data['retryable'] = True
+            return json.dumps(data)
+        return raw
+    instance.docker = changed
+    with pytest.raises(stand.StandError, match='adversarial_browser_gate_failed'):
+        instance._controlled_browser_routes()
+
+
+def test_direct_native_fixture_receipt_uses_real_http_without_content_leak():
+    from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
+    from threading import Thread
+    captured = []
+    class Handler(BaseHTTPRequestHandler):
+        def do_POST(self):
+            payload = json.loads(self.rfile.read(int(self.headers['Content-Length'])))
+            captured.append((self.headers.get('Authorization'), payload))
+            body = json.dumps({'contract_version': '1', 'request_id': payload['request_id'],
+                'original_url': payload['url'], 'outcome': 'success',
+                'result': {'content': 'cookie confirmed ' + 'x' * 300, 'title': 'private title'}}).encode()
+            self.send_response(200)
+            self.send_header('Content-Type', 'application/json')
+            self.send_header('Content-Length', str(len(body)))
+            self.end_headers()
+            self.wfile.write(body)
+        def log_message(self, *_args):
+            pass
+    server = ThreadingHTTPServer(('127.0.0.1', 0), Handler)
+    thread = Thread(target=server.serve_forever, daemon=True)
+    thread.start()
+    try:
+        script = stand.Stand.browser_request_script().replace('127.0.0.1:8080',
+            f'127.0.0.1:{server.server_port}')
+        result = subprocess.run([sys.executable, '-c', script, 'js-article', 'fixture'],
+            capture_output=True, text=True, env=dict(os.environ, EXTRACTOR_TEST_TOKEN='fixture-secret'), timeout=5)
+        assert result.returncode == 0, result.stderr
+        receipt = json.loads(result.stdout)
+        assert receipt['status'] == 200 and receipt['chars'] >= 200
+        assert receipt['cookie_confirmed'] is True and receipt['title_present'] is True
+        assert 'private title' not in result.stdout and 'fixture-secret' not in result.stdout
+        auth, payload = captured[0]
+        assert auth == 'Bearer fixture-secret' and payload['use_browser'] is True
+        assert payload['strategy'] == 'browser_rendering' and payload['source_type'] == 'article'
+    finally:
+        server.shutdown()
+        server.server_close()
+        thread.join(timeout=5)
+
+
+@pytest.mark.parametrize('script_factory', [stand.Stand.browser_request_script,
+                                          stand.Stand.stopped_worker_request_script])
+def test_fixture_probe_refuses_redirect_without_forwarding_token(script_factory):
+    from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
+    from threading import Thread
+    received = []
+    class Destination(BaseHTTPRequestHandler):
+        def do_POST(self):
+            received.append(self.headers.get('Authorization'))
+            self.send_response(200)
+            self.end_headers()
+        def do_GET(self):
+            received.append(self.headers.get('Authorization'))
+            self.send_response(200)
+            self.end_headers()
+        def log_message(self, *_args): pass
+    destination = ThreadingHTTPServer(('127.0.0.1', 0), Destination)
+    class Redirect(BaseHTTPRequestHandler):
+        def do_POST(self):
+            self.send_response(302)
+            self.send_header('Location', f'http://127.0.0.1:{destination.server_port}/capture')
+            self.end_headers()
+        def log_message(self, *_args): pass
+    origin = ThreadingHTTPServer(('127.0.0.1', 0), Redirect)
+    threads = [Thread(target=s.serve_forever, daemon=True) for s in (origin, destination)]
+    for thread in threads: thread.start()
+    try:
+        script = script_factory().replace('127.0.0.1:8080', f'127.0.0.1:{origin.server_port}')
+        result = subprocess.run([sys.executable, '-c', script, 'origin-auth', 'fixture'],
+            capture_output=True, text=True, env=dict(os.environ, EXTRACTOR_TEST_TOKEN='fixture-secret'), timeout=5)
+        assert result.returncode != 0
+        assert 'fixture_redirect_rejected' in result.stderr
+        assert 'fixture-secret' not in result.stderr + result.stdout
+        assert received == []
+    finally:
+        for server in (origin, destination): server.shutdown(); server.server_close()
+        for thread in threads: thread.join(timeout=5)

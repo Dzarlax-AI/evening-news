@@ -146,6 +146,8 @@ def verify_source_manifest(stage: Path) -> str:
         raise GateError('source_manifest_invalid') from None
     if manifest.get('base_commit') != BASE_COMMIT or not isinstance(rows, dict) or not rows:
         raise GateError('source_manifest_base_mismatch')
+    if 'benchmark/scripts/native_browser_fixture_client.py' not in rows:
+        raise GateError('source_manifest_fixture_client_missing')
     for name, expected in rows.items():
         if (not isinstance(name, str) or not name.startswith('benchmark/')
                 or '..' in Path(name).parts or not re.fullmatch(r'[0-9a-f]{64}', str(expected))):
@@ -1084,7 +1086,8 @@ def ensure_stage(stage: Path, *, runtime_only=False):
     if stage.stat().st_mode & 0o777 != 0o700:
         raise GateError('stage_must_be_mode_0700')
     required = [stage/'benchmark/go/go.mod', stage/'benchmark/scripts/native_shadow_stand.py',
-                stage/'benchmark/scripts/shadow_cdp_relay.py', stage/'bin-soak', stage/'tls']
+                stage/'benchmark/scripts/shadow_cdp_relay.py',
+                stage/'benchmark/scripts/native_browser_fixture_client.py', stage/'bin-soak', stage/'tls']
     if runtime_only:
         required += [stage/BINARY_MANIFEST_NAME]
     else:

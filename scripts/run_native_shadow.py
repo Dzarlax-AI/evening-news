@@ -222,7 +222,10 @@ async def _readiness(endpoint: str) -> dict[str, Any]:
 
 
 async def _run_c(url: str, endpoint: str, token: str) -> dict[str, Any]:
-    from news_aggregator.extraction.service_client import ExtractionServiceClient, ExtractionServiceError
+    try:
+        from scripts.native_browser_fixture_client import ExtractionServiceClient, ExtractionServiceError
+    except ImportError:
+        from native_browser_fixture_client import ExtractionServiceClient, ExtractionServiceError
     try:
         payload = await ExtractionServiceClient(endpoint, token).extract(
             url, timeout_seconds=MAX_JOB_SECONDS, strategy="browser_rendering",
