@@ -72,7 +72,9 @@ class DigestOperationError(AIRuntimeError):
         allowed = {"domain_operation_failed", "stale_fence", "authority_unavailable", "external_outcome_unknown",
                    "prepared_digest_missing", "resource_limit", "editorial_not_ready", "editorial_resource_limit",
                    "editorial_provider_timeout", "editorial_provider_unavailable", "editorial_invalid_result", "editorial_generation_failed"}
-        super().__init__(code if code in allowed else "domain_operation_failed")
+        super().__init__()
+        self.code = code if isinstance(code, str) and code in allowed else "domain_operation_failed"
+        self.args = (self.code,)
 
 
 class AIRuntimeProviderError(APIError):
@@ -198,13 +200,22 @@ class AIRuntime:
             if self.socket_path and self.socket_path.exists():
                 try:
                     socket_stat = self.socket_path.lstat()
-                    if stat.S_ISSOCK(socket_stat.st_mode) and self._socket_identity is None:
-                        self._socket_identity = (socket_stat.st_dev, socket_stat.st_ino)
+                    if not stat.S_ISSOCK(socket_stat.st_mode):
+                        raise AIRuntimeError("runtime_protocol_error")
+                    identity = (socket_stat.st_dev, socket_stat.st_ino)
+                    if self._socket_identity is None:
+                        self._socket_identity = identity
+                    elif self._socket_identity != identity:
+                        raise AIRuntimeError("runtime_protocol_error")
                     result = await self._rpc("GET", "/v1/status", timeout=0.5, require_ready=False)
                     if result.get("ready") is True and result.get("protocol_version") == 1:
-                        if not stat.S_ISSOCK(socket_stat.st_mode) or socket_stat.st_mode & 0o777 != 0o600:
+                        try:
+                            current = self.socket_path.lstat()
+                        except OSError:
+                            raise AIRuntimeError("runtime_protocol_error") from None
+                        if (not stat.S_ISSOCK(current.st_mode) or current.st_mode & 0o777 != 0o600
+                                or (current.st_dev, current.st_ino) != identity):
                             raise AIRuntimeError("runtime_protocol_error")
-                        self._socket_identity = (socket_stat.st_dev, socket_stat.st_ino)
                         return
                 except AIRuntimeError as exc:
                     if exc.code != "runtime_unavailable":

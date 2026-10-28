@@ -8,6 +8,7 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"math"
 	"net/http"
 	"net/http/httptest"
 	"net/url"
@@ -91,7 +92,7 @@ func TestReceiptAndFencePostgres(t *testing.T) {
  CREATE TABLE settings(key text primary key,value jsonb);
  CREATE TABLE IF NOT EXISTS editorial_digest_editions(id uuid primary key,edition_date date,locale text,policy_version text,snapshot_hash text,snapshot jsonb,edition jsonb,rendered jsonb,provider_usage jsonb,job_id uuid,attempt_generation int,created_at timestamp default timezone('UTC',now()),unique(job_id,attempt_generation,locale));
  CREATE TABLE IF NOT EXISTS digest_delivery_intents(id uuid primary key,edition_id uuid,destination_hash char(64),purpose text,render_hash char(64),job_id uuid,attempt_generation int,domain_instance_id uuid,state text,parts_sent int,rich_message bool,unique(edition_id,destination_hash,purpose));
- CREATE TABLE IF NOT EXISTS digest_delivery_parts(intent_id uuid,method text,part_index int,payload_hash char(64),job_id uuid,attempt_generation int,state text,message_id bigint,status_code int,retry_after_seconds double precision,updated_at timestamp default now(),primary key(intent_id,method,part_index))`
+ CREATE TABLE IF NOT EXISTS digest_delivery_parts(intent_id uuid,method text,part_index int,payload_hash char(64),job_id uuid,attempt_generation int,domain_instance_id uuid,state text,message_id bigint,status_code int,retry_after_seconds double precision,updated_at timestamp default now(),primary key(intent_id,method,part_index))`
 	if _, err = pool.Exec(ctx, ddl); err != nil {
 		t.Fatal("fixture schema setup failed")
 	}
@@ -343,6 +344,178 @@ func TestReceiptAndFencePostgres(t *testing.T) {
 	completed, err := second.ResolveIntent(ctx, "00000000-0000-0000-0000-000000000017", edition, hash, hash)
 	if err != nil || !completed.Completed || completed.PartsSent != 1 || !completed.RichMessage {
 		t.Fatal("completed intent was not reusable")
+	}
+
+	createIntent := func(id, destination string) telegramdelivery.Intent {
+		value, err := store.ResolveIntent(ctx, id, edition, strings.Repeat(destination, 64), hash)
+		if err != nil {
+			t.Fatal("create takeover fixture failed")
+		}
+		return value
+	}
+	// An untouched intent can be claimed; the old, still-fenced owner may no
+	// longer reserve, finish, or complete it.
+	empty := createIntent("00000000-0000-0000-0000-000000000020", "c")
+	if _, err = second.ResolveIntent(ctx, "00000000-0000-0000-0000-000000000021", edition, strings.Repeat("c", 64), hash); err != nil {
+		t.Fatal("empty intent takeover failed")
+	}
+	emptyPart := telegramdelivery.Part{Intent: empty.ID, Method: "sendMessage", Index: 0, PayloadHash: hash}
+	if _, err = store.Reserve(ctx, emptyPart); !errors.Is(err, telegramdelivery.ErrUnknown) {
+		t.Fatal("old owner reserved after takeover")
+	}
+	if err = store.Finish(ctx, emptyPart, telegramdelivery.Result{State: telegramdelivery.Sent}); !errors.Is(err, telegramdelivery.ErrUnknown) {
+		t.Fatal("old owner finalized after takeover")
+	}
+	if err = store.Complete(ctx, empty.ID, 1, false); !errors.Is(err, telegramdelivery.ErrUnknown) {
+		t.Fatal("old owner completed after takeover")
+	}
+	if state, err = second.Reserve(ctx, emptyPart); err != nil || state != telegramdelivery.New {
+		t.Fatal("new owner cannot reserve empty intent")
+	}
+
+	// A child/domain restart with the same job attempt is a distinct owner.
+	restarted := createIntent("00000000-0000-0000-0000-000000000026", "9")
+	replacement := store
+	replacement.DomainInstanceID = "00000000-0000-0000-0000-000000000027"
+	if _, err = replacement.ResolveIntent(ctx, "00000000-0000-0000-0000-000000000028", edition, strings.Repeat("9", 64), hash); err != nil {
+		t.Fatal("new instance takeover failed")
+	}
+	restartedPart := telegramdelivery.Part{Intent: restarted.ID, Method: "sendMessage", Index: 0, PayloadHash: hash}
+	if _, err = store.Reserve(ctx, restartedPart); !errors.Is(err, telegramdelivery.ErrUnknown) {
+		t.Fatal("old instance reserved after takeover")
+	}
+	if state, err = replacement.Reserve(ctx, restartedPart); err != nil || state != telegramdelivery.New {
+		t.Fatal("replacement instance could not reserve")
+	}
+
+	// A 429 is terminal in the first call and until its saved cooldown has
+	// elapsed. A later owner can then reserve once, without an automatic loop.
+	limited := createIntent("00000000-0000-0000-0000-000000000022", "d")
+	limitedPart := telegramdelivery.Part{Intent: limited.ID, Method: "sendRichMessage", Index: 0, PayloadHash: hash}
+	if _, err = store.Reserve(ctx, limitedPart); err != nil {
+		t.Fatal("rate limit reservation failed")
+	}
+	delay := 60.0
+	if err = store.Finish(ctx, limitedPart, telegramdelivery.Result{State: telegramdelivery.Rejected, StatusCode: 429, RetryAfterSeconds: &delay}); err != nil {
+		t.Fatal("rate limit receipt failed")
+	}
+	if _, err = second.ResolveIntent(ctx, "00000000-0000-0000-0000-000000000023", edition, strings.Repeat("d", 64), hash); err != nil {
+		t.Fatal("rejected intent takeover failed")
+	}
+	if state, err = second.Reserve(ctx, limitedPart); err != nil || state != telegramdelivery.RateLimited {
+		t.Fatal("retry after was not respected")
+	}
+	if _, err = pool.Exec(ctx, `UPDATE digest_delivery_parts SET updated_at=timezone('UTC',now())-interval '61 seconds' WHERE intent_id=$1`, limited.ID); err != nil {
+		t.Fatal("cooldown fixture failed")
+	}
+	if state, err = second.Reserve(ctx, limitedPart); err != nil || state != telegramdelivery.New {
+		t.Fatal("later owner could not reserve 429")
+	}
+	if state, err = second.Reserve(ctx, limitedPart); err != nil || state != telegramdelivery.InFlight {
+		t.Fatal("429 reservation was replayable")
+	}
+	if err = second.Finish(ctx, limitedPart, telegramdelivery.Result{State: telegramdelivery.Rejected, StatusCode: 429}); err != nil {
+		t.Fatal("new owner rejection failed")
+	}
+	if state, err = second.Reserve(ctx, limitedPart); err != nil || state != telegramdelivery.RateLimited {
+		t.Fatal("same owner retried rejected 429")
+	}
+
+	// A 429 protects every part, even if a later attempt changes the mode.
+	for i, methods := range []struct{ previous, next string }{{"sendRichMessage", "sendMessage"}, {"sendMessage", "sendRichMessage"}} {
+		id := fmt.Sprintf("00000000-0000-0000-0000-%012d", 40+i)
+		destination := strings.Repeat(string(rune('1'+i)), 64)
+		value, err := store.ResolveIntent(ctx, id, edition, destination, hash)
+		if err != nil {
+			t.Fatal("mode cooldown intent failed")
+		}
+		oldPart := telegramdelivery.Part{Intent: value.ID, Method: methods.previous, Index: 0, PayloadHash: hash}
+		if _, err = store.Reserve(ctx, oldPart); err != nil {
+			t.Fatal("mode cooldown reservation failed")
+		}
+		delay := 60.0
+		if err = store.Finish(ctx, oldPart, telegramdelivery.Result{State: telegramdelivery.Rejected, StatusCode: 429, RetryAfterSeconds: &delay}); err != nil {
+			t.Fatal("mode cooldown receipt failed")
+		}
+		proposed := fmt.Sprintf("00000000-0000-0000-0000-%012d", 50+i)
+		if _, err = second.ResolveIntent(ctx, proposed, edition, destination, hash); err != nil {
+			t.Fatal("mode cooldown takeover failed")
+		}
+		nextPart := telegramdelivery.Part{Intent: value.ID, Method: methods.next, Index: 0, PayloadHash: hash, Payload: map[string]any{"chat_id": "fixture"}}
+		delivery := telegramdelivery.Delivery{Store: second, Sender: telegramdelivery.Transport{Client: provider.Client(), Endpoint: provider.URL + "/telegram", Token: "fixture"}, Authority: secondFence}
+		before := telegramCalls.Load()
+		if _, err = delivery.SendPart(ctx, nextPart); !errors.Is(err, telegramdelivery.ErrRejected) || telegramCalls.Load() != before {
+			t.Fatal("mode switch bypassed cooldown")
+		}
+		if _, err = pool.Exec(ctx, `UPDATE digest_delivery_parts SET updated_at=timezone('UTC',now())-interval '61 seconds' WHERE intent_id=$1`, value.ID); err != nil {
+			t.Fatal("mode cooldown elapsed fixture failed")
+		}
+		if delivered, sendErr := delivery.SendPart(ctx, nextPart); sendErr != nil || delivered != telegramdelivery.Sent || telegramCalls.Load() != before+1 {
+			t.Fatal("mode switch did not send after cooldown")
+		}
+	}
+
+	huge := createIntent("00000000-0000-0000-0000-000000000060", "3")
+	hugePart := telegramdelivery.Part{Intent: huge.ID, Method: "sendMessage", Index: 0, PayloadHash: hash}
+	if _, err = store.Reserve(ctx, hugePart); err != nil {
+		t.Fatal("large cooldown fixture reservation failed")
+	}
+	maximum := math.MaxFloat64
+	if err = store.Finish(ctx, hugePart, telegramdelivery.Result{State: telegramdelivery.Rejected, StatusCode: 429, RetryAfterSeconds: &maximum}); err != nil {
+		t.Fatal("large cooldown fixture receipt failed")
+	}
+	if _, err = second.ResolveIntent(ctx, "00000000-0000-0000-0000-000000000061", edition, strings.Repeat("3", 64), hash); err != nil {
+		t.Fatal("large cooldown takeover failed")
+	}
+	if state, err = second.Reserve(ctx, telegramdelivery.Part{Intent: huge.ID, Method: "sendRichMessage", Index: 0, PayloadHash: hash}); err != nil || state != telegramdelivery.RateLimited {
+		t.Fatal("large finite cooldown was not safely enforced")
+	}
+
+	// Explicit rich rejection is retained for safe plain fallback after takeover.
+	rejected := createIntent("00000000-0000-0000-0000-000000000024", "e")
+	rejectedPart := telegramdelivery.Part{Intent: rejected.ID, Method: "sendRichMessage", Index: 0, PayloadHash: hash}
+	if _, err = store.Reserve(ctx, rejectedPart); err != nil {
+		t.Fatal("rich fixture reservation failed")
+	}
+	if err = store.Finish(ctx, rejectedPart, telegramdelivery.Result{State: telegramdelivery.Rejected, StatusCode: 400}); err != nil {
+		t.Fatal("rich fixture rejection failed")
+	}
+	if _, err = second.ResolveIntent(ctx, "00000000-0000-0000-0000-000000000025", edition, strings.Repeat("e", 64), hash); err != nil {
+		t.Fatal("rejected rich takeover failed")
+	}
+	if state, err = second.Reserve(ctx, rejectedPart); err != nil || state != telegramdelivery.PreviouslyRejected {
+		t.Fatal("rich rejection did not permit fallback")
+	}
+	if state, err = second.Reserve(ctx, telegramdelivery.Part{Intent: rejected.ID, Method: "sendMessage", Index: 0, PayloadHash: hash}); err != nil || state != telegramdelivery.New {
+		t.Fatal("plain fallback reservation failed")
+	}
+
+	// Sending and explicitly unknown outcomes never permit a new owner.
+	for i, kind := range []string{"sending", "unknown"} {
+		id := fmt.Sprintf("00000000-0000-0000-0000-%012d", 30+i)
+		destination := strings.Repeat(string(rune('f'+i)), 64)
+		// SHA-256 text must be lowercase hexadecimal.
+		if kind == "unknown" {
+			destination = strings.Repeat("0", 64)
+		}
+		pending, err := store.ResolveIntent(ctx, id, edition, destination, hash)
+		if err != nil {
+			t.Fatal("uncertain intent fixture failed")
+		}
+		pendingPart := telegramdelivery.Part{Intent: pending.ID, Method: "sendMessage", Index: 0, PayloadHash: hash}
+		if _, err = store.Reserve(ctx, pendingPart); err != nil {
+			t.Fatal("uncertain part fixture failed")
+		}
+		if kind == "unknown" {
+			if err = store.Finish(ctx, pendingPart, telegramdelivery.Result{State: telegramdelivery.Unknown}); err != nil {
+				t.Fatal("unknown receipt fixture failed")
+			}
+		}
+		before := telegramCalls.Load()
+		_, err = second.ResolveIntent(ctx, "00000000-0000-0000-0000-000000000032", edition, destination, hash)
+		if !errors.Is(err, telegramdelivery.ErrUnknown) || telegramCalls.Load() != before {
+			t.Fatal("uncertain intent takeover was allowed")
+		}
 	}
 	partialID := "00000000-0000-0000-0000-000000000018"
 	destinationHash := strings.Repeat("b", 64)

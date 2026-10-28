@@ -59,6 +59,7 @@ class DigestDeliveryMigration(BaseMigration):
                 payload_hash CHAR(64) NOT NULL CHECK (payload_hash ~ '^[0-9a-f]{{64}}$'),
                 job_id UUID NOT NULL,
                 attempt_generation INTEGER NOT NULL CHECK (attempt_generation > 0),
+                domain_instance_id UUID NOT NULL,
                 state VARCHAR(16) NOT NULL CHECK (state IN ('sending', 'sent', 'rejected', 'unknown')),
                 message_id BIGINT,
                 status_code INTEGER CHECK (status_code BETWEEN 100 AND 599),

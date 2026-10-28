@@ -366,3 +366,46 @@ async def test_canceling_one_rpc_keeps_shared_runtime_alive(tmp_path, monkeypatc
     )
     assert result["choices"][0]["message"]["content"] == "ok"
     await runtime.stop()
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("mode", ["chmod_ready", "replaced", "insecure"])
+async def test_ready_rechecks_socket_identity_and_permissions(mode):
+    import socket
+    from types import SimpleNamespace
+
+    with tempfile.TemporaryDirectory(prefix="nai-ready-") as directory:
+        path = Path(directory) / "runtime.sock"
+        original = socket.socket(socket.AF_UNIX, socket.SOCK_STREAM)
+        replacement = None
+        try:
+            original.bind(str(path))
+            path.chmod(0o755)
+            runtime = AIRuntime("/unused")
+            runtime.socket_path = path
+            runtime.process = SimpleNamespace(returncode=None)
+
+            async def ready(*_args, **_kwargs):
+                nonlocal replacement
+                if mode == "replaced":
+                    path.unlink()
+                    replacement = socket.socket(socket.AF_UNIX, socket.SOCK_STREAM)
+                    replacement.bind(str(path))
+                    path.chmod(0o600)
+                elif mode == "chmod_ready":
+                    path.chmod(0o600)
+                return {"ready": True, "protocol_version": 1}
+
+            runtime._rpc = ready
+            if mode == "chmod_ready":
+                await runtime._wait_until_ready()
+                current = path.lstat()
+                assert runtime._socket_identity == (current.st_dev, current.st_ino)
+            else:
+                with pytest.raises(AIRuntimeError) as exc:
+                    await runtime._wait_until_ready()
+                assert exc.value.code == "runtime_protocol_error"
+        finally:
+            original.close()
+            if replacement is not None:
+                replacement.close()

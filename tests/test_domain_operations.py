@@ -335,3 +335,46 @@ async def test_digest_dispatch_uses_native_adapter(monkeypatch):
     context = object()
     assert await domain._dispatch_operation(record, context, object()) == {"summaries_count": 2}
     native.assert_awaited_once_with(record, context)
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("code", ["editorial_not_ready", "stale_fence", "resource_limit", "not_valid", None])
+async def test_native_digest_failure_code_reaches_domain_receipt(monkeypatch, code):
+    from news_aggregator.services.ai_runtime import DigestOperationError
+
+    record = domain.validate_operation_body(_request("summary_status"))
+    key = domain._operation_key(record)
+    domain._RECORDS[key] = record
+    context = SimpleNamespace(kind="news_digest", payload={})
+    monkeypatch.setattr(domain, "_get_current_context", AsyncMock(return_value=context))
+
+    class Fence:
+        job_id = uuid.uuid4()
+        attempt_generation = 2
+        executor_instance_id = uuid.uuid4()
+        active = True
+        validate = AsyncMock()
+
+        def __init__(self, _context):
+            pass
+
+    class Session:
+        async def __aenter__(self):
+            return self
+
+        async def __aexit__(self, *_args):
+            pass
+
+        async def rollback(self):
+            pass
+
+    monkeypatch.setattr(domain, "RemoteDomainFence", Fence)
+    monkeypatch.setattr(domain, "AsyncSessionLocal", Session)
+    monkeypatch.setattr(domain, "_dispatch_operation", AsyncMock(side_effect=DigestOperationError(code)))
+    await domain._run_operation(key, record)
+    result = await domain.read_operation_status(record.job_id, record.attempt_generation,
+                                                record.operation, record.operation_id,
+                                                record.domain_instance_id)
+    expected = code if code in {"editorial_not_ready", "stale_fence", "resource_limit"} else "domain_operation_failed"
+    assert result["state"] == "failed"
+    assert result["error_code"] == expected
