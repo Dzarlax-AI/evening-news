@@ -66,17 +66,11 @@ func (s *Server) runAttempt(ctx context.Context, key attemptKey, e Envelope, kin
 		// Keep diagnostics useful without surfacing a handler error that may
 		// include provider, request, or database details.
 		if runErr != nil {
-			logExecutionFailure("pipeline_execute", "handler_failed", nil)
+			logExecutionFailure("pipeline_execute", SafeExecutionFailureReason(runErr), nil)
 		} else if execCtx.Err() != nil {
 			logExecutionFailure("pipeline_execute", "context_ended", nil)
 		}
-		if mayDeliver(kind, payload) {
-			state, code = "delivery_unknown", "external_outcome_unknown"
-		} else if errors.Is(execCtx.Err(), context.Canceled) || errors.Is(runErr, context.Canceled) {
-			state, code = "interrupted", "worker_interrupted"
-		} else {
-			state, code = "failed", "worker_error"
-		}
+		state, code = pipelineFailureDisposition(kind, payload, runErr, execCtx.Err())
 		result = Result{Value: json.RawMessage(`{"status":"warning"}`)}
 	}
 	bounded, berr := safeResult(result.Value)
@@ -117,6 +111,17 @@ func (s *Server) runAttempt(ctx context.Context, key attemptKey, e Envelope, kin
 	// uses a fresh bounded DB context while revalidating the current lease.
 	s.finish(context.Background(), key, state, code, bounded)
 }
+
+func pipelineFailureDisposition(kind string, payload []byte, runErr, contextErr error) (string, string) {
+	if DeliveryOutcomeUnknown(kind, payload, runErr) {
+		return "delivery_unknown", "external_outcome_unknown"
+	}
+	if errors.Is(contextErr, context.Canceled) || errors.Is(runErr, context.Canceled) {
+		return "interrupted", "worker_interrupted"
+	}
+	return "failed", "worker_error"
+}
+
 func (s *Server) executionContext(ctx context.Context, key attemptKey, e Envelope) (ExecutionContext, error) {
 	var pid int32
 	var owner string
