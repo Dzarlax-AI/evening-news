@@ -111,17 +111,20 @@ func testStoreWithProxy(t *testing.T, proxy *commitReplyProxy) (*Store, context.
 }
 
 type commitReplyProxy struct {
-	listener  net.Listener
-	port      uint16
-	target    string
-	armed     atomic.Bool
-	committed chan struct{}
-	dropReply chan struct{}
-	dropOnce  sync.Once
-	activeMu  sync.Mutex
-	closed    bool
-	active    map[net.Conn]struct{}
-	workers   sync.WaitGroup
+	listener         net.Listener
+	port             uint16
+	target           string
+	armed            atomic.Bool
+	rollbackArmed    atomic.Bool
+	rollbackObserved chan struct{}
+	allowRollback    chan struct{}
+	committed        chan struct{}
+	dropReply        chan struct{}
+	dropOnce         sync.Once
+	activeMu         sync.Mutex
+	closed           bool
+	active           map[net.Conn]struct{}
+	workers          sync.WaitGroup
 }
 
 func newCommitReplyProxy(t *testing.T, dsn string) *commitReplyProxy {
@@ -143,12 +146,14 @@ func newCommitReplyProxy(t *testing.T, dsn string) *commitReplyProxy {
 		t.Fatalf("listen for local PostgreSQL response proxy: %v", err)
 	}
 	proxy := &commitReplyProxy{
-		listener:  listener,
-		port:      uint16(listener.Addr().(*net.TCPAddr).Port),
-		target:    net.JoinHostPort(host, strconv.Itoa(port)),
-		committed: make(chan struct{}),
-		dropReply: make(chan struct{}),
-		active:    make(map[net.Conn]struct{}),
+		listener:         listener,
+		port:             uint16(listener.Addr().(*net.TCPAddr).Port),
+		target:           net.JoinHostPort(host, strconv.Itoa(port)),
+		committed:        make(chan struct{}),
+		dropReply:        make(chan struct{}),
+		rollbackObserved: make(chan struct{}),
+		allowRollback:    make(chan struct{}),
+		active:           make(map[net.Conn]struct{}),
 	}
 	proxy.workers.Add(1)
 	go proxy.serve()
@@ -203,6 +208,7 @@ func (p *commitReplyProxy) handle(client net.Conn) {
 	}
 	clientDone := make(chan struct{})
 	var pending atomic.Bool
+	var rollbackPending atomic.Bool
 	go func() {
 		defer close(clientDone)
 		for {
@@ -213,6 +219,9 @@ func (p *commitReplyProxy) handle(client net.Conn) {
 			if isCommitMessage(kind, body) && p.armed.CompareAndSwap(true, false) {
 				pending.Store(true)
 			}
+			if kind == 'Q' && strings.TrimSpace(strings.TrimRight(string(body), "\x00")) == "rollback" && p.rollbackArmed.CompareAndSwap(true, false) {
+				rollbackPending.Store(true)
+			}
 			if _, err := server.Write(raw); err != nil {
 				return
 			}
@@ -222,6 +231,10 @@ func (p *commitReplyProxy) handle(client net.Conn) {
 		kind, _, raw, err := readPGMessage(server)
 		if err != nil {
 			return
+		}
+		if kind == 'Z' && rollbackPending.Swap(false) {
+			close(p.rollbackObserved)
+			<-p.allowRollback
 		}
 		if kind == 'Z' && pending.Swap(false) {
 			close(p.committed)
@@ -261,6 +274,13 @@ func (p *commitReplyProxy) unregister(conn net.Conn) {
 }
 
 func (p *commitReplyProxy) close() {
+	if p.allowRollback != nil {
+		select {
+		case <-p.allowRollback:
+		default:
+			close(p.allowRollback)
+		}
+	}
 	p.dropCommitReply()
 	p.activeMu.Lock()
 	p.closed = true
@@ -276,8 +296,10 @@ func (p *commitReplyProxy) close() {
 
 func TestCommitReplyProxyRejectsConnectionsAfterClose(t *testing.T) {
 	proxy := &commitReplyProxy{
-		dropReply: make(chan struct{}),
-		active:    make(map[net.Conn]struct{}),
+		dropReply:        make(chan struct{}),
+		rollbackObserved: make(chan struct{}),
+		allowRollback:    make(chan struct{}),
+		active:           make(map[net.Conn]struct{}),
 	}
 	proxy.close()
 	client, server := net.Pipe()
@@ -440,6 +462,54 @@ func TestAcquireRejectsCompetingStartup(t *testing.T) {
 		t.Fatalf("Acquire after owner release = %v, want success", err)
 	}
 	_ = second.Release(context.Background())
+}
+
+// A failed heartbeat must notify the worker before a stalled rollback finishes.
+func TestHeartbeatSignalsFailureBeforeSlowRollback(t *testing.T) {
+	dsn := os.Getenv("TEST_DATABASE_URL")
+	if dsn == "" {
+		t.Skip("TEST_DATABASE_URL is required")
+	}
+	proxy := newCommitReplyProxy(t, dsn)
+	owner, ctx, cleanup := testStoreWithProxy(t, proxy)
+	defer cleanup()
+	if _, err := owner.Acquire(ctx); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := owner.Pool.Exec(ctx, `UPDATE background_worker_status SET status='stopped' WHERE id=1`); err != nil {
+		t.Fatal(err)
+	}
+	notifying, hasNotifier := any(owner).(interface {
+		HeartbeatWithFailure(context.Context, func()) error
+	})
+	proxy.rollbackArmed.Store(true)
+	failed := make(chan struct{})
+	done := make(chan error, 1)
+	go func() {
+		if hasNotifier {
+			done <- notifying.HeartbeatWithFailure(ctx, func() { close(failed) })
+			return
+		}
+		err := owner.Heartbeat(ctx)
+		if err != nil {
+			close(failed)
+		}
+		done <- err
+	}()
+	select {
+	case <-proxy.rollbackObserved:
+	case <-time.After(2 * time.Second):
+		t.Fatal("rollback not observed")
+	}
+	select {
+	case <-failed:
+	case <-time.After(250 * time.Millisecond):
+		t.Fatal("failure notification blocked by rollback")
+	}
+	close(proxy.allowRollback)
+	if err := <-done; !errors.Is(err, ErrLeaseLost) {
+		t.Fatalf("heartbeat = %v", err)
+	}
 }
 
 func TestHeartbeatLockContentionReportsBoundedTimeoutAndReleasesLease(t *testing.T) {

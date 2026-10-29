@@ -28,8 +28,8 @@ type nativeFixture struct {
 	status                                                                                                             int
 	childStatus                                                                                                        int
 	downloadFrame                                                                                                      string
-	navigateDownload                                                                                                   bool
-	navigationError                                                                                                    string
+	navigateDownload, statusAfterFailure, sameRequestNoFrame                                                           bool
+	navigationError, loadingFailure, loadingFailureType, loadingFailureFrame                                           string
 	evaluationException                                                                                                bool
 	requestBurst                                                                                                       int
 	pausedBurst                                                                                                        int
@@ -227,6 +227,11 @@ func newNativeFixture(t *testing.T) *nativeFixture {
 					close(f.navigated)
 				}
 				event := map[string]any{"method": "Network.responseReceived", "sessionId": sessionID, "params": map[string]any{"requestId": "main-request", "frameId": "main-frame", "type": "Document", "response": map[string]any{"status": f.status, "headers": map[string]string{"Retry-After": "30"}}}}
+				if f.sameRequestNoFrame {
+					params := event["params"].(map[string]any)
+					delete(params, "frameId")
+					params["requestId"] = "failure-request"
+				}
 				if f.targetCrashed {
 					f.targetCrashed = false
 					if f.changeGenerationOnCrash {
@@ -244,7 +249,17 @@ func newNativeFixture(t *testing.T) *nativeFixture {
 				if f.authSource != "" {
 					event = map[string]any{"method": "Fetch.authRequired", "sessionId": sessionID, "params": map[string]any{"requestId": "auth", "authChallenge": map[string]string{"source": f.authSource, "origin": f.authOrigin}}}
 				}
-				if !write(event) {
+				if f.loadingFailure != "" {
+					frame, kind := f.loadingFailureFrame, f.loadingFailureType
+					if frame == "" {
+						frame = "main-frame"
+					}
+					if kind == "" {
+						kind = "Document"
+					}
+					write(map[string]any{"method": "Network.requestWillBeSent", "sessionId": sessionID, "params": map[string]string{"requestId": "failure-request", "frameId": frame, "type": kind}})
+				}
+				if !f.statusAfterFailure && !write(event) {
 					f.mu.Unlock()
 					return
 				}
@@ -279,6 +294,13 @@ func newNativeFixture(t *testing.T) *nativeFixture {
 				}
 				if f.downloadFrame != "" {
 					write(map[string]any{"method": "Browser.downloadWillBegin", "params": map[string]string{"frameId": f.downloadFrame}})
+				}
+				if f.loadingFailure != "" {
+					write(map[string]any{"method": "Network.loadingFailed", "sessionId": sessionID, "params": map[string]string{"requestId": "failure-request", "errorText": f.loadingFailure}})
+				}
+				if f.statusAfterFailure && !write(event) {
+					f.mu.Unlock()
+					return
 				}
 				if !nextRequest() {
 					f.mu.Unlock()
@@ -1902,6 +1924,10 @@ func TestNativePageMonitorDiagnosticsClassifyNavigationAndPreservePrimaryFailure
 		{name: "connection", errorText: "net::ERR_CONNECTION_REFUSED https://CONNECTION_CANARY/path", wantReason: "navigation_connection"},
 		{name: "tls", errorText: "net::ERR_CERT_AUTHORITY_INVALID https://TLS_CANARY/path", wantReason: "navigation_tls"},
 		{name: "aborted", errorText: "net::ERR_ABORTED https://ABORT_CANARY/path", wantReason: "navigation_aborted"},
+		{name: "http", errorText: "net::ERR_HTTP_RESPONSE_CODE_FAILURE https://HTTP_CANARY/path", wantReason: "navigation_http"},
+		{name: "proxy", errorText: "net::ERR_PROXY_CONNECTION_FAILED https://PROXY_CANARY/path", wantReason: "navigation_proxy"},
+		{name: "redirect", errorText: "net::ERR_TOO_MANY_REDIRECTS https://REDIRECT_CANARY/path", wantReason: "navigation_redirect"},
+		{name: "empty", errorText: "net::ERR_EMPTY_RESPONSE https://EMPTY_CANARY/path", wantReason: "navigation_empty_response"},
 		{name: "unknown", errorText: "browser supplied arbitrary detail https://UNKNOWN_CANARY/path", wantReason: "navigation_other"},
 		{name: "navigation remains primary after cleanup failure", errorText: "net::ERR_NAME_NOT_RESOLVED https://CLEANUP_CANARY/path", wantReason: "navigation_dns", cleanup: true},
 	}
@@ -2282,5 +2308,139 @@ func TestNativeCumulativeRequestBudgetIncludesFinishedZeroByteRequests(t *testin
 	}
 	if !w.Ready() || len(f.contexts) != 0 || len(f.targets) != 1 || !f.targets["foreign-sentinel"] {
 		t.Fatal("request-budget rejection lost readiness or owned cleanup")
+	}
+}
+
+func TestNativeNavigationErrorPreservesEarlierMainHTTPStatus(t *testing.T) {
+	for i := 0; i < 20; i++ {
+		f := newNativeFixture(t)
+		f.status = 429
+		f.navigationError = "net::ERR_HTTP_RESPONSE_CODE_FAILURE"
+		w := f.worker(t)
+		if err := w.Probe(context.Background()); err != nil {
+			t.Fatal(err)
+		}
+		_, err := w.Fetch(context.Background(), "https://origin.example/", NativeBrowserOptions{})
+		var status *PublicHTTPStatusError
+		if !errors.As(err, &status) || status.StatusCode != 429 {
+			t.Fatalf("iteration %d: expected HTTP 429, got %v", i, err)
+		}
+	}
+}
+
+func TestNativeLoadingFailureCorrelatesMainDocument(t *testing.T) {
+	for _, tc := range []struct{ name, frame, kind, want string }{
+		{"main", "main-frame", "Document", "navigation_proxy"},
+		{"child", "child-frame", "Document", "navigation_other"},
+		{"subresource", "main-frame", "XHR", "navigation_other"},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			f := newNativeFixture(t)
+			f.navigationError = "arbitrary detail SECRET_CANARY"
+			f.loadingFailure = "net::ERR_PROXY_CONNECTION_FAILED SECRET_CANARY"
+			f.loadingFailureFrame, f.loadingFailureType = tc.frame, tc.kind
+			w := f.worker(t)
+			if err := w.Probe(context.Background()); err != nil {
+				t.Fatal(err)
+			}
+			diagnostic := NewPageMonitorDiagnostic(strings.Repeat("a", 64), 42)
+			_, err := w.Fetch(WithPageMonitorDiagnostic(context.Background(), diagnostic), "https://origin.example/", NativeBrowserOptions{})
+			if err == nil || strings.Contains(err.Error(), "SECRET_CANARY") {
+				t.Fatalf("unsafe result: %v", err)
+			}
+			stage, reason := diagnostic.Details()
+			if stage != "navigate" || reason != tc.want {
+				t.Fatalf("got %s/%s, want navigate/%s", stage, reason, tc.want)
+			}
+		})
+	}
+}
+
+func TestNativeNavigationErrorPreservesPendingPolicyAndDownload(t *testing.T) {
+	for _, tc := range []struct {
+		name             string
+		policy, download bool
+	}{
+		{"policy", true, false}, {"download", false, true},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			f := newNativeFixture(t)
+			f.navigationError = "net::ERR_EMPTY_RESPONSE"
+			if tc.policy {
+				f.pausedBurst, f.policyEventAt, f.policyRPCDelay = 1, 1, 20*time.Millisecond
+			}
+			f.navigateDownload = tc.download
+			w := f.worker(t)
+			if err := w.Probe(context.Background()); err != nil {
+				t.Fatal(err)
+			}
+			_, err := w.Fetch(context.Background(), "https://origin.example/", NativeBrowserOptions{})
+			if tc.policy && !errors.Is(err, ErrUnsafePublicURL) {
+				t.Fatalf("policy lost: %v", err)
+			}
+			if tc.download && !errors.Is(err, ErrNativeUnsupported) {
+				t.Fatalf("download lost: %v", err)
+			}
+		})
+	}
+}
+
+func TestNativeMainHTTPStatusSurvivesLoadingFailureOrdering(t *testing.T) {
+	for _, after := range []bool{false, true} {
+		t.Run(fmt.Sprintf("status_after_loading_failure_%t", after), func(t *testing.T) {
+			f := newNativeFixture(t)
+			f.status, f.statusAfterFailure = 429, after
+			f.navigationError = "net::ERR_HTTP_RESPONSE_CODE_FAILURE"
+			f.loadingFailure = "net::ERR_ABORTED"
+			w := f.worker(t)
+			if err := w.Probe(context.Background()); err != nil {
+				t.Fatal(err)
+			}
+			_, err := w.Fetch(context.Background(), "https://origin.example/", NativeBrowserOptions{})
+			var status *PublicHTTPStatusError
+			if !errors.As(err, &status) || status.StatusCode != 429 {
+				t.Fatalf("HTTP status lost: %v", err)
+			}
+		})
+	}
+}
+
+func TestNativeMainHTTPStatusSameRequestWithoutFrameID(t *testing.T) {
+	for _, after := range []bool{false, true} {
+		t.Run(fmt.Sprintf("status_after_loading_failure_%t", after), func(t *testing.T) {
+			f := newNativeFixture(t)
+			f.status, f.statusAfterFailure, f.sameRequestNoFrame = 429, after, true
+			f.navigationError = "net::ERR_HTTP_RESPONSE_CODE_FAILURE"
+			f.loadingFailure = "net::ERR_ABORTED"
+			w := f.worker(t)
+			if err := w.Probe(context.Background()); err != nil {
+				t.Fatal(err)
+			}
+			_, err := w.Fetch(context.Background(), "https://origin.example/", NativeBrowserOptions{})
+			var status *PublicHTTPStatusError
+			if !errors.As(err, &status) || status.StatusCode != 429 {
+				t.Fatalf("HTTP status lost: %v", err)
+			}
+		})
+	}
+}
+
+func TestNativeFrameFallbackDoesNotTreatSubresourceAsDocument(t *testing.T) {
+	for _, after := range []bool{false, true} {
+		t.Run(fmt.Sprintf("status_after_loading_failure_%t", after), func(t *testing.T) {
+			f := newNativeFixture(t)
+			f.status, f.statusAfterFailure, f.sameRequestNoFrame = 429, after, true
+			f.navigationError = "net::ERR_EMPTY_RESPONSE"
+			f.loadingFailure, f.loadingFailureType = "net::ERR_ABORTED", "XHR"
+			w := f.worker(t)
+			if err := w.Probe(context.Background()); err != nil {
+				t.Fatal(err)
+			}
+			_, err := w.Fetch(context.Background(), "https://origin.example/", NativeBrowserOptions{})
+			var status *PublicHTTPStatusError
+			if err == nil || errors.As(err, &status) {
+				t.Fatalf("subresource classified as main HTTP: %v", err)
+			}
+		})
 	}
 }

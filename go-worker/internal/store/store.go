@@ -259,17 +259,33 @@ func (s *Store) Info() LeaseInfo {
 }
 
 func (s *Store) Heartbeat(ctx context.Context) error {
+	return s.HeartbeatWithFailure(ctx, nil)
+}
+
+// HeartbeatWithFailure signals lease loss before cleanup. The callback must not
+// block or call back into the store; it runs while the lease mutex is held.
+func (s *Store) HeartbeatWithFailure(ctx context.Context, onFailure func()) error {
 	lockStarted := time.Now()
 	s.leaseMu.Lock()
 	defer s.leaseMu.Unlock()
 	mutexWait := time.Since(lockStarted)
 	if s.leaseConn == nil || s.closed {
+		if onFailure != nil {
+			onFailure()
+		}
 		return ErrLeaseLost
+	}
+	fail := func() {
+		s.closed = true
+		if onFailure != nil {
+			onFailure()
+		}
 	}
 	beginStarted := time.Now()
 	tx, err := s.leaseConn.Begin(ctx)
 	beginDuration := time.Since(beginStarted)
 	if err != nil {
+		fail()
 		return s.failHeartbeatLocked("begin", err, mutexWait, beginDuration, 0, 0)
 	}
 	updateStarted := time.Now()
@@ -279,10 +295,12 @@ func (s *Store) Heartbeat(ctx context.Context) error {
 		s.ownerID, s.generation, s.backendPID)
 	updateDuration := time.Since(updateStarted)
 	if err != nil {
+		fail()
 		rollbackTx(tx)
 		return s.failHeartbeatLocked("update", err, mutexWait, beginDuration, updateDuration, 0)
 	}
 	if command.RowsAffected() != 1 {
+		fail()
 		rollbackTx(tx)
 		identity := s.heartbeatIdentityLocked()
 		s.invalidateLeaseLocked()
@@ -293,6 +311,7 @@ func (s *Store) Heartbeat(ctx context.Context) error {
 	err = tx.Commit(ctx)
 	commitDuration := time.Since(commitStarted)
 	if err != nil {
+		fail()
 		rollbackTx(tx)
 		return s.failHeartbeatLocked("commit", err, mutexWait, beginDuration, updateDuration, commitDuration)
 	}

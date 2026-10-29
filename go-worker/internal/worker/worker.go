@@ -7,6 +7,7 @@ import (
 	"fmt"
 	"log/slog"
 	"net/http"
+	"sync"
 	"time"
 
 	"github.com/Dzarlax-AI/evening-news/go-worker/internal/config"
@@ -258,14 +259,25 @@ func (w *Worker) heartbeatLoop(ctx context.Context, cancelRun context.CancelFunc
 			return
 		case <-ticker.C:
 			heartbeatCtx, cancel := context.WithTimeout(context.Background(), w.config.RequestTimeout)
-			err := w.store.Heartbeat(heartbeatCtx)
+			var once sync.Once
+			var failureAt time.Time
+			notifyLoss := func() { once.Do(func() { failureAt = time.Now().UTC(); cancelRun(); close(lost) }) }
+			var err error
+			if notifying, ok := w.store.(interface {
+				HeartbeatWithFailure(context.Context, func()) error
+			}); ok {
+				err = notifying.HeartbeatWithFailure(heartbeatCtx, notifyLoss)
+			} else {
+				err = w.store.Heartbeat(heartbeatCtx)
+			}
 			cancel()
 			if err != nil {
+				notifyLoss()
 				var heartbeatErr *store.HeartbeatError
 				if errors.As(err, &heartbeatErr) {
 					w.logger.Error("worker heartbeat failed; lease released",
 						"event", "worker_heartbeat_failure",
-						"event_utc", time.Now().UTC().Format(time.RFC3339Nano),
+						"event_utc", failureAt.Format(time.RFC3339Nano),
 						"stage", heartbeatErr.Stage,
 						"reason", heartbeatErr.Reason,
 						"sqlstate", heartbeatErr.SQLState,
@@ -276,10 +288,8 @@ func (w *Worker) heartbeatLoop(ctx context.Context, cancelRun context.CancelFunc
 						"update_ms", heartbeatErr.UpdateDuration.Milliseconds(),
 						"commit_ms", heartbeatErr.CommitDuration.Milliseconds())
 				} else {
-					w.logger.Error("worker heartbeat failed; lease released", "event", "worker_heartbeat_failure", "event_utc", time.Now().UTC().Format(time.RFC3339Nano), "stage", "unknown", "reason", "other")
+					w.logger.Error("worker heartbeat failed; lease released", "event", "worker_heartbeat_failure", "event_utc", failureAt.Format(time.RFC3339Nano), "stage", "unknown", "reason", "other")
 				}
-				close(lost)
-				cancelRun()
 				return
 			}
 		}

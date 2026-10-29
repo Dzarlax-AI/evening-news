@@ -64,6 +64,8 @@ func TestPageMonitorTransportFailureClasses(t *testing.T) {
 		code      string
 		retryable bool
 	}{
+		{"http status", &transport.PublicHTTPStatusError{StatusCode: 429}, "transport_failed", true},
+		{"navigation", errors.New("native_browser_navigation_failed"), "transport_failed", true},
 		{"resource_limit", extractor.ErrOutputLimit, "resource_limit", false},
 		{"event_overflow", transport.ErrBrowserEventOverflow, "event_overflow", true},
 		{"unavailable", transport.ErrNativeOwnershipLost, "unavailable", true},

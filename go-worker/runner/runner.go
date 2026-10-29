@@ -111,12 +111,39 @@ type heartbeatObserver struct {
 }
 
 func (s heartbeatObserver) Heartbeat(ctx context.Context) error {
-	err := s.QueueStore.Heartbeat(ctx)
-	if s.onHealth != nil {
-		if err != nil {
-			s.onHealth(time.Time{})
-			return err
+	return s.HeartbeatWithFailure(ctx, nil)
+}
+
+func (s heartbeatObserver) HeartbeatWithFailure(ctx context.Context, onFailure func()) error {
+	failed := false
+	var healthDone chan struct{}
+	notify := func() {
+		failed = true
+		if onFailure != nil {
+			onFailure()
 		}
+		// The external observer may reenter the store. Run it independently
+		// and join only after the store has released its lease mutex.
+		if s.onHealth != nil {
+			healthDone = make(chan struct{})
+			go func() { defer close(healthDone); s.onHealth(time.Time{}) }()
+		}
+	}
+	var err error
+	if notifying, ok := s.QueueStore.(interface {
+		HeartbeatWithFailure(context.Context, func()) error
+	}); ok {
+		err = notifying.HeartbeatWithFailure(ctx, notify)
+	} else {
+		err = s.QueueStore.Heartbeat(ctx)
+	}
+	if err != nil && !failed {
+		notify()
+	}
+	if healthDone != nil {
+		<-healthDone
+	}
+	if err == nil && s.onHealth != nil {
 		s.onHealth(time.Now().UTC())
 	}
 	return err

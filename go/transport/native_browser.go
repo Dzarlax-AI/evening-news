@@ -270,6 +270,14 @@ func nativeDiagnosticReason(err error) string {
 func nativeNavigationReason(errorText string) string {
 	upper := strings.ToUpper(errorText)
 	switch {
+	case strings.Contains(upper, "ERR_HTTP_RESPONSE_CODE_FAILURE"):
+		return "navigation_http"
+	case strings.Contains(upper, "ERR_PROXY_CONNECTION_FAILED"), strings.Contains(upper, "ERR_TUNNEL_CONNECTION_FAILED"), strings.Contains(upper, "ERR_NO_SUPPORTED_PROXIES"), strings.Contains(upper, "ERR_PROXY_AUTH_UNSUPPORTED"), strings.Contains(upper, "ERR_MANDATORY_PROXY_CONFIGURATION_FAILED"), strings.Contains(upper, "ERR_PROXY_CERTIFICATE_INVALID"):
+		return "navigation_proxy"
+	case strings.Contains(upper, "ERR_TOO_MANY_REDIRECTS"), strings.Contains(upper, "ERR_INVALID_REDIRECT"), strings.Contains(upper, "ERR_UNSAFE_REDIRECT"):
+		return "navigation_redirect"
+	case strings.Contains(upper, "ERR_EMPTY_RESPONSE"):
+		return "navigation_empty_response"
 	case strings.Contains(upper, "ERR_NAME_NOT_RESOLVED"), strings.Contains(upper, "ERR_NAME_RESOLUTION_FAILED"), strings.Contains(upper, "ERR_DNS"):
 		return "navigation_dns"
 	case strings.Contains(upper, "ERR_CERT"), strings.Contains(upper, "ERR_SSL"), strings.Contains(upper, "ERR_TLS"):
@@ -1007,6 +1015,12 @@ func (w *NativeBrowser) Fetch(ctx context.Context, raw string, opts NativeBrowse
 	lastActivity.Store(time.Now().UnixNano())
 	var activeRequests atomic.Int64
 	eventsDone := make(chan struct{})
+	// The reader enqueues events before delivering the corresponding command reply.
+	// A private FIFO marker waits until those events have been handled.
+	barrier := &cdproto.Message{}
+	barrierDone := make(chan struct{})
+	var documentFailure atomic.Value
+	documentFailure.Store("")
 	eventRPCs := newNativeEventRPCs(nativeEventRPCMaxInFlight)
 	go func() {
 		defer close(eventsDone)
@@ -1067,6 +1081,12 @@ func (w *NativeBrowser) Fetch(ctx context.Context, raw string, opts NativeBrowse
 				w.taint()
 				return
 			case message := <-client.events:
+				if message == barrier {
+					if !terminalPending {
+						close(barrierDone)
+					}
+					continue
+				}
 				method := string(message.Method)
 				if detached, malformed := detachedOwnedSession(message, session); malformed {
 					stop(errors.Join(ErrNativeOwnershipLost, ErrNativePolicy, errNativeMalformedDetach))
@@ -1202,6 +1222,8 @@ func (w *NativeBrowser) Fetch(ctx context.Context, raw string, opts NativeBrowse
 						}
 						if event.Type == "Document" {
 							documentFrames[event.ID] = event.FrameID
+						} else {
+							delete(documentFrames, event.ID)
 						}
 						if requests[event.ID] {
 							continue
@@ -1215,10 +1237,14 @@ func (w *NativeBrowser) Fetch(ctx context.Context, raw string, opts NativeBrowse
 					}
 				case "Network.loadingFinished", "Network.loadingFailed":
 					var event struct {
-						ID      string  `json:"requestId"`
-						Encoded float64 `json:"encodedDataLength"`
+						ID        string  `json:"requestId"`
+						Encoded   float64 `json:"encodedDataLength"`
+						ErrorText string  `json:"errorText"`
 					}
 					if json.Unmarshal(message.Params, &event) == nil && requests[event.ID] {
+						if method == "Network.loadingFailed" && documentFrames[event.ID] != "" && documentFrames[event.ID] == mainFrame.Load().(string) {
+							documentFailure.Store(nativeNavigationReason(event.ErrorText))
+						}
 						wire += max(0, event.Encoded-encodedByRequest[event.ID])
 						delete(encodedByRequest, event.ID)
 						if wire > float64(wireLimit) {
@@ -1226,6 +1252,8 @@ func (w *NativeBrowser) Fetch(ctx context.Context, raw string, opts NativeBrowse
 							return
 						}
 						delete(requests, event.ID)
+						// Keep bounded document correlation until this ID is reused.
+						// A response can arrive after the loading event without a frame ID.
 						activeRequests.Add(-1)
 					}
 				case "Network.dataReceived":
@@ -1341,10 +1369,26 @@ func (w *NativeBrowser) Fetch(ctx context.Context, raw string, opts NativeBrowse
 		return doc, ErrNativeUnsupported
 	}
 	if navigation.Error != "" {
+		select {
+		case client.events <- barrier:
+			select {
+			case <-barrierDone:
+			case <-work.Done():
+			}
+		case <-work.Done():
+		}
+		if ctx.Err() != nil {
+			return doc, ctx.Err()
+		}
 		if cause := context.Cause(work); cause != nil {
 			return doc, cause
 		}
 		diagnosticReason = nativeNavigationReason(navigation.Error)
+		if diagnosticReason == "navigation_other" {
+			if reason := documentFailure.Load().(string); reason != "" {
+				diagnosticReason = reason
+			}
+		}
 		return doc, errors.New("native_browser_navigation_failed")
 	}
 	if navigation.FrameID != "" {
