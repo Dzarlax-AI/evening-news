@@ -4,7 +4,7 @@ import (
 	"context"
 	"errors"
 
-	ai "github.com/Dzarlax-AI/evening-news/go-ai"
+	ai "github.com/Dzarlax-AI/go-ai"
 	"github.com/Dzarlax-AI/evening-news/go-domain/analysis"
 )
 

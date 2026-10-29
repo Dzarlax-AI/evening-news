@@ -6,9 +6,9 @@ import (
 	"strings"
 	"time"
 
-	ai "github.com/Dzarlax-AI/evening-news/go-ai"
-	"github.com/Dzarlax-AI/evening-news/go-ai/providers/gemini"
-	"github.com/Dzarlax-AI/evening-news/go-ai/providers/openai"
+	ai "github.com/Dzarlax-AI/go-ai"
+	"github.com/Dzarlax-AI/go-ai/providers/gemini"
+	"github.com/Dzarlax-AI/go-ai/providers/openai"
 	"github.com/Dzarlax-AI/evening-news/go-domain/analysis"
 )
 

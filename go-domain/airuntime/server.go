@@ -21,7 +21,7 @@ import (
 	"syscall"
 	"time"
 
-	ai "github.com/Dzarlax-AI/evening-news/go-ai"
+	ai "github.com/Dzarlax-AI/go-ai"
 	"github.com/Dzarlax-AI/evening-news/go-domain/analysis"
 	"github.com/jackc/pgx/v5/pgxpool"
 )

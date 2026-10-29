@@ -119,13 +119,13 @@ For Gemini, set `GEMINI_API_KEY`; `SUMMARIZATION_MODEL` selects the article mode
 
 Optionally set `AI_MODEL_PRICES` in the executor environment to a JSON object keyed by `provider/model`. Each value has three non-negative numeric fields: `input`, `output`, and `cached_input`, in USD per million tokens. For example, `{"openai/example-model":{"input":1,"output":2,"cached_input":0.5}}` demonstrates the format only; these numbers are not vendor prices. The runtime looks up the provider-reported model first, then the requested model when an explicit price exists for that alias. Leave the value empty when prices are not configured: the corresponding cost is unknown. Cached input is charged at its configured rate instead of being counted again at the ordinary input rate.
 
-The independent [go-ai module](go-ai/README.md) supplies provider-neutral text and structured JSON requests and one HTTP attempt per call. News retains its own validation, retry policy, costs and editorial rules. Usage fields that the provider does not supply remain unknown; cached input is part of input and reasoning is part of output. Unknown usage or pricing must not be presented as free.
+The independent [go-ai module](https://github.com/Dzarlax-AI/go-ai), pinned at `v0.1.0`, supplies provider-neutral text and structured JSON requests and one HTTP attempt per call. News retains its own validation, retry policy, costs and editorial rules. Usage fields that the provider does not supply remain unknown; cached input is part of input and reasoning is part of output. Unknown usage or pricing must not be presented as free.
 
 The local provider tests use synthetic responses. Real-provider behavior and editorial quality require separate acceptance, including approval of the calls and their cost.
 
 ## Tests
 
-`make test` and `make vet` include the standalone `go-ai` module. The Go components can also be checked independently with `go test -race ./...`, `go vet ./...`, and `go mod verify` from each module directory. PostgreSQL integration tests require `TEST_DATABASE_URL` to point to a dedicated loopback test database. Do not use a production or shared database.
+`make test` and `make vet` cover the News Go modules; the external go-ai module has its own CI. The Go components can also be checked independently with `go test -race ./...`, `go vet ./...`, and `go mod verify` from each module directory. PostgreSQL integration tests require `TEST_DATABASE_URL` to point to a dedicated loopback test database. Do not use a production or shared database.
 
 The News application and its tooling use Go. The separate shared browser retains its existing Python runtime; its isolated contract and Cloak fixture checks use Go. Exact-head CI remains pending; see [the Go tooling coverage map](go-tools/COVERAGE.md) for verified checks and remaining validation.
 

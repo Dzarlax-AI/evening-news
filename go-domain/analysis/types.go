@@ -1,6 +1,6 @@
 package analysis
 
-import ai "github.com/Dzarlax-AI/evening-news/go-ai"
+import ai "github.com/Dzarlax-AI/go-ai"
 
 // Request is the bounded, versioned stdin contract for one article analysis.
 type Request struct {

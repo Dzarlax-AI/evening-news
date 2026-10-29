@@ -10,8 +10,8 @@ import (
 	"regexp"
 	"strings"
 
-	ai "github.com/Dzarlax-AI/evening-news/go-ai"
-	"github.com/Dzarlax-AI/evening-news/go-ai/providers/gemini"
+	ai "github.com/Dzarlax-AI/go-ai"
+	"github.com/Dzarlax-AI/go-ai/providers/gemini"
 )
 
 const (
