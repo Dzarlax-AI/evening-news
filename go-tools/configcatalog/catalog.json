@@ -2964,7 +2964,7 @@
     "migration": "managed profile only; the password file is created by installer state preparation",
     "precedence": "fixed managed Compose output",
     "sources": [
-      "docker-compose.managed.yml:26"
+      "docker-compose.managed.yml:27"
     ],
     "class": "compose_output",
     "managed_roles": []
@@ -3643,7 +3643,7 @@
     "sources": [
       "go-domain/airuntime/server.go:93",
       "go-domain/cmd/news-domain/runtime_config.go:25",
-      "go-domain/cmd/newsctl/external.go:60",
+      "go-domain/cmd/newsctl/external.go:72",
       "go-web/internal/config/config.go:147",
       "go-web/internal/config/config.go:50"
     ],

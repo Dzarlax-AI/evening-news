@@ -3,6 +3,7 @@ package main
 import (
 	"context"
 	"encoding/base64"
+	"encoding/json"
 	"errors"
 	"fmt"
 	"golang.org/x/crypto/argon2"
@@ -17,6 +18,57 @@ import (
 	"github.com/Dzarlax-AI/evening-news/go-tools/managedsetup"
 	"github.com/jackc/pgx/v5"
 )
+
+func TestNativeBrowserRecoveryFailsClosed(t *testing.T) {
+	native := managedsetup.NativeBrowserOptions{
+		ExtractorValues: map[string]string{
+			"LISTEN_ADDR": ":8080", "EXTRACTOR_HTTP_ONLY": "false", "EXTRACTOR_BROWSER_BACKEND": "native",
+			"EXTRACTOR_NATIVE_NETWORK_ISOLATED": "true", "CHROME_ENDPOINT": "http://10.77.0.2:9222",
+			"EXTRACTOR_NATIVE_PROXY_URL": "http://10.77.0.5:8081", "EXTRACTOR_NATIVE_PROXY_TOKEN": "fixture-proxy-token-01",
+			"EXTRACTOR_MAX_CONCURRENT": "2", "EXTRACTOR_BROWSER_CONCURRENT": "2",
+		},
+		EgressValues:    map[string]string{"EGRESS_LISTEN_ADDR": "10.77.0.5:8081", "EGRESS_TOKEN": "fixture-proxy-token-01", "EGRESS_MAX_CONCURRENT": "4"},
+		ExtractorLimits: managedsetup.ContainerLimits{Init: true, ReadOnly: true, CapDrop: []string{"ALL"}, SecurityOpt: []string{"no-new-privileges:true"}, PidsLimit: 128, MemLimit: "256m", CPUs: 1, StopGracePeriod: "55s"},
+		EgressLimits:    managedsetup.ContainerLimits{Init: true, ReadOnly: true, CapDrop: []string{"ALL"}, SecurityOpt: []string{"no-new-privileges:true"}, PidsLimit: 64, MemLimit: "128m", CPUs: 0.25, StopGracePeriod: "10s"},
+		ControlNetwork:  "control", ControlName: "fixture-control", OutboundNetwork: "outbound", OutboundName: "fixture-outbound",
+		ExtractorIP: "10.77.0.4", EgressIP: "10.77.0.5",
+	}
+	state, err := managedsetup.NewState("http://localhost:8000", managedsetup.Options{NativeBrowser: &native})
+	if err != nil {
+		t.Fatal(err)
+	}
+	root := t.TempDir()
+	setup := filepath.Join(root, "setup")
+	if err = os.Mkdir(setup, 0700); err != nil {
+		t.Fatal(err)
+	}
+	writeState := func(dir string) {
+		t.Helper()
+		if err := os.MkdirAll(dir, 0700); err != nil {
+			t.Fatal(err)
+		}
+		raw, err := json.Marshal(state)
+		if err != nil {
+			t.Fatal(err)
+		}
+		if err = os.WriteFile(filepath.Join(dir, "installation.json"), raw, 0600); err != nil {
+			t.Fatal(err)
+		}
+	}
+	layout := managedsetup.Layout{Setup: setup}
+	writeState(setup)
+	if err = backupInstallation(context.Background(), layout, filepath.Join(root, "backup.age"), "synthetic-passphrase", "127.0.0.1:5432"); err == nil || !strings.Contains(err.Error(), "native browser recovery bundle is not supported") {
+		t.Fatalf("native backup was not refused: %v", err)
+	}
+	if err = resumeInstallation(context.Background(), layout); err == nil || !strings.Contains(err.Error(), "native browser recovery resume is not supported") {
+		t.Fatalf("native resume was not refused: %v", err)
+	}
+	stage := filepath.Join(root, "stage")
+	writeState(stage)
+	if err = stageRestore(managedsetup.Layout{Setup: filepath.Join(root, "target")}, stage, recovery.Manifest{InstallationID: state.InstallationID}); err == nil || !strings.Contains(err.Error(), "native browser recovery bundle is not supported") {
+		t.Fatalf("native restore was not refused: %v", err)
+	}
+}
 
 func testRecoveryRoundTrip(t *testing.T, ctx context.Context, l managedsetup.Layout, s managedsetup.State, endpoint string, admin *pgx.Conn) {
 	t.Helper()

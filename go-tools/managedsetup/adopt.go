@@ -6,7 +6,9 @@ import (
 	"encoding/hex"
 	"encoding/json"
 	"errors"
+	"fmt"
 	"io"
+	"net/netip"
 	"os"
 	"path/filepath"
 	"sort"
@@ -20,8 +22,32 @@ const maxAdoptionConfig = 1 << 20
 // RenderedCompose is the deliberately narrow input supported by adopt. Values
 // are secrets and must stay in-process; callers should only print Keys().
 type RenderedCompose struct {
-	Services map[string]map[string]string
-	Digest   string
+	Services       map[string]map[string]string
+	ServiceNames   map[string]bool
+	PublishedPorts map[string][]PublishedPort
+	Digest         string
+	raw            []byte
+}
+
+// PublishedPort contains the only host-publish fields needed to validate the
+// explicit loopback-only local HTTP adoption profile.
+type PublishedPort struct {
+	HostIP string `json:"host_ip"`
+	Mode   string `json:"mode"`
+}
+
+func (c RenderedCompose) HasLoopbackPublishedPorts(service string) bool {
+	ports := c.PublishedPorts[service]
+	if len(ports) == 0 {
+		return false
+	}
+	for _, port := range ports {
+		ip, err := netip.ParseAddr(port.HostIP)
+		if err != nil || !ip.IsLoopback() || strings.EqualFold(port.Mode, "host") {
+			return false
+		}
+	}
+	return true
 }
 
 type composeDocument struct {
@@ -58,13 +84,24 @@ func ReadRenderedCompose(path string) (RenderedCompose, error) {
 		return out, errors.New("unsupported rendered Compose JSON shape")
 	}
 	out.Services = map[string]map[string]string{}
+	out.ServiceNames = make(map[string]bool, len(doc.Services))
+	out.PublishedPorts = make(map[string][]PublishedPort, len(doc.Services))
 	for service, spec := range doc.Services {
+		out.ServiceNames[service] = true
 		var serviceFields map[string]json.RawMessage
 		if json.Unmarshal(spec, &serviceFields) != nil {
 			return RenderedCompose{}, errors.New("unsupported rendered Compose service")
 		}
+		if portsRaw, exists := serviceFields["ports"]; exists {
+			var ports []PublishedPort
+			if json.Unmarshal(portsRaw, &ports) != nil {
+				return RenderedCompose{}, errors.New("unsupported rendered Compose ports")
+			}
+			out.PublishedPorts[service] = ports
+		}
 		envRaw, exists := serviceFields["environment"]
 		if !exists {
+			out.Services[service] = map[string]string{}
 			continue
 		}
 		var env map[string]json.RawMessage
@@ -88,11 +125,13 @@ func ReadRenderedCompose(path string) (RenderedCompose, error) {
 		}
 		out.Services[service] = values
 	}
-	if len(out.Services["web"]) == 0 || len(out.Services["executor"]) == 0 || len(out.Services["background"]) == 0 || len(out.Services["extractor"]) == 0 {
+	hasApp, hasWeb := out.ServiceNames["app"], out.ServiceNames["web"]
+	if hasApp == hasWeb || !out.ServiceNames["executor"] || !out.ServiceNames["background"] || !out.ServiceNames["extractor"] || len(out.Services["app"])+len(out.Services["web"]) == 0 || len(out.Services["executor"]) == 0 || len(out.Services["background"]) == 0 || len(out.Services["extractor"]) == 0 {
 		return RenderedCompose{}, errors.New("unsupported Compose service set")
 	}
 	h := sha256.Sum256(raw)
 	out.Digest = hex.EncodeToString(h[:])
+	out.raw = append([]byte(nil), raw...)
 	return out, nil
 }
 
@@ -180,7 +219,7 @@ type AdoptionBundle struct {
 // shared state. Credential fields must already have been removed by the caller.
 func StageAdoption(setup string, id string, sourceDigest string, roles map[string]map[string]string, policies map[string]struct{ Allowed, Required []string }, extra map[string][]byte) (string, AdoptionBundle, error) {
 	var bundle AdoptionBundle
-	if len(id) != 32 || len(sourceDigest) != 64 || len(roles) != 4 {
+	if len(id) != 32 || len(sourceDigest) != 64 || (len(roles) != 4 && len(roles) != 5) {
 		return "", bundle, errors.New("invalid adoption identity")
 	}
 	if _, err := hex.DecodeString(id); err != nil {
@@ -190,8 +229,17 @@ func StageAdoption(setup string, id string, sourceDigest string, roles map[strin
 		return "", bundle, errors.New("invalid adoption source digest")
 	}
 	setupInfo, err := os.Lstat(setup)
-	if err != nil || !setupInfo.IsDir() || setupInfo.Mode()&os.ModeSymlink != 0 || setupInfo.Mode().Perm()&0077 != 0 {
+	if err != nil || !setupInfo.IsDir() || setupInfo.Mode()&os.ModeSymlink != 0 {
 		return "", bundle, errors.New("adoption state directory must be private")
+	}
+	if setupInfo.Mode().Perm()&0077 != 0 {
+		entries, readErr := os.ReadDir(setup)
+		if readErr != nil || len(entries) != 0 {
+			return "", bundle, errors.New("adoption state directory must be private")
+		}
+		if err = os.Chmod(setup, 0700); err != nil {
+			return "", bundle, errors.New("adoption state directory must be private")
+		}
 	}
 	dir := filepath.Join(setup, "adoptions", id)
 	if err := os.MkdirAll(filepath.Dir(dir), 0700); err != nil {
@@ -308,6 +356,9 @@ func ActivateAdoption(l Layout, stage string, id, composeOutput string, policies
 	if _, ok := bundle.ArtifactSHA256["import.json"]; !ok {
 		return errors.New("adoption import artifact unavailable")
 	}
+	if _, ok := bundle.ArtifactSHA256["compose-override.yml"]; !ok {
+		return errors.New("adoption Compose override unavailable")
+	}
 	for name, expected := range bundle.ArtifactSHA256 {
 		if filepath.Base(name) != name || name == "bundle.json" {
 			return errors.New("adoption artifact invalid")
@@ -322,6 +373,15 @@ func ActivateAdoption(l Layout, stage string, id, composeOutput string, policies
 		name, path string
 		uid        int
 	}{{"web", l.Web, l.WebUID}, {"domain", l.Domain, l.DomainUID}, {"background", l.Background, l.BackgroundUID}, {"extractor", l.Extractor, l.ExtractorUID}}
+	if _, hasEgress := bundle.ManifestSHA256["egress"]; hasEgress {
+		if l.Egress == "" {
+			return errors.New("egress runtime state volume unavailable")
+		}
+		roles = append(roles, struct {
+			name, path string
+			uid        int
+		}{"egress", l.Egress, l.EgressUID})
+	}
 	for _, role := range roles {
 		manifest, e := os.ReadFile(filepath.Join(stage, role.name+".json"))
 		if e != nil {
@@ -339,19 +399,55 @@ func ActivateAdoption(l Layout, stage string, id, composeOutput string, policies
 			return errors.New("adoption manifest invalid")
 		}
 		info, e := os.Lstat(role.path)
-		if e != nil || !info.IsDir() || info.Mode()&os.ModeSymlink != 0 || info.Mode().Perm()&0077 != 0 {
+		if e != nil || !info.IsDir() || info.Mode()&os.ModeSymlink != 0 {
 			return errors.New("runtime state volume unavailable")
 		}
-	}
-	// Validate all conflicts before the first target write.
-	for _, role := range roles {
-		want, _ := os.ReadFile(filepath.Join(stage, role.name+".json"))
-		got, e := os.ReadFile(filepath.Join(role.path, "runtime.json"))
-		if e == nil && string(got) != string(want) {
-			return errors.New("existing runtime state conflicts with adoption")
+		entries, e := os.ReadDir(role.path)
+		if e != nil || len(entries) > 1 {
+			return errors.New("runtime state volume contains unexpected files")
 		}
-		if e != nil && !os.IsNotExist(e) {
+		for _, entry := range entries {
+			if entry.Name() != "runtime.json" {
+				return errors.New("runtime state volume contains unexpected files")
+			}
+		}
+		target := filepath.Join(role.path, "runtime.json")
+		if targetInfo, statErr := os.Lstat(target); statErr == nil {
+			if !targetInfo.Mode().IsRegular() || targetInfo.Mode()&os.ModeSymlink != 0 {
+				return errors.New("existing runtime state conflicts with adoption")
+			}
+			got, readErr := os.ReadFile(target)
+			if readErr != nil || string(got) != string(manifest) {
+				return errors.New("existing runtime state conflicts with adoption")
+			}
+		} else if !os.IsNotExist(statErr) {
 			return errors.New("runtime state unavailable")
+		}
+	}
+	override, err := os.ReadFile(filepath.Join(stage, "compose-override.yml"))
+	if err != nil || len(override) == 0 || len(override) > maxAdoptionConfig {
+		return errors.New("adoption Compose override unavailable")
+	}
+	if err = preflightWriteOrVerify(composeOutput, override); err != nil {
+		return errors.New("adoption Compose override output unavailable")
+	}
+	marker := map[string]any{"installation_id": id, "source_digest": bundle.SourceDigest, "revision": bundle.Revision, "runtime_files_activated": true}
+	markerBytes, _ := json.Marshal(marker)
+	markerPath := filepath.Join(l.Setup, "adoption-committed.json")
+	markerExists := true
+	if err = preflightWriteOrVerify(markerPath, markerBytes); err != nil {
+		return errors.New("adoption completion marker unavailable")
+	} else if _, statErr := os.Lstat(markerPath); os.IsNotExist(statErr) {
+		markerExists = false
+	}
+	// Validate every volume and output conflict before changing ownership or
+	// writing any runtime file. Docker named volumes may start root-owned 0755.
+	for _, role := range roles {
+		if err = os.Chmod(role.path, 0700); err != nil {
+			return errors.New("runtime state volume ownership unavailable")
+		}
+		if role.uid >= 0 && os.Chown(role.path, role.uid, role.uid) != nil {
+			return errors.New("runtime state volume ownership unavailable")
 		}
 	}
 	for _, role := range roles {
@@ -363,25 +459,35 @@ func ActivateAdoption(l Layout, stage string, id, composeOutput string, policies
 			}
 		} else if e != nil {
 			return errors.New("runtime state unavailable")
+		} else {
+			if e = os.Chmod(target, 0600); e != nil || (role.uid >= 0 && os.Chown(target, role.uid, role.uid) != nil) {
+				return errors.New("runtime state volume ownership unavailable")
+			}
 		}
 	}
-	if err = writeOrVerify(composeOutput, []byte(adoptionComposeOverride)); err != nil {
+	if err = writeOrVerify(composeOutput, override); err != nil {
 		return errors.New("adoption Compose override output unavailable")
 	}
-	marker := map[string]any{"installation_id": id, "source_digest": bundle.SourceDigest, "revision": bundle.Revision, "runtime_files_activated": true}
-	markerBytes, _ := json.Marshal(marker)
-	markerPath := filepath.Join(l.Setup, "adoption-committed.json")
-	if got, e := os.ReadFile(markerPath); e == nil {
-		var prior map[string]any
-		if json.Unmarshal(got, &prior) != nil || prior["installation_id"] != id || prior["source_digest"] != bundle.SourceDigest {
-			return errors.New("existing adoption marker conflicts")
-		}
+	if markerExists {
 		return nil
-	} else if !os.IsNotExist(e) {
-		return errors.New("adoption completion marker unavailable")
 	}
 	if err = writeNew(markerPath, markerBytes, -1); err != nil {
 		return errors.New("adoption completion marker unavailable")
+	}
+	return nil
+}
+
+func preflightWriteOrVerify(path string, data []byte) error {
+	info, err := os.Lstat(path)
+	if os.IsNotExist(err) {
+		return nil
+	}
+	if err != nil || !info.Mode().IsRegular() || info.Mode()&os.ModeSymlink != 0 {
+		return errors.New("invalid output target")
+	}
+	old, err := os.ReadFile(path)
+	if err != nil || string(old) != string(data) {
+		return errors.New("output target conflicts")
 	}
 	return nil
 }
@@ -407,32 +513,49 @@ func writeOrVerify(path string, data []byte) error {
 	return writeNew(path, data, -1)
 }
 
-const adoptionComposeOverride = `services:
-  web:
-    environment:
-      NEWS_RUNTIME_FILE: /run/news/runtime.json
-    volumes:
-      - managed_web:/run/news:ro
-  executor:
-    environment:
-      NEWS_RUNTIME_FILE: /run/news/runtime.json
-    volumes:
-      - managed_domain:/run/news:ro
-  background:
-    environment:
-      NEWS_RUNTIME_FILE: /run/news/runtime.json
-    volumes:
-      - managed_background:/run/news:ro
-  extractor:
-    environment:
-      NEWS_RUNTIME_FILE: /run/news/runtime.json
-    volumes:
-      - managed_extractor:/run/news:ro
-  migrate:
-    entrypoint: ["/bin/true"]
-volumes:
-  managed_web: {}
-  managed_domain: {}
-  managed_background: {}
-  managed_extractor: {}
-`
+// AdoptionComposeOverride emits only News service overlays. Service names come
+// from the canonical local Compose configuration; browser and Readeck service
+// definitions and all existing network topology remain owned by their sources.
+func AdoptionComposeOverride(services map[string]string) ([]byte, error) {
+	allowed := map[string]map[string]bool{"web": {"app": true, "web": true}, "domain": {"executor": true}, "background": {"background": true}, "extractor": {"extractor": true}, "egress": {"egress": true}}
+	for role, name := range services {
+		if role == "migrate" && name == "migrate" {
+			continue
+		}
+		if !allowed[role][name] {
+			return nil, errors.New("unsupported adoption Compose service name")
+		}
+	}
+	for _, role := range []string{"web", "domain", "background", "extractor"} {
+		if services[role] == "" {
+			return nil, errors.New("adoption Compose service set incomplete")
+		}
+	}
+	if name := services["egress"]; name != "" && !allowed["egress"][name] {
+		return nil, errors.New("unsupported adoption Compose service name")
+	}
+	var b strings.Builder
+	b.WriteString("services:\n")
+	items := []struct{ role, volume string }{{"web", "managed_web"}, {"domain", "managed_domain"}, {"background", "managed_background"}, {"extractor", "managed_extractor"}}
+	if services["egress"] != "" {
+		items = append(items, struct{ role, volume string }{"egress", "managed_egress"})
+	}
+	for _, item := range items {
+		fmt.Fprintf(&b, "  %s:\n    env_file: !override []\n    environment: !override\n      NEWS_RUNTIME_FILE: /run/news/runtime.json\n    volumes:\n      - %s:/run/news:ro\n", services[item.role], item.volume)
+		if item.role == "egress" {
+			fmt.Fprintf(&b, "    profiles: !override []\n")
+		}
+	}
+	if services["migrate"] == "migrate" {
+		b.WriteString("  migrate:\n    entrypoint: !override [\"/bin/true\"]\n")
+	}
+	b.WriteString("volumes:\n")
+	volumes := []string{"managed_web", "managed_domain", "managed_background", "managed_extractor"}
+	if services["egress"] != "" {
+		volumes = append(volumes, "managed_egress")
+	}
+	for _, v := range volumes {
+		fmt.Fprintf(&b, "  %s: {}\n", v)
+	}
+	return []byte(b.String()), nil
+}

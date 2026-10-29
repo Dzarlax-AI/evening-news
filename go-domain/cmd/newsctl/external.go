@@ -46,6 +46,8 @@ func prepareCommand(ctx context.Context, l managedsetup.Layout, args []string) e
 	flags := flagSet("prepare")
 	externalPath := flags.String("external-db", "", "protected JSON with a bootstrap DSN and seven pre-provisioned runtime DSNs")
 	optionsPath := flags.String("options", "", "protected JSON installer options")
+	browserPath := flags.String("browser-config", "", "protected rendered Compose JSON with the existing native browser topology")
+	composeOutput := flags.String("compose-output", "", "private Compose override output path for native browser networking")
 	if flags.Parse(args) != nil || flags.NArg() != 0 {
 		return errors.New("usage: newsctl prepare [--options PATH] [--external-db PATH]")
 	}
@@ -57,14 +59,43 @@ func prepareCommand(ctx context.Context, l managedsetup.Layout, args []string) e
 			return err
 		}
 	}
+	if *browserPath != "" {
+		if options.NativeBrowser != nil {
+			return errors.New("choose either --options native_browser or --browser-config")
+		}
+		browser, readErr := managedsetup.ReadNativeBrowserOptions(*browserPath)
+		if readErr != nil {
+			return readErr
+		}
+		options.NativeBrowser = &browser
+	}
 	site := os.Getenv("SITE_BASE_URL")
 	if site == "" {
 		site = "http://localhost:8000"
+	}
+	if *optionsPath == "" && *browserPath == "" {
+		if existing, readErr := managedsetup.ReadState(l.Setup); readErr == nil {
+			options = existing.Options
+		}
+	}
+	if options.NativeBrowser != nil && *composeOutput == "" {
+		return errors.New("--compose-output is required for the native browser profile")
+	}
+	if options.NativeBrowser == nil && *composeOutput != "" {
+		return errors.New("--compose-output requires a native browser profile")
+	}
+	if err = managedsetup.ValidateWebTransport(site, options, managedsetup.IsLoopbackHTTPOrigin(site)); err != nil {
+		return err
 	}
 	if *externalPath == "" {
 		created, e := managedsetup.PrepareWithOptions(l, site, options)
 		if e != nil {
 			return e
+		}
+		if options.NativeBrowser != nil {
+			if err = writeNativeBrowserOverride(*composeOutput, *options.NativeBrowser); err != nil {
+				return err
+			}
 		}
 		if created {
 			fmt.Println("Installation state created")
@@ -78,9 +109,6 @@ func prepareCommand(ctx context.Context, l managedsetup.Layout, args []string) e
 		return err
 	}
 	if existing, readErr := managedsetup.ReadState(l.Setup); readErr == nil {
-		if *optionsPath == "" {
-			options = existing.Options
-		}
 		if !existing.ExternalDB || !sameExternalRuntimeValues(existing, input.RuntimeDSNs) || !externalBootstrapMatches(l, input.BootstrapDSN) || !reflect.DeepEqual(existing.Options, options) {
 			return errors.New("external installer state conflicts with provided input")
 		}
@@ -111,7 +139,53 @@ func prepareCommand(ctx context.Context, l managedsetup.Layout, args []string) e
 	if err = installExternal(ctx, l, site, options, input); err != nil {
 		return err
 	}
+	if options.NativeBrowser != nil {
+		if err = writeNativeBrowserOverride(*composeOutput, *options.NativeBrowser); err != nil {
+			return err
+		}
+	}
 	fmt.Println("External database installation initialized; no database, role, grant, or scheduler schema was created by the installer")
+	return nil
+}
+
+func writeNativeBrowserOverride(path string, options managedsetup.NativeBrowserOptions) error {
+	contents, err := managedsetup.NativeBrowserComposeOverride(options)
+	if err != nil {
+		return errors.New("native browser Compose override invalid")
+	}
+	if path == "" || err != nil {
+		return errors.New("native browser Compose output unavailable")
+	}
+	if err = os.MkdirAll(filepath.Dir(path), 0700); err != nil {
+		return errors.New("native browser Compose output unavailable")
+	}
+	if existing, statErr := os.Lstat(path); statErr == nil {
+		if !existing.Mode().IsRegular() || existing.Mode()&os.ModeSymlink != 0 || existing.Mode().Perm()&0077 != 0 {
+			return errors.New("native browser Compose output conflicts")
+		}
+		old, readErr := os.ReadFile(path)
+		if readErr != nil || string(old) != string(contents) {
+			return errors.New("native browser Compose output conflicts")
+		}
+		return nil
+	} else if !os.IsNotExist(statErr) {
+		return errors.New("native browser Compose output unavailable")
+	}
+	f, err := os.OpenFile(path, os.O_WRONLY|os.O_CREATE|os.O_EXCL, 0600)
+	if err != nil {
+		return errors.New("native browser Compose output unavailable")
+	}
+	if _, err = f.Write(contents); err == nil {
+		err = f.Sync()
+	}
+	closeErr := f.Close()
+	if err == nil {
+		err = closeErr
+	}
+	if err != nil {
+		_ = os.Remove(path)
+		return errors.New("native browser Compose output unavailable")
+	}
 	return nil
 }
 
@@ -202,7 +276,7 @@ func externalDirectoriesClean(l managedsetup.Layout) error {
 	for _, d := range []struct {
 		path string
 		uid  int
-	}{{l.Setup, -1}, {l.Web, l.WebUID}, {l.Domain, l.DomainUID}, {l.Background, l.BackgroundUID}, {l.Extractor, l.ExtractorUID}} {
+	}{{l.Setup, -1}, {l.Web, l.WebUID}, {l.Domain, l.DomainUID}, {l.Background, l.BackgroundUID}, {l.Extractor, l.ExtractorUID}, {l.Egress, l.EgressUID}} {
 		if err := os.MkdirAll(d.path, 0700); err != nil {
 			return errors.New("external installer state directories unavailable")
 		}
@@ -219,14 +293,22 @@ func externalDirectoriesClean(l managedsetup.Layout) error {
 			}
 		}
 	}
-	for _, p := range []string{filepath.Join(l.Setup, "installation.json"), filepath.Join(l.Setup, "external-bootstrap.json"), filepath.Join(l.Web, "runtime.json"), filepath.Join(l.Domain, "runtime.json"), filepath.Join(l.Background, "runtime.json"), filepath.Join(l.Extractor, "runtime.json")} {
+	paths := []string{filepath.Join(l.Setup, "installation.json"), filepath.Join(l.Setup, "external-bootstrap.json"), filepath.Join(l.Web, "runtime.json"), filepath.Join(l.Domain, "runtime.json"), filepath.Join(l.Background, "runtime.json"), filepath.Join(l.Extractor, "runtime.json")}
+	if l.Egress != "" {
+		paths = append(paths, filepath.Join(l.Egress, "runtime.json"))
+	}
+	for _, p := range paths {
 		if _, err := os.Lstat(p); err == nil {
 			return errors.New("partial installer state exists; inspect before retrying")
 		} else if !os.IsNotExist(err) {
 			return errors.New("installer state unavailable")
 		}
 	}
-	for _, d := range []string{l.Setup, l.Web, l.Domain, l.Background, l.Extractor} {
+	dirs := []string{l.Setup, l.Web, l.Domain, l.Background, l.Extractor}
+	if l.Egress != "" {
+		dirs = append(dirs, l.Egress)
+	}
+	for _, d := range dirs {
 		entries, err := os.ReadDir(d)
 		if err != nil {
 			return errors.New("external installer state unavailable")

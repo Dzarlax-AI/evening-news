@@ -4,6 +4,7 @@ import (
 	"context"
 	"crypto/rand"
 	"encoding/base64"
+	"encoding/json"
 	"go/ast"
 	"go/parser"
 	"go/token"
@@ -174,7 +175,7 @@ func TestAdoptionImportPostgresFixture(t *testing.T) {
 		}
 	}()
 	for _, q := range []string{
-		`CREATE TABLE ` + ident + `.installation_state(id smallint primary key,installation_id text,revision bigint,provisioning_complete boolean,maintenance_mode boolean,onboarding_step text,onboarding_completed boolean)`,
+		`CREATE TABLE ` + ident + `.installation_state(id smallint primary key,installation_id text,revision bigint,provisioning_complete boolean,maintenance_mode boolean,onboarding_step text,onboarding_completed boolean,updated_at timestamptz default now())`,
 		`CREATE TABLE ` + ident + `.managed_admin(id smallint primary key,username text,password_hash text,revision bigint)`,
 		`CREATE TABLE ` + ident + `.integration_credentials(provider text primary key,revision bigint,envelope_version integer,key_id text,nonce bytea,ciphertext bytea)`,
 		`CREATE TABLE ` + ident + `.settings(key text primary key,value jsonb)`,
@@ -197,6 +198,8 @@ func TestAdoptionImportPostgresFixture(t *testing.T) {
 		t.Fatal("could not create offline-check role")
 	}
 	defer func() {
+		_, _ = admin.Exec(context.Background(), `DROP SCHEMA IF EXISTS news_scheduler_other CASCADE`)
+		_, _ = admin.Exec(context.Background(), `DROP SCHEMA IF EXISTS scheduler_service CASCADE`)
 		_, _ = admin.Exec(context.Background(), "REVOKE USAGE ON SCHEMA public FROM "+pgx.Identifier{roleName}.Sanitize())
 		if _, e := admin.Exec(context.Background(), "DROP ROLE "+pgx.Identifier{roleName}.Sanitize()); e != nil {
 			t.Error("offline-check role cleanup failed")
@@ -218,6 +221,32 @@ func TestAdoptionImportPostgresFixture(t *testing.T) {
 		runtimePool.Close()
 		t.Fatal("offline-check runtime connection failed")
 	}
+	var schedulerSchemaExists bool
+	if err = admin.QueryRow(ctx, `SELECT EXISTS(SELECT 1 FROM pg_namespace WHERE nspname='scheduler_service')`).Scan(&schedulerSchemaExists); err != nil || schedulerSchemaExists {
+		t.Fatal("scheduler ownership fixture requires an unused scheduler_service schema")
+	}
+	if _, err = admin.Exec(ctx, `CREATE SCHEMA scheduler_service AUTHORIZATION `+pgx.Identifier{roleName}.Sanitize()); err != nil {
+		t.Fatal("could not create scheduler ownership fixture schema")
+	}
+	if _, err = runtimePool.Exec(ctx, `CREATE TABLE scheduler_service.toast_fixture(payload text)`); err != nil {
+		t.Fatal("could not create scheduler-owned fixture table")
+	}
+	if _, err = runtimePool.Exec(ctx, `INSERT INTO scheduler_service.toast_fixture VALUES ((SELECT string_agg(md5(random()::text), '') FROM generate_series(1,2000)))`); err != nil {
+		t.Fatal("could not create scheduler-owned fixture payload")
+	}
+	var toastPresent bool
+	if err = runtimePool.QueryRow(ctx, `SELECT reltoastrelid<>0 FROM pg_class WHERE oid='scheduler_service.toast_fixture'::regclass`).Scan(&toastPresent); err != nil || !toastPresent {
+		t.Fatal("scheduler fixture did not create a TOAST relation")
+	}
+	if owns, e := adoptionRoleOwnsForbiddenObjects(ctx, runtimePool, true); e != nil || owns {
+		t.Fatalf("scheduler-owned TOAST objects were treated as foreign ownership: owns=%t err=%v", owns, e)
+	}
+	if _, err = admin.Exec(ctx, `CREATE SCHEMA news_scheduler_other AUTHORIZATION `+pgx.Identifier{roleName}.Sanitize()); err != nil {
+		t.Fatal("could not create unrelated ownership fixture schema")
+	}
+	if owns, e := adoptionRoleOwnsForbiddenObjects(ctx, runtimePool, true); e != nil || !owns {
+		t.Fatalf("scheduler-owned unrelated schema was not rejected: owns=%t err=%v", owns, e)
+	}
 	offlineRoles := map[string]map[string]string{
 		"web":        {"DATABASE_URL": runtimeURL.String()},
 		"domain":     {"DATABASE_URL": runtimeURL.String()},
@@ -233,6 +262,17 @@ func TestAdoptionImportPostgresFixture(t *testing.T) {
 	}
 	if _, err = admin.Exec(ctx, "GRANT USAGE ON SCHEMA public TO "+pgx.Identifier{roleName}.Sanitize()); err != nil {
 		t.Fatal("could not configure schema parity fixture")
+	}
+	if _, err = admin.Exec(ctx, `CREATE TABLE `+ident+`.setup_tokens(id smallint primary key,token_hash bytea,expires_at timestamptz,consumed_at timestamptz)`); err != nil {
+		t.Fatal("could not create post-migration managed table fixture")
+	}
+	if _, err = admin.Exec(ctx, "GRANT USAGE ON SCHEMA "+ident+" TO "+pgx.Identifier{roleName}.Sanitize()); err != nil {
+		t.Fatal("could not grant fixture schema usage")
+	}
+	if err = verifyManagedRuntimeGrants(ctx, map[string]map[string]string{
+		"web": {"DATABASE_URL": runtimeURL.String()}, "domain": {"DATABASE_URL": runtimeURL.String()},
+	}); err == nil || !strings.Contains(err.Error(), "missing runtime grants") || !strings.Contains(err.Error(), `GRANT SELECT ON "news_adopt_fixture"."managed_admin"`) {
+		t.Fatalf("missing managed grants did not fail with scoped operator guidance: %v", err)
 	}
 	splitRoles := map[string]map[string]string{
 		"web":        {"DATABASE_URL": runtimeURL.String()},
@@ -261,10 +301,10 @@ func TestAdoptionImportPostgresFixture(t *testing.T) {
 		t.Fatal(err)
 	}
 	secrets := adoptionSecrets{AdminUsername: "fixture-admin", AdminHash: "$argon2id$fixture", Credentials: map[string]credentialstore.Envelope{"gemini": envelope}}
-	if _, err = pool.Exec(ctx, `INSERT INTO settings(key,value) VALUES('ai_settings','{"active_provider":"openai","profiles":{}}'::jsonb)`); err != nil {
+	if _, err = pool.Exec(ctx, `INSERT INTO settings(key,value) VALUES('ai_settings','{"active_provider":"openai","profiles":{}}'::jsonb),('telegram_chat_id','"-100-existing"'::jsonb),('telegram_service_chat_id','""'::jsonb)`); err != nil {
 		t.Fatal(err)
 	}
-	domain := map[string]string{"AI_PROVIDER": "gemini", "SUMMARIZATION_MODEL": "fixture-model", "TELEGRAM_CHAT_ID": "-100123"}
+	domain := map[string]string{"AI_PROVIDER": "gemini", "SUMMARIZATION_MODEL": "fixture-model", "TELEGRAM_CHAT_ID": "-100123", "TELEGRAM_SERVICE_CHAT_ID": "-100-service"}
 	background := map[string]string{"NEWS_LIMIT_ENABLED": "true", "NEWS_LIMIT_MAX_ARTICLES": "42", "NEWS_LIMIT_PER_SOURCE": "7", "NEWS_LIMIT_DAYS": "3", "NEWS_LIMIT_NEWEST_DATE": "2026-10-29"}
 	if err = importAdoption(ctx, pool, id, secrets, domain, background); err != nil {
 		t.Fatal(err)
@@ -289,8 +329,11 @@ func TestAdoptionImportPostgresFixture(t *testing.T) {
 	if !strings.Contains(string(aiRaw), `"active_provider": "openai"`) {
 		t.Fatal("existing AI settings override was not preserved")
 	}
-	if err = pool.QueryRow(ctx, `SELECT value FROM settings WHERE key='telegram_chat_id'`).Scan(&chatRaw); err != nil || string(chatRaw) != `"-100123"` {
-		t.Fatal("effective Telegram destination missing")
+	if err = pool.QueryRow(ctx, `SELECT value FROM settings WHERE key='telegram_chat_id'`).Scan(&chatRaw); err != nil || string(chatRaw) != `"-100-existing"` {
+		t.Fatal("existing Telegram database override was not preserved")
+	}
+	if err = pool.QueryRow(ctx, `SELECT value FROM settings WHERE key='telegram_service_chat_id'`).Scan(&chatRaw); err != nil || string(chatRaw) != `"-100-service"` {
+		t.Fatal("empty Telegram database override did not retain the environment fallback")
 	}
 	var maxArticles int
 	if err = pool.QueryRow(ctx, `SELECT (value #>> '{}')::integer FROM settings WHERE key='operational_max_articles'`).Scan(&maxArticles); err != nil || maxArticles != 42 {
@@ -361,5 +404,130 @@ func TestAdoptionPlanRejectsTokenAndDatabaseDrift(t *testing.T) {
 	c.Services["background"]["PROCESSING_DATABASE_URL"] = "postgres://other:pw@other:5432/news?search_path=public"
 	if _, err := adoptionPlanFromCompose(c, strings.Repeat("1", 32)); err == nil {
 		t.Fatal("accepted split News database")
+	}
+}
+
+func TestValidateAdoptionWebTransport(t *testing.T) {
+	tests := []struct {
+		name string
+		web  map[string]string
+		port bool
+		want bool
+	}{
+		{name: "hosted https with exact proxy", web: map[string]string{"SITE_BASE_URL": "https://news.example.invalid", "TRUSTED_PROXY_CIDRS": "172.20.0.2/32"}},
+		{name: "hosted https without proxy", web: map[string]string{"SITE_BASE_URL": "https://news.example.invalid"}, want: true},
+		{name: "hosted http", web: map[string]string{"SITE_BASE_URL": "http://news.example.invalid", "TRUSTED_PROXY_CIDRS": "172.20.0.2/32"}, want: true},
+		{name: "invalid proxy", web: map[string]string{"SITE_BASE_URL": "https://news.example.invalid", "TRUSTED_PROXY_CIDRS": "0.0.0.0/0"}, want: true},
+		{name: "loopback without explicit profile", web: map[string]string{"SITE_BASE_URL": "http://127.0.0.1:8000"}, port: true, want: true},
+		{name: "loopback profile without port binding", web: map[string]string{"SITE_BASE_URL": "http://127.0.0.1:8000", "LOCAL_HTTP_SETUP": "true"}, want: true},
+		{name: "loopback explicit bound profile", web: map[string]string{"SITE_BASE_URL": "http://127.0.0.1:8000", "LOCAL_HTTP_SETUP": "true"}, port: true},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			plan := adoptionPlan{roles: map[string]map[string]string{"web": tt.web}, localHTTPPortsOK: tt.port}
+			err := validateAdoptionWebTransport(plan)
+			if (err != nil) != tt.want {
+				t.Fatalf("validateAdoptionWebTransport() error=%v wantErr=%t", err, tt.want)
+			}
+		})
+	}
+}
+
+func TestAdoptApplyRejectsHostedMissingProxyBeforeDatabaseOrStaging(t *testing.T) {
+	compose := adoptionFixture()
+	compose.Services["web"]["SITE_BASE_URL"] = "https://news.example.invalid"
+	services := map[string]any{}
+	for name, environment := range compose.Services {
+		services[name] = map[string]any{"environment": environment}
+	}
+	raw, err := json.Marshal(map[string]any{"services": services})
+	if err != nil {
+		t.Fatal(err)
+	}
+	root := t.TempDir()
+	configPath := filepath.Join(root, "rendered-compose.json")
+	if err = os.WriteFile(configPath, raw, 0600); err != nil {
+		t.Fatal(err)
+	}
+	setup := filepath.Join(root, "setup")
+	err = adoptionCommand(context.Background(), managedsetup.Layout{Setup: setup}, []string{"--config", configPath, "--apply", "--bootstrap-input", filepath.Join(root, "missing-bootstrap.json"), "--compose-output", filepath.Join(root, "override.yml")})
+	if err == nil || !strings.Contains(err.Error(), "trusted proxy CIDRs") {
+		t.Fatalf("apply did not fail on transport readiness before database work: %v", err)
+	}
+	if _, statErr := os.Lstat(setup); !os.IsNotExist(statErr) {
+		t.Fatal("failed transport preflight created adoption state")
+	}
+}
+
+func TestNativeAdoptionPreservesCurrentCloakContract(t *testing.T) {
+	compose := func(t *testing.T, listen string) managedsetup.RenderedCompose {
+		t.Helper()
+		fixture := adoptionFixture()
+		app := fixture.Services["web"]
+		delete(fixture.Services, "web")
+		app["BROWSER_WS_ENDPOINT"] = "ws://10.77.0.2:9222"
+		app["BROWSER_RESTART_MARKER_PATH"] = "/browser-control/restart.request"
+		app["BROWSER_PROXY_ENABLED"] = "true"
+		app["BROWSER_PROXY_URL"] = "http://10.77.0.5:8081"
+		app["BROWSER_PROXY_TOKEN"] = "fixture-proxy-token-01"
+		app["EXTRACTION_SERVICE_URL"] = "http://10.77.0.4:8080"
+		app["EXTRACTION_SERVICE_TOKEN"] = "extractor"
+		app["EXTRACTION_SERVICE_MODE"] = "go"
+		app["EXTRACTION_SERVICE_NATIVE_BROWSER"] = "true"
+		app["EXTRACTION_SERVICE_PYTHON_FALLBACK"] = "false"
+		app["TELEGRAM_SOURCE_MODE"] = "go"
+		app["PAGE_MONITOR_SOURCE_MODE"] = "go"
+		extractor := map[string]string{"EXTRACTOR_SERVICE_TOKEN": "extractor", "LISTEN_ADDR": ":8080", "EXTRACTOR_HTTP_ONLY": "false", "EXTRACTOR_BROWSER_BACKEND": "native", "EXTRACTOR_NATIVE_NETWORK_ISOLATED": "true", "CHROME_ENDPOINT": "http://10.77.0.2:9222", "EXTRACTOR_NATIVE_PROXY_URL": "http://10.77.0.5:8081", "EXTRACTOR_NATIVE_PROXY_TOKEN": "fixture-proxy-token-01", "EXTRACTOR_MAX_CONCURRENT": "2", "EXTRACTOR_BROWSER_CONCURRENT": "2"}
+		egress := map[string]string{"EGRESS_LISTEN_ADDR": listen, "EGRESS_TOKEN": "fixture-proxy-token-01", "EGRESS_MAX_CONCURRENT": "4"}
+		limits := map[string]any{"init": true, "read_only": true, "cap_drop": []string{"ALL"}, "security_opt": []string{"no-new-privileges:true"}, "pids_limit": 128, "mem_limit": "268435456", "cpus": 1, "stop_grace_period": "55s"}
+		egressLimits := map[string]any{"init": true, "read_only": true, "cap_drop": []string{"ALL"}, "security_opt": []string{"no-new-privileges:true"}, "pids_limit": 64, "mem_limit": "134217728", "cpus": 0.25, "stop_grace_period": "10s"}
+		services := map[string]any{
+			"app":        map[string]any{"environment": app},
+			"executor":   map[string]any{"environment": fixture.Services["executor"]},
+			"background": map[string]any{"environment": fixture.Services["background"]},
+			"extractor":  map[string]any{"environment": extractor, "networks": map[string]any{"private-control": map[string]string{"ipv4_address": "10.77.0.4"}, "outbound": map[string]any{}}},
+			"egress":     map[string]any{"environment": egress, "networks": map[string]any{"private-control": map[string]string{"ipv4_address": "10.77.0.5"}, "outbound": map[string]any{}}},
+			"migrate":    map[string]any{"environment": map[string]string{"DATABASE_URL": fixture.Services["executor"]["DATABASE_URL"]}},
+		}
+		for key, value := range limits {
+			services["extractor"].(map[string]any)[key] = value
+		}
+		for key, value := range egressLimits {
+			services["egress"].(map[string]any)[key] = value
+		}
+		raw, err := json.Marshal(map[string]any{"services": services, "networks": map[string]any{
+			"private-control": map[string]any{"name": "shared-control", "external": true},
+			"outbound":        map[string]any{"name": "shared-outbound"},
+		}})
+		if err != nil {
+			t.Fatal(err)
+		}
+		path := filepath.Join(t.TempDir(), "compose.json")
+		if err = os.WriteFile(path, raw, 0600); err != nil {
+			t.Fatal(err)
+		}
+		compose, err := managedsetup.ReadRenderedCompose(path)
+		if err != nil {
+			t.Fatal(err)
+		}
+		return compose
+	}
+	c := compose(t, "10.77.0.5:8081")
+	p, err := adoptionPlanFromCompose(c, strings.Repeat("4", 32))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if p.services["web"] != "app" || p.roles["extractor"]["EXTRACTOR_BROWSER_CONCURRENT"] != "2" || p.roles["extractor"]["EXTRACTOR_NATIVE_NETWORK_ISOLATED"] != "true" || p.roles["egress"]["EGRESS_TOKEN"] == "" {
+		t.Fatal("native browser runtime settings were not carried into protected roles")
+	}
+	override, err := managedsetup.AdoptionComposeOverride(p.services)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !strings.Contains(string(override), "  app:") || !strings.Contains(string(override), "  egress:") || !strings.Contains(string(override), "entrypoint: !override") || strings.Contains(string(override), "  chrome:") || strings.Contains(string(override), "  readeck:") {
+		t.Fatal("generated override changed or omitted the expected News-only services")
+	}
+	if _, err = adoptionPlanFromCompose(compose(t, "10.77.0.6:8081"), strings.Repeat("5", 32)); err == nil {
+		t.Fatal("native adoption accepted proxy/listener address mismatch")
 	}
 }

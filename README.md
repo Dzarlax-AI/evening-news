@@ -89,7 +89,7 @@ Public data endpoints live under `/api/public/`; the authenticated management AP
 
 ## Local development
 
-For a fresh installation, the managed Compose profile starts the Go web service, one background runtime, the private Go domain process, the extractor, and one PostgreSQL 17 server. It creates separate News and scheduler databases and least-privilege runtime roles on that server. Private per-role configuration, database passwords, service tokens, and signing keys are generated into persistent local volumes. No AI provider or Telegram key is needed to start the app.
+For a fresh installation, the managed Compose profile starts the Go web service, one background runtime, the private Go domain process, the extractor, and one PostgreSQL 17 server. It creates separate News and scheduler databases and least-privilege runtime roles on that server. Private per-role configuration, database passwords, service tokens, and signing keys are generated into persistent local volumes. No AI provider or Telegram key is needed to start the app. HTTP-only extraction is the zero-configuration default; an optional protected setup flow can attach a fresh install to an existing native browser and egress stack without creating browser services.
 
 The only optional `.env` value is `SITE_BASE_URL`. Leaving it unset uses `http://localhost:8000`. The local HTTP exception requires a loopback site origin, and the host port is bound to `127.0.0.1`. Public sites require HTTPS; trusted proxy CIDRs are supplied separately through a protected installer options file.
 
@@ -101,7 +101,7 @@ make managed-token
 
 Open [http://localhost:8000/setup](http://localhost:8000/setup), paste the one-time token printed by `make managed-token`, and create the first administrator. The token expires after 15 minutes and is consumed when the account is claimed. Then configure AI, Telegram, sources, categories, and scheduling in the setup screens. Saving AI settings does not send a provider request. Use `make managed-logs` to inspect service logs and `make managed-stop` to stop services while preserving installation data.
 
-`make dev` remains the separate legacy Compose profile. Its detailed DSNs, service environment and migration steps are in the [legacy local deployment guide](deploy/news/README.md) and [legacy environment example](.env.legacy.example). The [configuration guide](docs/configuration.md) covers the complete catalog, protected proxy options, a separately gated external-database install path, and the dry-run workflow for existing-installation adoption. The `.env.full.example` and machine-readable catalog cover advanced generator and operator inputs across supported profiles.
+`make dev` remains the separate legacy Compose profile. Its detailed DSNs, service environment and migration steps are in the [legacy local deployment guide](deploy/news/README.md) and [legacy environment example](.env.legacy.example). The [configuration guide](docs/configuration.md) covers the complete catalog, the protected native-browser attach flow, separately gated external-database installation, and dry-run/apply workflow for existing-installation adoption. The `.env.full.example` and machine-readable catalog cover advanced generator and operator inputs across supported profiles.
 
 ## AI providers
 

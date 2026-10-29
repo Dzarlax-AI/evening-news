@@ -65,6 +65,9 @@ func backupInstallation(ctx context.Context, l managedsetup.Layout, output, pass
 	if err != nil {
 		return err
 	}
+	if s.Options.NativeBrowser != nil {
+		return errors.New("native browser recovery bundle is not supported; export a reviewed operator backup and preserve the native role manifests and Compose override")
+	}
 	if s.ExternalDB {
 		return errors.New("external database backup requires an explicit external target mapping and is not supported")
 	}
@@ -157,8 +160,13 @@ func cleanPasswordEnv() []string {
 }
 
 func restoreCommand(l managedsetup.Layout, args []string) error {
-	if current, err := managedsetup.ReadState(l.Setup); err == nil && current.ExternalDB {
-		return errors.New("external database restore requires an explicit external target mapping and is not supported")
+	if current, err := managedsetup.ReadState(l.Setup); err == nil {
+		if current.ExternalDB {
+			return errors.New("external database restore requires an explicit external target mapping and is not supported")
+		}
+		if current.Options.NativeBrowser != nil {
+			return errors.New("native browser recovery bundle is not supported; restore requires a reviewed operator procedure")
+		}
 	}
 	flags := flag.NewFlagSet("restore", flag.ContinueOnError)
 	flags.SetOutput(io.Discard)
@@ -182,6 +190,9 @@ func stageRestore(l managedsetup.Layout, stage string, manifest recovery.Manifes
 	if err != nil || s.InstallationID != manifest.InstallationID {
 		return errors.New("recovery identity mismatch")
 	}
+	if s.Options.NativeBrowser != nil {
+		return errors.New("native browser recovery bundle is not supported; restore requires a reviewed operator procedure")
+	}
 	if err = managedsetup.RestoreState(l, stage); err != nil {
 		return err
 	}
@@ -196,6 +207,9 @@ func resumeInstallation(ctx context.Context, l managedsetup.Layout) error {
 	}
 	if s.ExternalDB {
 		return errors.New("external database recovery requires an explicit external target mapping and is not supported")
+	}
+	if s.Options.NativeBrowser != nil {
+		return errors.New("native browser recovery resume is not supported by the local recovery bundle")
 	}
 	news, err := connect(ctx, s, "newsdb")
 	if err != nil {

@@ -40,7 +40,11 @@ func NewExternalState(site string, options Options, roleDSNs map[string]string) 
 		return zero, nil, errors.New("external runtime generation failed")
 	}
 	values := map[string]map[string]string{}
-	for _, role := range []string{"web", "domain", "background", "extractor"} {
+	roles := []string{"web", "domain", "background", "extractor"}
+	if s.Options.NativeBrowser != nil {
+		roles = append(roles, "egress")
+	}
+	for _, role := range roles {
 		var m runtimeconfig.Manifest
 		if json.Unmarshal(generated[role], &m) != nil || m.Service != role || m.InstallationID != s.InstallationID || m.Values == nil {
 			return zero, nil, errors.New("generated runtime state invalid")
@@ -68,7 +72,11 @@ func NewExternalState(site string, options Options, roleDSNs map[string]string) 
 // bootstrap DSN is installer-only and is never written to a runtime manifest.
 // installation.json is written last and acts as the local state commit marker.
 func InstallExternalState(l Layout, s State, manifests map[string][]byte, bootstrapDSN string) error {
-	if !s.ExternalDB || bootstrapDSN == "" || s.InstallationID == "" || len(manifests) != 4 {
+	wantManifests := 4
+	if s.Options.NativeBrowser != nil {
+		wantManifests++
+	}
+	if !s.ExternalDB || bootstrapDSN == "" || s.InstallationID == "" || len(manifests) != wantManifests {
 		return errors.New("external installation state invalid")
 	}
 	setupInfo, err := os.Lstat(l.Setup)
@@ -79,6 +87,12 @@ func InstallExternalState(l Layout, s State, manifests map[string][]byte, bootst
 		name, path string
 		uid        int
 	}{{"web", l.Web, l.WebUID}, {"domain", l.Domain, l.DomainUID}, {"background", l.Background, l.BackgroundUID}, {"extractor", l.Extractor, l.ExtractorUID}}
+	if s.Options.NativeBrowser != nil {
+		roleDirs = append(roleDirs, struct {
+			name, path string
+			uid        int
+		}{"egress", l.Egress, l.EgressUID})
+	}
 	for _, role := range roleDirs {
 		var m runtimeconfig.Manifest
 		if json.Unmarshal(manifests[role.name], &m) != nil || m.Version != runtimeconfig.Version || m.Service != role.name || m.InstallationID != s.InstallationID {
@@ -147,7 +161,11 @@ func InstallExternalState(l Layout, s State, manifests map[string][]byte, bootst
 // VerifyExternalState checks that installer-only external DB state and every
 // role manifest still match the committed installation record.
 func VerifyExternalState(l Layout, s State) error {
-	if !s.ExternalDB || len(s.RuntimeValues) != 4 {
+	wantRoles := 4
+	if s.Options.NativeBrowser != nil {
+		wantRoles++
+	}
+	if !s.ExternalDB || len(s.RuntimeValues) != wantRoles {
 		return errors.New("external installation state invalid")
 	}
 	setupInfo, err := os.Lstat(l.Setup)
@@ -167,7 +185,11 @@ func VerifyExternalState(l Layout, s State) error {
 	if err != nil {
 		return errors.New("external installation state invalid")
 	}
-	for _, role := range []struct{ name, path string }{{"web", l.Web}, {"domain", l.Domain}, {"background", l.Background}, {"extractor", l.Extractor}} {
+	roles := []struct{ name, path string }{{"web", l.Web}, {"domain", l.Domain}, {"background", l.Background}, {"extractor", l.Extractor}}
+	if s.Options.NativeBrowser != nil {
+		roles = append(roles, struct{ name, path string }{"egress", l.Egress})
+	}
+	for _, role := range roles {
 		info, e := os.Lstat(role.path)
 		if e != nil || !info.IsDir() || info.Mode()&os.ModeSymlink != 0 || info.Mode().Perm()&0077 != 0 {
 			return errors.New("external runtime volume unavailable")

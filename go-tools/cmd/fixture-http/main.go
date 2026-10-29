@@ -63,7 +63,14 @@ func runWithClient(in io.Reader, out io.Writer, client httpDoer) error {
 		r.Header.Set("Content-Type", "application/json")
 	}
 	for k, v := range c.Headers {
-		if k != "Idempotency-Key" {
+		allowed := k == "Idempotency-Key"
+		// Managed admin acceptance models TLS terminated by a trusted reverse
+		// proxy. Permit only fixed https scheme assertions for login and the
+		// synthetic protected article read; never forward identity headers.
+		if k == "X-Forwarded-Proto" && v == "https" && secureWebFixturePath(c) {
+			allowed = true
+		}
+		if !allowed {
 			return errors.New("invalid probe header")
 		}
 		r.Header.Set(k, v)
@@ -79,6 +86,29 @@ func runWithClient(in io.Reader, out io.Writer, client httpDoer) error {
 		return errors.New("probe response invalid")
 	}
 	return json.NewEncoder(out).Encode(reply{resp.StatusCode, body, len(resp.Header.Values("Set-Cookie")) != 0})
+}
+
+func secureWebFixturePath(c command) bool {
+	if c.Target != "web" {
+		return false
+	}
+	if c.Method == "POST" && c.Path == "/auth/login" {
+		return true
+	}
+	const prefix = "/api/v1/articles/"
+	if c.Method != "GET" || !strings.HasPrefix(c.Path, prefix) {
+		return false
+	}
+	id := strings.TrimPrefix(c.Path, prefix)
+	if id == "" {
+		return false
+	}
+	for _, r := range id {
+		if r < '0' || r > '9' {
+			return false
+		}
+	}
+	return true
 }
 func main() {
 	if run(os.Stdin, os.Stdout) != nil {

@@ -73,6 +73,16 @@ func allMigrations() []migration {
 // Run is explicitly invoked by maintenance, never by service startup. Each
 // conditional migration and its privilege changes commit together.
 func Run(ctx context.Context, pool *pgxpool.Pool, allowCreateAll, dryRun bool) (Result, error) {
+	return runMigrations(ctx, pool, allMigrations(), allowCreateAll, dryRun)
+}
+
+// RunAdoption applies only the additive managed-configuration migration.
+// Adoption must never run legacy migrations against an existing installation.
+func RunAdoption(ctx context.Context, pool *pgxpool.Pool) (Result, error) {
+	return runMigrations(ctx, pool, []migration{managedConfigurationMigration()}, false, false)
+}
+
+func runMigrations(ctx context.Context, pool *pgxpool.Pool, migrations []migration, allowCreateAll, dryRun bool) (Result, error) {
 	started := time.Now()
 	result := Result{MigrationsRun: []map[string]any{}, MigrationsSkipped: []map[string]any{}, Errors: []string{}, DryRun: dryRun}
 	if pool == nil {
@@ -92,7 +102,7 @@ func Run(ctx context.Context, pool *pgxpool.Pool, allowCreateAll, dryRun bool) (
 			return result, err
 		}
 	}
-	for _, m := range allMigrations() {
+	for _, m := range migrations {
 		tx, err := pool.Begin(ctx)
 		if err != nil {
 			result.Errors = append(result.Errors, "Migration system error: database unavailable")

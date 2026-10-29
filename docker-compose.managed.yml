@@ -16,6 +16,7 @@ services:
       - managed_domain:/state/domain
       - managed_background:/state/background
       - managed_extractor:/state/extractor
+      - managed_egress:/state/egress
       - managed_postgres_secret:/state/postgres-secret
       - managed_postgres:/state/pg:ro
   postgres:
@@ -71,6 +72,31 @@ services:
       extractor:
         condition: service_healthy
     restart: unless-stopped
+  egress:
+    profiles: [native-browser]
+    build:
+      context: ./go
+      dockerfile: ../docker/Dockerfile.extractor
+    entrypoint: ["/extract-egress"]
+    environment:
+      NEWS_RUNTIME_FILE: /run/news/runtime.json
+    volumes:
+      - managed_egress:/run/news:ro
+    restart: unless-stopped
+    init: true
+    read_only: true
+    cap_drop: [ALL]
+    security_opt: [no-new-privileges:true]
+    pids_limit: 64
+    mem_limit: 128m
+    cpus: 0.25
+    stop_grace_period: 10s
+    healthcheck:
+      test: ["CMD", "/extract-egress", "-healthcheck"]
+      interval: 15s
+      timeout: 3s
+      start_period: 5s
+      retries: 3
   background:
     build:
       context: .
@@ -113,6 +139,7 @@ volumes:
   managed_domain:
   managed_background:
   managed_extractor:
+  managed_egress:
   managed_postgres_secret:
   managed_postgres:
   app_cache:

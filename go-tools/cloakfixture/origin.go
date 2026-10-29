@@ -120,6 +120,11 @@ func (o *Origin) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 		http.Error(w, "fixture route rejected", 404)
 		return
 	}
+	if r.URL.Path == "/page-monitor" {
+		w.Header().Set("Content-Type", "text/html; charset=utf-8")
+		fmt.Fprint(w, `<html><body><main><article><a href="/story"><h2>Synthetic PageMonitor story</h2></a><time datetime="2026-10-29T12:00:00Z">29 October 2026</time><p>`+fixtureBody+`</p></article></main></body></html>`)
+		return
+	}
 	if r.URL.Path == "/healthz" {
 		w.Header().Set("Content-Type", "text/plain; charset=utf-8")
 		fmt.Fprint(w, "ok")

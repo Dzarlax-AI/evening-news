@@ -41,12 +41,14 @@ type adoptionSecrets struct {
 }
 
 type adoptionPlan struct {
-	id, source  string
-	roles       map[string]map[string]string
-	secrets     adoptionSecrets
-	keys        map[string][]string
-	unsupported map[string][]string
-	legacy      map[string]map[string]string
+	id, source       string
+	roles            map[string]map[string]string
+	services         map[string]string
+	secrets          adoptionSecrets
+	keys             map[string][]string
+	unsupported      map[string][]string
+	legacy           map[string]map[string]string
+	localHTTPPortsOK bool
 }
 
 var adoptionPolicies = map[string]struct{ Allowed, Required []string }{
@@ -54,13 +56,24 @@ var adoptionPolicies = map[string]struct{ Allowed, Required []string }{
 	"domain":     {[]string{"DATABASE_URL", "DB_POOL_SIZE", "DB_MAX_OVERFLOW", "JOB_EXECUTOR_TOKEN", "ARTICLE_AI_TOKEN", "EXECUTION_SERVICE_URL", "EXTRACTION_SERVICE_URL", "EXTRACTION_SERVICE_TOKEN", "EXTRACTION_TEXT_MAX_CHARS", "EXTRACTION_HTTP_MAX_BYTES", "ALLOW_CREATE_ALL", "BACKGROUND_EXECUTION_MODE", "WEB_BACKEND_TOKEN", "JOB_EXECUTOR_HOST", "JOB_EXECUTOR_PORT", "GEMINI_API_ENDPOINT", "SUMMARIZATION_MODEL", "LOCAL_CATEGORY", "AI_PROVIDER", "OPENAI_ARTICLE_MODEL", "OPENAI_DIGEST_MODEL", "OPENAI_TEXT_MODEL", "TEXT_MODEL", "TELEGRAM_CHAT_ID", "TELEGRAM_SERVICE_CHAT_ID", "DIGEST_MODEL", "SITE_BASE_URL", "TELEGRAM_RICH_MESSAGES_ENABLED", "RPS", "NEWS_AI_DB_MAX_CONNS", "AI_MODEL_PRICES", "AI_INPUT_COST_PER_1M", "AI_OUTPUT_COST_PER_1M", "AI_CACHED_INPUT_COST_PER_1M", "NEWS_CREDENTIAL_KEY", "NEWS_CREDENTIAL_KEY_ID"}, []string{"DATABASE_URL", "JOB_EXECUTOR_TOKEN", "ARTICLE_AI_TOKEN", "EXTRACTION_SERVICE_URL", "EXTRACTION_SERVICE_TOKEN", "WEB_BACKEND_TOKEN", "NEWS_CREDENTIAL_KEY", "NEWS_CREDENTIAL_KEY_ID"}},
 	"background": {[]string{"ARTICLE_AI_TOKEN", "ARTICLE_AI_URL", "ARTICLE_INGESTION_DB_MAX_CONNS", "ARTICLE_INGESTION_LISTEN", "ARTICLE_INGESTION_TOKEN", "ARTICLE_PROCESSING_DB_MAX_CONNS", "ARTICLE_PROCESSING_LISTEN", "ARTICLE_PROCESSING_TOKEN", "BACKGROUND_HEALTH_LISTEN", "BACKGROUND_SHUTDOWN_TIMEOUT_SECONDS", "BACKGROUND_WORKER_BACKOFF_MAX", "BACKGROUND_WORKER_BACKOFF_MIN", "DOMAIN_SERVICE_URL", "EXECUTION_DATABASE_URL", "EXECUTION_DB_SCHEMA", "EXECUTION_MAX_CONNECTIONS", "EXTRACTION_BROWSER_MAX_BYTES", "EXTRACTION_HTTP_MAX_BYTES", "EXTRACTION_SERVICE_NATIVE_BROWSER", "EXTRACTION_SERVICE_TIMEOUT_SECONDS", "EXTRACTION_SERVICE_TOKEN", "EXTRACTION_SERVICE_TOTAL_BUDGET_SECONDS", "EXTRACTION_SERVICE_URL", "EXTRACTION_TEXT_MAX_CHARS", "INGESTION_DATABASE_URL", "JOB_EXECUTOR_LISTEN", "JOB_EXECUTOR_REQUEST_TIMEOUT_SECONDS", "JOB_EXECUTOR_TOKEN", "JOB_EXECUTOR_URL", "MAX_WORKERS", "NEWS_LIMIT_DAYS", "NEWS_LIMIT_ENABLED", "NEWS_LIMIT_MAX_ARTICLES", "NEWS_LIMIT_NEWEST_DATE", "NEWS_LIMIT_PER_SOURCE", "PROCESSING_ATTEMPT_TIMEOUT_SECONDS", "PROCESSING_BATCH_SIZE", "PROCESSING_DATABASE_URL", "PROCESSING_MAX_ATTEMPTS", "PROCESSING_RETRY_INITIAL_SECONDS", "PROCESSING_RETRY_LATER_SECONDS", "SCHEDULER_ALLOW_HTTP_TARGETS", "SCHEDULER_API_TOKEN", "SCHEDULER_DATABASE_URL", "SCHEDULER_DB_MAX_CONNS", "SCHEDULER_DB_SCHEMA", "SCHEDULER_HTTP_TIMEOUT", "SCHEDULER_LISTEN_ADDR", "SCHEDULER_MAX_INFLIGHT", "SCHEDULER_MAX_OUTBOX", "SCHEDULER_POLL_INTERVAL", "SCHEDULER_START_PAUSED", "SCHEDULER_TARGET_ALIASES", "SCHEDULER_TARGET_NEWS_WORKER_URL", "SCHEDULER_TARGET_NEWS_WORKER_TOKEN", "SELECTOR_SERVICE_URL", "WORKER_DATABASE_URL", "WORKER_JOB_RETENTION_DAYS", "WORKER_MAX_JOB_ATTEMPTS", "WORKER_POLL_INTERVAL_SECONDS", "WORKER_SHUTDOWN_DRAIN_SECONDS"}, []string{"WORKER_DATABASE_URL", "EXECUTION_DATABASE_URL", "INGESTION_DATABASE_URL", "PROCESSING_DATABASE_URL", "SCHEDULER_DATABASE_URL", "JOB_EXECUTOR_TOKEN", "ARTICLE_AI_TOKEN", "ARTICLE_INGESTION_TOKEN", "ARTICLE_PROCESSING_TOKEN", "SCHEDULER_API_TOKEN", "SCHEDULER_TARGET_NEWS_WORKER_TOKEN", "EXTRACTION_SERVICE_TOKEN"}},
 	"extractor":  {[]string{"LISTEN_ADDR", "EXTRACTOR_SERVICE_TOKEN", "EXTRACTOR_MAX_CONCURRENT", "EXTRACTOR_BROWSER_CONCURRENT", "CHROME_ENDPOINT", "EXTRACTOR_HTTP_ONLY", "EXTRACTOR_BROWSER_BACKEND", "EXTRACTOR_NATIVE_PROXY_URL", "EXTRACTOR_NATIVE_PROXY_TOKEN", "EXTRACTOR_NATIVE_NETWORK_ISOLATED", "EXTRACTOR_NATIVE_READY_SELECTOR", "EXTRACTOR_NATIVE_DIAGNOSTICS"}, []string{"EXTRACTOR_SERVICE_TOKEN"}},
+	"egress":     {[]string{"EGRESS_LISTEN_ADDR", "EGRESS_TOKEN", "EGRESS_ALLOW_WILDCARD_BIND", "EGRESS_MAX_CONCURRENT", "EGRESS_MAX_TUNNEL_BYTES", "EGRESS_MAX_LIFETIME_SECONDS", "EGRESS_TEST_MODE", "EGRESS_TEST_ALLOWLIST"}, []string{"EGRESS_TOKEN"}},
 }
 
 var secretConfigKeys = map[string]string{"GEMINI_API_KEY": "gemini", "OPENAI_API_KEY": "openai", "TELEGRAM_TOKEN": "telegram"}
 
 func adoptionPlanFromCompose(c managedsetup.RenderedCompose, id string) (adoptionPlan, error) {
-	p := adoptionPlan{id: id, source: c.Digest, roles: map[string]map[string]string{}, keys: c.Keys(), unsupported: map[string][]string{}, legacy: c.Services}
-	services := map[string]string{"web": "web", "executor": "domain", "background": "background", "extractor": "extractor"}
+	webService := "app"
+	if len(c.Services[webService]) == 0 {
+		webService = "web"
+	}
+	p := adoptionPlan{id: id, source: c.Digest, roles: map[string]map[string]string{}, services: map[string]string{"web": webService, "domain": "executor", "background": "background", "extractor": "extractor"}, keys: c.Keys(), unsupported: map[string][]string{}, legacy: c.Services, localHTTPPortsOK: c.HasLoopbackPublishedPorts(webService)}
+	if c.ServiceNames["migrate"] {
+		p.services["migrate"] = "migrate"
+	}
+	services := map[string]string{webService: "web", "executor": "domain", "background": "background", "extractor": "extractor"}
+	if p.services["egress"] != "" {
+		services["egress"] = "egress"
+	}
 	allowed := map[string]bool{}
 	for role, policy := range adoptionPolicies {
 		for _, key := range policy.Allowed {
@@ -74,6 +87,9 @@ func adoptionPlanFromCompose(c managedsetup.RenderedCompose, id string) (adoptio
 			if key == "ADMIN_PASSWORD" || secretConfigKeys[key] != "" {
 				continue
 			}
+			if role == "web" && retiredLegacyAppKey(key) {
+				continue
+			}
 			if !allowed[role+"\x00"+key] {
 				p.unsupported[service] = append(p.unsupported[service], key)
 				continue
@@ -81,7 +97,7 @@ func adoptionPlanFromCompose(c managedsetup.RenderedCompose, id string) (adoptio
 			p.roles[role][key] = value
 		}
 	}
-	if p.legacy["web"]["ADMIN_PASSWORD"] == "" && p.legacy["executor"]["ADMIN_PASSWORD"] == "" {
+	if p.legacy[webService]["ADMIN_PASSWORD"] == "" && p.legacy["executor"]["ADMIN_PASSWORD"] == "" {
 		return adoptionPlan{}, errors.New("legacy administrator credential unavailable")
 	}
 	if _, ok := p.roles["web"]["DATABASE_URL"]; !ok {
@@ -90,6 +106,25 @@ func adoptionPlanFromCompose(c managedsetup.RenderedCompose, id string) (adoptio
 	if _, ok := p.roles["domain"]["DATABASE_URL"]; !ok {
 		return adoptionPlan{}, errors.New("required executor configuration unavailable")
 	}
+	if p.roles["extractor"]["EXTRACTOR_HTTP_ONLY"] == "false" || p.roles["extractor"]["EXTRACTOR_BROWSER_BACKEND"] == "native" {
+		if _, err := managedsetup.NativeBrowserOptionsFromCompose(c); err != nil {
+			return adoptionPlan{}, errors.New("native browser adoption requires a supported isolated rendered Compose contract")
+		}
+		if c.ServiceNames["egress"] || len(c.Services["egress"]) != 0 {
+			p.services["egress"] = "egress"
+			p.roles["egress"] = map[string]string{}
+			for key, value := range c.Services["egress"] {
+				if !allowed["egress\x00"+key] {
+					p.unsupported["egress"] = append(p.unsupported["egress"], key)
+					continue
+				}
+				p.roles["egress"][key] = value
+			}
+		}
+		if err := validateNativeAdoption(p); err != nil {
+			return adoptionPlan{}, err
+		}
+	}
 	if err := validateAdoptionParity(p); err != nil {
 		return adoptionPlan{}, err
 	}
@@ -97,6 +132,9 @@ func adoptionPlanFromCompose(c managedsetup.RenderedCompose, id string) (adoptio
 		if role == "domain" {
 			continue
 		} // the two NEWS_CREDENTIAL values are generated on apply
+		if role == "egress" && p.services["egress"] == "" {
+			continue
+		}
 		for _, key := range policy.Required {
 			service := role
 			if role == "domain" {
@@ -110,6 +148,41 @@ func adoptionPlanFromCompose(c managedsetup.RenderedCompose, id string) (adoptio
 	return p, nil
 }
 
+func retiredLegacyAppKey(key string) bool {
+	switch key {
+	case "BROWSER_WS_ENDPOINT", "BROWSER_RESTART_MARKER_PATH", "BROWSER_PROXY_ENABLED", "BROWSER_PROXY_URL", "BROWSER_PROXY_TOKEN", "EXTRACTION_SERVICE_MODE", "EXTRACTION_SERVICE_URL", "EXTRACTION_SERVICE_TOKEN", "EXTRACTION_SERVICE_NATIVE_BROWSER", "EXTRACTION_SERVICE_PYTHON_FALLBACK", "TELEGRAM_SOURCE_MODE", "PAGE_MONITOR_SOURCE_MODE":
+		return true
+	default:
+		return false
+	}
+}
+
+func validateNativeAdoption(p adoptionPlan) error {
+	app, extractor, egress := p.legacy[p.services["web"]], p.legacy[p.services["extractor"]], p.roles["egress"]
+	background := p.roles["background"]
+	if background["EXTRACTION_SERVICE_NATIVE_BROWSER"] == "" && app["EXTRACTION_SERVICE_NATIVE_BROWSER"] == "true" {
+		background["EXTRACTION_SERVICE_NATIVE_BROWSER"] = "true"
+	}
+	if background["EXTRACTION_SERVICE_NATIVE_BROWSER"] != "true" || (app["EXTRACTION_SERVICE_NATIVE_BROWSER"] != "" && app["EXTRACTION_SERVICE_NATIVE_BROWSER"] != "true") {
+		return errors.New("native browser adoption requires the existing background native-extractor mode")
+	}
+	if extractor["EXTRACTOR_HTTP_ONLY"] != "false" || extractor["EXTRACTOR_BROWSER_BACKEND"] != "native" || extractor["EXTRACTOR_NATIVE_NETWORK_ISOLATED"] != "true" {
+		return errors.New("native browser adoption requires native backend, HTTP fallback disabled, and isolated network mode")
+	}
+	for _, key := range []string{"EXTRACTOR_SERVICE_TOKEN", "CHROME_ENDPOINT", "EXTRACTOR_NATIVE_PROXY_URL", "EXTRACTOR_NATIVE_PROXY_TOKEN", "EXTRACTOR_MAX_CONCURRENT", "EXTRACTOR_BROWSER_CONCURRENT"} {
+		if strings.TrimSpace(extractor[key]) == "" {
+			return fmt.Errorf("native browser adoption requires extractor setting %s", key)
+		}
+	}
+	if extractor["EXTRACTOR_SERVICE_TOKEN"] != background["EXTRACTION_SERVICE_TOKEN"] || (p.roles["domain"]["EXTRACTION_SERVICE_TOKEN"] != "" && p.roles["domain"]["EXTRACTION_SERVICE_TOKEN"] != extractor["EXTRACTOR_SERVICE_TOKEN"]) {
+		return errors.New("native browser extractor service credentials do not match across services")
+	}
+	if len(egress) == 0 || egress["EGRESS_TOKEN"] == "" || egress["EGRESS_TOKEN"] != extractor["EXTRACTOR_NATIVE_PROXY_TOKEN"] {
+		return errors.New("native browser adoption requires the matching isolated egress service")
+	}
+	return nil
+}
+
 func validateAdoptionParity(p adoptionPlan) error {
 	web, domain, bg, extract := p.roles["web"], p.roles["domain"], p.roles["background"], p.roles["extractor"]
 	if domain["AI_PROVIDER"] == "" {
@@ -119,7 +192,7 @@ func validateAdoptionParity(p adoptionPlan) error {
 		web["ADMIN_USERNAME"] = "admin"
 	}
 	if web["JWT_SECRET"] == "" {
-		fallback := p.legacy["web"]["ADMIN_PASSWORD"]
+		fallback := p.legacy[p.services["web"]]["ADMIN_PASSWORD"]
 		if fallback == "" {
 			fallback = p.legacy["executor"]["ADMIN_PASSWORD"]
 		}
@@ -144,6 +217,25 @@ func validateAdoptionParity(p adoptionPlan) error {
 		return errors.New("scheduler database must use the dedicated scheduler_service schema")
 	}
 	return sameNewsDatabase(p.roles)
+}
+
+func validateAdoptionWebTransport(p adoptionPlan) error {
+	web := p.roles["web"]
+	site := strings.TrimSpace(web["SITE_BASE_URL"])
+	if site == "" {
+		return errors.New("adoption --apply requires SITE_BASE_URL in the canonical web configuration")
+	}
+	var proxies []string
+	for _, value := range strings.Split(web["TRUSTED_PROXY_CIDRS"], ",") {
+		if value = strings.TrimSpace(value); value != "" {
+			proxies = append(proxies, value)
+		}
+	}
+	localHTTP := web["LOCAL_HTTP_SETUP"] == "true"
+	if managedsetup.IsLoopbackHTTPOrigin(site) && localHTTP && !p.localHTTPPortsOK {
+		return errors.New("loopback HTTP adoption requires LOCAL_HTTP_SETUP=true and every published web port bound to loopback; otherwise use HTTPS with trusted proxy CIDRs")
+	}
+	return managedsetup.ValidateWebTransport(site, managedsetup.Options{TrustedProxyCIDRs: proxies}, localHTTP)
 }
 
 func sameNewsDatabase(roles map[string]map[string]string) error {
@@ -199,6 +291,9 @@ func adoptionCommand(ctx context.Context, l managedsetup.Layout, args []string) 
 	}
 	if *bootstrapPath == "" || *composeOutput == "" {
 		return errors.New("--bootstrap-input and --compose-output are required for --apply")
+	}
+	if err = validateAdoptionWebTransport(plan); err != nil {
+		return err
 	}
 	if err = preflightAdoptionRoles(ctx, plan); err != nil {
 		return err
@@ -322,14 +417,15 @@ func preflightAdoptionRoles(ctx context.Context, p adoptionPlan) error {
 			return errors.New("runtime database role preflight failed")
 		}
 		var superuser, bypass, createDB, createRole, ownsTarget, privilegedMember bool
-		ownerPredicate := `pg_has_role(current_user,d.datdba,'MEMBER') OR EXISTS (SELECT 1 FROM pg_namespace n WHERE n.nspname NOT IN ('pg_catalog','information_schema') AND pg_has_role(current_user,n.nspowner,'MEMBER')) OR EXISTS (SELECT 1 FROM pg_class c JOIN pg_namespace n ON n.oid=c.relnamespace WHERE n.nspname NOT IN ('pg_catalog','information_schema') AND pg_has_role(current_user,c.relowner,'MEMBER'))`
-		if role == "scheduler" {
-			ownerPredicate = `pg_has_role(current_user,d.datdba,'MEMBER') OR EXISTS (SELECT 1 FROM pg_namespace n WHERE n.nspname NOT IN ('pg_catalog','information_schema','scheduler_service') AND pg_has_role(current_user,n.nspowner,'MEMBER')) OR EXISTS (SELECT 1 FROM pg_class c JOIN pg_namespace n ON n.oid=c.relnamespace WHERE n.nspname NOT IN ('pg_catalog','information_schema','scheduler_service') AND pg_has_role(current_user,c.relowner,'MEMBER'))`
-		}
-		query := `SELECT r.rolsuper,r.rolbypassrls,r.rolcreatedb,r.rolcreaterole,(` + ownerPredicate + `),
+		err = pool.QueryRow(probeCtx, `SELECT r.rolsuper,r.rolbypassrls,r.rolcreatedb,r.rolcreaterole,
+			pg_has_role(current_user,d.datdba,'MEMBER'),
 			EXISTS(SELECT 1 FROM pg_roles inherited WHERE pg_has_role(current_user,inherited.oid,'MEMBER') AND (inherited.rolsuper OR inherited.rolbypassrls OR inherited.rolcreatedb OR inherited.rolcreaterole))
-			FROM pg_roles r CROSS JOIN pg_database d WHERE r.rolname=current_user AND d.datname=current_database()`
-		err = pool.QueryRow(probeCtx, query).Scan(&superuser, &bypass, &createDB, &createRole, &ownsTarget, &privilegedMember)
+			FROM pg_roles r CROSS JOIN pg_database d WHERE r.rolname=current_user AND d.datname=current_database()`).Scan(&superuser, &bypass, &createDB, &createRole, &ownsTarget, &privilegedMember)
+		if err == nil {
+			var ownsObjects bool
+			ownsObjects, err = adoptionRoleOwnsForbiddenObjects(probeCtx, pool, role == "scheduler")
+			ownsTarget = ownsTarget || ownsObjects
+		}
 		pool.Close()
 		cancel()
 		if err != nil {
@@ -340,6 +436,35 @@ func preflightAdoptionRoles(ctx context.Context, p adoptionPlan) error {
 		}
 	}
 	return nil
+}
+
+func adoptionRoleOwnsForbiddenObjects(ctx context.Context, pool *pgxpool.Pool, scheduler bool) (bool, error) {
+	ownerPredicate := `EXISTS (SELECT 1 FROM pg_namespace n WHERE n.nspname NOT IN ('pg_catalog','information_schema') AND pg_has_role(current_user,n.nspowner,'MEMBER')) OR EXISTS (SELECT 1 FROM pg_class c JOIN pg_namespace n ON n.oid=c.relnamespace WHERE n.nspname NOT IN ('pg_catalog','information_schema') AND pg_has_role(current_user,c.relowner,'MEMBER'))`
+	if scheduler {
+		ownerPredicate = `EXISTS (
+			SELECT 1 FROM pg_namespace n
+			WHERE n.nspname NOT IN ('pg_catalog','information_schema')
+			  AND pg_has_role(current_user,n.nspowner,'MEMBER')
+			  AND (n.nspname <> 'scheduler_service' OR n.nspowner<>(SELECT oid FROM pg_roles WHERE rolname=current_user))
+		) OR EXISTS (
+			SELECT 1 FROM pg_class c JOIN pg_namespace n ON n.oid=c.relnamespace
+			WHERE n.nspname NOT IN ('pg_catalog','information_schema')
+			  AND pg_has_role(current_user,c.relowner,'MEMBER')
+			  AND (n.nspname <> 'scheduler_service' OR c.relowner<>(SELECT oid FROM pg_roles WHERE rolname=current_user))
+			  AND NOT (n.nspname='pg_toast' AND EXISTS (
+				SELECT 1 FROM pg_class parent JOIN pg_namespace pn ON pn.oid=parent.relnamespace
+				WHERE pn.nspname='scheduler_service'
+				  AND parent.relowner=(SELECT oid FROM pg_roles WHERE rolname=current_user)
+				  AND (parent.reltoastrelid=c.oid OR EXISTS (
+					SELECT 1 FROM pg_index toast_index
+					WHERE toast_index.indexrelid=c.oid AND toast_index.indrelid=parent.reltoastrelid
+				  ))
+			  ))
+		)`
+	}
+	var owns bool
+	err := pool.QueryRow(ctx, `SELECT `+ownerPredicate).Scan(&owns)
+	return owns, err
 }
 
 func sameBootstrapDatabase(bootstrap string, roles map[string]map[string]string) error {
@@ -372,7 +497,7 @@ func applyAdoption(ctx context.Context, l managedsetup.Layout, p adoptionPlan, b
 	for key := range secretConfigKeys {
 		legacy[key] = p.legacy["executor"][key]
 	}
-	legacy["ADMIN_PASSWORD"] = p.legacy["web"]["ADMIN_PASSWORD"]
+	legacy["ADMIN_PASSWORD"] = p.legacy[p.services["web"]]["ADMIN_PASSWORD"]
 	if legacy["ADMIN_PASSWORD"] == "" {
 		legacy["ADMIN_PASSWORD"] = p.legacy["executor"]["ADMIN_PASSWORD"]
 	}
@@ -393,8 +518,11 @@ func applyAdoption(ctx context.Context, l managedsetup.Layout, p adoptionPlan, b
 		if e != nil || json.Unmarshal(rawDomain, &domainManifest) != nil {
 			return errors.New("staged domain state unavailable")
 		}
-		for role, file := range map[string]string{"web": "web.json", "domain": "domain.json", "background": "background.json", "extractor": "extractor.json"} {
+		for role, file := range map[string]string{"web": "web.json", "domain": "domain.json", "background": "background.json", "extractor": "extractor.json", "egress": "egress.json"} {
 			raw, e := os.ReadFile(filepath.Join(dir, file))
+			if role == "egress" && os.IsNotExist(e) && p.services[role] == "" {
+				continue
+			}
 			var manifest runtimeconfig.Manifest
 			if e != nil || json.Unmarshal(raw, &manifest) != nil || manifest.Service != role || manifest.InstallationID != p.id {
 				return errors.New("staged runtime state is ambiguous")
@@ -447,7 +575,11 @@ func applyAdoption(ctx context.Context, l managedsetup.Layout, p adoptionPlan, b
 		if err != nil {
 			return errors.New("adoption staging failed")
 		}
-		dir, _, err = managedsetup.StageAdoption(l.Setup, p.id, p.source, p.roles, adoptionPolicies, map[string][]byte{"import.json": secretBytes})
+		override, err := managedsetup.AdoptionComposeOverride(p.services)
+		if err != nil {
+			return errors.New("adoption Compose generation failed")
+		}
+		dir, _, err = managedsetup.StageAdoption(l.Setup, p.id, p.source, p.roles, adoptionPolicies, map[string][]byte{"import.json": secretBytes, "compose-override.yml": override})
 		if err != nil {
 			return err
 		}
@@ -490,9 +622,12 @@ func applyAdoption(ctx context.Context, l managedsetup.Layout, p adoptionPlan, b
 	if err != nil {
 		return errors.New("legacy data preservation preflight failed")
 	}
-	result, err := migration.Run(ctx, pool, false, false)
+	result, err := migration.RunAdoption(ctx, pool)
 	if err != nil || len(result.Errors) != 0 {
-		return errors.New("database migrations unavailable; required grants may be missing")
+		return errors.New("managed additive migration unavailable; verify schema ownership and provide the one-time bootstrap connection")
+	}
+	if err = verifyManagedRuntimeGrants(ctx, p.roles); err != nil {
+		return err
 	}
 	after, err := adoptionPreservationSnapshot(ctx, pool)
 	if err != nil || !equalStringMaps(before, after) {
@@ -506,7 +641,64 @@ func applyAdoption(ctx context.Context, l managedsetup.Layout, p adoptionPlan, b
 	if err = managedsetup.ActivateAdoption(l, dir, p.id, composeOutput, adoptionPolicies); err != nil {
 		return err
 	}
-	fmt.Printf("Adoption imported; role files are active. Start the existing project with its generated override: docker compose -f docker-compose.example.yml -f %s up -d\n", composeOutput)
+	fmt.Println("Adoption imported and role files activated. Start the News services with the same canonical Compose files used to create the protected input, plus the generated override.")
+	return nil
+}
+
+func verifyManagedRuntimeGrants(ctx context.Context, roles map[string]map[string]string) error {
+	type need struct{ table, privilege, column string }
+	needs := map[string][]need{
+		"web": {
+			{"installation_state", "SELECT", ""},
+			{"managed_admin", "SELECT", ""}, {"managed_admin", "INSERT", ""}, {"managed_admin", "UPDATE", ""}, {"managed_admin", "DELETE", ""},
+			{"setup_tokens", "SELECT", ""}, {"setup_tokens", "INSERT", ""}, {"setup_tokens", "UPDATE", ""}, {"setup_tokens", "DELETE", ""},
+			{"installation_state", "UPDATE", "onboarding_step"}, {"installation_state", "UPDATE", "onboarding_completed"}, {"installation_state", "UPDATE", "revision"}, {"installation_state", "UPDATE", "updated_at"},
+		},
+		"domain": {
+			{"installation_state", "SELECT", ""},
+			{"integration_credentials", "SELECT", ""}, {"integration_credentials", "INSERT", ""}, {"integration_credentials", "UPDATE", ""},
+		},
+	}
+	var missing []string
+	for service, required := range needs {
+		key := "DATABASE_URL"
+		if roles[service][key] == "" {
+			return fmt.Errorf("%s managed runtime database configuration unavailable", service)
+		}
+		pool, err := poolForDSN(ctx, roles[service][key])
+		if err != nil {
+			return fmt.Errorf("%s managed runtime role could not be verified", service)
+		}
+		var schema, roleName string
+		if err = pool.QueryRow(ctx, `SELECT current_schema(), current_user`).Scan(&schema, &roleName); err != nil || schema == "" || roleName == "" {
+			pool.Close()
+			return fmt.Errorf("%s managed runtime role could not be verified", service)
+		}
+		for _, n := range required {
+			var allowed bool
+			qualified := pgx.Identifier{schema, n.table}.Sanitize()
+			if n.column == "" {
+				err = pool.QueryRow(ctx, `SELECT has_table_privilege(current_user,$1,$2)`, qualified, n.privilege).Scan(&allowed)
+			} else {
+				err = pool.QueryRow(ctx, `SELECT has_column_privilege(current_user,$1,$2,$3)`, qualified, n.column, n.privilege).Scan(&allowed)
+			}
+			if err != nil {
+				pool.Close()
+				return fmt.Errorf("%s managed runtime grants could not be verified", service)
+			}
+			if !allowed {
+				if n.column == "" {
+					missing = append(missing, fmt.Sprintf("GRANT %s ON %s TO %s;", n.privilege, qualified, pgx.Identifier{roleName}.Sanitize()))
+				} else {
+					missing = append(missing, fmt.Sprintf("GRANT UPDATE (%s) ON %s TO %s;", pgx.Identifier{n.column}.Sanitize(), qualified, pgx.Identifier{roleName}.Sanitize()))
+				}
+			}
+		}
+		pool.Close()
+	}
+	if len(missing) != 0 {
+		return fmt.Errorf("managed adoption is missing runtime grants; review and apply these scoped grants before retrying: %s", strings.Join(missing, " "))
+	}
 	return nil
 }
 
@@ -670,11 +862,8 @@ func importEffectiveSettings(ctx context.Context, tx pgx.Tx, domain, background 
 	// Preserve existing DB overrides. Seed only keys whose old effective value
 	// came from the Compose environment so managed mode can remove that source.
 	for _, pair := range [][2]string{{"telegram_chat_id", domain["TELEGRAM_CHAT_ID"]}, {"telegram_service_chat_id", domain["TELEGRAM_SERVICE_CHAT_ID"]}} {
-		if pair[1] == "" {
-			continue
-		}
-		if _, err := tx.Exec(ctx, `INSERT INTO settings(key,value) VALUES($1,to_jsonb($2::text)) ON CONFLICT(key) DO NOTHING`, pair[0], pair[1]); err != nil {
-			return errors.New("effective setting import failed")
+		if err := importLegacyStringSetting(ctx, tx, pair[0], pair[1]); err != nil {
+			return err
 		}
 	}
 	// Operational bounds are independent from AI provider settings and must be
@@ -721,6 +910,36 @@ func importEffectiveSettings(ctx context.Context, tx pgx.Tx, domain, background 
 	}
 	if _, err = tx.Exec(ctx, `INSERT INTO settings(key,value) VALUES('ai_settings_revision',to_jsonb(1::bigint)) ON CONFLICT(key) DO NOTHING`); err != nil {
 		return errors.New("AI settings revision import failed")
+	}
+	return nil
+}
+
+func importLegacyStringSetting(ctx context.Context, tx pgx.Tx, key, envValue string) error {
+	var raw []byte
+	err := tx.QueryRow(ctx, `SELECT value FROM settings WHERE key=$1 FOR UPDATE`, key).Scan(&raw)
+	if errors.Is(err, pgx.ErrNoRows) {
+		if strings.TrimSpace(envValue) == "" {
+			return nil
+		}
+		if _, err = tx.Exec(ctx, `INSERT INTO settings(key,value) VALUES($1,to_jsonb($2::text))`, key, envValue); err != nil {
+			return errors.New("effective setting import failed")
+		}
+		return nil
+	}
+	if err != nil {
+		return errors.New("effective setting import failed")
+	}
+	var existing string
+	if string(raw) != "null" {
+		if err = json.Unmarshal(raw, &existing); err != nil {
+			return errors.New("effective setting import conflict")
+		}
+	}
+	if strings.TrimSpace(existing) != "" || strings.TrimSpace(envValue) == "" {
+		return nil
+	}
+	if _, err = tx.Exec(ctx, `UPDATE settings SET value=to_jsonb($2::text) WHERE key=$1`, key, envValue); err != nil {
+		return errors.New("effective setting import failed")
 	}
 	return nil
 }

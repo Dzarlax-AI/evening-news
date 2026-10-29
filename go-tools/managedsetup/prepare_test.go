@@ -4,6 +4,7 @@ import (
 	"encoding/json"
 	"os"
 	"path/filepath"
+	"strings"
 	"testing"
 )
 
@@ -97,5 +98,98 @@ func TestPublicProxyOptionsAreExplicitAndPersistent(t *testing.T) {
 		if (Options{TrustedProxyCIDRs: []string{v}}).Validate() == nil {
 			t.Fatal("invalid proxy accepted")
 		}
+	}
+}
+
+func TestPrepareNativeBrowserPersistsEgressAndRefusesTestOptionsBeforeWrites(t *testing.T) {
+	options := NativeBrowserOptions{
+		ExtractorValues: map[string]string{
+			"LISTEN_ADDR": ":8080", "EXTRACTOR_HTTP_ONLY": "false", "EXTRACTOR_BROWSER_BACKEND": "native",
+			"EXTRACTOR_NATIVE_NETWORK_ISOLATED": "true", "CHROME_ENDPOINT": "http://10.77.0.2:9222",
+			"EXTRACTOR_NATIVE_PROXY_URL": "http://10.77.0.5:8081", "EXTRACTOR_NATIVE_PROXY_TOKEN": "fixture-proxy-token-01",
+			"EXTRACTOR_MAX_CONCURRENT": "2", "EXTRACTOR_BROWSER_CONCURRENT": "2",
+		},
+		EgressValues:    map[string]string{"EGRESS_LISTEN_ADDR": "10.77.0.5:8081", "EGRESS_TOKEN": "fixture-proxy-token-01", "EGRESS_MAX_CONCURRENT": "4"},
+		ExtractorLimits: ContainerLimits{Init: true, ReadOnly: true, CapDrop: []string{"ALL"}, SecurityOpt: []string{"no-new-privileges:true"}, PidsLimit: 128, MemLimit: "256m", CPUs: 1, StopGracePeriod: "55s"},
+		EgressLimits:    ContainerLimits{Init: true, ReadOnly: true, CapDrop: []string{"ALL"}, SecurityOpt: []string{"no-new-privileges:true"}, PidsLimit: 64, MemLimit: "128m", CPUs: 0.25, StopGracePeriod: "10s"},
+		ControlNetwork:  "control", ControlName: "fixture-control", OutboundNetwork: "outbound", OutboundName: "fixture-outbound",
+		ExtractorIP: "10.77.0.4", EgressIP: "10.77.0.5",
+	}
+	l := testLayout(t)
+	l.Egress = filepath.Join(filepath.Dir(l.Setup), "egress")
+	l.EgressUID = -1
+	if _, err := PrepareWithOptions(l, "http://localhost:8000", Options{NativeBrowser: &options}); err != nil {
+		t.Fatal(err)
+	}
+	state, err := ReadState(l.Setup)
+	if err != nil || !sameOptions(state.Options, Options{NativeBrowser: &options}) {
+		t.Fatal("native browser state not persisted", err)
+	}
+	var background struct {
+		Values map[string]string `json:"values"`
+	}
+	for role, target := range map[string]string{"background": filepath.Join(l.Background, "runtime.json"), "egress": filepath.Join(l.Egress, "runtime.json")} {
+		raw, err := os.ReadFile(target)
+		if err != nil || json.Unmarshal(raw, &background) != nil {
+			t.Fatalf("%s runtime state unavailable: %v", role, err)
+		}
+		if role == "background" && background.Values["EXTRACTION_SERVICE_NATIVE_BROWSER"] != "true" {
+			t.Fatal("native browser flag missing from background")
+		}
+		if role == "egress" && background.Values["EGRESS_TOKEN"] != "fixture-proxy-token-01" {
+			t.Fatal("egress runtime manifest missing")
+		}
+	}
+	bad := options
+	bad.EgressValues = map[string]string{}
+	for key, value := range options.EgressValues {
+		bad.EgressValues[key] = value
+	}
+	bad.EgressValues["EGRESS_TEST_MODE"] = "true"
+	reject := testLayout(t)
+	if _, err = PrepareWithOptions(reject, "http://localhost:8000", Options{NativeBrowser: &bad}); err == nil {
+		t.Fatal("test-only egress settings accepted")
+	}
+	if _, err = os.Stat(filepath.Join(reject.Setup, "installation.json")); !os.IsNotExist(err) {
+		t.Fatal("invalid native options wrote installer state")
+	}
+	copyValues := func(values map[string]string) map[string]string {
+		copied := make(map[string]string, len(values))
+		for key, value := range values {
+			copied[key] = value
+		}
+		return copied
+	}
+	for name, mutate := range map[string]func(*NativeBrowserOptions){
+		"short-token": func(o *NativeBrowserOptions) {
+			o.EgressValues["EGRESS_TOKEN"] = "short-token"
+			o.ExtractorValues["EXTRACTOR_NATIVE_PROXY_TOKEN"] = "short-token"
+		},
+		"long-token": func(o *NativeBrowserOptions) {
+			token := strings.Repeat("x", 257)
+			o.EgressValues["EGRESS_TOKEN"] = token
+			o.ExtractorValues["EXTRACTOR_NATIVE_PROXY_TOKEN"] = token
+		},
+		"proxy-path":      func(o *NativeBrowserOptions) { o.ExtractorValues["EXTRACTOR_NATIVE_PROXY_URL"] += "path" },
+		"proxy-query":     func(o *NativeBrowserOptions) { o.ExtractorValues["EXTRACTOR_NATIVE_PROXY_URL"] += "?mode=bad" },
+		"proxy-fragment":  func(o *NativeBrowserOptions) { o.ExtractorValues["EXTRACTOR_NATIVE_PROXY_URL"] += "#bad" },
+		"proxy-opaque":    func(o *NativeBrowserOptions) { o.ExtractorValues["EXTRACTOR_NATIVE_PROXY_URL"] = "http:10.77.0.5:8081" },
+		"chrome-query":    func(o *NativeBrowserOptions) { o.ExtractorValues["CHROME_ENDPOINT"] += "?mode=bad" },
+		"chrome-fragment": func(o *NativeBrowserOptions) { o.ExtractorValues["CHROME_ENDPOINT"] += "#bad" },
+		"chrome-opaque":   func(o *NativeBrowserOptions) { o.ExtractorValues["CHROME_ENDPOINT"] = "http:10.77.0.2:9222" },
+	} {
+		t.Run(name, func(t *testing.T) {
+			invalid := options
+			invalid.ExtractorValues = copyValues(options.ExtractorValues)
+			invalid.EgressValues = copyValues(options.EgressValues)
+			mutate(&invalid)
+			layout := testLayout(t)
+			if _, err := PrepareWithOptions(layout, "http://localhost:8000", Options{NativeBrowser: &invalid}); err == nil {
+				t.Fatal("invalid native configuration accepted")
+			}
+			if _, err := os.Stat(filepath.Join(layout.Setup, "installation.json")); !os.IsNotExist(err) {
+				t.Fatal("rejected native configuration wrote installer state")
+			}
+		})
 	}
 }

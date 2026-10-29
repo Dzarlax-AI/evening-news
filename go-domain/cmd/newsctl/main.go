@@ -28,7 +28,7 @@ func main() {
 	}
 }
 func layout() managedsetup.Layout {
-	return managedsetup.Layout{Setup: "/state/setup", Web: "/state/web", Domain: "/state/domain", Background: "/state/background", Extractor: "/state/extractor", Postgres: "/state/pg", PostgresSecrets: "/state/postgres-secret", WebUID: 65532, DomainUID: 10001, BackgroundUID: 65532, ExtractorUID: 65532}
+	return managedsetup.Layout{Setup: "/state/setup", Web: "/state/web", Domain: "/state/domain", Background: "/state/background", Extractor: "/state/extractor", Egress: "/state/egress", Postgres: "/state/pg", PostgresSecrets: "/state/postgres-secret", WebUID: 65532, DomainUID: 10001, BackgroundUID: 65532, ExtractorUID: 65532, EgressUID: 65532}
 }
 func run(args []string) error {
 	if len(args) < 1 {

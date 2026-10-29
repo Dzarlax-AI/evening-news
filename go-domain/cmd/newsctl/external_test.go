@@ -48,6 +48,52 @@ func TestReadExternalInputRequiresPrivateStrictBundle(t *testing.T) {
 	}
 }
 
+func TestPrepareCommandRejectsUnsafeHostedTransportBeforeWrites(t *testing.T) {
+	t.Setenv("SITE_BASE_URL", "https://news.example.invalid")
+	for _, tt := range []struct {
+		name    string
+		options string
+		want    string
+	}{
+		{name: "missing proxy", options: `{}`, want: "trusted proxy CIDRs"},
+		{name: "invalid proxy", options: `{"trusted_proxy_cidrs":["0.0.0.0/0"]}`, want: "invalid trusted proxy CIDR"},
+	} {
+		t.Run(tt.name, func(t *testing.T) {
+			root := t.TempDir()
+			optionsPath := filepath.Join(root, "options.json")
+			if err := os.WriteFile(optionsPath, []byte(tt.options), 0600); err != nil {
+				t.Fatal(err)
+			}
+			setup := filepath.Join(root, "setup")
+			layout := managedsetup.Layout{Setup: setup}
+			err := prepareCommand(context.Background(), layout, []string{"--options", optionsPath})
+			if err == nil || !strings.Contains(err.Error(), tt.want) {
+				t.Fatalf("prepare did not reject unsafe hosted transport: %v", err)
+			}
+			if _, statErr := os.Lstat(setup); !os.IsNotExist(statErr) {
+				t.Fatal("rejected web transport created installer state")
+			}
+		})
+	}
+}
+
+func TestPrepareCommandRejectsUnsupportedLoopbackHTTPHostsBeforeWrites(t *testing.T) {
+	for _, site := range []string{"http://127.0.0.2:8000", "http://localhost.:8000"} {
+		t.Run(site, func(t *testing.T) {
+			t.Setenv("SITE_BASE_URL", site)
+			root := t.TempDir()
+			setup := filepath.Join(root, "setup")
+			err := prepareCommand(context.Background(), managedsetup.Layout{Setup: setup}, nil)
+			if err == nil || !strings.Contains(err.Error(), "HTTPS") {
+				t.Fatalf("prepare accepted unsupported local HTTP host: %v", err)
+			}
+			if _, statErr := os.Lstat(setup); !os.IsNotExist(statErr) {
+				t.Fatal("rejected local HTTP host created installer state")
+			}
+		})
+	}
+}
+
 func TestExternalInstallPostgresFixture(t *testing.T) {
 	adminDSN := os.Getenv("NEWS_INSTALLER_TEST_DATABASE_URL")
 	if adminDSN == "" {
