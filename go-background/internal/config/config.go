@@ -11,6 +11,7 @@ import (
 	"time"
 
 	execution "github.com/Dzarlax-AI/evening-news/go-execution"
+	orchestration "github.com/Dzarlax-AI/evening-news/go-execution/orchestration"
 	ingestion "github.com/Dzarlax-AI/evening-news/go-ingestion/runner"
 	processing "github.com/Dzarlax-AI/evening-news/go-processing/runner"
 	scheduler "github.com/Dzarlax-AI/evening-news/go-scheduler/runner"
@@ -21,6 +22,8 @@ var ErrInvalidConfig = errors.New("background configuration is invalid")
 var configKeyPattern = regexp.MustCompile(`[A-Z][A-Z0-9_]{2,}`)
 
 type Config struct {
+	ManagedMode         bool
+	PrepareJob          orchestration.JobConfigPreparer
 	Worker              worker.Config
 	Scheduler           scheduler.Config
 	Ingestion           ingestion.Config

@@ -135,6 +135,17 @@ func validateSettings(v AISettings) error {
 }
 func (s *Server) GetAISettings(ctx context.Context) (AISettings, error) {
 	out := s.defaultAISettings()
+	if s.credentials != nil {
+		gem, err := s.credentials.Metadata(ctx, "gemini")
+		if err != nil {
+			return AISettings{}, err
+		}
+		open, err := s.credentials.Metadata(ctx, "openai")
+		if err != nil {
+			return AISettings{}, err
+		}
+		out.Configured = AIConfigured{Gemini: gem.Configured, OpenAI: open.Configured}
+	}
 	if s.db == nil {
 		return out, nil
 	}
@@ -163,7 +174,16 @@ func (s *Server) UpdateAISettings(ctx context.Context, in AISettingsUpdate) (AIS
 	if in.ExpectedRevision < 0 || s.db == nil {
 		return AISettings{}, ErrAISettingsInvalid
 	}
-	target := s.defaultAISettings()
+	target, err := s.GetAISettings(ctx)
+	if err != nil {
+		return AISettings{}, err
+	}
+	if in.ResetToEnv {
+		defaults := s.defaultAISettings()
+		target.ActiveProvider = defaults.ActiveProvider
+		target.Profiles = defaults.Profiles
+		target.Source = defaults.Source
+	}
 	if !in.ResetToEnv {
 		target.ActiveProvider = in.ActiveProvider
 		target.Profiles = in.Profiles
@@ -221,7 +241,19 @@ func (s *Server) ValidateAISettings(ctx context.Context) error {
 	if err != nil {
 		return err
 	}
-	return validateSettings(settings)
+	if err = validateSettings(settings); err != nil {
+		return err
+	}
+	if s.credentials != nil {
+		secret, meta, e := s.credentials.Resolve(ctx, settings.ActiveProvider)
+		if e != nil {
+			return e
+		}
+		if !meta.Configured || len(secret) == 0 {
+			return ErrAISettingsInvalid
+		}
+	}
+	return nil
 }
 
 // StartupAISettings permits management-only recovery when a valid persisted
@@ -233,6 +265,9 @@ func (s *Server) StartupAISettings(ctx context.Context) (bool, error) {
 	}
 	if err = validateSettings(settings); err == nil {
 		return false, nil
+	}
+	if s.credentials != nil && validateSettingsShape(settings) == nil {
+		return true, nil
 	}
 	if settings.Source == "override" && validateSettingsShape(settings) == nil && validateSettings(s.defaultAISettings()) == nil {
 		return true, nil

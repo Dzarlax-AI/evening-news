@@ -47,7 +47,20 @@ func run() error {
 		return err
 	}
 	defer db.Close()
-	authService := auth.New(auth.Config{Username: cfg.AdminUsername, Password: cfg.AdminPassword, JWTSecret: cfg.JWTSecret, Development: cfg.Development, TrustForwardAuth: cfg.TrustForwardAuth})
+	if cfg.Managed {
+		check, cancel := context.WithTimeout(context.Background(), 3*time.Second)
+		var id string
+		var complete bool
+		err := db.Pool().QueryRow(check, `SELECT installation_id,provisioning_complete FROM installation_state WHERE id=1`).Scan(&id, &complete)
+		cancel()
+		if err != nil || id != cfg.InstallationID || !complete {
+			return errors.New("managed installation is not activated")
+		}
+	}
+	authService := auth.New(auth.Config{Username: cfg.AdminUsername, Password: cfg.AdminPassword, JWTSecret: cfg.JWTSecret, Development: cfg.Development || cfg.LocalHTTPSetup, TrustForwardAuth: cfg.TrustForwardAuth})
+	if cfg.Managed {
+		authService.UseManaged(auth.NewManagedStore(db.Pool(), cfg.InstallationID))
+	}
 	started := time.Now().UTC()
 	ui := httpui.New(httpui.Config{Reader: db, PublicAdmin: func(r *http.Request) bool { _, ok := authService.PublicAdmin(r); return ok }, TemplatesDir: "templates", StaticDir: "../web/static", StartedAt: started, Version: "2.0.0"})
 	mux := http.NewServeMux()
@@ -55,6 +68,9 @@ func run() error {
 		return err
 	}
 	ui.Register(mux)
+	if cfg.Managed {
+		httpui.RegisterSetup(mux, authService, db.Pool(), cfg.InstallationID)
+	}
 	authService.Register(mux)
 	httpui.RegisterAdmin(mux, authService, ui)
 	jobStore := repositories.NewJobRepository(db.Pool())
@@ -65,6 +81,9 @@ func run() error {
 		return err
 	}
 	managementService := management.New(managementRepository, jobService, privateOps)
+	if cfg.Managed {
+		managementService.SetJobPreflight(management.NewConfigurationPreflight(privateOps))
+	}
 	httpui.RegisterManagement(mux, httpui.ManagementConfig{
 		Service: managementService, Auth: authService,
 		PublicAdmin:               func(r *http.Request) bool { _, ok := authService.PublicAdmin(r); return ok },
@@ -75,7 +94,15 @@ func run() error {
 		EditorialDigestStatus:     db.EditorialDigestStatus,
 	})
 	httpui.RegisterBackend(mux, authService, privateOps)
-	schedules.NewHandlerFromEnv(repositories.NewScheduleJobsSnapshot(db.Pool())).Register(mux, authService)
+	if cfg.Managed {
+		client, err := schedules.NewClient(schedules.ClientConfig{Endpoint: cfg.SchedulerURL, Token: cfg.SchedulerToken, AllowHTTP: cfg.SchedulerAllowHTTP, Timeout: 5 * time.Second})
+		if err != nil {
+			return err
+		}
+		schedules.NewManagedHandler(schedules.NewRoot(client, repositories.NewScheduleJobsSnapshot(db.Pool()), nil)).Register(mux, authService)
+	} else {
+		schedules.NewHandlerFromEnv(repositories.NewScheduleJobsSnapshot(db.Pool())).Register(mux, authService)
+	}
 	trustedProxies := make([]*net.IPNet, 0, len(cfg.TrustedProxyCIDRs))
 	for _, cidr := range cfg.TrustedProxyCIDRs {
 		_, block, e := net.ParseCIDR(cidr)
@@ -84,7 +111,11 @@ func run() error {
 		}
 		trustedProxies = append(trustedProxies, block)
 	}
-	handler, err := (transport.Policy{TrustedHosts: cfg.TrustedHosts, AllowedOrigins: cfg.AllowedOrigins, TrustedProxies: trustedProxies, PublicOrigin: cfg.SiteBaseURL, Development: cfg.Development, RequestTimeout: 30 * time.Second}).Wrap(mux)
+	var routes http.Handler = mux
+	if cfg.Managed {
+		routes = auth.ProtectManagedCookies(routes)
+	}
+	handler, err := (transport.Policy{TrustedHosts: cfg.TrustedHosts, AllowedOrigins: cfg.AllowedOrigins, TrustedProxies: trustedProxies, PublicOrigin: cfg.SiteBaseURL, Development: cfg.Development, LocalHTTPSetup: cfg.LocalHTTPSetup, RequestTimeout: 30 * time.Second}).Wrap(routes)
 	if err != nil {
 		return err
 	}

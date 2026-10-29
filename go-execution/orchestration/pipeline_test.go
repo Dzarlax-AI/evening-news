@@ -656,6 +656,68 @@ func TestDigestLostPublishAckAfterRestartIsNeverResent(t *testing.T) {
 	}
 }
 
+func TestOptionalOperationalPreparePreservesLegacyAndSkipsDisabledDelivery(t *testing.T) {
+	t.Run("legacy has no prepare hook and retains digest behavior", func(t *testing.T) {
+		f := &fakeServices{}
+		p := testPipeline(t, f)
+		result, err := p.Execute(context.Background(), testFence(), "telegram_digest", json.RawMessage(`{}`))
+		if err != nil {
+			t.Fatal(err)
+		}
+		var got map[string]any
+		if json.Unmarshal(result.Value, &got) != nil || got["parts_sent"] != float64(2) {
+			t.Fatalf("legacy digest result=%s", result.Value)
+		}
+		f.mu.Lock()
+		defer f.mu.Unlock()
+		if f.postCount == 0 || !contains(f.calls, "digest_publish") {
+			t.Fatalf("legacy digest did not reach its domain operations: posts=%d calls=%v", f.postCount, f.calls)
+		}
+	})
+
+	t.Run("managed delivery disabled makes no delivery operation request", func(t *testing.T) {
+		f := &fakeServices{}
+		srv := newFakeServer(t, f)
+		defer srv.Close()
+		p, err := NewPipeline(Config{
+			Domain:     DomainConfig{BaseURL: srv.URL, Token: "domain-token"},
+			Ingestion:  ServiceConfig{URL: srv.URL, Token: "job-token"},
+			Processing: ServiceConfig{URL: srv.URL, Token: "job-token"},
+			PrepareJob: func(_ context.Context, fence execution.ExecutionContext) (JobOperationalConfig, error) {
+				return JobOperationalConfig{
+					JobID: fence.JobID, AttemptGeneration: fence.AttemptGeneration, PinnedAt: time.Now().UTC(),
+					Settings: OperationalSettings{Revision: 1, MaxArticles: 50, PerSource: 50, Days: 1, ProcessingEnabled: true, DeliveryEnabled: false},
+				}, nil
+			},
+		})
+		if err != nil {
+			t.Fatal(err)
+		}
+		result, err := p.Execute(context.Background(), testFence(), "telegram_digest", json.RawMessage(`{}`))
+		if err != nil {
+			t.Fatal(err)
+		}
+		var got map[string]any
+		if json.Unmarshal(result.Value, &got) != nil || got["status"] != "delivery_disabled" || got["parts_sent"] != float64(0) {
+			t.Fatalf("disabled delivery result=%s", result.Value)
+		}
+		f.mu.Lock()
+		defer f.mu.Unlock()
+		if f.statusCount != 1 || f.postCount != 0 || len(f.calls) != 0 || f.publishCount != 0 {
+			t.Fatalf("disabled delivery performed domain work: status=%d posts=%d calls=%v published=%d", f.statusCount, f.postCount, f.calls, f.publishCount)
+		}
+	})
+}
+
+func contains(values []string, want string) bool {
+	for _, value := range values {
+		if value == want {
+			return true
+		}
+	}
+	return false
+}
+
 func TestDomainPollingCancellationDoesNotResubmit(t *testing.T) {
 	f := &fakeServices{pendingDomain: true}
 	srv := newFakeServer(t, f)

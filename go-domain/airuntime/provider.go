@@ -6,10 +6,10 @@ import (
 	"strings"
 	"time"
 
+	"github.com/Dzarlax-AI/evening-news/go-domain/analysis"
 	ai "github.com/Dzarlax-AI/go-ai"
 	"github.com/Dzarlax-AI/go-ai/providers/gemini"
 	"github.com/Dzarlax-AI/go-ai/providers/openai"
-	"github.com/Dzarlax-AI/evening-news/go-domain/analysis"
 )
 
 type providerSnapshot struct {
@@ -31,6 +31,13 @@ func (s *Server) snapshot(ctx context.Context, purpose string) (providerSnapshot
 	if settings.ActiveProvider == "openai" {
 		profile = settings.Profiles.OpenAI
 		key, endpoint = s.config.OpenAIKey, s.config.OpenAIEndpoint
+	}
+	if s.credentials != nil {
+		secret, _, resolveErr := s.credentials.Resolve(ctx, settings.ActiveProvider)
+		if resolveErr != nil || len(secret) == 0 {
+			return providerSnapshot{}, ErrAISettingsInvalid
+		}
+		key = string(secret)
 	}
 	model := profile.Models.Text
 	if purpose == "article" {

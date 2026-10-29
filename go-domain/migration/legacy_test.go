@@ -121,18 +121,18 @@ func TestBootstrapAndRerun(t *testing.T) {
 		id, _ := item["id"].(string)
 		migrationIDs[id] = true
 	}
-	for _, id := range []string{"009_background_jobs", "010_scheduled_job_metadata", "012_article_ingestion", "013_article_processing", "014_editorial_digest", "015_digest_delivery"} {
+	for _, id := range []string{"009_background_jobs", "010_scheduled_job_metadata", "012_article_ingestion", "013_article_processing", "014_editorial_digest", "015_digest_delivery", "016_managed_configuration"} {
 		if !migrationIDs[id] {
 			t.Fatalf("required migration %s did not run", id)
 		}
 	}
 	if migrationIDs["006_feed_performance_optimization"] {
-		if len(migrationIDs) != 7 {
+		if len(migrationIDs) != 8 {
 			t.Fatalf("unexpected migration set: %+v", first.MigrationsRun)
 		}
 	} else {
 		var siblingIndex bool
-		if err = pool.QueryRow(ctx, `SELECT EXISTS (SELECT 1 FROM pg_indexes WHERE schemaname<>current_schema() AND indexname='idx_articles_fetched_at_desc')`).Scan(&siblingIndex); err != nil || !siblingIndex || len(migrationIDs) != 6 {
+		if err = pool.QueryRow(ctx, `SELECT EXISTS (SELECT 1 FROM pg_indexes WHERE schemaname<>current_schema() AND indexname='idx_articles_fetched_at_desc')`).Scan(&siblingIndex); err != nil || !siblingIndex || len(migrationIDs) != 7 {
 			t.Fatalf("006 was skipped without legacy sibling-index condition: %v", err)
 		}
 	}

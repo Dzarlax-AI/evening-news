@@ -91,6 +91,16 @@ func (w *Worker) Run(ctx context.Context) error {
 	stopShutdown := context.AfterFunc(ctx, cancelClaims)
 	defer stopShutdown()
 
+	if w.config.BeforeRecovery != nil {
+		for {
+			if err := w.config.BeforeRecovery(claimCtx); err == nil {
+				break
+			}
+			if err := sleep(claimCtx, w.config.PollInterval); err != nil {
+				return err
+			}
+		}
+	}
 	if err := w.recoverBeforeClaim(claimCtx); err != nil {
 		return err
 	}

@@ -7,6 +7,7 @@ import (
 	"net/http"
 	"time"
 
+	"github.com/Dzarlax-AI/evening-news/go-domain/appsettings"
 	"github.com/Dzarlax-AI/evening-news/go-domain/digestworkflow"
 	"github.com/Dzarlax-AI/evening-news/go-domain/telegramdelivery"
 )
@@ -63,7 +64,18 @@ func (s *Server) SendServiceTest(ctx context.Context, text string) (telegramdeli
 	return s.sendTelegram(ctx, telegramRequest{Channel: "service", Method: "sendMessage", Text: text})
 }
 func (s *Server) sendTelegram(ctx context.Context, v telegramRequest) (telegramdelivery.Result, error) {
-	if (v.Channel != "main" && v.Channel != "service") || (v.Method != "sendMessage" && v.Method != "sendRichMessage") || v.Text == "" || len(v.Text) > 1<<20 || s.config.TelegramToken == "" {
+	if (v.Channel != "main" && v.Channel != "service") || (v.Method != "sendMessage" && v.Method != "sendRichMessage") || v.Text == "" || len(v.Text) > 1<<20 {
+		return telegramdelivery.Result{}, errors.New("invalid_input")
+	}
+	token := s.config.TelegramToken
+	if s.credentials != nil {
+		secret, _, err := s.credentials.Resolve(ctx, "telegram")
+		if err != nil {
+			return telegramdelivery.Result{}, err
+		}
+		token = string(secret)
+	}
+	if token == "" {
 		return telegramdelivery.Result{}, errors.New("invalid_input")
 	}
 	var mainOverride, serviceOverride string
@@ -91,13 +103,21 @@ func (s *Server) sendTelegram(ctx context.Context, v telegramRequest) (telegramd
 			}
 			rows.Close()
 		}
+		if queryErr != nil && s.credentials != nil {
+			return telegramdelivery.Result{}, errors.New("settings_unavailable")
+		}
 		if queryErr != nil {
 			mainOverride = ""
 			serviceOverride = ""
 		}
 	}
 
-	main, service, err := digestworkflow.Destinations(mainOverride, serviceOverride, s.config.TelegramMain, s.config.TelegramService)
+	mainDefault, serviceDefault := s.config.TelegramMain, s.config.TelegramService
+	if s.credentials != nil {
+		// Empty managed destinations are authoritative, including after deletion.
+		mainDefault, serviceDefault = "", ""
+	}
+	main, service, err := digestworkflow.Destinations(mainOverride, serviceOverride, mainDefault, serviceDefault)
 	if err != nil {
 		return telegramdelivery.Result{}, errors.New("invalid_input")
 	}
@@ -122,5 +142,16 @@ func (s *Server) sendTelegram(ctx context.Context, v telegramRequest) (telegramd
 		}
 		payload = data
 	}
-	return (telegramdelivery.Transport{Client: s.client, Admission: s.limiter, Endpoint: s.config.TelegramEndpoint, Token: s.config.TelegramToken}).Send(ctx, v.Method, payload), nil
+	return (telegramdelivery.Transport{Client: s.client, Admission: s.limiter, Endpoint: s.config.TelegramEndpoint, Token: token}).Send(ctx, v.Method, payload), nil
+}
+
+// managedDestination is read before provider admission and does not revive a
+// legacy environment destination after an operator clears managed settings.
+func (s *Server) managedDestination(ctx context.Context) (string, error) {
+	settings, err := (appsettings.Store{Pool: s.db}).Telegram(ctx)
+	if err != nil {
+		return "", err
+	}
+	main, _, err := digestworkflow.Destinations(settings.ChatID, settings.ServiceChatID, "", "")
+	return main, err
 }

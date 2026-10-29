@@ -6,6 +6,7 @@ import (
 	"encoding/json"
 	"fmt"
 	"github.com/Dzarlax-AI/evening-news/go-domain/airuntime"
+	"github.com/Dzarlax-AI/evening-news/go-domain/credentialstore"
 	"github.com/Dzarlax-AI/evening-news/go-domain/migration"
 	"github.com/Dzarlax-AI/evening-news/go-domain/privateapi"
 	"github.com/Dzarlax-AI/evening-news/go-domain/telegramdelivery"
@@ -24,12 +25,21 @@ type Server struct {
 	Guard                                            Guard
 	Pool                                             *pgxpool.Pool
 	Runtime                                          *airuntime.Server
+	Credentials                                      *credentialstore.Store
 	Worker, AllowCreateAll                           bool
 	BackupRoot, TelegramToken, ChatID, ServiceChatID string
 }
 
 func (s *Server) Handler() http.Handler {
 	mux := http.NewServeMux()
+	mux.HandleFunc("GET /internal/web/v1/configuration/telegram", s.telegramConfiguration)
+	mux.HandleFunc("PUT /internal/web/v1/configuration/telegram", s.telegramConfiguration)
+	mux.HandleFunc("GET /internal/web/v1/configuration/operational", s.operationalConfiguration)
+	mux.HandleFunc("PUT /internal/web/v1/configuration/operational", s.operationalConfiguration)
+	mux.HandleFunc("GET /internal/web/v1/configuration/readiness", s.configurationReadiness)
+	mux.HandleFunc("GET /internal/web/v1/credentials/{provider}", s.credential)
+	mux.HandleFunc("PUT /internal/web/v1/credentials/{provider}", s.credential)
+	mux.HandleFunc("DELETE /internal/web/v1/credentials/{provider}", s.credential)
 	mux.HandleFunc("GET /internal/web/v1/ai/settings", s.aiSettingsGet)
 	mux.HandleFunc("PUT /internal/web/v1/ai/settings", s.aiSettingsPut)
 	mux.HandleFunc("POST /internal/web/v1/categories/ai-category-analysis", s.categoryAnalysis)

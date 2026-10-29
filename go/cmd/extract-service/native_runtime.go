@@ -12,16 +12,20 @@ import (
 )
 
 func configuredNativeBrowser(httpOnly bool, endpoint string, workers int) (*transport.NativeBrowser, error) {
-	backend := os.Getenv("EXTRACTOR_BROWSER_BACKEND")
-	proxy := os.Getenv("EXTRACTOR_NATIVE_PROXY_URL")
-	token := os.Getenv("EXTRACTOR_NATIVE_PROXY_TOKEN")
-	isolation := os.Getenv("EXTRACTOR_NATIVE_NETWORK_ISOLATED")
-	selector := os.Getenv("EXTRACTOR_NATIVE_READY_SELECTOR")
+	return configuredNativeBrowserFrom(os.Getenv, httpOnly, endpoint, workers)
+}
+
+func configuredNativeBrowserFrom(get func(string) string, httpOnly bool, endpoint string, workers int) (*transport.NativeBrowser, error) {
+	backend := get("EXTRACTOR_BROWSER_BACKEND")
+	proxy := get("EXTRACTOR_NATIVE_PROXY_URL")
+	token := get("EXTRACTOR_NATIVE_PROXY_TOKEN")
+	isolation := get("EXTRACTOR_NATIVE_NETWORK_ISOLATED")
+	selector := get("EXTRACTOR_NATIVE_READY_SELECTOR")
 	diagnostic := nativeDiagnosticLogger(nativeDiagnosticsEnabled(
-		os.Getenv("EXTRACTOR_NATIVE_DIAGNOSTICS"), selector))
+		get("EXTRACTOR_NATIVE_DIAGNOSTICS"), selector))
 	if httpOnly {
 		if backend != "" || proxy != "" || token != "" || isolation != "" || selector != "" ||
-			os.Getenv("EXTRACTOR_NATIVE_DIAGNOSTICS") != "" {
+			get("EXTRACTOR_NATIVE_DIAGNOSTICS") != "" {
 			return nil, errors.New("native configuration forbidden in HTTP-only mode")
 		}
 		return nil, nil

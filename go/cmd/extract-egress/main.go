@@ -17,6 +17,7 @@ import (
 	"time"
 
 	"github.com/Dzarlax-AI/evening-news/go/egress"
+	"github.com/Dzarlax-AI/evening-news/go/runtimefile"
 	"golang.org/x/net/netutil"
 )
 
@@ -114,7 +115,11 @@ func loadConfig(get func(string) string) (string, egress.Config, error) {
 func run() error {
 	healthcheck := flag.Bool("healthcheck", false, "check local readiness and exit")
 	flag.Parse()
-	addr, cfg, err := loadConfig(os.Getenv)
+	get, err := runtimefile.FromEnvironment("egress")
+	if err != nil {
+		return err
+	}
+	addr, cfg, err := loadConfig(get)
 	if err != nil {
 		return err
 	}

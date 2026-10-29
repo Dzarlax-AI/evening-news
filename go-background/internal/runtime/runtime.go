@@ -286,6 +286,7 @@ func runExecution(ctx context.Context, cfg config.Config, onReady func(bool)) er
 		Domain:     domainConfig(cfg),
 		Ingestion:  orchestration.ServiceConfig{URL: localServiceURL(cfg.Ingestion.ListenAddr), Token: cfg.Ingestion.Token},
 		Processing: orchestration.ServiceConfig{URL: localServiceURL(cfg.Processing.ListenAddr), Token: cfg.Processing.Token},
+		PrepareJob: cfg.PrepareJob,
 	})
 	if err != nil {
 		return errors.New("execution pipeline configuration is invalid")
@@ -388,6 +389,9 @@ func run(ctx context.Context, cfg config.Config, deps dependencies) error {
 	}
 	if ctx.Err() != nil {
 		return nil
+	}
+	if cfg.ManagedMode {
+		cfg.PrepareJob, cfg.Processing.LoadOperationalSnapshot = operationalCallbacks(cfg.DomainServiceURL, cfg.Execution.Token)
 	}
 
 	state := newState(cfg.BuildID)

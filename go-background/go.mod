@@ -3,6 +3,7 @@ module github.com/Dzarlax-AI/evening-news/go-background
 go 1.25.6
 
 require (
+ github.com/Dzarlax-AI/evening-news/go-tools v0.0.0
 	github.com/Dzarlax-AI/evening-news/go-ingestion v0.0.0
 	github.com/Dzarlax-AI/evening-news/go-processing v0.0.0
 	github.com/Dzarlax-AI/evening-news/go-scheduler v0.0.0
@@ -30,3 +31,5 @@ replace github.com/Dzarlax-AI/evening-news/go-scheduler => ../go-scheduler
 replace github.com/Dzarlax-AI/evening-news/go-worker => ../go-worker
 
 replace github.com/Dzarlax-AI/evening-news/go-execution => ../go-execution
+
+replace github.com/Dzarlax-AI/evening-news/go-tools => ../go-tools

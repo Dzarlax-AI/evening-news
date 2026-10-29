@@ -19,20 +19,23 @@ import (
 
 	"github.com/Dzarlax-AI/evening-news/go/extractor"
 	"github.com/Dzarlax-AI/evening-news/go/pipeline"
+	"github.com/Dzarlax-AI/evening-news/go/runtimefile"
 	"github.com/Dzarlax-AI/evening-news/go/service"
 	"github.com/Dzarlax-AI/evening-news/go/transport"
 )
 
 var buildVersion = "dev"
 
-func env(key, fallback string) string {
-	if s := os.Getenv(key); s != "" {
+func env(key, fallback string) string { return envFrom(os.Getenv, key, fallback) }
+func envFrom(get func(string) string, key, fallback string) string {
+	if s := get(key); s != "" {
 		return s
 	}
 	return fallback
 }
-func envInt(key string, fallback int) (int, error) {
-	s := os.Getenv(key)
+func envInt(key string, fallback int) (int, error) { return envIntFrom(os.Getenv, key, fallback) }
+func envIntFrom(get func(string) string, key string, fallback int) (int, error) {
+	s := get(key)
 	if s == "" {
 		return fallback, nil
 	}
@@ -52,20 +55,24 @@ func main() {
 func run() error {
 	healthcheck := flag.Bool("healthcheck", false, "check the local readiness endpoint and exit")
 	flag.Parse()
-	addr := env("LISTEN_ADDR", ":8080")
+	get, err := runtimefile.FromEnvironment("extractor")
+	if err != nil {
+		return err
+	}
+	addr := envFrom(get, "LISTEN_ADDR", ":8080")
 	if *healthcheck {
 		return checkHealth(addr)
 	}
-	workers, err := envInt("EXTRACTOR_MAX_CONCURRENT", 5)
+	workers, err := envIntFrom(get, "EXTRACTOR_MAX_CONCURRENT", 5)
 	if err != nil {
 		return err
 	}
-	browserWorkers, err := envInt("EXTRACTOR_BROWSER_CONCURRENT", 1)
+	browserWorkers, err := envIntFrom(get, "EXTRACTOR_BROWSER_CONCURRENT", 1)
 	if err != nil {
 		return err
 	}
-	endpoint := os.Getenv("CHROME_ENDPOINT")
-	httpOnly, err := httpOnlyConfig(os.Getenv("EXTRACTOR_HTTP_ONLY"), endpoint)
+	endpoint := get("CHROME_ENDPOINT")
+	httpOnly, err := httpOnlyConfig(get("EXTRACTOR_HTTP_ONLY"), endpoint)
 	if err != nil {
 		return err
 	}
@@ -75,11 +82,11 @@ func run() error {
 			return errors.New("invalid CHROME_ENDPOINT")
 		}
 	}
-	native, err := configuredNativeBrowser(httpOnly, endpoint, browserWorkers)
+	native, err := configuredNativeBrowserFrom(get, httpOnly, endpoint, browserWorkers)
 	if err != nil {
 		return err
 	}
-	nativeSelector := os.Getenv("EXTRACTOR_NATIVE_READY_SELECTOR")
+	nativeSelector := get("EXTRACTOR_NATIVE_READY_SELECTOR")
 	if native != nil {
 		probe, done := context.WithTimeout(context.Background(), 10*time.Second)
 		err = native.Probe(probe)
@@ -154,7 +161,7 @@ func run() error {
 	if native != nil && nativeSelector != "" {
 		selectorHash = fmt.Sprintf("%x", sha256.Sum256([]byte(nativeSelector)))
 	}
-	handler, err := service.New(service.Config{Token: os.Getenv("EXTRACTOR_SERVICE_TOKEN"), BuildVersion: buildVersion, MaxConcurrent: workers, BrowserAvailable: browserAvailable, Ready: ready, NativeBrowser: native != nil, NativeReadySelectorConfigured: native != nil && nativeSelector != "", NativeReadySelectorHash: selectorHash}, runner)
+	handler, err := service.New(service.Config{Token: get("EXTRACTOR_SERVICE_TOKEN"), BuildVersion: buildVersion, MaxConcurrent: workers, BrowserAvailable: browserAvailable, Ready: ready, NativeBrowser: native != nil, NativeReadySelectorConfigured: native != nil && nativeSelector != "", NativeReadySelectorHash: selectorHash}, runner)
 	if err != nil {
 		return err
 	}

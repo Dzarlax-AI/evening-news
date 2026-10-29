@@ -67,7 +67,7 @@ func bootstrap(ctx context.Context, tx pgx.Tx) error {
 	return nil
 }
 func allMigrations() []migration {
-	return append(earlyMigrations(), backgroundMigration(), schedulerMigration(), executionMigration(), ingestionMigration(), processingMigration(), editorialMigration(), deliveryMigration())
+	return append(earlyMigrations(), backgroundMigration(), schedulerMigration(), executionMigration(), ingestionMigration(), processingMigration(), editorialMigration(), deliveryMigration(), managedConfigurationMigration())
 }
 
 // Run is explicitly invoked by maintenance, never by service startup. Each

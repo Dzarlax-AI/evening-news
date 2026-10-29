@@ -74,14 +74,14 @@ for the same canonical key fails closed. Different names remain separate even
 when their current values happen to match; this preserves token aliases and
 service boundaries.
 
-The checked-in [`.env.example`](../../.env.example) is for local Compose. It
+The checked-in [`.env.legacy.example`](../../.env.legacy.example) is for the legacy local Compose profile. It
 contains placeholders only and documents separate web, executor, scheduler,
 worker, ingestion, and processing DSNs. Production DSNs and credentials stay
 on the server.
 
 ## AI provider settings
 
-The local Compose example passes AI settings only to the private executor. `AI_PROVIDER` defaults to `gemini`: provide `GEMINI_API_KEY`, with `SUMMARIZATION_MODEL`, `DIGEST_MODEL`, and optional `TEXT_MODEL` (defaults to the summarization model). To start with OpenAI instead, set `AI_PROVIDER=openai`, `OPENAI_API_KEY`, `OPENAI_ARTICLE_MODEL`, `OPENAI_DIGEST_MODEL`, and `OPENAI_TEXT_MODEL`. OpenAI model names are explicit and have no built-in defaults. The selected provider needs its key and all three model names. The installation-wide admin settings can select a provider and its models; saved settings override initial environment defaults. Configure both keys in the executor environment before switching, and do not enter keys in admin settings. There is no automatic provider fallback.
+The legacy local Compose example passes AI settings only to the private executor. `AI_PROVIDER` defaults to `gemini`: provide `GEMINI_API_KEY`, with `SUMMARIZATION_MODEL`, `DIGEST_MODEL`, and optional `TEXT_MODEL` (defaults to the summarization model). To start with OpenAI instead, set `AI_PROVIDER=openai`, `OPENAI_API_KEY`, `OPENAI_ARTICLE_MODEL`, `OPENAI_DIGEST_MODEL`, and `OPENAI_TEXT_MODEL`. OpenAI model names are explicit and have no built-in defaults. The selected provider needs its key and all three model names. Installation-wide admin settings can select a provider and models; saved settings override initial environment defaults. Keep provider keys in the private executor environment for this legacy profile. There is no automatic provider fallback.
 
 The optional `AI_MODEL_PRICES` executor environment variable is a JSON object keyed by `provider/model`, with non-negative numeric `input`, `output`, and `cached_input` rates in USD per million tokens. For example, `{"openai/example-model":{"input":1,"output":2,"cached_input":0.5}}` illustrates the syntax only; those numbers are not vendor prices. The runtime checks the provider-reported model first and then the requested model alias. Leave it blank when rates are not configured; costs without matching rates or required usage stay unknown. Cached input uses the cached rate rather than being charged twice.
 
@@ -99,7 +99,7 @@ background service. Their role templates default to schema `news`, so pass
 Start only the two local databases and run the one-shot migration:
 
 ```sh
-cp .env.example .env
+cp .env.legacy.example .env
 # Replace the development placeholders in .env first.
 docker compose --env-file .env -f docker-compose.example.yml up -d postgres scheduler-postgres
 docker compose --env-file .env -f docker-compose.example.yml run --rm migrate

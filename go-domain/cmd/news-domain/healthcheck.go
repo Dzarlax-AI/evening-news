@@ -6,7 +6,6 @@ import (
 	"io"
 	"net"
 	"net/http"
-	"os"
 	"strconv"
 	"time"
 )
@@ -21,11 +20,15 @@ type healthClient interface {
 }
 
 func checkHealth(client healthClient) error {
-	token := os.Getenv("JOB_EXECUTOR_TOKEN")
+	source, err := loadSource()
+	if err != nil {
+		return errors.New("runtime configuration unavailable")
+	}
+	token := source.get("JOB_EXECUTOR_TOKEN")
 	if !tokenOK(token) {
 		return errors.New("invalid private service token")
 	}
-	port := os.Getenv("JOB_EXECUTOR_PORT")
+	port := source.get("JOB_EXECUTOR_PORT")
 	if port == "" {
 		port = "8100"
 	}

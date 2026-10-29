@@ -52,13 +52,13 @@ func (h *AdminHandler) page(templateName, title, activeMenu string) http.Handler
 			return
 		}
 		buffer := httptest.NewRecorder()
-		data := map[string]any{"Title": title, "ActiveMenu": activeMenu, "AdminUser": principal.Username}
+		data := map[string]any{"Title": title, "ActiveMenu": activeMenu, "AdminUser": principal.Username, "Managed": h.auth.Managed()}
 		if err := h.renderer.RenderTemplate(buffer, r, "admin/"+templateName, data); err != nil {
 			http.Error(w, "page unavailable", http.StatusInternalServerError)
 			return
 		}
 		cookie, err := h.auth.AdminCookie(principal.Username)
-		if err != nil {
+		if err != nil && r.Header.Get("X-authentik-username") == "" {
 			http.Error(w, "page unavailable", http.StatusInternalServerError)
 			return
 		}
@@ -67,7 +67,9 @@ func (h *AdminHandler) page(templateName, title, activeMenu string) http.Handler
 				w.Header().Add(name, value)
 			}
 		}
-		http.SetCookie(w, cookie)
+		if cookie != nil {
+			http.SetCookie(w, cookie)
+		}
 		w.WriteHeader(buffer.Code)
 		_, _ = w.Write(buffer.Body.Bytes())
 	}

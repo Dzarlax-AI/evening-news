@@ -26,6 +26,10 @@ func main() {
 }
 
 func run(args []string) error {
+	getenv, err := configLookup()
+	if err != nil {
+		return errors.New("invalid runtime manifest")
+	}
 	if len(args) > 1 {
 		return errors.New("usage: news-background [healthcheck]")
 	}
@@ -33,7 +37,7 @@ func run(args []string) error {
 		if args[0] != "healthcheck" {
 			return errors.New("usage: news-background [healthcheck]")
 		}
-		addr := strings.TrimSpace(os.Getenv("BACKGROUND_HEALTH_LISTEN"))
+		addr := strings.TrimSpace(getenv("BACKGROUND_HEALTH_LISTEN"))
 		if addr == "" {
 			addr = ":8095"
 		}
@@ -44,9 +48,13 @@ func run(args []string) error {
 		}
 		return nil
 	}
-	cfg, err := config.Load(os.Getenv, buildID)
+	cfg, err := config.Load(getenv, buildID)
 	if err != nil {
 		return err
+	}
+	if _, managed := os.LookupEnv("NEWS_RUNTIME_FILE"); managed {
+		cfg.ManagedMode = true
+		cfg.Worker.BeforeRecovery = runtimeConfigurationGate(cfg.DomainServiceURL, cfg.Execution.Token)
 	}
 	ctx, stop := signal.NotifyContext(context.Background(), os.Interrupt, syscall.SIGTERM)
 	defer stop()

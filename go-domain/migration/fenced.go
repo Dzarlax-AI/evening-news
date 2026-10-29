@@ -20,6 +20,9 @@ var editorialSQL string
 //go:embed sql/015.sql
 var deliverySQL string
 
+//go:embed sql/016.sql
+var managedConfigurationSQL string
+
 func schemaSQL(ctx context.Context, tx pgx.Tx, sql string) error {
 	var schema string
 	if err := tx.QueryRow(ctx, "SELECT current_schema()").Scan(&schema); err != nil {
@@ -66,5 +69,15 @@ func deliveryMigration() migration {
 		return !exists, err
 	}, Apply: func(ctx context.Context, tx pgx.Tx) (map[string]any, error) {
 		return map[string]any{"tables_created_or_confirmed": []string{"digest_delivery_intents", "digest_delivery_parts"}}, schemaSQL(ctx, tx, deliverySQL)
+	}}
+}
+
+func managedConfigurationMigration() migration {
+	return migration{ID: "016_managed_configuration", Description: "Add managed installation credentials and local administrator", Needed: func(ctx context.Context, tx pgx.Tx) (bool, error) {
+		var count int
+		err := tx.QueryRow(ctx, `SELECT count(*) FROM information_schema.tables WHERE table_schema=current_schema() AND table_name=ANY($1)`, []string{"installation_state", "managed_admin", "setup_tokens", "integration_credentials"}).Scan(&count)
+		return count != 4, err
+	}, Apply: func(ctx context.Context, tx pgx.Tx) (map[string]any, error) {
+		return map[string]any{"tables_created_or_confirmed": []string{"installation_state", "managed_admin", "setup_tokens", "integration_credentials"}}, schemaSQL(ctx, tx, managedConfigurationSQL)
 	}}
 }

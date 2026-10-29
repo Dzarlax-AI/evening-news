@@ -25,6 +25,19 @@ type Processor struct {
 	DateFrom, DateTo                             *time.Time
 	Duplicates                                   *DuplicateCache
 	AttemptTimeout, RetryInitial, RetryLater     time.Duration
+	LoadOperationalSnapshot                      func(context.Context, store.Fence) (OperationalSnapshot, error)
+}
+
+type OperationalSnapshot struct {
+	Revision          int64
+	PinnedAt          time.Time
+	LimitsEnabled     bool
+	MaxArticles       int
+	PerSource         int
+	Days              int
+	NewestDate        string
+	ProcessingEnabled bool
+	DeliveryEnabled   bool
 }
 type jobPayload struct {
 	ArticleIDs     []int64 `json:"article_ids"`
@@ -36,6 +49,25 @@ type jobPayload struct {
 }
 
 func (p *Processor) Run(ctx context.Context, f store.Fence) (map[string]any, error) {
+	var operational *OperationalSnapshot
+	if p.LoadOperationalSnapshot != nil {
+		snapshot, err := p.LoadOperationalSnapshot(ctx, f)
+		if err != nil {
+			return nil, withPhase("operational_configuration", err)
+		}
+		invalidDate := false
+		if snapshot.NewestDate != "" {
+			_, err := time.Parse("2006-01-02", snapshot.NewestDate)
+			invalidDate = err != nil
+		}
+		if snapshot.Revision < 0 || snapshot.PinnedAt.IsZero() || snapshot.MaxArticles < 1 || snapshot.MaxArticles > 100000 || snapshot.PerSource < 1 || snapshot.PerSource > 100000 || snapshot.Days < 0 || snapshot.Days > 36500 || invalidDate {
+			return nil, withPhase("operational_configuration", errors.New("invalid pinned settings"))
+		}
+		operational = &snapshot
+		if !snapshot.ProcessingEnabled {
+			return map[string]any{"status": "processing_disabled", "articles_processed": 0, "articles_summarized": 0, "articles_categorized": 0, "errors_count": 0}, nil
+		}
+	}
 	if p.Duplicates == nil {
 		p.Duplicates = NewDuplicateCache()
 	}
@@ -65,6 +97,11 @@ func (p *Processor) Run(ctx context.Context, f store.Fence) (map[string]any, err
 		batchSize = 25
 	}
 	cycleLimit := p.CycleMax
+	sourceLimit := p.PerSourceLimit
+	dateFrom, dateTo := p.DateFrom, p.DateTo
+	if operational != nil {
+		cycleLimit, sourceLimit, dateFrom, dateTo = operationalBounds(*operational)
+	}
 	if kind == "reprocess_failed" {
 		limit := payload.Limit
 		if limit < 1 {
@@ -85,7 +122,7 @@ func (p *Processor) Run(ctx context.Context, f store.Fence) (map[string]any, err
 		if limit < 1 {
 			limit = 20
 		}
-		candidates, err := p.DB.SelectDue(ctx, f, limit, 0, nil, p.DateFrom, p.DateTo, p.maxAttempts())
+		candidates, err := p.DB.SelectDue(ctx, f, limit, 0, nil, dateFrom, dateTo, p.maxAttempts())
 		if err != nil {
 			return nil, withPhase("select_dry_run", err)
 		}
@@ -115,11 +152,11 @@ func (p *Processor) Run(ctx context.Context, f store.Fence) (map[string]any, err
 				remaining = batchSize
 			}
 		}
-		dateFrom, dateTo := p.DateFrom, p.DateTo
+		batchDateFrom, batchDateTo := dateFrom, dateTo
 		if len(payload.ArticleIDs) > 0 {
-			dateFrom, dateTo = nil, nil
+			batchDateFrom, batchDateTo = nil, nil
 		}
-		batch, err := p.DB.SelectDue(ctx, f, remaining, cursor, payload.ArticleIDs, dateFrom, dateTo, p.maxAttempts())
+		batch, err := p.DB.SelectDue(ctx, f, remaining, cursor, payload.ArticleIDs, batchDateFrom, batchDateTo, p.maxAttempts())
 		if err != nil {
 			return nil, withPhase("select_due", err)
 		}
@@ -133,7 +170,7 @@ func (p *Processor) Run(ctx context.Context, f store.Fence) (map[string]any, err
 			if row.SourceID != nil {
 				sourceID = *row.SourceID
 			}
-			if p.sourceLimit() > 0 && sourceCounts[sourceID] >= p.sourceLimit() {
+			if sourceLimit > 0 && sourceCounts[sourceID] >= sourceLimit {
 				continue
 			}
 			sourceCounts[sourceID]++
@@ -256,7 +293,23 @@ func (p *Processor) Run(ctx context.Context, f store.Fence) (map[string]any, err
 	}
 	return receipt, nil
 }
-func (p *Processor) sourceLimit() int { return p.PerSourceLimit }
+
+func operationalBounds(snapshot OperationalSnapshot) (cycleLimit, sourceLimit int, dateFrom, dateTo *time.Time) {
+	if !snapshot.LimitsEnabled {
+		return 0, 0, nil, nil
+	}
+	cycleLimit, sourceLimit = snapshot.MaxArticles, snapshot.PerSource
+	if snapshot.Days > 0 {
+		v := snapshot.PinnedAt.Add(-time.Duration(snapshot.Days) * 24 * time.Hour)
+		dateFrom = &v
+	}
+	if snapshot.NewestDate != "" {
+		v, _ := time.Parse("2006-01-02", snapshot.NewestDate)
+		v = v.Add(24*time.Hour - time.Nanosecond)
+		dateTo = &v
+	}
+	return cycleLimit, sourceLimit, dateFrom, dateTo
+}
 
 func uniqueSortedIDs(ids []int64) []int64 {
 	if len(ids) == 0 {

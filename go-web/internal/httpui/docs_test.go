@@ -189,7 +189,7 @@ func TestDocsRoutesServeFrozenOpenAPIWithoutRemoteAssets(t *testing.T) {
 	if err := json.Unmarshal(resp.Body.Bytes(), &served); err != nil {
 		t.Fatal(err)
 	}
-	if len(served["paths"].(map[string]any)) != 91 {
+	if len(served["paths"].(map[string]any)) != 98 {
 		t.Fatalf("unexpected frozen schema path count: %d", len(served["paths"].(map[string]any)))
 	}
 }
@@ -218,6 +218,14 @@ func TestCheckedInOpenAPIPreservesBaselineAndAddsAISettings(t *testing.T) {
 	}
 	gotRoot := got.(map[string]any)
 	paths := gotRoot["paths"].(map[string]any)
+	components := gotRoot["components"].(map[string]any)
+	schemas := components["schemas"].(map[string]any)
+	for _, name := range []string{"OperationalSettings", "OperationalSettingsUpdate"} {
+		if schemas[name] == nil {
+			t.Fatalf("missing operational settings schema %s", name)
+		}
+		delete(schemas, name)
+	}
 	ai, ok := paths["/api/v1/ai/settings"].(map[string]any)
 	if !ok || ai["get"] == nil || ai["put"] == nil {
 		t.Fatal("AI settings GET and PUT must be documented")
@@ -227,6 +235,18 @@ func TestCheckedInOpenAPIPreservesBaselineAndAddsAISettings(t *testing.T) {
 		t.Fatal("AI settings update contract is incomplete")
 	}
 	delete(paths, "/api/v1/ai/settings")
+	for path, methods := range map[string][]string{"/api/v1/configuration/readiness": {"get"}, "/api/v1/configuration/telegram": {"get", "put"}, "/api/v1/configuration/operational": {"get", "put"}, "/api/v1/setup/status": {"get"}, "/api/v1/setup/claim": {"post"}, "/api/v1/installation/progress": {"get", "put"}, "/api/v1/credentials/{provider}": {"get", "put", "delete"}} {
+		item, ok := paths[path].(map[string]any)
+		if !ok {
+			t.Fatalf("missing onboarding path %s", path)
+		}
+		for _, method := range methods {
+			if item[method] == nil {
+				t.Fatalf("missing %s %s", method, path)
+			}
+		}
+		delete(paths, path)
+	}
 	if !reflect.DeepEqual(got, want) {
 		t.Fatal("contracts/openapi.json differs from the frozen Python OpenAPI snapshot")
 	}
