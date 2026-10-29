@@ -297,8 +297,7 @@ func (s *state) geminiRequest(w http.ResponseWriter, r *http.Request, p map[stri
 		s.counters["selector_study"]++
 		s.mu.Unlock()
 		result := map[string]any{"content_selectors": []string{".zx-entry"}, "title_selectors": []string{".zx-title"}, "date_selectors": []string{".zx-time"}, "confidence_scores": map[string]float64{".zx-entry": 0.99}, "page_type": "news", "reasoning": "Synthetic gate page has one article element per story.", "suggested_config": map[string]any{"max_articles_per_check": 2}}
-		raw, _ := json.Marshal(result)
-		write(w, 200, map[string]any{"candidates": []any{map[string]any{"content": map[string]any{"parts": []any{map[string]any{"text": string(raw)}}}}}})
+		writeGeminiResult(w, result)
 		return
 	}
 	if strings.Contains(prompt, "Learned Selector Gate Story") {
@@ -307,7 +306,10 @@ func (s *state) geminiRequest(w http.ResponseWriter, r *http.Request, p map[stri
 		s.mu.Unlock()
 	}
 	config, _ := p["generationConfig"].(map[string]any)
-	schema, _ := config["responseSchema"].(map[string]any)
+	schema, _ := config["responseJsonSchema"].(map[string]any)
+	if schema == nil {
+		schema, _ = config["responseSchema"].(map[string]any)
+	}
 	properties, _ := schema["properties"].(map[string]any)
 	var result map[string]any
 	if _, editorial := properties["article_stories"]; editorial {
@@ -362,14 +364,17 @@ func (s *state) geminiRequest(w http.ResponseWriter, r *http.Request, p map[stri
 	} else {
 		result = map[string]any{"optimized_title": "Fixture technology article", "summary": "A synthetic technology report with verified fixture details.", "categories": []string{"Tech"}, "category_confidences": []float64{0.98}, "category": "Tech", "category_confidence": 0.98, "summary_confidence": 0.98, "original_categories": []string{"technology"}, "is_advertisement": false, "ad_type": "news_article", "ad_confidence": 0.0, "ad_reasoning": "Synthetic fixture is editorial content.", "publication_date": nil, "content_quality": 0.95, "confidence": 0.98}
 	}
-	raw, _ := json.Marshal(result)
-	reply := map[string]any{"candidates": []any{map[string]any{"content": map[string]any{"parts": []any{map[string]any{"text": string(raw)}}}}}}
-	if _, editorial := properties["article_stories"]; editorial {
-		reply["candidates"].([]any)[0].(map[string]any)["finishReason"] = "STOP"
-		reply["usageMetadata"] = map[string]any{"promptTokenCount": 100, "candidatesTokenCount": 100, "totalTokenCount": 200}
-	}
-	write(w, 200, reply)
+	writeGeminiResult(w, result)
 }
+
+func writeGeminiResult(w http.ResponseWriter, result map[string]any) {
+	raw, _ := json.Marshal(result)
+	write(w, 200, map[string]any{
+		"candidates":    []any{map[string]any{"finishReason": "STOP", "content": map[string]any{"parts": []any{map[string]any{"text": string(raw)}}}}},
+		"usageMetadata": map[string]any{"promptTokenCount": 100, "candidatesTokenCount": 100, "thoughtsTokenCount": 10, "cachedContentTokenCount": 20, "totalTokenCount": 210},
+	})
+}
+
 func (s *state) consumerHandler(w http.ResponseWriter, r *http.Request) {
 	if r.Method != "POST" || r.URL.Path != "/commands" {
 		write(w, 404, map[string]any{"error": "not_found"})

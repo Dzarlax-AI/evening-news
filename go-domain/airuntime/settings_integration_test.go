@@ -50,6 +50,11 @@ func TestAISettingsPostgresCASResetAndRestart(t *testing.T) {
 	}
 	config := Config{APIKey: "fake-gemini", Model: "gemini-model", OpenAIKey: "fake-openai", OpenAIArticleModel: "openai-article", OpenAIDigestModel: "openai-digest", OpenAITextModel: "openai-text", RPS: 100}
 	s := NewServer(config, pool)
+	invalidDefault := config
+	invalidDefault.APIKey = ""
+	if attention, e := NewServer(invalidDefault, pool).StartupAISettings(ctx); e == nil || attention {
+		t.Fatalf("invalid environment default started: attention=%v err=%v", attention, e)
+	}
 	initial, err := s.GetAISettings(ctx)
 	if err != nil || initial.Revision != 0 || initial.Source != "env" {
 		t.Fatalf("initial=%+v err=%v", initial, err)
@@ -84,6 +89,37 @@ func TestAISettingsPostgresCASResetAndRestart(t *testing.T) {
 	current, err := restarted.GetAISettings(ctx)
 	if err != nil || current.Revision != 1 || current.ActiveProvider != "openai" || current.Source != "override" {
 		t.Fatalf("current=%+v err=%v", current, err)
+	}
+
+	// Missing the selected key permits only management recovery when defaults
+	// are valid, and does not change the selected provider or admit a request.
+	recoveryConfig := config
+	recoveryConfig.APIKey = "fake-gemini"
+	recoveryConfig.OpenAIKey = ""
+	recovery := NewServer(recoveryConfig, pool)
+	if attention, e := recovery.StartupAISettings(ctx); e != nil || !attention {
+		t.Fatalf("recovery unavailable: attention=%v err=%v", attention, e)
+	}
+	if _, e := recovery.snapshot(ctx, "article"); !errors.Is(e, ErrAISettingsInvalid) {
+		t.Fatalf("invalid profile admitted request: %v", e)
+	}
+	noDefaults := recoveryConfig
+	noDefaults.APIKey = ""
+	if attention, e := NewServer(noDefaults, pool).StartupAISettings(ctx); e == nil || attention {
+		t.Fatalf("invalid defaults accepted: attention=%v err=%v", attention, e)
+	}
+	var original []byte
+	if err = pool.QueryRow(ctx, `SELECT value FROM settings WHERE key='ai_settings'`).Scan(&original); err != nil {
+		t.Fatal(err)
+	}
+	if _, err = pool.Exec(ctx, `UPDATE settings SET value='{"active_provider":"openai","unknown":true}' WHERE key='ai_settings'`); err != nil {
+		t.Fatal(err)
+	}
+	if attention, e := recovery.StartupAISettings(ctx); e == nil || attention {
+		t.Fatalf("corrupt override accepted: attention=%v err=%v", attention, e)
+	}
+	if _, err = pool.Exec(ctx, `UPDATE settings SET value=$1::json WHERE key='ai_settings'`, original); err != nil {
+		t.Fatal(err)
 	}
 
 	// A profile change while a retry is pending must not change the in-flight model.
@@ -150,5 +186,11 @@ func TestAISettingsPostgresCASResetAndRestart(t *testing.T) {
 	}
 	if _, err = resetter.UpdateAISettings(ctx, update); !errors.Is(err, ErrAISettingsConflict) {
 		t.Fatalf("stale writer after reset: %v", err)
+	}
+	if _, err = pool.Exec(ctx, `DROP TABLE settings`); err != nil {
+		t.Fatal(err)
+	}
+	if attention, e := resetter.StartupAISettings(ctx); e == nil || attention {
+		t.Fatalf("database failure accepted: attention=%v err=%v", attention, e)
 	}
 }

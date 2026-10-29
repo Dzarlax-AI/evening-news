@@ -75,11 +75,21 @@ func (c *Client) Generate(ctx context.Context, r ai.Request) (ai.Response, error
 	if v.Usage != nil {
 		out.Usage.TotalTokens = v.Usage.Total
 		out.Usage.InputTokens = v.Usage.Input
-		out.Usage.CachedInputTokens = v.Usage.Cached
-		out.Usage.ReasoningTokens = v.Usage.Reasoning
-		if v.Usage.Output != nil && v.Usage.Reasoning != nil {
-			x := *v.Usage.Output + *v.Usage.Reasoning
-			out.Usage.OutputTokens = &x
+		if v.Usage.Input != nil {
+			cached := 0
+			if v.Usage.Cached != nil {
+				cached = *v.Usage.Cached
+			}
+			out.Usage.CachedInputTokens = &cached
+		}
+		if v.Usage.Output != nil {
+			reasoning := 0
+			if v.Usage.Reasoning != nil {
+				reasoning = *v.Usage.Reasoning
+			}
+			out.Usage.ReasoningTokens = &reasoning
+			output := *v.Usage.Output + reasoning
+			out.Usage.OutputTokens = &output
 		}
 	}
 	if v.PromptFeedback.BlockReason != "" {

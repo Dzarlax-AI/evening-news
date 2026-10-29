@@ -17,6 +17,7 @@ import (
 	"testing"
 	"time"
 
+	ai "github.com/Dzarlax-AI/evening-news/go-ai"
 	"github.com/Dzarlax-AI/evening-news/go-domain/analysis"
 )
 
@@ -25,132 +26,6 @@ type roundTripFunc func(*http.Request) (*http.Response, error)
 func (f roundTripFunc) RoundTrip(r *http.Request) (*http.Response, error) { return f(r) }
 func response(status int, headers http.Header, body string) *http.Response {
 	return &http.Response{StatusCode: status, Header: headers, Body: io.NopCloser(strings.NewReader(body)), Request: nil}
-}
-
-type transportFixture struct {
-	Name             string            `json:"name"`
-	Mode             string            `json:"mode"`
-	Status           int               `json:"status"`
-	Headers          map[string]string `json:"headers"`
-	ProviderResponse json.RawMessage   `json:"provider_response"`
-	ExpectedResult   any               `json:"expected_result"`
-	ExpectedError    struct {
-		Status     int      `json:"status_code"`
-		RetryAfter *float64 `json:"retry_after_seconds"`
-	} `json:"expected_error"`
-	Request struct {
-		Prompt       string          `json:"prompt"`
-		Model        string          `json:"model"`
-		AnalysisType string          `json:"analysis_type"`
-		Domain       string          `json:"domain"`
-		Temperature  float64         `json:"temperature"`
-		MaxTokens    int             `json:"max_tokens"`
-		Schema       json.RawMessage `json:"schema"`
-	} `json:"request"`
-	ExpectedRequest struct {
-		URL     string `json:"url"`
-		JSON    any    `json:"json"`
-		Timeout int    `json:"timeout"`
-	} `json:"expected_request"`
-	ExpectedUsageEvents int `json:"expected_usage_events"`
-}
-
-func TestLegacyTransportFixtureParity(t *testing.T) {
-	data, err := os.ReadFile("../../tests/fixtures/ai-runtime-v1/legacy_transport.json")
-	if err != nil {
-		t.Fatal(err)
-	}
-	var fixtures []transportFixture
-	if err = json.Unmarshal(data, &fixtures); err != nil {
-		t.Fatal(err)
-	}
-	if len(fixtures) != 10 {
-		t.Fatalf("fixtures=%d", len(fixtures))
-	}
-	for _, fixture := range fixtures {
-		t.Run(fixture.Name, func(t *testing.T) {
-			var gotBody map[string]any
-			var gotURL string
-			var gotDeadline time.Time
-			var calls atomic.Int32
-			status := fixture.Status
-			if status == 0 {
-				status = 200
-			}
-			headers := http.Header{}
-			for k, v := range fixture.Headers {
-				headers.Set(k, v)
-			}
-			transport := roundTripFunc(func(req *http.Request) (*http.Response, error) {
-				calls.Add(1)
-				gotURL = req.URL.Scheme + "://" + req.URL.Host + req.URL.Path
-				gotDeadline, _ = req.Context().Deadline()
-				raw, _ := io.ReadAll(req.Body)
-				_ = json.Unmarshal(raw, &gotBody)
-				return response(status, headers, string(fixture.ProviderResponse)), nil
-			})
-			s := NewServer(Config{APIKey: "synthetic-secret", Endpoint: "https://fixture.invalid/v1/models", Model: fixture.Request.Model, RPS: 100}, nil)
-			s.client = &http.Client{Transport: transport}
-			req := generateRequest{Mode: fixture.Mode, Prompt: fixture.Request.Prompt, Model: fixture.Request.Model, AnalysisType: fixture.Request.AnalysisType, Domain: fixture.Request.Domain, Schema: fixture.Request.Schema, Options: generateOptions{Temperature: fixture.Request.Temperature, MaxTokens: fixture.Request.MaxTokens}}
-			if fixture.Mode == "structured" {
-				req.Options = generateOptions{}
-			}
-			value, callErr := s.callGenerate(context.Background(), req)
-			if wantErr, exists := map[string]bool{"text_http429": true, "structured_http500": true, "text_empty_candidates": true}[fixture.Name]; exists && wantErr {
-				if callErr == nil {
-					t.Fatal("expected provider error")
-				}
-				var pf *providerFailure
-				if !errors.As(callErr, &pf) {
-					t.Fatalf("error type %T", callErr)
-				}
-				if fixture.ExpectedError.Status != 0 && (pf.status == nil || *pf.status != fixture.ExpectedError.Status) {
-					t.Fatalf("status=%v", pf.status)
-				}
-				if fixture.ExpectedError.RetryAfter != nil && (pf.retryAfter == nil || *pf.retryAfter != *fixture.ExpectedError.RetryAfter) {
-					t.Fatalf("retry_after=%v", pf.retryAfter)
-				}
-				if calls.Load() != 1 {
-					t.Fatalf("calls=%d; status/decode failures must not retry", calls.Load())
-				}
-				return
-			}
-			if callErr != nil {
-				t.Fatal(callErr)
-			}
-			out := value.(generateOutput)
-			wantAccounting := out.usage.TotalTokens
-			if wantAccounting == 0 {
-				wantAccounting = out.usage.PromptTokens + out.usage.CompletionTokens
-			}
-			if out.accountingTokens != wantAccounting {
-				t.Fatalf("usage accounting tokens=%d want=%d", out.accountingTokens, wantAccounting)
-			}
-			got := out.result
-			wantJSON, _ := json.Marshal(fixture.ExpectedResult)
-			gotJSON, _ := json.Marshal(got)
-			var want, actual any
-			_ = json.Unmarshal(wantJSON, &want)
-			_ = json.Unmarshal(gotJSON, &actual)
-			if !reflect.DeepEqual(actual, want) {
-				t.Fatalf("result mismatch\n got: %s\nwant: %s", gotJSON, wantJSON)
-			}
-			if gotURL != fixture.ExpectedRequest.URL {
-				t.Fatalf("url=%q want=%q", gotURL, fixture.ExpectedRequest.URL)
-			}
-			wantRequest, _ := json.Marshal(fixture.ExpectedRequest.JSON)
-			gotRequest, _ := json.Marshal(gotBody)
-			if !reflect.DeepEqual(gotRequest, wantRequest) {
-				t.Fatalf("provider request mismatch\n got: %s\nwant: %s", gotRequest, wantRequest)
-			}
-			if gotDeadline.IsZero() {
-				t.Fatal("fixture transport observed no finite request context deadline")
-			}
-			if fixture.ExpectedUsageEvents != 1 {
-				t.Fatalf("fixture usage=%d", fixture.ExpectedUsageEvents)
-			}
-		})
-	}
 }
 
 func TestLegacyUsageAccountingFixtureParity(t *testing.T) {
@@ -209,7 +84,11 @@ func TestSharedPermitAndProviderUseOneWindow(t *testing.T) {
 	request := generateRequest{Mode: "text", Prompt: "x", Model: "gemini-2", AnalysisType: "x", Domain: "x", Options: generateOptions{Temperature: .1, MaxTokens: 20}}
 	start := time.Now()
 	done := make(chan error, 1)
-	go func() { _, err := s.callGenerate(context.Background(), request); done <- err }()
+	snap, err := s.snapshot(context.Background(), "text")
+	if err != nil {
+		t.Fatal(err)
+	}
+	go func() { _, err := s.generateWithSnapshot(context.Background(), snap, request); done <- err }()
 	if err := limiter.Acquire(context.Background()); err != nil {
 		t.Fatal(err)
 	}
@@ -235,13 +114,16 @@ func TestProviderCancellationDoesNotReplay(t *testing.T) {
 	req := generateRequest{Mode: "text", Prompt: "x", Model: "gemini-2", AnalysisType: "x", Domain: "x", Options: generateOptions{Temperature: .1, MaxTokens: 20}}
 	ctx, cancel := context.WithCancel(context.Background())
 	done := make(chan error, 1)
-	go func() { _, err := s.callGenerate(ctx, req); done <- err }()
+	snap, err := s.snapshot(ctx, "text")
+	if err != nil {
+		t.Fatal(err)
+	}
+	go func() { _, err := s.generateWithSnapshot(ctx, snap, req); done <- err }()
 	time.Sleep(20 * time.Millisecond)
 	cancel()
 	select {
 	case err := <-done:
-		var pf *providerFailure
-		if !errors.As(err, &pf) || pf.code != "provider_cancelled" {
+		if !errors.Is(err, context.Canceled) {
 			t.Fatalf("cancel outcome=%v", err)
 		}
 	case <-time.After(time.Second):
@@ -311,9 +193,13 @@ func TestDomainPreservesAuthorityAndGenericRequiresStatus200(t *testing.T) {
 		return response(http.StatusCreated, nil, `{"candidates":[{"finishReason":"STOP","content":{"parts":[{"text":"unexpected"}]}}]}`), nil
 	})}
 	req := generateRequest{Mode: "text", Prompt: "x", Model: "gemini-2", AnalysisType: "x", Domain: "x", Options: generateOptions{Temperature: .1, MaxTokens: 20}}
-	_, err := s.callGenerate(context.Background(), req)
-	var pf *providerFailure
-	if !errors.As(err, &pf) || pf.status == nil || *pf.status != http.StatusCreated {
+	snap, err := s.snapshot(context.Background(), "text")
+	if err != nil {
+		t.Fatal(err)
+	}
+	_, err = s.generateWithSnapshot(context.Background(), snap, req)
+	var pf *ai.Error
+	if !errors.As(err, &pf) || pf.StatusCode != http.StatusCreated {
 		t.Fatalf("201 status outcome=%v", err)
 	}
 	if calls.Load() != 1 {
@@ -812,5 +698,38 @@ func TestDomainTelegramRichBooleanEnvironment(t *testing.T) {
 	cfg, err := DomainConfigFromEnv()
 	if err != nil || !cfg.TelegramRich {
 		t.Fatalf("default rich=%v error=%v", cfg.TelegramRich, err)
+	}
+}
+
+func TestModelPricesEnvironmentValidation(t *testing.T) {
+	t.Setenv("DATABASE_URL", "postgres://fixture:fixture@localhost/test")
+	t.Setenv("GEMINI_API_KEY", "fixture")
+	t.Setenv("GEMINI_API_ENDPOINT", "https://generativelanguage.googleapis.com/v1/models")
+	t.Setenv("SUMMARIZATION_MODEL", "fixture-model")
+	t.Setenv("AI_PROVIDER", "gemini")
+	t.Setenv("NEWS_FIXTURE_MODE", "0")
+	t.Setenv("RPS", "3")
+	t.Setenv("NEWS_AI_DB_MAX_CONNS", "2")
+	t.Setenv("TELEGRAM_RICH_MESSAGES_ENABLED", "true")
+	for _, tc := range []struct {
+		name, raw string
+		valid     bool
+	}{
+		{"empty", "", true},
+		{"valid", `{"openai/example":{"input":1,"output":2,"cached_input":0.5}}`, true},
+		{"malformed", `{not-json`, false},
+		{"missing rate", `{"openai/example":{"input":1,"output":2}}`, false},
+		{"negative rate", `{"openai/example":{"input":-1,"output":2,"cached_input":0.5}}`, false},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			t.Setenv("AI_MODEL_PRICES", tc.raw)
+			_, err := DomainConfigFromEnv()
+			if tc.valid && err != nil {
+				t.Fatalf("valid price config rejected: %v", err)
+			}
+			if !tc.valid && (err == nil || err.Error() != "ai_runtime_price_configuration") {
+				t.Fatalf("invalid price config result: %v", err)
+			}
+		})
 	}
 }

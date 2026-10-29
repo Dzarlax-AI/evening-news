@@ -7,6 +7,7 @@ import (
 	"encoding/json"
 	"errors"
 	"io"
+	"log"
 	"math"
 	"net"
 	"net/http"
@@ -512,16 +513,6 @@ type providerFailure struct {
 }
 
 func (e *providerFailure) Error() string { return e.code }
-func normalizeUsage(u analysis.GeminiUsage) map[string]any {
-	total := 0
-	if u.TotalTokenCount != nil {
-		total = *u.TotalTokenCount
-	} else {
-		total = u.PromptTokenCount + u.CandidatesTokenCount + u.CachedContentTokenCount
-	}
-	return map[string]any{"prompt_tokens": u.PromptTokenCount, "completion_tokens": u.CandidatesTokenCount, "cached_tokens": u.CachedContentTokenCount, "total_tokens": total}
-}
-
 func parseLegacyStructured(response string) (any, error) {
 	text := strings.TrimSpace(response)
 	decode := func(raw string) (any, error) {
@@ -570,22 +561,6 @@ func providerURL(base, model string) (string, error) {
 	}
 	u.Path = strings.TrimRight(u.Path, "/") + "/" + url.PathEscape(model) + ":generateContent"
 	return u.String(), nil
-}
-func parseRetryAfter(raw string) *float64 {
-	if raw == "" {
-		return nil
-	}
-	if n, e := strconv.ParseFloat(strings.TrimSpace(raw), 64); e == nil && n >= 0 && !math.IsInf(n, 0) && !math.IsNaN(n) {
-		return &n
-	}
-	if d, e := http.ParseTime(raw); e == nil {
-		n := time.Until(d).Seconds()
-		if n < 0 {
-			n = 0
-		}
-		return &n
-	}
-	return nil
 }
 func (s *Server) retry(ctx context.Context, fn func(context.Context) (any, error)) (any, error) {
 	for attempt := 0; attempt < 3; attempt++ {
@@ -796,11 +771,15 @@ func (s *Server) CloseUsage(timeout time.Duration) {
 // ServeUnix requires an already-created owner-only ephemeral directory and never
 // removes a pre-existing path. The caller owns parent-directory lifecycle.
 func ServeUnix(ctx context.Context, s *Server) error {
-	if err := s.ValidateAISettings(ctx); err != nil {
+	attention, err := s.StartupAISettings(ctx)
+	if err != nil {
 		if s.db != nil {
 			s.db.Close()
 		}
 		return errors.New("ai_runtime_provider_configuration")
+	}
+	if attention {
+		log.Print("AI settings require attention; generation unavailable until repaired")
 	}
 	dir := filepath.Dir(s.config.Socket)
 	st, e := os.Lstat(dir)

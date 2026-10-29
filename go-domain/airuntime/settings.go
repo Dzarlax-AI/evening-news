@@ -1,9 +1,11 @@
 package airuntime
 
 import (
+	"bytes"
 	"context"
 	"encoding/json"
 	"errors"
+	"io"
 	"regexp"
 	"strings"
 
@@ -47,6 +49,44 @@ type storedAISettings struct {
 	Profiles       AIProfiles `json:"profiles"`
 }
 
+func decodeStoredAISettings(raw []byte) (storedAISettings, error) {
+	type models struct {
+		Article *string `json:"article"`
+		Digest  *string `json:"digest"`
+		Text    *string `json:"text"`
+	}
+	type profile struct {
+		Models *models `json:"models"`
+	}
+	var v struct {
+		ActiveProvider *string `json:"active_provider"`
+		Profiles       *struct {
+			Gemini *profile `json:"gemini"`
+			OpenAI *profile `json:"openai"`
+		} `json:"profiles"`
+	}
+	dec := json.NewDecoder(bytes.NewReader(raw))
+	dec.DisallowUnknownFields()
+	if dec.Decode(&v) != nil || dec.Decode(new(any)) != io.EOF || v.ActiveProvider == nil || v.Profiles == nil || v.Profiles.Gemini == nil || v.Profiles.OpenAI == nil {
+		return storedAISettings{}, ErrAISettingsInvalid
+	}
+	convert := func(p *profile) (AIProfile, error) {
+		if p.Models == nil || p.Models.Article == nil || p.Models.Digest == nil || p.Models.Text == nil {
+			return AIProfile{}, ErrAISettingsInvalid
+		}
+		return AIProfile{Models: AIModels{Article: *p.Models.Article, Digest: *p.Models.Digest, Text: *p.Models.Text}}, nil
+	}
+	gem, err := convert(v.Profiles.Gemini)
+	if err != nil {
+		return storedAISettings{}, err
+	}
+	open, err := convert(v.Profiles.OpenAI)
+	if err != nil {
+		return storedAISettings{}, err
+	}
+	return storedAISettings{ActiveProvider: *v.ActiveProvider, Profiles: AIProfiles{Gemini: gem, OpenAI: open}}, nil
+}
+
 var modelID = regexp.MustCompile(`^[A-Za-z0-9._-]{1,128}$`)
 
 func (s *Server) defaultAISettings() AISettings {
@@ -64,7 +104,7 @@ func (s *Server) defaultAISettings() AISettings {
 	}
 	return AISettings{ActiveProvider: provider, Profiles: AIProfiles{Gemini: AIProfile{AIModels{s.config.Model, digest, text}}, OpenAI: AIProfile{AIModels{s.config.OpenAIArticleModel, s.config.OpenAIDigestModel, s.config.OpenAITextModel}}}, Configured: AIConfigured{strings.TrimSpace(s.config.APIKey) != "", strings.TrimSpace(s.config.OpenAIKey) != ""}, Source: "env"}
 }
-func validateSettings(v AISettings) error {
+func validateSettingsShape(v AISettings) error {
 	if v.ActiveProvider != "gemini" && v.ActiveProvider != "openai" {
 		return ErrAISettingsInvalid
 	}
@@ -75,11 +115,20 @@ func validateSettings(v AISettings) error {
 			}
 		}
 	}
-	active, ready := v.Profiles.Gemini, v.Configured.Gemini
+	active := v.Profiles.Gemini
 	if v.ActiveProvider == "openai" {
-		active, ready = v.Profiles.OpenAI, v.Configured.OpenAI
+		active = v.Profiles.OpenAI
 	}
-	if !ready || active.Models.Article == "" || active.Models.Digest == "" || active.Models.Text == "" {
+	if active.Models.Article == "" || active.Models.Digest == "" || active.Models.Text == "" {
+		return ErrAISettingsInvalid
+	}
+	return nil
+}
+func validateSettings(v AISettings) error {
+	if err := validateSettingsShape(v); err != nil {
+		return err
+	}
+	if (v.ActiveProvider == "gemini" && !v.Configured.Gemini) || (v.ActiveProvider == "openai" && !v.Configured.OpenAI) {
 		return ErrAISettingsInvalid
 	}
 	return nil
@@ -97,13 +146,16 @@ func (s *Server) GetAISettings(ctx context.Context) (AISettings, error) {
 	}
 	out.Revision = revision
 	if len(raw) > 0 {
-		var stored storedAISettings
-		if json.Unmarshal(raw, &stored) != nil {
+		stored, decodeErr := decodeStoredAISettings(raw)
+		if decodeErr != nil {
 			return AISettings{}, ErrAISettingsInvalid
 		}
 		out.ActiveProvider = stored.ActiveProvider
 		out.Profiles = stored.Profiles
 		out.Source = "override"
+		if err := validateSettingsShape(out); err != nil {
+			return AISettings{}, err
+		}
 	}
 	return out, nil
 }
@@ -170,4 +222,20 @@ func (s *Server) ValidateAISettings(ctx context.Context) error {
 		return err
 	}
 	return validateSettings(settings)
+}
+
+// StartupAISettings permits management-only recovery when a valid persisted
+// profile has lost its key and the environment profile can be restored.
+func (s *Server) StartupAISettings(ctx context.Context) (bool, error) {
+	settings, err := s.GetAISettings(ctx)
+	if err != nil {
+		return false, err
+	}
+	if err = validateSettings(settings); err == nil {
+		return false, nil
+	}
+	if settings.Source == "override" && validateSettingsShape(settings) == nil && validateSettings(s.defaultAISettings()) == nil {
+		return true, nil
+	}
+	return false, err
 }

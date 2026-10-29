@@ -359,3 +359,5 @@ func (b *boundedReadCloser) Read(p []byte) (int, error) {
 }
 
 var _ Operations = (*Client)(nil)
+
+var _ AISettingsOperations = (*Client)(nil)
