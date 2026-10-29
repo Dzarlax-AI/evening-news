@@ -115,6 +115,7 @@ func TestDomainProcessStartupAndDrainPostgres(t *testing.T) {
 	q.Set("search_path", schema)
 	u.RawQuery = q.Encode()
 	statements := []string{
+		`CREATE TABLE ` + ident + `.settings(key text primary key,value json not null,updated_at timestamp)`,
 		`CREATE TABLE ` + ident + `.background_worker_status(id integer primary key,owner_id uuid,generation integer,status text,lock_backend_pid integer,heartbeat_at timestamp)`,
 		`CREATE TABLE ` + ident + `.background_jobs(id uuid primary key,state text,owner_generation integer,attempt_generation integer,kind text,payload jsonb)`,
 		`CREATE TABLE ` + ident + `.background_job_executions(job_id uuid,attempt_generation integer,executor_instance_id uuid,owner_id uuid,worker_generation integer,deadline_at timestamp,state text)`,
@@ -243,10 +244,10 @@ func TestDomainProcessStartupAndDrainPostgres(t *testing.T) {
 					t.Error(e)
 				}
 			}
-			_, _ = w.Write([]byte(`{"candidates":[{"content":{"parts":[{"text":"{\"content_selectors\":[\"article\"],\"title_selectors\":[\"h2\"],\"date_selectors\":[\"time\"],\"page_type\":\"news\"}"}]}}]}`))
+			_, _ = w.Write([]byte(`{"candidates":[{"finishReason":"STOP","content":{"parts":[{"text":"{\"content_selectors\":[\"article\"],\"title_selectors\":[\"h2\"],\"date_selectors\":[\"time\"],\"page_type\":\"news\"}"}]}}]}`))
 			return
 		}
-		_, _ = w.Write([]byte(`{"candidates":[{"content":{"parts":[{"text":"{\"summary\":\"ok\",\"categories\":[\"Business\"],\"is_advertisement\":false}"}]}}]}`))
+		_, _ = w.Write([]byte(`{"candidates":[{"finishReason":"STOP","content":{"parts":[{"text":"{\"summary\":\"ok\",\"categories\":[\"Business\"],\"is_advertisement\":false}"}]}}]}`))
 	}))
 	defer upstream.Close()
 	listener, err := net.Listen("tcp4", "127.0.0.1:0")
@@ -260,7 +261,7 @@ func TestDomainProcessStartupAndDrainPostgres(t *testing.T) {
 	}
 	listener.Close()
 	cmd := exec.Command(os.Args[0], "-test.run=^TestDomainProcessStartupAndDrainPostgres$")
-	cmd.Env = append(os.Environ(), "NEWS_DOMAIN_HELPER=1", "DATABASE_URL="+u.String(), "GEMINI_API_KEY=fixture-key", "GEMINI_API_ENDPOINT="+upstream.URL+"/v1/models", "SUMMARIZATION_MODEL=fixture-model", "JOB_EXECUTOR_TOKEN=fixture-executor-token", "ARTICLE_AI_TOKEN=fixture-article-token", "WEB_BACKEND_TOKEN=fixture-web-token", "BACKGROUND_EXECUTION_MODE=worker", "EXTRACTION_SERVICE_URL="+upstream.URL, "EXTRACTION_SERVICE_TOKEN=fixture-extractor-token", "JOB_EXECUTOR_HOST=127.0.0.1", "JOB_EXECUTOR_PORT="+port, "EXECUTION_SERVICE_URL="+upstream.URL, "NEWS_FIXTURE_MODE=0")
+	cmd.Env = append(os.Environ(), "NEWS_DOMAIN_HELPER=1", "DATABASE_URL="+u.String(), "GEMINI_API_KEY=fixture-key", "GEMINI_API_ENDPOINT="+upstream.URL+"/v1/models", "SUMMARIZATION_MODEL=fixture-model", "JOB_EXECUTOR_TOKEN=fixture-executor-token", "ARTICLE_AI_TOKEN=fixture-article-token", "WEB_BACKEND_TOKEN=fixture-web-token", "BACKGROUND_EXECUTION_MODE=worker", "EXTRACTION_SERVICE_URL="+upstream.URL, "EXTRACTION_SERVICE_TOKEN=fixture-extractor-token", "JOB_EXECUTOR_HOST=127.0.0.1", "JOB_EXECUTOR_PORT="+port, "EXECUTION_SERVICE_URL="+upstream.URL, "NEWS_FIXTURE_MODE=1", "NEWS_TEST_TELEGRAM_ENDPOINT="+upstream.URL)
 	if err = cmd.Start(); err != nil {
 		t.Fatal(err)
 	}

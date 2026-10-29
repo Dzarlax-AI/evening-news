@@ -83,7 +83,7 @@ func TestCategoryAnalysisFakeProvider(t *testing.T) {
 		t.Fatal(err)
 	}
 	defer admin.Exec(ctx, "DROP SCHEMA "+q+" CASCADE")
-	sql := `CREATE TABLE articles(id integer,title text);CREATE TABLE article_categories(article_id integer,ai_category text);CREATE TABLE category_mapping(ai_category text);CREATE TABLE categories(name text,display_name text);INSERT INTO articles VALUES (1,'A fixture story');INSERT INTO article_categories VALUES (1,'Machine learning');INSERT INTO categories VALUES ('Tech','Technology')`
+	sql := `CREATE TABLE settings(key text primary key,value json not null,updated_at timestamp);CREATE TABLE articles(id integer,title text);CREATE TABLE article_categories(article_id integer,ai_category text);CREATE TABLE category_mapping(ai_category text);CREATE TABLE categories(name text,display_name text);INSERT INTO articles VALUES (1,'A fixture story');INSERT INTO article_categories VALUES (1,'Machine learning');INSERT INTO categories VALUES ('Tech','Technology')`
 	if _, err = admin.Exec(ctx, "SET search_path TO "+q); err != nil {
 		t.Fatal(err)
 	}
@@ -108,7 +108,7 @@ func TestCategoryAnalysisFakeProvider(t *testing.T) {
 		}
 		called = true
 		w.Header().Set("Content-Type", "application/json")
-		_, _ = w.Write([]byte(`{"candidates":[{"content":{"parts":[{"text":"{\"suggestions\":[{\"category\":\"Tech (Technology)\",\"confidence\":0.85,\"reasoning\":\"matching\"}]}"}]}}],"usageMetadata":{}}`))
+		_, _ = w.Write([]byte(`{"candidates":[{"finishReason":"STOP","content":{"parts":[{"text":"{\"suggestions\":[{\"category\":\"Tech (Technology)\",\"confidence\":0.85,\"reasoning\":\"matching\"}]}"}]}}],"usageMetadata":{}}`))
 	}))
 	defer fake.Close()
 	runtime := airuntime.NewServer(airuntime.Config{RPS: 10, APIKey: "fixture", Model: "fixture-model", Endpoint: fake.URL + "/v1/models"}, pool)

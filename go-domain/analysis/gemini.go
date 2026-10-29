@@ -1,27 +1,26 @@
 package analysis
 
 import (
-	"bytes"
 	"context"
 	"encoding/json"
-	"errors"
 	"fmt"
 	"io"
-	"math"
 	"net/http"
 	"net/url"
 	"regexp"
-	"strconv"
 	"strings"
-	"time"
+
+	ai "github.com/Dzarlax-AI/evening-news/go-ai"
+	"github.com/Dzarlax-AI/evening-news/go-ai/providers/gemini"
 )
 
 const (
-	maxGeminiRequest  = 5 << 20
-	maxGeminiResponse = 2 << 20
+	maxGeminiRequest = 5 << 20
 )
 
 type ProviderConfig struct {
+	Provider      ai.Provider
+	Revision      int64
 	APIKey        string
 	Model         string
 	Endpoint      string
@@ -41,45 +40,27 @@ func Analyze(ctx context.Context, r Request, config ProviderConfig) (map[string]
 				"_insufficient_content": true}, nil, nil
 		}
 	}
-	if err := requiredConfig(config); err != nil {
-		return nil, nil, err
+	if config.Provider == nil {
+		if err := requiredConfig(config); err != nil {
+			return nil, nil, err
+		}
+		if r.Model != "" {
+			config.Model = r.Model
+		}
+		if r.Endpoint != "" {
+			config.Endpoint = r.Endpoint
+		}
+		endpoint := config.Endpoint
+		if strings.Contains(strings.ToLower(config.Model), "gemini-3") {
+			endpoint = strings.Replace(endpoint, "/v1/models", "/v1beta/models", 1)
+		}
+		config.Provider = gemini.New(ai.Config{APIKey: config.APIKey, BaseURL: endpoint, HTTPClient: config.Client})
 	}
-	if r.Model != "" {
-		config.Model = r.Model
-	}
-	if r.Endpoint != "" {
-		config.Endpoint = r.Endpoint
-	}
-	prompt := buildPrompt(r)
-	response, err := callGemini(ctx, prompt, config)
-	if err != nil {
-		return nil, nil, err
-	}
-	result := validateAnalysisResult(response.Result, r)
-	usage := &Usage{Model: config.Model, PromptTokens: response.Usage.PromptTokenCount,
-		CompletionTokens: response.Usage.CandidatesTokenCount,
-		CachedTokens:     response.Usage.CachedContentTokenCount,
-		TotalTokens:      0}
-	if response.Usage.TotalTokenCount != nil {
-		usage.TotalTokens = *response.Usage.TotalTokenCount
-	} else {
-		usage.TotalTokens = usage.PromptTokens + usage.CompletionTokens + usage.CachedTokens
-	}
-	return result, usage, nil
+	return analyzeWithProvider(ctx, r, config)
 }
 
-type geminiResult struct {
-	Result map[string]any
-	Usage  GeminiUsage
-}
-
-func callGemini(ctx context.Context, prompt string, config ProviderConfig) (geminiResult, error) {
-	var empty geminiResult
-	endpoint, err := providerEndpoint(config.Endpoint, config.Model)
-	if err != nil {
-		return empty, errCode(CodeProviderConfiguration)
-	}
-	schema := map[string]any{
+func analysisSchema() map[string]any {
+	return map[string]any{
 		"type": "object",
 		"properties": map[string]any{
 			"optimized_title":      map[string]any{"type": []string{"string", "null"}},
@@ -101,86 +82,39 @@ func callGemini(ctx context.Context, prompt string, config ProviderConfig) (gemi
 		"required":             []string{"summary", "categories", "is_advertisement"},
 		"additionalProperties": true,
 	}
-	body, err := json.Marshal(map[string]any{
-		"contents": []any{map[string]any{"role": "user", "parts": []any{map[string]string{"text": prompt}}}},
-		"generationConfig": map[string]any{
-			"temperature": 0.1, "maxOutputTokens": 2000,
-			"responseMimeType": "application/json", "responseJsonSchema": schema,
-		},
-	})
-	if err != nil || len(body) > maxGeminiRequest {
-		return empty, errCode(CodeProviderRequestTooLarge)
-	}
-	u, err := url.Parse(endpoint)
+}
+
+// analyzeWithProvider keeps domain validation separate from transport.
+func analyzeWithProvider(ctx context.Context, r Request, cfg ProviderConfig) (map[string]any, *Usage, error) {
+	schema, err := json.Marshal(analysisSchema())
 	if err != nil {
-		return empty, errCode(CodeProviderConfiguration)
+		return nil, nil, errCode(CodeProviderConfiguration)
 	}
-	query := u.Query()
-	query.Set("key", config.APIKey)
-	u.RawQuery = query.Encode()
-	req, err := http.NewRequestWithContext(ctx, http.MethodPost, u.String(), bytes.NewReader(body))
-	if err != nil {
-		return empty, errCode(CodeProviderConfiguration)
-	}
-	req.Header.Set("Content-Type", "application/json")
-	client := config.Client
-	if client == nil {
-		client = &http.Client{Timeout: 40 * time.Second}
-	}
-	clientCopy := *client
-	clientCopy.CheckRedirect = func(*http.Request, []*http.Request) error { return http.ErrUseLastResponse }
-	if config.BeforeAttempt != nil {
-		if err := config.BeforeAttempt(ctx); err != nil {
-			return empty, err
+	if cfg.BeforeAttempt != nil {
+		if err := cfg.BeforeAttempt(ctx); err != nil {
+			return nil, nil, err
 		}
 	}
-	resp, err := clientCopy.Do(req)
+	temp, maxTokens := 0.1, 2000
+	response, err := cfg.Provider.Generate(ctx, ai.Request{Purpose: "article", Model: cfg.Model, Prompt: buildPrompt(r), Schema: schema, Temperature: &temp, MaxOutputTokens: &maxTokens})
 	if err != nil {
-		if errors.Is(err, context.Canceled) {
-			return empty, errTransport(CodeProviderCancelled, false)
-		}
-		if errors.Is(err, context.DeadlineExceeded) {
-			return empty, errTransport(CodeProviderTimeout, true)
-		}
-		return empty, errTransport(CodeProviderTransport, true)
+		return nil, nil, err
 	}
-	defer resp.Body.Close()
-	if resp.StatusCode < 200 || resp.StatusCode >= 300 {
-		_, _ = io.Copy(io.Discard, io.LimitReader(resp.Body, 64<<10))
-		var retryAfter *float64
-		if resp.StatusCode == http.StatusTooManyRequests {
-			retryAfter = parseRetryAfter(resp.Header.Get("Retry-After"))
-		}
-		return empty, errStatus(CodeProviderHTTP, resp.StatusCode, retryAfter)
+	if response.Status != ai.Complete {
+		return nil, nil, errCode(CodeProviderInvalid)
 	}
-	responseBody, err := io.ReadAll(io.LimitReader(resp.Body, maxGeminiResponse+1))
+	parsed, err := parseStructuredResult(response.Text)
 	if err != nil {
-		return empty, errCode(CodeProviderRead)
+		return nil, nil, errCode(CodeProviderInvalidJSON)
 	}
-	if len(responseBody) > maxGeminiResponse {
-		return empty, errCode(CodeProviderResponseTooBig)
+	value := func(p *int) int {
+		if p == nil {
+			return 0
+		}
+		return *p
 	}
-	var raw struct {
-		Candidates []struct {
-			Content *struct {
-				Parts []struct {
-					Text string `json:"text"`
-				} `json:"parts"`
-			} `json:"content"`
-		} `json:"candidates"`
-		Usage GeminiUsage `json:"usageMetadata"`
-	}
-	if err := json.Unmarshal(responseBody, &raw); err != nil {
-		return empty, errStatus(CodeProviderInvalid, http.StatusOK, nil)
-	}
-	if len(raw.Candidates) == 0 || raw.Candidates[0].Content == nil || len(raw.Candidates[0].Content.Parts) == 0 || raw.Candidates[0].Content.Parts[0].Text == "" {
-		return empty, errStatus(CodeProviderEmpty, http.StatusOK, nil)
-	}
-	result, err := parseStructuredResult(raw.Candidates[0].Content.Parts[0].Text)
-	if err != nil {
-		return empty, errStatus(CodeProviderInvalidJSON, http.StatusOK, nil)
-	}
-	return geminiResult{Result: result, Usage: raw.Usage}, nil
+	u := &Usage{RequestedModel: cfg.Model, Model: response.Model, Provider: response.Provider, ProfileRevision: cfg.Revision, Normalized: &response.Usage, PromptTokens: value(response.Usage.InputTokens), CompletionTokens: value(response.Usage.OutputTokens), CachedTokens: value(response.Usage.CachedInputTokens), TotalTokens: value(response.Usage.TotalTokens)}
+	return validateAnalysisResult(parsed, r), u, nil
 }
 
 var structuredJSONCodeBlock = regexp.MustCompile("(?s)```(json)?\\s*\\n?(.*?)\\n?```")
@@ -230,23 +164,6 @@ func providerEndpoint(baseURL, model string) (string, error) {
 	}
 	parsed.Path = strings.TrimRight(parsed.Path, "/") + "/" + url.PathEscape(model) + ":generateContent"
 	return parsed.String(), nil
-}
-
-func parseRetryAfter(raw string) *float64 {
-	if raw == "" {
-		return nil
-	}
-	if seconds, err := strconv.ParseFloat(strings.TrimSpace(raw), 64); err == nil && seconds >= 0 && !math.IsInf(seconds, 0) && !math.IsNaN(seconds) {
-		return &seconds
-	}
-	if date, err := http.ParseTime(raw); err == nil {
-		seconds := time.Until(date).Seconds()
-		if seconds < 0 {
-			seconds = 0
-		}
-		return &seconds
-	}
-	return nil
 }
 
 func ensureEOF(dec *json.Decoder) error {

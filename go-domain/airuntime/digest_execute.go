@@ -11,10 +11,12 @@ import (
 	"strings"
 	"time"
 
+	"github.com/Dzarlax-AI/evening-news/go-domain/analysis"
 	"github.com/Dzarlax-AI/evening-news/go-domain/authority"
 	"github.com/Dzarlax-AI/evening-news/go-domain/digestworkflow"
 	"github.com/Dzarlax-AI/evening-news/go-domain/telegramdelivery"
 	"github.com/Dzarlax-AI/evening-news/go-editorial/editorial"
+	"github.com/jackc/pgx/v5"
 )
 
 func hashBytes(b []byte) string { h := sha256.Sum256(b); return hex.EncodeToString(h[:]) }
@@ -22,11 +24,31 @@ func (s *Server) executeDigest(ctx context.Context, v digestInput, f authority.F
 	if err := f.Check(ctx); err != nil {
 		return nil, err
 	}
-	endpoint, err := editorialEndpoint(s.config.Endpoint, s.config.DigestModel)
-	if err != nil && v.Operation == "summaries_generate" {
-		return nil, err
+	wf := digestworkflow.Workflow{Pool: s.db, Fence: f, SiteBase: s.config.SiteBase}
+	wf.ResolveProvider = func(ctx context.Context) (editorial.ProviderConfig, error) {
+		snap, err := s.snapshot(ctx, "digest")
+		if err != nil {
+			return editorial.ProviderConfig{}, err
+		}
+		return editorial.ProviderConfig{Provider: snap.provider, Model: snap.model, Revision: snap.revision}, nil
 	}
-	wf := digestworkflow.Workflow{Pool: s.db, Fence: f, SiteBase: s.config.SiteBase, Provider: editorial.ProviderConfig{APIKey: s.config.APIKey, Model: s.config.DigestModel, Endpoint: endpoint, Client: s.client}}
+	wf.PriceUsage = func(u editorial.ProviderUsage) *float64 {
+		values := usageInsert(usageRecord{usage: analysis.Usage{Provider: u.Provider, RequestedModel: u.RequestedModel, Model: u.Model, Normalized: u.Normalized}}, s.config)
+		if cost, ok := values["cost"].(float64); ok {
+			return &cost
+		}
+		return nil
+	}
+	wf.RecordUsage = func(ctx context.Context, tx pgx.Tx, u editorial.ProviderUsage) error {
+		rec := usageRecord{domain: "digest", analysisType: "digest", usage: analysis.Usage{Provider: u.Provider, RequestedModel: u.RequestedModel, Model: u.Model, ProfileRevision: u.Revision, Normalized: u.Normalized, PromptTokens: u.PromptTokenCount, CompletionTokens: u.CandidatesTokenCount, TotalTokens: u.TotalTokenCount}}
+		values := usageInsert(rec, s.config)
+		details, err := json.Marshal(values["result"])
+		if err != nil {
+			return err
+		}
+		_, err = tx.Exec(ctx, `INSERT INTO ai_usage_tracking(domain,analysis_type,tokens_used,credits_cost,analysis_result,created_at) VALUES($1,$2,$3,$4,$5,timezone('UTC',now()))`, rec.domain, rec.analysisType, values["tokens_used"], values["cost"], details)
+		return err
+	}
 	deadline, _ := time.Parse(time.RFC3339Nano, v.Envelope.Deadline)
 	identity := digestworkflow.Identity{JobID: v.Envelope.JobID, Attempt: v.Envelope.Attempt, DomainInstanceID: v.DomainInstanceID, Deadline: deadline}
 	switch v.Operation {

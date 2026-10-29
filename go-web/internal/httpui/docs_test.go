@@ -189,12 +189,12 @@ func TestDocsRoutesServeFrozenOpenAPIWithoutRemoteAssets(t *testing.T) {
 	if err := json.Unmarshal(resp.Body.Bytes(), &served); err != nil {
 		t.Fatal(err)
 	}
-	if len(served["paths"].(map[string]any)) != 90 {
+	if len(served["paths"].(map[string]any)) != 91 {
 		t.Fatalf("unexpected frozen schema path count: %d", len(served["paths"].(map[string]any)))
 	}
 }
 
-func TestCheckedInOpenAPIIsAnUnmodifiedBaselineCopy(t *testing.T) {
+func TestCheckedInOpenAPIPreservesBaselineAndAddsAISettings(t *testing.T) {
 	fixtureBytes, err := os.ReadFile("../../../tests/fixtures/web-contract-v1/registered-routes-openapi.json")
 	if err != nil {
 		t.Fatal(err)
@@ -216,6 +216,17 @@ func TestCheckedInOpenAPIIsAnUnmodifiedBaselineCopy(t *testing.T) {
 	if err := json.Unmarshal(contractBytes, &got); err != nil {
 		t.Fatal(err)
 	}
+	gotRoot := got.(map[string]any)
+	paths := gotRoot["paths"].(map[string]any)
+	ai, ok := paths["/api/v1/ai/settings"].(map[string]any)
+	if !ok || ai["get"] == nil || ai["put"] == nil {
+		t.Fatal("AI settings GET and PUT must be documented")
+	}
+	put := ai["put"].(map[string]any)
+	if put["requestBody"] == nil || put["responses"].(map[string]any)["409"] == nil || put["responses"].(map[string]any)["422"] == nil {
+		t.Fatal("AI settings update contract is incomplete")
+	}
+	delete(paths, "/api/v1/ai/settings")
 	if !reflect.DeepEqual(got, want) {
 		t.Fatal("contracts/openapi.json differs from the frozen Python OpenAPI snapshot")
 	}

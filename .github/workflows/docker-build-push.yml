@@ -13,6 +13,7 @@ on:
       - 'go-execution/**'
       - 'go-editorial/**'
       - 'go-domain/**'
+      - 'go-ai/**'
       - 'go-tools/**'
       - 'go/**'
       - 'go-ingestion/**'
@@ -44,6 +45,7 @@ on:
       - 'go-execution/**'
       - 'go-editorial/**'
       - 'go-domain/**'
+      - 'go-ai/**'
       - 'go-tools/**'
       - 'go/**'
       - 'go-ingestion/**'
@@ -73,6 +75,24 @@ permissions:
   contents: read
 
 jobs:
+  go-ai-tests:
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          persist-credentials: false
+      - uses: actions/setup-go@v5
+        with:
+          go-version-file: go-ai/go.mod
+          cache-dependency-path: go-ai/go.mod
+      - name: Race tests, vet, and module verification
+        working-directory: go-ai
+        run: |
+          go mod verify
+          go test -race -count=1 ./...
+          go vet ./...
+
   go-core-tests:
     runs-on: ubuntu-latest
     timeout-minutes: 30
@@ -133,7 +153,7 @@ jobs:
 
   assemble-fixture:
     if: ${{ !(github.event_name == 'workflow_dispatch' && inputs.publish && github.ref == 'refs/heads/main') }}
-    needs: [go-core-tests, cross-build-arm64]
+    needs: [go-ai-tests, go-core-tests, cross-build-arm64]
     runs-on: ubuntu-latest
     timeout-minutes: 35
     strategy:
@@ -180,7 +200,7 @@ jobs:
 
   publish-reviewed-main:
     if: ${{ github.event_name == 'workflow_dispatch' && inputs.publish && github.ref == 'refs/heads/main' }}
-    needs: [go-core-tests, cross-build-arm64]
+    needs: [go-ai-tests, go-core-tests, cross-build-arm64]
     concurrency:
       group: core-image-publish-${{ github.sha }}
       cancel-in-progress: false

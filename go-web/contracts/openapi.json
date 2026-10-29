@@ -4421,6 +4421,404 @@
         },
         "summary": "Public Search View"
       }
+    },
+    "/api/v1/ai/settings": {
+      "get": {
+        "operationId": "get_ai_settings",
+        "summary": "Get AI settings (admin only)",
+        "responses": {
+          "200": {
+            "description": "AI settings",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object",
+                  "required": [
+                    "revision",
+                    "active_provider",
+                    "profiles",
+                    "configured",
+                    "source"
+                  ],
+                  "properties": {
+                    "revision": {
+                      "type": "integer",
+                      "format": "int64"
+                    },
+                    "active_provider": {
+                      "type": "string",
+                      "enum": [
+                        "gemini",
+                        "openai"
+                      ]
+                    },
+                    "profiles": {
+                      "type": "object",
+                      "additionalProperties": false,
+                      "required": [
+                        "gemini",
+                        "openai"
+                      ],
+                      "properties": {
+                        "gemini": {
+                          "type": "object",
+                          "additionalProperties": false,
+                          "required": [
+                            "models"
+                          ],
+                          "properties": {
+                            "models": {
+                              "type": "object",
+                              "additionalProperties": false,
+                              "required": [
+                                "article",
+                                "digest",
+                                "text"
+                              ],
+                              "properties": {
+                                "article": {
+                                  "type": "string",
+                                  "maxLength": 128
+                                },
+                                "digest": {
+                                  "type": "string",
+                                  "maxLength": 128
+                                },
+                                "text": {
+                                  "type": "string",
+                                  "maxLength": 128
+                                }
+                              }
+                            }
+                          }
+                        },
+                        "openai": {
+                          "type": "object",
+                          "additionalProperties": false,
+                          "required": [
+                            "models"
+                          ],
+                          "properties": {
+                            "models": {
+                              "type": "object",
+                              "additionalProperties": false,
+                              "required": [
+                                "article",
+                                "digest",
+                                "text"
+                              ],
+                              "properties": {
+                                "article": {
+                                  "type": "string",
+                                  "maxLength": 128
+                                },
+                                "digest": {
+                                  "type": "string",
+                                  "maxLength": 128
+                                },
+                                "text": {
+                                  "type": "string",
+                                  "maxLength": 128
+                                }
+                              }
+                            }
+                          }
+                        }
+                      }
+                    },
+                    "configured": {
+                      "type": "object",
+                      "required": [
+                        "gemini",
+                        "openai"
+                      ],
+                      "properties": {
+                        "gemini": {
+                          "type": "boolean"
+                        },
+                        "openai": {
+                          "type": "boolean"
+                        }
+                      }
+                    },
+                    "source": {
+                      "type": "string",
+                      "enum": [
+                        "env",
+                        "override"
+                      ]
+                    }
+                  }
+                }
+              }
+            }
+          },
+          "401": {
+            "description": "Authentication required"
+          },
+          "403": {
+            "description": "Admin access required"
+          },
+          "503": {
+            "description": "Private backend unavailable"
+          }
+        }
+      },
+      "put": {
+        "operationId": "update_ai_settings",
+        "summary": "Update AI settings (admin only)",
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": {
+              "schema": {
+                "type": "object",
+                "additionalProperties": false,
+                "required": [
+                  "expected_revision",
+                  "active_provider",
+                  "profiles",
+                  "reset_to_env"
+                ],
+                "properties": {
+                  "expected_revision": {
+                    "type": "integer",
+                    "format": "int64",
+                    "minimum": 0
+                  },
+                  "active_provider": {
+                    "type": "string",
+                    "enum": [
+                      "gemini",
+                      "openai"
+                    ]
+                  },
+                  "profiles": {
+                    "type": "object",
+                    "additionalProperties": false,
+                    "required": [
+                      "gemini",
+                      "openai"
+                    ],
+                    "properties": {
+                      "gemini": {
+                        "type": "object",
+                        "additionalProperties": false,
+                        "required": [
+                          "models"
+                        ],
+                        "properties": {
+                          "models": {
+                            "type": "object",
+                            "additionalProperties": false,
+                            "required": [
+                              "article",
+                              "digest",
+                              "text"
+                            ],
+                            "properties": {
+                              "article": {
+                                "type": "string",
+                                "maxLength": 128
+                              },
+                              "digest": {
+                                "type": "string",
+                                "maxLength": 128
+                              },
+                              "text": {
+                                "type": "string",
+                                "maxLength": 128
+                              }
+                            }
+                          }
+                        }
+                      },
+                      "openai": {
+                        "type": "object",
+                        "additionalProperties": false,
+                        "required": [
+                          "models"
+                        ],
+                        "properties": {
+                          "models": {
+                            "type": "object",
+                            "additionalProperties": false,
+                            "required": [
+                              "article",
+                              "digest",
+                              "text"
+                            ],
+                            "properties": {
+                              "article": {
+                                "type": "string",
+                                "maxLength": 128
+                              },
+                              "digest": {
+                                "type": "string",
+                                "maxLength": 128
+                              },
+                              "text": {
+                                "type": "string",
+                                "maxLength": 128
+                              }
+                            }
+                          }
+                        }
+                      }
+                    }
+                  },
+                  "reset_to_env": {
+                    "type": "boolean"
+                  }
+                }
+              }
+            }
+          }
+        },
+        "responses": {
+          "200": {
+            "description": "AI settings",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object",
+                  "required": [
+                    "revision",
+                    "active_provider",
+                    "profiles",
+                    "configured",
+                    "source"
+                  ],
+                  "properties": {
+                    "revision": {
+                      "type": "integer",
+                      "format": "int64"
+                    },
+                    "active_provider": {
+                      "type": "string",
+                      "enum": [
+                        "gemini",
+                        "openai"
+                      ]
+                    },
+                    "profiles": {
+                      "type": "object",
+                      "additionalProperties": false,
+                      "required": [
+                        "gemini",
+                        "openai"
+                      ],
+                      "properties": {
+                        "gemini": {
+                          "type": "object",
+                          "additionalProperties": false,
+                          "required": [
+                            "models"
+                          ],
+                          "properties": {
+                            "models": {
+                              "type": "object",
+                              "additionalProperties": false,
+                              "required": [
+                                "article",
+                                "digest",
+                                "text"
+                              ],
+                              "properties": {
+                                "article": {
+                                  "type": "string",
+                                  "maxLength": 128
+                                },
+                                "digest": {
+                                  "type": "string",
+                                  "maxLength": 128
+                                },
+                                "text": {
+                                  "type": "string",
+                                  "maxLength": 128
+                                }
+                              }
+                            }
+                          }
+                        },
+                        "openai": {
+                          "type": "object",
+                          "additionalProperties": false,
+                          "required": [
+                            "models"
+                          ],
+                          "properties": {
+                            "models": {
+                              "type": "object",
+                              "additionalProperties": false,
+                              "required": [
+                                "article",
+                                "digest",
+                                "text"
+                              ],
+                              "properties": {
+                                "article": {
+                                  "type": "string",
+                                  "maxLength": 128
+                                },
+                                "digest": {
+                                  "type": "string",
+                                  "maxLength": 128
+                                },
+                                "text": {
+                                  "type": "string",
+                                  "maxLength": 128
+                                }
+                              }
+                            }
+                          }
+                        }
+                      }
+                    },
+                    "configured": {
+                      "type": "object",
+                      "required": [
+                        "gemini",
+                        "openai"
+                      ],
+                      "properties": {
+                        "gemini": {
+                          "type": "boolean"
+                        },
+                        "openai": {
+                          "type": "boolean"
+                        }
+                      }
+                    },
+                    "source": {
+                      "type": "string",
+                      "enum": [
+                        "env",
+                        "override"
+                      ]
+                    }
+                  }
+                }
+              }
+            }
+          },
+          "401": {
+            "description": "Authentication required"
+          },
+          "403": {
+            "description": "Admin access required"
+          },
+          "503": {
+            "description": "Private backend unavailable"
+          },
+          "409": {
+            "description": "Revision conflict"
+          },
+          "422": {
+            "description": "Invalid request or provider configuration"
+          }
+        }
+      }
     }
   },
   "servers": [

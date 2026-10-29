@@ -206,6 +206,9 @@ func run() error {
 		_ = guard.Close(ctx)
 	}()
 	runtime := airuntime.NewServer(config, pool)
+	if err := runtime.ValidateAISettings(root); err != nil {
+		return errors.New("invalid effective AI settings")
+	}
 	runtime.StartUsageWorkers(1)
 	appCtx, cancelApp := context.WithCancel(root)
 	defer cancelApp()

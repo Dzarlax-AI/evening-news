@@ -39,8 +39,15 @@ func (w Workflow) Generate(ctx context.Context, job string, attempt int, operati
 	if len(snap.Articles) == 0 {
 		return 0, nil
 	}
+	provider := w.Provider
+	if w.ResolveProvider != nil {
+		provider, err = w.ResolveProvider(ctx)
+		if err != nil {
+			return 0, err
+		}
+	}
 	providerCtx, cancel := context.WithTimeout(ctx, 60*time.Second)
-	generation, err := editorial.Generate(providerCtx, snap, "ru", w.Provider)
+	generation, err := editorial.Generate(providerCtx, snap, "ru", provider)
 	cancel()
 	if err != nil {
 		return 0, err
@@ -56,6 +63,9 @@ func (w Workflow) Generate(ctx context.Context, job string, attempt int, operati
 	renderJSON, err := json.Marshal(rendered)
 	if err != nil {
 		return 0, ErrInvalid
+	}
+	if w.PriceUsage != nil {
+		generation.Usage.Cost = w.PriceUsage(generation.Usage)
 	}
 	usageJSON, err := json.Marshal(generation.Usage)
 	if err != nil {
@@ -74,6 +84,11 @@ func (w Workflow) Generate(ctx context.Context, job string, attempt int, operati
  ON CONFLICT (job_id,attempt_generation,locale) DO NOTHING`, id, snap.Date, generation.Edition.SourceSnapshotHash, snapshot, editionJSON, renderJSON, usageJSON, job, attempt)
 	if err != nil {
 		return 0, err
+	}
+	if tag.RowsAffected() == 1 && w.RecordUsage != nil {
+		if err = w.RecordUsage(ctx, tx, generation.Usage); err != nil {
+			return 0, err
+		}
 	}
 	if tag.RowsAffected() == 0 {
 		var found bool

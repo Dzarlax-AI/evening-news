@@ -23,6 +23,8 @@ const maxBackupUpload = 64 << 20
 func RegisterBackend(mux *http.ServeMux, service *auth.Service, ops backend.Operations) {
 	h := &backendHandler{ops: ops}
 	admin := func(pattern string, fn http.HandlerFunc) { mux.Handle(pattern, RequireAPIAdmin(service, fn)) }
+	admin("GET /api/v1/ai/settings", h.aiSettingsGet)
+	admin("PUT /api/v1/ai/settings", h.aiSettingsPut)
 	admin("POST /api/v1/categories/ai-category-analysis", h.analyzeCategories)
 	admin("POST /api/v1/telegram/test", h.testTelegram)
 	admin("GET /api/v1/backup", h.listBackups)

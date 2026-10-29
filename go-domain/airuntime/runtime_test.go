@@ -204,7 +204,7 @@ func TestSharedPermitAndProviderUseOneWindow(t *testing.T) {
 	s := NewServer(Config{APIKey: "test", Endpoint: "https://fixture.invalid/v1/models", Model: "gemini-2", RPS: 2}, nil)
 	s.limiter = limiter
 	s.client = &http.Client{Transport: roundTripFunc(func(req *http.Request) (*http.Response, error) {
-		return response(200, nil, `{"candidates":[{"content":{"parts":[{"text":"ok"}]}}],"usageMetadata":{}}`), nil
+		return response(200, nil, `{"candidates":[{"finishReason":"STOP","content":{"parts":[{"text":"ok"}]}}],"usageMetadata":{}}`), nil
 	})}
 	request := generateRequest{Mode: "text", Prompt: "x", Model: "gemini-2", AnalysisType: "x", Domain: "x", Options: generateOptions{Temperature: .1, MaxTokens: 20}}
 	start := time.Now()
@@ -308,7 +308,7 @@ func TestDomainPreservesAuthorityAndGenericRequiresStatus200(t *testing.T) {
 	s := NewServer(Config{APIKey: "test", Endpoint: "https://fixture.invalid/v1/models", Model: "gemini-2", RPS: 10}, nil)
 	s.client = &http.Client{Transport: roundTripFunc(func(*http.Request) (*http.Response, error) {
 		calls.Add(1)
-		return response(http.StatusCreated, nil, `{"candidates":[{"content":{"parts":[{"text":"unexpected"}]}}]}`), nil
+		return response(http.StatusCreated, nil, `{"candidates":[{"finishReason":"STOP","content":{"parts":[{"text":"unexpected"}]}}]}`), nil
 	})}
 	req := generateRequest{Mode: "text", Prompt: "x", Model: "gemini-2", AnalysisType: "x", Domain: "x", Options: generateOptions{Temperature: .1, MaxTokens: 20}}
 	_, err := s.callGenerate(context.Background(), req)
@@ -328,7 +328,7 @@ func runGenerateOverUnix(t *testing.T, providerStatus int, domain string) (int, 
 		providerCalls.Add(1)
 		if providerStatus == http.StatusOK {
 			w.Header().Set("Content-Type", "application/json")
-			_, _ = io.WriteString(w, `{"candidates":[{"content":{"parts":[{"text":"generated"}]}}],"usageMetadata":{"promptTokenCount":2,"candidatesTokenCount":1}}`)
+			_, _ = io.WriteString(w, `{"candidates":[{"finishReason":"STOP","content":{"parts":[{"text":"generated"}]}}],"usageMetadata":{"promptTokenCount":2,"candidatesTokenCount":1}}`)
 			return
 		}
 		w.WriteHeader(providerStatus)
@@ -555,7 +555,7 @@ func TestUDSAuthenticationSocketModeAndCleanup(t *testing.T) {
 	}
 	socket := filepath.Join(dir, "ai.sock")
 	ctx, cancel := context.WithCancel(context.Background())
-	s := NewServer(Config{Socket: socket, Token: "boot-token", RPS: 2}, nil)
+	s := NewServer(Config{Socket: socket, Token: "boot-token", RPS: 2, APIKey: "fixture", Model: "fixture-model", Endpoint: "https://generativelanguage.googleapis.com/v1/models"}, nil)
 	done := make(chan error, 1)
 	go func() { done <- ServeUnix(ctx, s) }()
 	var conn net.Conn
@@ -633,7 +633,7 @@ func TestUDSCleanupNeverRemovesPreexistingOrReplacedPath(t *testing.T) {
 	if err = os.WriteFile(socket, []byte("original"), 0600); err != nil {
 		t.Fatal(err)
 	}
-	s := NewServer(Config{Socket: socket, Token: "boot-token"}, nil)
+	s := NewServer(Config{Socket: socket, Token: "boot-token", APIKey: "fixture", Model: "fixture-model", Endpoint: "https://generativelanguage.googleapis.com/v1/models"}, nil)
 	if err = ServeUnix(context.Background(), s); err == nil {
 		t.Fatal("preexisting path accepted")
 	}
@@ -698,7 +698,7 @@ func TestAnalyzeArticleDirectUsesSharedRuntime(t *testing.T) {
 	var calls atomic.Int32
 	s.client = &http.Client{Transport: roundTripFunc(func(req *http.Request) (*http.Response, error) {
 		calls.Add(1)
-		return response(200, nil, `{"candidates":[{"content":{"parts":[{"text":"{\"summary\":\"ok\",\"categories\":[\"Business\"],\"is_advertisement\":false}"}]}}],"usageMetadata":{"promptTokenCount":10,"candidatesTokenCount":20}}`), nil
+		return response(200, nil, `{"candidates":[{"finishReason":"STOP","content":{"parts":[{"text":"{\"summary\":\"ok\",\"categories\":[\"Business\"],\"is_advertisement\":false}"}]}}],"usageMetadata":{"promptTokenCount":10,"candidatesTokenCount":20}}`), nil
 	})}
 	ctx, cancel := context.WithTimeout(context.Background(), time.Minute)
 	defer cancel()
@@ -768,7 +768,7 @@ func TestGenerateTextDirectSharesUsageAndCancellation(t *testing.T) {
 	var request map[string]any
 	s.client = &http.Client{Transport: roundTripFunc(func(r *http.Request) (*http.Response, error) {
 		_ = json.NewDecoder(r.Body).Decode(&request)
-		return response(200, nil, `{"candidates":[{"content":{"parts":[{"text":"fixture result"}]}}],"usageMetadata":{"promptTokenCount":2,"candidatesTokenCount":3}}`), nil
+		return response(200, nil, `{"candidates":[{"finishReason":"STOP","content":{"parts":[{"text":"fixture result"}]}}],"usageMetadata":{"promptTokenCount":2,"candidatesTokenCount":3}}`), nil
 	})}
 	ctx, cancel := context.WithTimeout(context.Background(), time.Minute)
 	defer cancel()
@@ -789,7 +789,7 @@ func TestGenerateTextDirectSharesUsageAndCancellation(t *testing.T) {
 func TestDomainTelegramRichBooleanEnvironment(t *testing.T) {
 	t.Setenv("DATABASE_URL", "postgres://fixture:fixture@localhost/test")
 	t.Setenv("GEMINI_API_KEY", "fixture-key")
-	t.Setenv("GEMINI_API_ENDPOINT", "https://fixture.invalid/v1/models")
+	t.Setenv("GEMINI_API_ENDPOINT", "https://generativelanguage.googleapis.com/v1/models")
 	t.Setenv("SUMMARIZATION_MODEL", "fixture-model")
 	t.Setenv("NEWS_FIXTURE_MODE", "0")
 	for _, tc := range []struct {

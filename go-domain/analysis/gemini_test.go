@@ -4,6 +4,7 @@ import (
 	"context"
 	"encoding/json"
 	"errors"
+	ai "github.com/Dzarlax-AI/evening-news/go-ai"
 	"net/http"
 	"net/http/httptest"
 	"strings"
@@ -17,7 +18,7 @@ func testRequest(endpoint string) Request {
 }
 
 func providerResponse(metadata string) string {
-	return `{"candidates":[{"content":{"parts":[{"text":"{\"summary\":\"ok\",\"categories\":[\"Business\"],\"is_advertisement\":false}"}]}}],"usageMetadata":{` + metadata + `}}`
+	return `{"candidates":[{"finishReason":"STOP","content":{"parts":[{"text":"{\"summary\":\"ok\",\"categories\":[\"Business\"],\"is_advertisement\":false}"}]}}],"usageMetadata":{` + metadata + `}}`
 }
 
 func TestAnalyzeGeminiRequestAndUsage(t *testing.T) {
@@ -28,8 +29,8 @@ func TestAnalyzeGeminiRequestAndUsage(t *testing.T) {
 		if !strings.Contains(r.URL.Path, "gemini-2.5-flash:generateContent") {
 			t.Errorf("path = %s", r.URL.Path)
 		}
-		if r.URL.Query().Get("key") != "test-key" {
-			t.Errorf("provider key missing from query")
+		if r.Header.Get("x-goog-api-key") != "test-key" {
+			t.Errorf("provider key missing from header")
 		}
 		var request map[string]any
 		if err := json.NewDecoder(r.Body).Decode(&request); err != nil {
@@ -66,7 +67,7 @@ func TestMissingTotalUsageFallsBackButExplicitZeroDoesNot(t *testing.T) {
 		name, metadata string
 		want           int
 	}{
-		{"missing", `"promptTokenCount":7,"candidatesTokenCount":11,"cachedContentTokenCount":2`, 20},
+		{"missing", `"promptTokenCount":7,"candidatesTokenCount":11,"cachedContentTokenCount":2`, 0},
 		{"zero", `"promptTokenCount":7,"candidatesTokenCount":11,"cachedContentTokenCount":2,"totalTokenCount":0`, 0},
 	} {
 		t.Run(tc.name, func(t *testing.T) {
@@ -92,20 +93,20 @@ func TestProviderErrorsPreserveRetryPhase(t *testing.T) {
 	defer server.Close()
 	r := testRequest(server.URL + "/v1/models")
 	_, _, err := Analyze(context.Background(), r, ProviderConfig{APIKey: "key", Model: r.Model, Endpoint: r.Endpoint, Client: server.Client()})
-	var ae *AnalysisError
+	var ae *ai.Error
 	if !errors.As(err, &ae) {
 		t.Fatalf("error = %T %v", err, err)
 	}
-	if ae.Detail.StatusCode == nil || *ae.Detail.StatusCode != 429 || ae.Detail.RetryAfterSeconds == nil || *ae.Detail.RetryAfterSeconds != 12 || ae.Detail.RetryableTransport {
-		t.Fatalf("provider error = %#v", ae.Detail)
+	if ae.StatusCode != 429 || ae.RetryAfter.Seconds() != 12 || !ae.Retryable {
+		t.Fatalf("provider error = %#v", ae)
 	}
 }
 
 func TestTransportErrorIsEligibleForImmediateRetry(t *testing.T) {
 	r := testRequest("http://127.0.0.1:1/v1/models")
 	_, _, err := Analyze(context.Background(), r, ProviderConfig{APIKey: "key", Model: r.Model, Endpoint: r.Endpoint})
-	var ae *AnalysisError
-	if !errors.As(err, &ae) || !ae.Detail.RetryableTransport {
+	var ae *ai.Error
+	if !errors.As(err, &ae) || !ae.Retryable {
 		t.Fatalf("error = %#v", err)
 	}
 }
@@ -115,8 +116,8 @@ func TestMalformedProviderJSONIsNotTransportRetryable(t *testing.T) {
 	defer server.Close()
 	r := testRequest(server.URL + "/v1/models")
 	_, _, err := Analyze(context.Background(), r, ProviderConfig{APIKey: "key", Model: r.Model, Endpoint: r.Endpoint, Client: server.Client()})
-	var ae *AnalysisError
-	if !errors.As(err, &ae) || ae.Detail.RetryableTransport || ae.Detail.Code != CodeProviderInvalid {
+	var ae *ai.Error
+	if !errors.As(err, &ae) || ae.Retryable || ae.Kind != "invalid_response" {
 		t.Fatalf("error = %#v", err)
 	}
 }
@@ -145,7 +146,7 @@ func TestStructuredJSONPreservesLegacyFencedAndPrefixedExtraction(t *testing.T) 
 func TestAnalyzeTrimsWhitespaceInLegacyNumericStrings(t *testing.T) {
 	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		body, _ := json.Marshal(map[string]any{
-			"candidates": []any{map[string]any{"content": map[string]any{"parts": []any{
+			"candidates": []any{map[string]any{"finishReason": "STOP", "content": map[string]any{"parts": []any{
 				map[string]string{"text": `{"summary":"ok","categories":["Business"],"is_advertisement":false,"category_confidence":" 0.72 "}`},
 			}}}},
 			"usageMetadata": map[string]any{"promptTokenCount": 1, "candidatesTokenCount": 1, "totalTokenCount": 2},

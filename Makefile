@@ -1,6 +1,6 @@
 # Local development commands. Runtime configuration is supplied separately.
 COMPOSE = docker compose -f docker-compose.example.yml -f docker-compose.dev.yml
-GO_MODULES = go go-web go-background go-worker go-scheduler go-ingestion go-processing go-execution go-editorial go-domain go-tools
+GO_MODULES = go-ai go go-web go-background go-worker go-scheduler go-ingestion go-processing go-execution go-editorial go-domain go-tools
 
 .PHONY: help dev stop logs build migrate test vet
 

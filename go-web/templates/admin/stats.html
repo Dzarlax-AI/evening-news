@@ -506,7 +506,7 @@
                     <div class="ai-usage-label">токенов за период</div>
                 </div>
                 <div class="ai-usage-card">
-                    <div class="ai-usage-value" id="ai-cost-total">$0.00</div>
+                    <div class="ai-usage-value" id="ai-cost-total">—</div>
                     <div class="ai-usage-label">расходы за период</div>
                 </div>
                 <div class="ai-usage-card">
@@ -1109,7 +1109,7 @@ async function loadAIUsageStats() {
         // Update main stats
         document.getElementById('ai-tokens-today').textContent = formatNumber(data.today?.tokens || 0);
         document.getElementById('ai-tokens-total').textContent = formatNumber(data.total?.tokens || 0);
-        document.getElementById('ai-cost-total').textContent = `$${(data.total?.cost || 0).toFixed(6)}`;
+        document.getElementById('ai-cost-total').textContent = formatAICost(data.total);
         document.getElementById('ai-requests-total').textContent = formatNumber(data.total?.requests || 0);
 
         // Update by type list
@@ -1157,6 +1157,12 @@ async function loadAIUsageStats() {
         document.getElementById('ai-cost-total').textContent = '-';
         document.getElementById('ai-requests-total').textContent = '-';
     }
+}
+
+function formatAICost(total) {
+    if (!total || total.cost == null) return 'Неизвестно';
+    const amount = `$${total.cost > 0 && total.cost < 0.000001 ? total.cost.toExponential(2) : total.cost.toFixed(6)}`;
+    return total.unknown_cost_count > 0 ? `${amount} (частично; неизвестно: ${total.unknown_cost_count})` : amount;
 }
 
 function formatNumber(num) {

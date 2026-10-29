@@ -30,6 +30,8 @@ type Server struct {
 
 func (s *Server) Handler() http.Handler {
 	mux := http.NewServeMux()
+	mux.HandleFunc("GET /internal/web/v1/ai/settings", s.aiSettingsGet)
+	mux.HandleFunc("PUT /internal/web/v1/ai/settings", s.aiSettingsPut)
 	mux.HandleFunc("POST /internal/web/v1/categories/ai-category-analysis", s.categoryAnalysis)
 	mux.HandleFunc("POST /internal/web/v1/categories/invalidate-cache", s.invalidate)
 	mux.HandleFunc("GET /internal/web/v1/telegram/settings", s.telegramSettings)

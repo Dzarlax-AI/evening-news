@@ -8,6 +8,7 @@
 <div class="settings-tabs">
     <button class="settings-tab active" onclick="switchSettingsTab('telegram')">Telegram</button>
     <button class="settings-tab" onclick="switchSettingsTab('schedule')">Расписание</button>
+    <button class="settings-tab" onclick="switchSettingsTab('ai')">AI</button>
 </div>
 
 <!-- ==================== TELEGRAM TAB ==================== -->
@@ -68,6 +69,35 @@
             <div id="tg-action-result" class="settings-result" style="display:none;"></div>
         </div>
     </div>
+</div>
+
+<div id="settings-tab-ai" class="settings-panel" style="display:none;">
+    <h2>AI</h2>
+    <div class="settings-card"><div class="settings-card-body">
+        <p id="ai-status" role="status" aria-live="polite">Загрузка...</p>
+        <form id="ai-form" onsubmit="aiSave(event, false)">
+            <fieldset id="ai-fields" disabled>
+                <div class="settings-form-group"><label for="ai-provider">Провайдер</label>
+                    <select id="ai-provider" class="settings-input"><option value="gemini">Gemini</option><option value="openai">OpenAI</option></select>
+                </div>
+                <p class="settings-hint">Ключи задаются в окружении приватного сервиса. Их значения здесь недоступны.</p>
+                <div class="settings-form-row" style="grid-template-columns:repeat(auto-fit,minmax(220px,1fr));">
+                    <div><h3>Gemini</h3><p id="ai-gemini-key"></p>
+                        <div class="settings-form-group"><label for="ai-gemini-article">Модель статьи</label><input id="ai-gemini-article" class="settings-input" maxlength="128"></div>
+                        <div class="settings-form-group"><label for="ai-gemini-digest">Модель дайджеста</label><input id="ai-gemini-digest" class="settings-input" maxlength="128"></div>
+                        <div class="settings-form-group"><label for="ai-gemini-text">Модель текста</label><input id="ai-gemini-text" class="settings-input" maxlength="128"></div>
+                    </div>
+                    <div><h3>OpenAI</h3><p id="ai-openai-key"></p>
+                        <div class="settings-form-group"><label for="ai-openai-article">Модель статьи</label><input id="ai-openai-article" class="settings-input" maxlength="128"></div>
+                        <div class="settings-form-group"><label for="ai-openai-digest">Модель дайджеста</label><input id="ai-openai-digest" class="settings-input" maxlength="128"></div>
+                        <div class="settings-form-group"><label for="ai-openai-text">Модель текста</label><input id="ai-openai-text" class="settings-input" maxlength="128"></div>
+                    </div>
+                </div>
+                <div style="display:flex;flex-wrap:wrap;gap:10px;margin-top:16px;"><button class="btn btn--primary" type="submit">Сохранить</button><button class="btn btn--secondary" type="button" onclick="aiSave(null, true)">Сбросить к окружению</button><button class="btn btn--secondary" type="button" onclick="aiLoad()">Обновить</button></div>
+            </fieldset>
+        </form>
+        <button id="ai-retry" class="btn btn--secondary" type="button" onclick="aiLoad()" hidden>Повторить загрузку</button>
+    </div></div>
 </div>
 
 <!-- ==================== SCHEDULE TAB ==================== -->
@@ -221,16 +251,17 @@ function switchSettingsTab(tab) {
     document.querySelectorAll('.settings-panel').forEach(p => p.style.display = 'none');
     document.querySelectorAll('.settings-tab').forEach(t => t.classList.remove('active'));
     document.getElementById('settings-tab-' + tab).style.display = 'block';
-    event.target.classList.add('active');
+    document.querySelectorAll('.settings-tab').forEach(t => t.classList.toggle('active', t.getAttribute('onclick') === "switchSettingsTab('" + tab + "')"));
     localStorage.setItem('settings_tab', tab);
 }
 
 document.addEventListener('DOMContentLoaded', () => {
-    const saved = localStorage.getItem('settings_tab') || 'telegram';
+    const stored = localStorage.getItem('settings_tab');
+    const saved = ['telegram', 'schedule', 'ai'].includes(stored) ? stored : 'telegram';
     const tabs = document.querySelectorAll('.settings-tab');
     tabs.forEach(t => {
         t.classList.remove('active');
-        if (t.textContent.trim().toLowerCase() === (saved === 'telegram' ? 'telegram' : 'расписание')) {
+        if (t.getAttribute('onclick') === "switchSettingsTab('" + saved + "')") {
             t.classList.add('active');
         }
     });
@@ -239,7 +270,48 @@ document.addEventListener('DOMContentLoaded', () => {
 
     tgLoadSettings();
     schLoadAll();
+    aiLoad();
 });
+
+let aiSettings = null;
+function aiMessage(message) { document.getElementById('ai-status').textContent = message; }
+async function aiLoad() {
+    const fields = document.getElementById('ai-fields');
+    fields.disabled = true; document.getElementById('ai-retry').hidden = true; aiMessage('Загрузка...');
+    try {
+        const r = await fetch('/api/v1/ai/settings');
+        if (!r.ok) throw new Error('Не удалось загрузить настройки');
+        const d = await window.readApiResponse(r); aiSettings = d;
+        document.getElementById('ai-provider').value = d.active_provider;
+        for (const provider of ['gemini', 'openai']) {
+            document.getElementById('ai-' + provider + '-key').textContent = d.configured[provider] ? 'Ключ настроен' : 'Ключ не настроен';
+            for (const purpose of ['article', 'digest', 'text']) document.getElementById('ai-' + provider + '-' + purpose).value = d.profiles[provider].models[purpose];
+        }
+        aiMessage(d.source === 'env' ? 'Используются настройки окружения.' : 'Используются сохранённые настройки.'); fields.disabled = false;
+    } catch (e) { aiSettings = null; aiMessage(e.message); document.getElementById('ai-retry').hidden = false; }
+}
+async function aiSave(event, reset) {
+    if (event) event.preventDefault(); if (!aiSettings) return;
+    const provider = document.getElementById('ai-provider').value;
+    const profiles = {};
+    for (const name of ['gemini', 'openai']) {
+        const models = {}; for (const purpose of ['article', 'digest', 'text']) models[purpose] = document.getElementById('ai-' + name + '-' + purpose).value.trim();
+        profiles[name] = {models};
+    }
+    if (!reset && !aiSettings.configured[provider]) { aiMessage('Для выбранного провайдера не настроен ключ в окружении.'); return; }
+    if (!reset && Object.values(profiles[provider].models).some(v => !v)) { aiMessage('Заполните все три модели выбранного провайдера.'); return; }
+    const fields = document.getElementById('ai-fields'); fields.disabled = true; aiMessage('Сохранение...');
+    try {
+        const r = await fetch('/api/v1/ai/settings', {method:'PUT', headers:{'Content-Type':'application/json'}, body:JSON.stringify({expected_revision:aiSettings.revision, active_provider:provider, profiles, reset_to_env:reset})});
+        if (r.status === 409) { aiMessage('Настройки изменены в другом окне. Обновите их перед сохранением.'); return; }
+        if (r.status === 422) { aiMessage('Проверьте ключ и модели выбранного провайдера или настройки окружения.'); return; }
+        if (!r.ok) throw new Error('Не удалось сохранить настройки. Проверьте состояние перед повтором.');
+        const d = await window.readApiResponse(r); aiSettings = d;
+        document.getElementById('ai-provider').value = d.active_provider;
+        for (const name of ['gemini','openai']) for (const purpose of ['article','digest','text']) document.getElementById('ai-' + name + '-' + purpose).value = d.profiles[name].models[purpose];
+        aiMessage(d.source === 'env' ? 'Настройки сброшены к окружению.' : 'Настройки сохранены.');
+    } catch(e) { aiMessage(e.message); } finally { fields.disabled = false; }
+}
 
 // ============================================================
 // TELEGRAM

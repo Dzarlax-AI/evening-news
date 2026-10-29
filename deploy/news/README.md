@@ -79,6 +79,12 @@ contains placeholders only and documents separate web, executor, scheduler,
 worker, ingestion, and processing DSNs. Production DSNs and credentials stay
 on the server.
 
+## AI provider settings
+
+The local Compose example passes AI settings only to the private executor. `AI_PROVIDER` defaults to `gemini`: provide `GEMINI_API_KEY`, with `SUMMARIZATION_MODEL`, `DIGEST_MODEL`, and optional `TEXT_MODEL` (defaults to the summarization model). To start with OpenAI instead, set `AI_PROVIDER=openai`, `OPENAI_API_KEY`, `OPENAI_ARTICLE_MODEL`, `OPENAI_DIGEST_MODEL`, and `OPENAI_TEXT_MODEL`. OpenAI model names are explicit and have no built-in defaults. The selected provider needs its key and all three model names. The installation-wide admin settings can select a provider and its models; saved settings override initial environment defaults. Configure both keys in the executor environment before switching, and do not enter keys in admin settings. There is no automatic provider fallback.
+
+These are candidate configuration instructions; they do not authorize a production environment or deployment change. Review and apply any production mapping separately. Unknown usage and prices remain unknown, and real-provider calls require separate approval.
+
 ## Fresh local Compose database setup
 
 The local PostgreSQL image starts with database `newsdb`, owner/login

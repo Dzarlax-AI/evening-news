@@ -1,7 +1,6 @@
 package editorial
 
 import (
-	"bytes"
 	"context"
 	"encoding/json"
 	"errors"
@@ -11,16 +10,19 @@ import (
 	"net/url"
 	"sort"
 	"strings"
-	"time"
+
+	ai "github.com/Dzarlax-AI/evening-news/go-ai"
+	"github.com/Dzarlax-AI/evening-news/go-ai/providers/gemini"
 )
 
 const (
 	defaultGeminiEndpoint = "https://generativelanguage.googleapis.com/v1beta/models/%s:generateContent"
-	maxProviderResponse   = 2 << 20
 	maxProviderRequest    = 8 << 20
 )
 
 type ProviderConfig struct {
+	Provider ai.Provider
+	Revision int64
 	APIKey   string
 	Model    string
 	Endpoint string
@@ -28,10 +30,15 @@ type ProviderConfig struct {
 }
 
 type ProviderUsage struct {
-	Model                string `json:"model"`
-	PromptTokenCount     int    `json:"prompt_token_count"`
-	CandidatesTokenCount int    `json:"candidates_token_count"`
-	TotalTokenCount      int    `json:"total_token_count"`
+	Cost                 *float64  `json:"cost"`
+	RequestedModel       string    `json:"requested_model,omitempty"`
+	Provider             string    `json:"provider,omitempty"`
+	Revision             int64     `json:"profile_revision,omitempty"`
+	Normalized           *ai.Usage `json:"normalized_usage,omitempty"`
+	Model                string    `json:"model"`
+	PromptTokenCount     int       `json:"prompt_token_count"`
+	CandidatesTokenCount int       `json:"candidates_token_count"`
+	TotalTokenCount      int       `json:"total_token_count"`
 }
 
 type Generation struct {
@@ -84,92 +91,51 @@ func Generate(ctx context.Context, s Snapshot, locale string, cfg ProviderConfig
 	if err := validateProviderSummaries(s); err != nil {
 		return Generation{}, err
 	}
-	if strings.TrimSpace(cfg.APIKey) == "" || strings.TrimSpace(cfg.Model) == "" {
+	if cfg.Provider == nil {
+		if strings.TrimSpace(cfg.APIKey) == "" || strings.TrimSpace(cfg.Model) == "" {
+			return Generation{}, providerErr("provider_not_configured")
+		}
+		cfg.Endpoint = strings.TrimSuffix(cfg.Endpoint, "/%s:generateContent")
+		endpoint, err := providerEndpoint(cfg)
+		if err != nil {
+			return Generation{}, providerErr("provider_invalid_configuration")
+		}
+		suffix := "/" + url.PathEscape(cfg.Model) + ":generateContent"
+		endpoint = strings.TrimSuffix(endpoint, suffix)
+		cfg.Provider = gemini.New(ai.Config{APIKey: cfg.APIKey, BaseURL: endpoint, HTTPClient: cfg.Client})
+	}
+	return generateWithProvider(ctx, s, locale, cfg)
+}
+
+// generateWithProvider retains the editorial validation and rendering contract
+// while delegating only the transport to the provider-neutral interface.
+func generateWithProvider(ctx context.Context, s Snapshot, locale string, cfg ProviderConfig) (Generation, error) {
+	if strings.TrimSpace(cfg.Model) == "" {
 		return Generation{}, providerErr("provider_not_configured")
 	}
-	endpoint, err := providerEndpoint(cfg)
-	if err != nil {
-		return Generation{}, providerErr("provider_invalid_configuration")
-	}
-	prompt, spanByID, err := buildPrompt(s)
+	prompt, spans, err := buildPrompt(s)
 	if err != nil {
 		return Generation{}, err
 	}
-	body, err := json.Marshal(map[string]any{
-		"contents": []any{map[string]any{"role": "user", "parts": []any{map[string]string{"text": prompt}}}},
-		"generationConfig": map[string]any{
-			"responseMimeType": "application/json",
-			"responseSchema":   geminiSchema(s),
-			"temperature":      0.2,
-		},
-	})
-	if err != nil || len(body) > maxProviderRequest {
-		return Generation{}, providerErr("provider_request_too_large")
-	}
-	req, err := http.NewRequestWithContext(ctx, http.MethodPost, endpoint, bytes.NewReader(body))
+	schema, err := json.Marshal(geminiSchema(s))
 	if err != nil {
 		return Generation{}, providerErr("provider_invalid_configuration")
 	}
-	q := req.URL.Query()
-	q.Set("key", cfg.APIKey)
-	req.URL.RawQuery = q.Encode()
-	req.Header.Set("Content-Type", "application/json")
-	client := cfg.Client
-	if client == nil {
-		client = &http.Client{Timeout: 60 * time.Second}
-	}
-	clientCopy := *client
-	clientCopy.CheckRedirect = func(_ *http.Request, _ []*http.Request) error { return http.ErrUseLastResponse }
-	resp, err := clientCopy.Do(req)
+	temperature := 0.2
+	response, err := cfg.Provider.Generate(ctx, ai.Request{Purpose: "digest", Model: cfg.Model, Prompt: prompt, Schema: schema, Temperature: &temperature})
 	if err != nil {
-		if errors.Is(err, context.Canceled) {
-			return Generation{}, providerErr("provider_cancelled")
-		}
-		if errors.Is(err, context.DeadlineExceeded) {
-			return Generation{}, providerErr("provider_timeout")
-		}
-		return Generation{}, providerErr("provider_transport_error")
+		return Generation{}, err
 	}
-	defer resp.Body.Close()
-	if resp.StatusCode < 200 || resp.StatusCode >= 300 {
-		return Generation{}, providerErr(providerStatusCode(resp.StatusCode))
-	}
-	responseBody, err := io.ReadAll(io.LimitReader(resp.Body, maxProviderResponse+1))
-	if err != nil {
-		return Generation{}, providerErr("provider_response_read_error")
-	}
-	if len(responseBody) > maxProviderResponse {
-		return Generation{}, providerErr("provider_response_too_large")
-	}
-	var response geminiResponse
-	if err := json.Unmarshal(responseBody, &response); err != nil {
-		return Generation{}, providerErr("provider_invalid_response")
-	}
-	if len(response.Candidates) == 0 || response.Candidates[0].Content == nil {
-		return Generation{}, providerErr("provider_empty_response")
-	}
-	if response.Candidates[0].FinishReason != "STOP" {
+	if response.Status != ai.Complete {
 		return Generation{}, providerErr("provider_incomplete_response")
 	}
-	var textParts []string
-	for _, part := range response.Candidates[0].Content.Parts {
-		if part.Text != "" {
-			textParts = append(textParts, part.Text)
-		}
-	}
-	if len(textParts) == 0 {
-		return Generation{}, providerErr("provider_empty_response")
-	}
 	var draft modelDraft
-	dec := json.NewDecoder(strings.NewReader(strings.Join(textParts, "")))
+	dec := json.NewDecoder(strings.NewReader(response.Text))
 	dec.DisallowUnknownFields()
-	if err := dec.Decode(&draft); err != nil {
+	if dec.Decode(&draft) != nil || ensureEOF(dec) != nil {
 		return Generation{}, providerErr("provider_invalid_editorial_json")
 	}
-	if err := ensureEOF(dec); err != nil {
-		return Generation{}, providerErr("provider_invalid_editorial_json")
-	}
-	stories, err := resolveModelStories(s, draft.MainStories, draft.BriefStories, draft.ArticleStories, spanByID)
+	stories, err := resolveModelStories(s, draft.MainStories, draft.BriefStories, draft.ArticleStories, spans)
 	if err != nil {
 		return Generation{}, providerErr("provider_invalid_editorial_edition")
 	}
@@ -177,7 +143,13 @@ func Generate(ctx context.Context, s Snapshot, locale string, cfg ProviderConfig
 	if err != nil {
 		return Generation{}, providerErr("provider_invalid_editorial_edition")
 	}
-	return Generation{Edition: edition, Usage: ProviderUsage{Model: cfg.Model, PromptTokenCount: response.UsageMetadata.PromptTokenCount, CandidatesTokenCount: response.UsageMetadata.CandidatesTokenCount, TotalTokenCount: response.UsageMetadata.TotalTokenCount}}, nil
+	value := func(p *int) int {
+		if p == nil {
+			return 0
+		}
+		return *p
+	}
+	return Generation{Edition: edition, Usage: ProviderUsage{Provider: response.Provider, RequestedModel: cfg.Model, Model: response.Model, Revision: cfg.Revision, Normalized: &response.Usage, PromptTokenCount: value(response.Usage.InputTokens), CandidatesTokenCount: value(response.Usage.OutputTokens), TotalTokenCount: value(response.Usage.TotalTokens)}}, nil
 }
 
 func buildPrompt(s Snapshot) (string, map[string]sourceSpan, error) {
@@ -410,38 +382,6 @@ func providerEndpoint(cfg ProviderConfig) (string, error) {
 }
 
 func providerErr(code string) error { return errors.New(code) }
-func providerStatusCode(status int) string {
-	switch status {
-	case 401, 403:
-		return "provider_rejected_credentials"
-	case 408:
-		return "provider_timeout"
-	case 429:
-		return "provider_rate_limited"
-	default:
-		if status >= 500 {
-			return "provider_unavailable"
-		}
-		return "provider_rejected_request"
-	}
-}
-
-type geminiResponse struct {
-	Candidates []struct {
-		FinishReason string `json:"finishReason"`
-		Content      *struct {
-			Parts []struct {
-				Text string `json:"text"`
-			} `json:"parts"`
-		} `json:"content"`
-	} `json:"candidates"`
-	UsageMetadata struct {
-		PromptTokenCount     int `json:"promptTokenCount"`
-		CandidatesTokenCount int `json:"candidatesTokenCount"`
-		TotalTokenCount      int `json:"totalTokenCount"`
-	} `json:"usageMetadata"`
-}
-
 func ensureEOF(dec *json.Decoder) error {
 	var extra any
 	if err := dec.Decode(&extra); err != io.EOF {

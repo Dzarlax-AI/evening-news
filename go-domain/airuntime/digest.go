@@ -8,6 +8,7 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	ai "github.com/Dzarlax-AI/evening-news/go-ai"
 	"net/http"
 	"regexp"
 	"strconv"
@@ -249,6 +250,23 @@ func (s *Server) runDigest(key string, receipt *digestReceipt, deadline time.Tim
 }
 
 func digestErrorCode(err error) string {
+	var providerErr *ai.Error
+	if errors.As(err, &providerErr) {
+		switch providerErr.Kind {
+		case "timeout", "cancelled":
+			return "editorial_provider_timeout"
+		case "request_too_large_or_invalid", "response_too_large":
+			return "editorial_resource_limit"
+		case "incomplete", "refusal", "invalid_response", "invalid_json", "invalid_schema":
+			return "editorial_invalid_result"
+		default:
+			return "editorial_provider_unavailable"
+		}
+	}
+	if errors.Is(err, ErrAISettingsInvalid) {
+		return "editorial_provider_unavailable"
+	}
+
 	switch {
 	case errors.Is(err, authority.ErrStale):
 		return "stale_fence"
