@@ -242,6 +242,31 @@ networks:
 	}
 }
 
+func TestAdoptionComposeOverrideKeepsGoRuntimeEnvironment(t *testing.T) {
+	services := map[string]string{"web": "app", "domain": "executor", "background": "background", "extractor": "extractor"}
+	got, err := AdoptionComposeOverrideWithRuntime(services, map[string]string{"GOMAXPROCS": "3", "GOMEMLIMIT": "402653184"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	text := string(got)
+	for _, want := range []string{"GOMAXPROCS: \"3\"", "GOMEMLIMIT: \"402653184\"", "background:\n    env_file: !override []\n    environment: !override\n      NEWS_RUNTIME_FILE: /run/news/runtime.json"} {
+		if !strings.Contains(text, want) {
+			t.Fatalf("runtime override missing %q: %s", want, text)
+		}
+	}
+	background := strings.SplitN(text, "background:", 2)
+	if len(background) != 2 || strings.Contains(background[0], "GOMAXPROCS") {
+		t.Fatal("Go runtime settings were not scoped to background process environment")
+	}
+	backgroundBlock := strings.SplitN(background[1], "extractor:", 2)[0]
+	if !strings.Contains(backgroundBlock, "GOMAXPROCS") || !strings.Contains(backgroundBlock, "GOMEMLIMIT") {
+		t.Fatal("Go runtime settings missing from background process environment")
+	}
+	if _, err = AdoptionComposeOverrideWithRuntime(services, map[string]string{"UNKNOWN": "x"}); err == nil {
+		t.Fatal("unsupported process environment key accepted")
+	}
+}
+
 func TestStageAndActivateAdoptionAreImmutable(t *testing.T) {
 	root := t.TempDir()
 	l := Layout{Setup: filepath.Join(root, "setup"), Web: filepath.Join(root, "web"), Domain: filepath.Join(root, "domain"), Background: filepath.Join(root, "background"), Extractor: filepath.Join(root, "extractor"), Egress: filepath.Join(root, "egress"), WebUID: -1, DomainUID: -1, BackgroundUID: -1, ExtractorUID: -1, EgressUID: -1}

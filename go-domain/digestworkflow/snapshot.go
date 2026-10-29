@@ -76,7 +76,9 @@ func (w Workflow) Snapshot(ctx context.Context, cutoff time.Time, id string) (ed
 	if err = w.Fence.Validate(ctx, tx); err != nil {
 		return empty, nil, err
 	}
-	rows, err := tx.Query(ctx, `SELECT a.id, COALESCE(a.title,''), COALESCE(a.summary,''), COALESCE(a.content,''), COALESCE(a.url,''),
+	// Full article content is intentionally excluded: digest generation is
+	// grounded in the saved summary, while the edition owns source links.
+	rows, err := tx.Query(ctx, `SELECT a.id, COALESCE(a.title,''), COALESCE(a.summary,''), COALESCE(a.url,''),
  COALESCE(s.name,''), c.id, COALESCE(c.name,''), COALESCE(c.display_name,'')
  FROM articles a LEFT JOIN sources s ON s.id=a.source_id
  JOIN (SELECT article_id,category_id,row_number() OVER(PARTITION BY article_id ORDER BY COALESCE(confidence,0) DESC,category_id ASC) AS rank FROM article_categories) r ON r.article_id=a.id AND r.rank=1
@@ -91,7 +93,7 @@ func (w Workflow) Snapshot(ctx context.Context, cutoff time.Time, id string) (ed
 		var cid *int
 		var a editorial.Article
 		var name, display string
-		if err = rows.Scan(&aid, &a.Title, &a.Summary, &a.Content, &a.URL, &a.SourceName, &cid, &name, &display); err != nil {
+		if err = rows.Scan(&aid, &a.Title, &a.Summary, &a.URL, &a.SourceName, &cid, &name, &display); err != nil {
 			rows.Close()
 			return empty, nil, err
 		}

@@ -149,10 +149,19 @@ func TestReceiptAndFencePostgres(t *testing.T) {
        INSERT INTO article_categories VALUES(41,3,0.9),(41,4,0.9),(42,3,1.0),(43,3,1),(44,3,1),(45,3,1),(46,3,1)`); err != nil {
 		t.Fatal("snapshot fixture failed")
 	}
+	largeSummary := strings.Repeat("S", 634)
+	largeContent := strings.Repeat("ORIGINAL_BODY_MARKER", 52882/len("ORIGINAL_BODY_MARKER"))
+	largeContent += strings.Repeat("X", 52882-len(largeContent))
+	if _, err = pool.Exec(ctx, `UPDATE articles SET summary=$2,content=$3 WHERE id=$1`, 41, largeSummary, largeContent); err != nil {
+		t.Fatal("large article fixture update failed")
+	}
 	wf := digestworkflow.Workflow{Pool: pool, Fence: fence, SiteBase: "https://news.fixture.test"}
-	snapshot, _, err := wf.Snapshot(ctx, time.Now(), edition)
+	snapshot, snapshotJSON, err := wf.Snapshot(ctx, time.Now(), edition)
 	if err != nil || len(snapshot.Articles) != 1 || snapshot.Articles[0].ID != "41" || snapshot.Articles[0].CategoryID != "3" || snapshot.Articles[0].CategoryName != "Технологии" {
 		t.Fatal("snapshot parity failed")
+	}
+	if snapshot.Articles[0].Summary != largeSummary || snapshot.Articles[0].Content != "" || strings.Contains(string(snapshotJSON), "ORIGINAL_BODY_MARKER") {
+		t.Fatal("snapshot did not preserve the saved summary while omitting original article content")
 	}
 	var providerCalls atomic.Int32
 	var telegramCalls atomic.Int32

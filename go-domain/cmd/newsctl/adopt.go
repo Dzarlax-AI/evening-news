@@ -48,6 +48,7 @@ type adoptionPlan struct {
 	keys             map[string][]string
 	unsupported      map[string][]string
 	legacy           map[string]map[string]string
+	processEnv       map[string]string
 	localHTTPPortsOK bool
 }
 
@@ -66,7 +67,7 @@ func adoptionPlanFromCompose(c managedsetup.RenderedCompose, id string) (adoptio
 	if len(c.Services[webService]) == 0 {
 		webService = "web"
 	}
-	p := adoptionPlan{id: id, source: c.Digest, roles: map[string]map[string]string{}, services: map[string]string{"web": webService, "domain": "executor", "background": "background", "extractor": "extractor"}, keys: c.Keys(), unsupported: map[string][]string{}, legacy: c.Services, localHTTPPortsOK: c.HasLoopbackPublishedPorts(webService)}
+	p := adoptionPlan{id: id, source: c.Digest, roles: map[string]map[string]string{}, services: map[string]string{"web": webService, "domain": "executor", "background": "background", "extractor": "extractor"}, keys: c.Keys(), unsupported: map[string][]string{}, legacy: c.Services, processEnv: map[string]string{}, localHTTPPortsOK: c.HasLoopbackPublishedPorts(webService)}
 	if c.ServiceNames["migrate"] {
 		p.services["migrate"] = "migrate"
 	}
@@ -84,7 +85,14 @@ func adoptionPlanFromCompose(c managedsetup.RenderedCompose, id string) (adoptio
 		values := c.Services[service]
 		p.roles[role] = map[string]string{}
 		for key, value := range values {
+			if role == "background" && (key == "GOMAXPROCS" || key == "GOMEMLIMIT") {
+				p.processEnv[key] = value
+				continue
+			}
 			if key == "ADMIN_PASSWORD" || secretConfigKeys[key] != "" {
+				continue
+			}
+			if role == "domain" && retiredLegacyDomainKey(key) {
 				continue
 			}
 			if role == "web" && retiredLegacyAppKey(key) {
@@ -146,6 +154,17 @@ func adoptionPlanFromCompose(c managedsetup.RenderedCompose, id string) (adoptio
 		}
 	}
 	return p, nil
+}
+
+// These variables belong to retired Python executor configuration. The Go
+// domain reads the remaining supported keys through loadSource and airuntime.
+func retiredLegacyDomainKey(key string) bool {
+	switch key {
+	case "ADMIN_USERNAME", "ALLOWED_ORIGINS", "ARTICLE_INGESTION_MODE", "ARTICLE_INGESTION_TOKEN", "ARTICLE_INGESTION_URL", "ARTICLE_PROCESSING_TOKEN", "ARTICLE_PROCESSING_URL", "BROWSER_PROXY_ENABLED", "BROWSER_PROXY_TOKEN", "BROWSER_PROXY_URL", "BROWSER_RESTART_MARKER_PATH", "BROWSER_WS_ENDPOINT", "CACHE_DIR", "CACHE_TTL", "CATEGORIZATION_MODEL", "DB_POOL_TIMEOUT", "DEFAULT_CATEGORY", "DEVELOPMENT", "EXTRACTION_SERVICE_MODE", "EXTRACTION_SERVICE_NATIVE_BROWSER", "EXTRACTION_SERVICE_PYTHON_FALLBACK", "JWT_SECRET", "LOG_LEVEL", "MAX_WORKERS", "NEWS_CATEGORIES", "PAGE_MONITOR_SOURCE_MODE", "SCHEDULED_JOBS_TOKEN", "SCHEDULER_API_ALLOW_HTTP", "SCHEDULER_API_TOKEN", "SCHEDULER_API_URL", "SCHEDULER_CHECK_INTERVAL_SECONDS", "SCHEDULER_ENABLED", "SCHEDULER_RESET_EVERY_CHECKS", "SCHEDULER_STUCK_HOURS", "SCHEDULER_TASK_TIMEOUT_SECONDS", "SCHEDULE_DISPATCH_MODE", "SOURCE_MANAGER_MODE", "TELEGRAM_SOURCE_MODE", "TELEGRAPH_ACCESS_TOKEN", "TRUSTED_HOSTS", "TRUST_FORWARD_AUTH", "TZ":
+		return true
+	default:
+		return false
+	}
 }
 
 func retiredLegacyAppKey(key string) bool {
@@ -514,6 +533,9 @@ func applyAdoption(ctx context.Context, l managedsetup.Layout, p adoptionPlan, b
 	var key []byte
 	var keyID string
 	if _, e := os.Stat(dir); e == nil {
+		if err := verifyStagedAdoptionComposeOverride(dir, p); err != nil {
+			return err
+		}
 		rawDomain, e := os.ReadFile(filepath.Join(dir, "domain.json"))
 		if e != nil || json.Unmarshal(rawDomain, &domainManifest) != nil {
 			return errors.New("staged domain state unavailable")
@@ -575,7 +597,7 @@ func applyAdoption(ctx context.Context, l managedsetup.Layout, p adoptionPlan, b
 		if err != nil {
 			return errors.New("adoption staging failed")
 		}
-		override, err := managedsetup.AdoptionComposeOverride(p.services)
+		override, err := managedsetup.AdoptionComposeOverrideWithRuntime(p.services, p.processEnv)
 		if err != nil {
 			return errors.New("adoption Compose generation failed")
 		}
@@ -642,6 +664,18 @@ func applyAdoption(ctx context.Context, l managedsetup.Layout, p adoptionPlan, b
 		return err
 	}
 	fmt.Println("Adoption imported and role files activated. Start the News services with the same canonical Compose files used to create the protected input, plus the generated override.")
+	return nil
+}
+
+func verifyStagedAdoptionComposeOverride(dir string, p adoptionPlan) error {
+	expected, err := managedsetup.AdoptionComposeOverrideWithRuntime(p.services, p.processEnv)
+	if err != nil {
+		return errors.New("current adoption Compose override could not be generated")
+	}
+	actual, err := os.ReadFile(filepath.Join(dir, "compose-override.yml"))
+	if err != nil || !bytes.Equal(actual, expected) {
+		return errors.New("staged adoption Compose override is stale; inspect and explicitly recover the existing stage before retrying adoption")
+	}
 	return nil
 }
 

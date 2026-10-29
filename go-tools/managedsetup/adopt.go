@@ -517,6 +517,17 @@ func writeOrVerify(path string, data []byte) error {
 // from the canonical local Compose configuration; browser and Readeck service
 // definitions and all existing network topology remain owned by their sources.
 func AdoptionComposeOverride(services map[string]string) ([]byte, error) {
+	return AdoptionComposeOverrideWithRuntime(services, nil)
+}
+
+// AdoptionComposeOverrideWithRuntime preserves only Go runtime process
+// settings that must be present before the managed application starts.
+func AdoptionComposeOverrideWithRuntime(services map[string]string, processEnv map[string]string) ([]byte, error) {
+	for key := range processEnv {
+		if key != "GOMAXPROCS" && key != "GOMEMLIMIT" {
+			return nil, errors.New("unsupported adoption process environment key")
+		}
+	}
 	allowed := map[string]map[string]bool{"web": {"app": true, "web": true}, "domain": {"executor": true}, "background": {"background": true}, "extractor": {"extractor": true}, "egress": {"egress": true}}
 	for role, name := range services {
 		if role == "migrate" && name == "migrate" {
@@ -541,7 +552,16 @@ func AdoptionComposeOverride(services map[string]string) ([]byte, error) {
 		items = append(items, struct{ role, volume string }{"egress", "managed_egress"})
 	}
 	for _, item := range items {
-		fmt.Fprintf(&b, "  %s:\n    env_file: !override []\n    environment: !override\n      NEWS_RUNTIME_FILE: /run/news/runtime.json\n    volumes:\n      - %s:/run/news:ro\n", services[item.role], item.volume)
+		fmt.Fprintf(&b, "  %s:\n    env_file: !override []\n    environment: !override\n      NEWS_RUNTIME_FILE: /run/news/runtime.json\n", services[item.role])
+		if item.role == "background" {
+			for _, key := range []string{"GOMAXPROCS", "GOMEMLIMIT"} {
+				if value, ok := processEnv[key]; ok {
+					quoted, _ := json.Marshal(value)
+					fmt.Fprintf(&b, "      %s: %s\n", key, quoted)
+				}
+			}
+		}
+		fmt.Fprintf(&b, "    volumes:\n      - %s:/run/news:ro\n", item.volume)
 		if item.role == "egress" {
 			fmt.Fprintf(&b, "    profiles: !override []\n")
 		}

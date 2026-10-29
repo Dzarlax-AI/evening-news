@@ -30,6 +30,15 @@ type Pipeline struct {
 	prepareJob func(context.Context, execution.ExecutionContext) (JobOperationalConfig, error)
 }
 
+type digestStageError struct {
+	stage            string
+	deliveryMayStart bool
+}
+
+func (e digestStageError) Error() string                { return "digest_" + e.stage + "_failed" }
+func (e digestStageError) DeliveryMayHaveStarted() bool { return e.deliveryMayStart }
+func (e digestStageError) SafeFailureReason() string    { return "digest_" + e.stage + "_failed" }
+
 func NewPipeline(cfg Config) (*Pipeline, error) {
 	if cfg.HTTPClient != nil {
 		if cfg.Domain.HTTPClient == nil {
@@ -80,15 +89,24 @@ func (p *Pipeline) Execute(ctx context.Context, f execution.ExecutionContext, ki
 	if p.prepareJob != nil {
 		pinned, err := p.prepareJob(ctx, f)
 		if err != nil {
+			if kind == "news_digest" || kind == "telegram_digest" {
+				return execution.Result{}, digestStageError{stage: "operational_settings"}
+			}
 			return execution.Result{}, errors.New("job operational settings unavailable")
 		}
 		if pinned.JobID != f.JobID || pinned.AttemptGeneration != f.AttemptGeneration || pinned.PinnedAt.IsZero() || pinned.Settings.validate() != nil {
+			if kind == "news_digest" || kind == "telegram_digest" {
+				return execution.Result{}, digestStageError{stage: "operational_settings_invalid"}
+			}
 			return execution.Result{}, errors.New("job operational settings are invalid")
 		}
 		operational = &pinned
 	}
 	status, err := p.domain.Status(ctx)
 	if err != nil {
+		if kind == "news_digest" || kind == "telegram_digest" {
+			return execution.Result{}, digestStageError{stage: "domain_status"}
+		}
 		return execution.Result{}, err
 	}
 	call := func(op, id string, in any) (map[string]any, error) {
@@ -110,6 +128,9 @@ func (p *Pipeline) Execute(ctx context.Context, f execution.ExecutionContext, ki
 		result = map[string]any{}
 		if boolDefault(input, "run_processing", true) {
 			result, err = p.fullCycle(ctx, f, call, operational)
+			if err != nil {
+				err = digestStageError{stage: "processing"}
+			}
 		}
 		if err == nil && boolDefault(input, "send_telegram", true) && (operational == nil || operational.Settings.DeliveryEnabled) {
 			parts, e := p.digest(ctx, f, call)
@@ -247,37 +268,37 @@ func (p *Pipeline) fullCycle(ctx context.Context, f execution.ExecutionContext, 
 func (p *Pipeline) digest(ctx context.Context, f execution.ExecutionContext, call func(string, string, any) (map[string]any, error)) (int, error) {
 	status, err := call("summary_status", "summary_status", map[string]any{})
 	if err != nil {
-		return 0, errors.New("summary status failed")
+		return 0, digestStageError{stage: "summary_status"}
 	}
 	count, ok := nonnegativeInt(status["summaries_count"])
 	if !ok {
-		return 0, errors.New("summary status result is invalid")
+		return 0, digestStageError{stage: "summary_status_result"}
 	}
 	if count == 0 {
 		if _, err = call("summaries_generate", "summaries_generate", map[string]any{}); err != nil {
-			return 0, errors.New("daily summaries generation failed")
+			return 0, digestStageError{stage: "summaries_generate"}
 		}
 	}
 	prepared, err := call("digest_prepare", "digest_prepare", map[string]any{})
 	if err != nil {
-		return 0, errors.New("digest preparation failed")
+		return 0, digestStageError{stage: "prepare"}
 	}
 	token, ok := prepared["prepared_token"].(string)
 	if !ok || !canonicalUUID(token) {
-		return 0, errors.New("digest preparation result is invalid")
+		return 0, digestStageError{stage: "prepare_result"}
 	}
 	published, err := call("digest_publish", "digest_publish", map[string]any{"prepared_token": token})
 	if err != nil {
-		return 0, errors.New("digest publication outcome is unknown")
+		return 0, digestStageError{stage: "publish", deliveryMayStart: true}
 	}
 	if success, ok := published["success"].(bool); !ok || !success {
-		return 0, errors.New("digest delivery failed")
+		return 0, digestStageError{stage: "publish_result", deliveryMayStart: true}
 	}
 	parts, ok := nonnegativeInt(published["parts_sent"])
 	total, totalOK := nonnegativeInt(published["parts_total"])
 	_, richOK := published["rich_message"].(bool)
 	if !ok || !totalOK || total < parts || !richOK {
-		return 0, errors.New("digest publication result is invalid")
+		return 0, digestStageError{stage: "publish_result", deliveryMayStart: true}
 	}
 	return parts, nil
 }

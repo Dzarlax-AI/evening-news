@@ -41,6 +41,7 @@ type fakeServices struct {
 	domainUUID              string
 	pendingProcessing       bool
 	statusFailures          int
+	failOperation           string
 	statusCount             int
 	cancelCount             int
 	foreignReceipt          bool
@@ -101,7 +102,9 @@ func newFakeServer(t *testing.T, f *fakeServices) *httptest.Server {
 		f.calls = append(f.calls, req.Operation)
 		key := opKey(req.Envelope.JobID, req.Envelope.AttemptGeneration, req.Operation, req.OperationID)
 		result := domainResult(req.Operation, req.Input)
-		if req.Operation == "media_refresh" && f.failMedia {
+		if req.Operation == f.failOperation {
+			f.ops[key] = fakeDomainOperation{req: req, state: "failed", errCode: stringPtr("domain_operation_failed")}
+		} else if req.Operation == "media_refresh" && f.failMedia {
 			f.ops[key] = fakeDomainOperation{req: req, state: "failed", errCode: stringPtr("provider_timeout")}
 		} else {
 			state := "succeeded"
@@ -642,6 +645,8 @@ func TestDigestLostPublishAckAfterRestartIsNeverResent(t *testing.T) {
 	p := testPipeline(t, f)
 	if _, err := p.Execute(context.Background(), testFence(), "telegram_digest", json.RawMessage(`{}`)); err == nil {
 		t.Fatal("expected unknown publication after restart")
+	} else if !execution.DeliveryOutcomeUnknown("telegram_digest", json.RawMessage(`{}`), err) {
+		t.Fatal("ambiguous publish acknowledgement was classified as safe to retry")
 	}
 	f.mu.Lock()
 	defer f.mu.Unlock()
@@ -716,6 +721,54 @@ func contains(values []string, want string) bool {
 		}
 	}
 	return false
+}
+
+func TestDigestPrePublishFailuresAreNotDeliveryUnknown(t *testing.T) {
+	for _, tc := range []struct{ operation, reason string }{
+		{"summary_status", "digest_summary_status_failed"},
+		{"summaries_generate", "digest_summaries_generate_failed"},
+		{"digest_prepare", "digest_prepare_failed"},
+	} {
+		operation := tc.operation
+		t.Run(operation, func(t *testing.T) {
+			f := &fakeServices{failOperation: operation}
+			p := testPipeline(t, f)
+			_, err := p.Execute(context.Background(), testFence(), "telegram_digest", json.RawMessage(`{}`))
+			if err == nil {
+				t.Fatal("expected digest stage failure")
+			}
+			if execution.DeliveryOutcomeUnknown("telegram_digest", json.RawMessage(`{}`), err) {
+				t.Fatalf("pre-publish %s failure was classified as delivery_unknown", operation)
+			}
+			if got := execution.SafeExecutionFailureReason(err); got != tc.reason {
+				t.Fatalf("failure reason=%q want %q", got, tc.reason)
+			}
+		})
+	}
+}
+
+func TestDigestPrepareFailureIsNotDeliveryUnknown(t *testing.T) {
+	f := &fakeServices{}
+	srv := newFakeServer(t, f)
+	defer srv.Close()
+	p, err := NewPipeline(Config{
+		Domain:     DomainConfig{BaseURL: srv.URL, Token: "domain-token"},
+		Ingestion:  ServiceConfig{URL: srv.URL, Token: "job-token"},
+		Processing: ServiceConfig{URL: srv.URL, Token: "job-token"},
+		PrepareJob: func(context.Context, execution.ExecutionContext) (JobOperationalConfig, error) {
+			return JobOperationalConfig{}, errors.New("settings unavailable")
+		},
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	_, err = p.Execute(context.Background(), testFence(), "telegram_digest", json.RawMessage(`{}`))
+	if err == nil || execution.DeliveryOutcomeUnknown("telegram_digest", json.RawMessage(`{}`), err) {
+		t.Fatalf("operational settings failure classification: err=%v", err)
+	}
+	if got := execution.SafeExecutionFailureReason(err); got != "digest_operational_settings_failed" {
+		t.Fatalf("failure reason=%q", got)
+	}
 }
 
 func TestDomainPollingCancellationDoesNotResubmit(t *testing.T) {

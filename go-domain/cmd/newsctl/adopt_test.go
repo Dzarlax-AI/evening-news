@@ -360,6 +360,98 @@ func TestAdoptionPlanPreservesRuntimeAndSeparatesSecrets(t *testing.T) {
 	}
 }
 
+func TestAdoptionRetiresKnownDomainKeysAndPreservesGoProcessEnv(t *testing.T) {
+	c := adoptionFixture()
+	for _, key := range []string{
+		"ADMIN_PASSWORD", "ADMIN_USERNAME", "AI_PROVIDER", "ALLOWED_ORIGINS", "ALLOW_CREATE_ALL", "ARTICLE_AI_TOKEN", "ARTICLE_INGESTION_MODE", "ARTICLE_INGESTION_TOKEN", "ARTICLE_INGESTION_URL", "ARTICLE_PROCESSING_TOKEN", "ARTICLE_PROCESSING_URL", "BACKGROUND_EXECUTION_MODE", "BROWSER_PROXY_ENABLED", "BROWSER_PROXY_TOKEN", "BROWSER_PROXY_URL", "BROWSER_RESTART_MARKER_PATH", "BROWSER_WS_ENDPOINT", "CACHE_DIR", "CACHE_TTL", "CATEGORIZATION_MODEL", "DATABASE_URL", "DB_MAX_OVERFLOW", "DB_POOL_SIZE", "DB_POOL_TIMEOUT", "DEFAULT_CATEGORY", "DEVELOPMENT", "DIGEST_MODEL", "EXECUTION_SERVICE_URL", "EXTRACTION_SERVICE_MODE", "EXTRACTION_SERVICE_NATIVE_BROWSER", "EXTRACTION_SERVICE_PYTHON_FALLBACK", "EXTRACTION_SERVICE_TOKEN", "EXTRACTION_SERVICE_URL", "GEMINI_API_ENDPOINT", "GEMINI_API_KEY", "JOB_EXECUTOR_HOST", "JOB_EXECUTOR_PORT", "JOB_EXECUTOR_TOKEN", "JWT_SECRET", "LOCAL_CATEGORY", "LOG_LEVEL", "MAX_WORKERS", "NEWS_CATEGORIES", "PAGE_MONITOR_SOURCE_MODE", "RPS", "SCHEDULED_JOBS_TOKEN", "SCHEDULER_API_ALLOW_HTTP", "SCHEDULER_API_TOKEN", "SCHEDULER_API_URL", "SCHEDULER_CHECK_INTERVAL_SECONDS", "SCHEDULER_ENABLED", "SCHEDULER_RESET_EVERY_CHECKS", "SCHEDULER_STUCK_HOURS", "SCHEDULER_TASK_TIMEOUT_SECONDS", "SCHEDULE_DISPATCH_MODE", "SOURCE_MANAGER_MODE", "SUMMARIZATION_MODEL", "TELEGRAM_CHAT_ID", "TELEGRAM_SERVICE_CHAT_ID", "TELEGRAM_SOURCE_MODE", "TELEGRAM_TOKEN", "TELEGRAPH_ACCESS_TOKEN", "TRUSTED_HOSTS", "TRUST_FORWARD_AUTH", "TZ", "WEB_BACKEND_TOKEN",
+	} {
+		c.Services["executor"][key] = "legacy-value"
+	}
+	// Restore valid values for settings consumed by the Go domain and AI runtime.
+	for key, value := range adoptionFixture().Services["executor"] {
+		c.Services["executor"][key] = value
+	}
+	c.Services["executor"]["DB_POOL_SIZE"] = "10"
+	c.Services["executor"]["DB_MAX_OVERFLOW"] = "20"
+	c.Services["executor"]["EXECUTION_SERVICE_URL"] = "http://execution"
+	c.Services["executor"]["GEMINI_API_ENDPOINT"] = "https://generativelanguage.googleapis.com/v1/models"
+	c.Services["executor"]["JOB_EXECUTOR_HOST"] = "127.0.0.1"
+	c.Services["executor"]["JOB_EXECUTOR_PORT"] = "8082"
+	c.Services["executor"]["ALLOW_CREATE_ALL"] = "false"
+	c.Services["executor"]["BACKGROUND_EXECUTION_MODE"] = "worker"
+	c.Services["executor"]["LOCAL_CATEGORY"] = "local"
+	c.Services["executor"]["RPS"] = "3"
+	c.Services["executor"]["SUMMARIZATION_MODEL"] = "gemini-3.5-flash-lite"
+	c.Services["executor"]["DIGEST_MODEL"] = "gemini-3.5-flash-lite"
+	c.Services["executor"]["TELEGRAM_SERVICE_CHAT_ID"] = "-100456"
+	c.Services["executor"]["UNKNOWN_EXECUTOR_OPTION"] = "must-not-pass"
+	c.Services["background"]["GOMAXPROCS"] = "3"
+	c.Services["background"]["GOMEMLIMIT"] = "402653184"
+	p, err := adoptionPlanFromCompose(c, strings.Repeat("1", 32))
+	if err != nil {
+		t.Fatal(err)
+	}
+	for _, key := range []string{"ARTICLE_INGESTION_MODE", "ALLOWED_ORIGINS", "MAX_WORKERS", "PAGE_MONITOR_SOURCE_MODE"} {
+		if !retiredLegacyDomainKey(key) || p.roles["domain"][key] != "" {
+			t.Fatalf("retired legacy domain setting %s leaked into the managed manifest", key)
+		}
+	}
+	if len(p.unsupported["executor"]) != 1 || p.unsupported["executor"][0] != "UNKNOWN_EXECUTOR_OPTION" {
+		t.Fatalf("unknown domain key was not rejected: %v", p.unsupported["executor"])
+	}
+	if p.processEnv["GOMAXPROCS"] != "3" || p.processEnv["GOMEMLIMIT"] != "402653184" {
+		t.Fatalf("Go process environment not retained: %v", p.processEnv)
+	}
+	for _, key := range []string{"GOMAXPROCS", "GOMEMLIMIT"} {
+		if _, leaked := p.roles["background"][key]; leaked {
+			t.Fatalf("%s leaked into application config", key)
+		}
+	}
+}
+
+func TestStagedAdoptionRequiresCurrentComposeOverride(t *testing.T) {
+	p, err := adoptionPlanFromCompose(adoptionFixture(), strings.Repeat("1", 32))
+	if err != nil {
+		t.Fatal(err)
+	}
+	p.processEnv = map[string]string{"GOMAXPROCS": "3", "GOMEMLIMIT": "402653184"}
+	stage := func(t *testing.T, override []byte) string {
+		t.Helper()
+		setup := t.TempDir()
+		if err := os.Chmod(setup, 0700); err != nil {
+			t.Fatal(err)
+		}
+		p.roles["domain"]["NEWS_CREDENTIAL_KEY"] = base64.RawStdEncoding.EncodeToString(make([]byte, 32))
+		p.roles["domain"]["NEWS_CREDENTIAL_KEY_ID"] = "fixture-key-id"
+		secrets, err := json.Marshal(adoptionSecrets{AdminHash: "fixture-hash", AdminUsername: "editor", Credentials: map[string]credentialstore.Envelope{}})
+		if err != nil {
+			t.Fatal(err)
+		}
+		_, _, err = managedsetup.StageAdoption(setup, p.id, p.source, p.roles, adoptionPolicies, map[string][]byte{"import.json": secrets, "compose-override.yml": override})
+		if err != nil {
+			t.Fatal(err)
+		}
+		return setup
+	}
+	stale, err := managedsetup.AdoptionComposeOverrideWithRuntime(p.services, map[string]string{"GOMAXPROCS": "3"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	err = applyAdoption(context.Background(), managedsetup.Layout{Setup: stage(t, stale)}, p, "", "")
+	if err == nil || !strings.Contains(err.Error(), "staged adoption Compose override is stale") {
+		t.Fatalf("stage missing GOMEMLIMIT accepted: %v", err)
+	}
+
+	matching, err := managedsetup.AdoptionComposeOverrideWithRuntime(p.services, p.processEnv)
+	if err != nil {
+		t.Fatal(err)
+	}
+	err = applyAdoption(context.Background(), managedsetup.Layout{Setup: stage(t, matching)}, p, "not-a-dsn", "")
+	if err == nil || err.Error() != "bootstrap database configuration invalid" {
+		t.Fatalf("matching stage did not resume through overlay validation: %v", err)
+	}
+}
+
 func TestAdoptionParityNormalizesAsyncPGOnlyForValidation(t *testing.T) {
 	c := adoptionFixture()
 	for role, key := range map[string]string{"web": "DATABASE_URL", "executor": "DATABASE_URL", "background": "WORKER_DATABASE_URL"} {
