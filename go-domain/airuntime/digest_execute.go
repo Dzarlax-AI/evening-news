@@ -72,8 +72,21 @@ func (s *Server) executeDigest(ctx context.Context, v digestInput, f authority.F
 		if e != nil {
 			return nil, e
 		}
-		destination, e := wf.Destination(ctx, s.config.TelegramMain, s.config.TelegramService)
-		if e != nil || s.config.TelegramToken == "" {
+		var destination string
+		if s.credentials != nil {
+			destination, e = s.managedDestination(ctx)
+		} else {
+			destination, e = wf.Destination(ctx, s.config.TelegramMain, s.config.TelegramService)
+		}
+		token := s.config.TelegramToken
+		if s.credentials != nil {
+			secret, _, resolveErr := s.credentials.Resolve(ctx, "telegram")
+			if resolveErr != nil {
+				return nil, resolveErr
+			}
+			token = string(secret)
+		}
+		if e != nil || token == "" {
 			return nil, digestworkflow.ErrDestination
 		}
 		renderedBytes, e := json.Marshal(prepared.Rendered)
@@ -93,7 +106,7 @@ func (s *Server) executeDigest(ctx context.Context, v digestInput, f authority.F
 		if intent.Completed {
 			return map[string]any{"success": true, "parts_sent": intent.PartsSent, "parts_total": intent.PartsSent, "rich_message": intent.RichMessage}, nil
 		}
-		delivery := telegramdelivery.Delivery{Store: store, Sender: telegramdelivery.Transport{Client: s.client, Admission: s.limiter, Endpoint: s.config.TelegramEndpoint, Token: s.config.TelegramToken}, Authority: f}
+		delivery := telegramdelivery.Delivery{Store: store, Sender: telegramdelivery.Transport{Client: s.client, Admission: s.limiter, Endpoint: s.config.TelegramEndpoint, Token: token}, Authority: f}
 		makePart := func(method string, index int, payload any) telegramdelivery.Part {
 			raw, _ := json.Marshal(payload)
 			return telegramdelivery.Part{Intent: intent.ID, Method: method, Index: index, PayloadHash: hashBytes(raw), Payload: payload}

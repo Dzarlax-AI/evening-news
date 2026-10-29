@@ -25,6 +25,14 @@ func RegisterBackend(mux *http.ServeMux, service *auth.Service, ops backend.Oper
 	admin := func(pattern string, fn http.HandlerFunc) { mux.Handle(pattern, RequireAPIAdmin(service, fn)) }
 	admin("GET /api/v1/ai/settings", h.aiSettingsGet)
 	admin("PUT /api/v1/ai/settings", h.aiSettingsPut)
+	admin("GET /api/v1/credentials/{provider}", h.credential)
+	admin("PUT /api/v1/credentials/{provider}", h.credential)
+	admin("DELETE /api/v1/credentials/{provider}", h.credential)
+	admin("GET /api/v1/configuration/readiness", h.configuration)
+	admin("GET /api/v1/configuration/telegram", h.configuration)
+	admin("PUT /api/v1/configuration/telegram", h.configuration)
+	admin("GET /api/v1/configuration/operational", h.configuration)
+	admin("PUT /api/v1/configuration/operational", h.configuration)
 	admin("POST /api/v1/categories/ai-category-analysis", h.analyzeCategories)
 	admin("POST /api/v1/telegram/test", h.testTelegram)
 	admin("GET /api/v1/backup", h.listBackups)
@@ -41,6 +49,66 @@ func RegisterBackend(mux *http.ServeMux, service *auth.Service, ops backend.Oper
 }
 
 type backendHandler struct{ ops backend.Operations }
+
+func (h *backendHandler) configuration(w http.ResponseWriter, r *http.Request) {
+	ops, ok := h.ops.(backend.ConfigurationOperations)
+	if !ok {
+		writeProblem(w, 503, "Private operation unavailable")
+		return
+	}
+	group := strings.TrimPrefix(r.URL.Path, "/api/v1/configuration/")
+	var body json.RawMessage
+	if r.Method == http.MethodPut {
+		r.Body = http.MaxBytesReader(w, r.Body, 8192)
+		data, err := io.ReadAll(r.Body)
+		if err != nil || !json.Valid(data) || hasDuplicateJSONKeys(data) {
+			writeProblem(w, 422, "Invalid configuration")
+			return
+		}
+		body = data
+	}
+	h.call(w, r, func(ctx context.Context) (json.RawMessage, error) {
+		return ops.Configuration(ctx, r.Method, group, body)
+	})
+}
+
+func (h *backendHandler) credential(w http.ResponseWriter, r *http.Request) {
+	ops, ok := h.ops.(backend.CredentialOperations)
+	if !ok {
+		writeProblem(w, 503, "Private operation unavailable")
+		return
+	}
+	provider := r.PathValue("provider")
+	if provider != "gemini" && provider != "openai" && provider != "telegram" {
+		writeProblem(w, 422, "Invalid provider")
+		return
+	}
+	var body json.RawMessage
+	if r.Method != http.MethodGet {
+		r.Body = http.MaxBytesReader(w, r.Body, 8192)
+		data, err := io.ReadAll(r.Body)
+		if err != nil || !json.Valid(data) || hasDuplicateJSONKeys(data) {
+			writeProblem(w, 422, "Invalid credential request")
+			return
+		}
+		body = data
+	}
+	h.call(w, r, func(ctx context.Context) (json.RawMessage, error) {
+		out, err := ops.Credential(ctx, r.Method, provider, body)
+		if err != nil {
+			return nil, err
+		}
+		var meta struct {
+			Provider   string `json:"provider"`
+			Revision   int64  `json:"revision"`
+			Configured bool   `json:"configured"`
+		}
+		if json.Unmarshal(out, &meta) != nil || meta.Provider != provider || meta.Revision < 0 {
+			return nil, &backend.APIError{Status: 502, Detail: "Invalid credential metadata"}
+		}
+		return json.Marshal(meta)
+	})
+}
 
 func (h *backendHandler) call(w http.ResponseWriter, r *http.Request, fn func(context.Context) (json.RawMessage, error)) {
 	if h.ops == nil {

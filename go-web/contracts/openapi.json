@@ -833,6 +833,102 @@
         "title": "TelegramSettingsUpdate",
         "type": "object"
       },
+      "OperationalSettings": {
+        "type": "object",
+        "additionalProperties": false,
+        "properties": {
+          "revision": {
+            "type": "integer",
+            "minimum": 0
+          },
+          "limits_enabled": {
+            "type": "boolean"
+          },
+          "max_articles": {
+            "type": "integer",
+            "minimum": 1,
+            "maximum": 100000
+          },
+          "per_source": {
+            "type": "integer",
+            "minimum": 1,
+            "maximum": 100000
+          },
+          "days": {
+            "type": "integer",
+            "minimum": 0,
+            "maximum": 36500
+          },
+          "newest_date": {
+            "type": "string",
+            "pattern": "^$|^[0-9]{4}-[0-9]{2}-[0-9]{2}$"
+          },
+          "processing_enabled": {
+            "type": "boolean"
+          },
+          "delivery_enabled": {
+            "type": "boolean"
+          }
+        },
+        "required": [
+          "revision",
+          "limits_enabled",
+          "max_articles",
+          "per_source",
+          "days",
+          "newest_date",
+          "processing_enabled",
+          "delivery_enabled"
+        ]
+      },
+      "OperationalSettingsUpdate": {
+        "type": "object",
+        "additionalProperties": false,
+        "properties": {
+          "expected_revision": {
+            "type": "integer",
+            "minimum": 0
+          },
+          "limits_enabled": {
+            "type": "boolean"
+          },
+          "max_articles": {
+            "type": "integer",
+            "minimum": 1,
+            "maximum": 100000
+          },
+          "per_source": {
+            "type": "integer",
+            "minimum": 1,
+            "maximum": 100000
+          },
+          "days": {
+            "type": "integer",
+            "minimum": 0,
+            "maximum": 36500
+          },
+          "newest_date": {
+            "type": "string",
+            "pattern": "^$|^[0-9]{4}-[0-9]{2}-[0-9]{2}$"
+          },
+          "processing_enabled": {
+            "type": "boolean"
+          },
+          "delivery_enabled": {
+            "type": "boolean"
+          }
+        },
+        "required": [
+          "expected_revision",
+          "limits_enabled",
+          "max_articles",
+          "per_source",
+          "days",
+          "newest_date",
+          "processing_enabled",
+          "delivery_enabled"
+        ]
+      },
       "TokenResponse": {
         "properties": {
           "access_token": {
@@ -4816,6 +4912,738 @@
           },
           "422": {
             "description": "Invalid request or provider configuration"
+          }
+        }
+      }
+    },
+    "/api/v1/setup/status": {
+      "get": {
+        "operationId": "get_setup_status",
+        "summary": "Get setup state",
+        "responses": {
+          "200": {
+            "description": "Setup state",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object",
+                  "additionalProperties": false,
+                  "properties": {
+                    "admin_configured": {
+                      "type": "boolean"
+                    }
+                  },
+                  "required": [
+                    "admin_configured"
+                  ]
+                }
+              }
+            }
+          },
+          "503": {
+            "description": "Setup unavailable"
+          }
+        }
+      }
+    },
+    "/api/v1/setup/claim": {
+      "post": {
+        "operationId": "claim_setup",
+        "summary": "Claim first administrator with one-time token over HTTPS",
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": {
+              "schema": {
+                "type": "object",
+                "additionalProperties": false,
+                "properties": {
+                  "token": {
+                    "type": "string",
+                    "writeOnly": true
+                  },
+                  "username": {
+                    "type": "string"
+                  },
+                  "password": {
+                    "type": "string",
+                    "writeOnly": true,
+                    "minLength": 12
+                  }
+                },
+                "required": [
+                  "token",
+                  "username",
+                  "password"
+                ]
+              }
+            }
+          }
+        },
+        "responses": {
+          "201": {
+            "description": "Administrator created"
+          },
+          "401": {
+            "description": "Authentication required"
+          },
+          "403": {
+            "description": "Admin or CSRF check failed"
+          },
+          "409": {
+            "description": "Conflict"
+          },
+          "422": {
+            "description": "Invalid request"
+          },
+          "503": {
+            "description": "Service unavailable"
+          },
+          "429": {
+            "description": "Rate limited"
+          }
+        }
+      }
+    },
+    "/api/v1/installation/progress": {
+      "get": {
+        "operationId": "get_installation_progress",
+        "responses": {
+          "200": {
+            "description": "Progress",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object",
+                  "additionalProperties": false,
+                  "properties": {
+                    "step": {
+                      "type": "string",
+                      "enum": [
+                        "storage",
+                        "ai",
+                        "telegram",
+                        "sources",
+                        "categories",
+                        "schedule",
+                        "finish"
+                      ]
+                    },
+                    "completed": {
+                      "type": "boolean"
+                    },
+                    "revision": {
+                      "type": "integer",
+                      "minimum": 1
+                    }
+                  },
+                  "required": [
+                    "step",
+                    "completed",
+                    "revision"
+                  ]
+                }
+              }
+            }
+          },
+          "401": {
+            "description": "Authentication required"
+          },
+          "403": {
+            "description": "Admin or CSRF check failed"
+          },
+          "409": {
+            "description": "Conflict"
+          },
+          "422": {
+            "description": "Invalid request"
+          },
+          "503": {
+            "description": "Service unavailable"
+          }
+        }
+      },
+      "put": {
+        "operationId": "update_installation_progress",
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": {
+              "schema": {
+                "type": "object",
+                "additionalProperties": false,
+                "properties": {
+                  "step": {
+                    "type": "string",
+                    "enum": [
+                      "storage",
+                      "ai",
+                      "telegram",
+                      "sources",
+                      "categories",
+                      "schedule",
+                      "finish"
+                    ]
+                  },
+                  "completed": {
+                    "type": "boolean"
+                  },
+                  "expected_revision": {
+                    "type": "integer",
+                    "minimum": 1
+                  }
+                },
+                "required": [
+                  "step",
+                  "completed",
+                  "expected_revision"
+                ]
+              }
+            }
+          }
+        },
+        "responses": {
+          "200": {
+            "description": "Progress",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object",
+                  "additionalProperties": false,
+                  "properties": {
+                    "step": {
+                      "type": "string",
+                      "enum": [
+                        "storage",
+                        "ai",
+                        "telegram",
+                        "sources",
+                        "categories",
+                        "schedule",
+                        "finish"
+                      ]
+                    },
+                    "completed": {
+                      "type": "boolean"
+                    },
+                    "revision": {
+                      "type": "integer",
+                      "minimum": 1
+                    }
+                  },
+                  "required": [
+                    "step",
+                    "completed",
+                    "revision"
+                  ]
+                }
+              }
+            }
+          },
+          "401": {
+            "description": "Authentication required"
+          },
+          "403": {
+            "description": "Admin or CSRF check failed"
+          },
+          "409": {
+            "description": "Conflict"
+          },
+          "422": {
+            "description": "Invalid request"
+          },
+          "503": {
+            "description": "Service unavailable"
+          }
+        }
+      }
+    },
+    "/api/v1/credentials/{provider}": {
+      "get": {
+        "operationId": "get_integration_credential",
+        "parameters": [
+          {
+            "name": "provider",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "enum": [
+                "gemini",
+                "openai",
+                "telegram"
+              ]
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Credential metadata only",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object",
+                  "additionalProperties": false,
+                  "properties": {
+                    "provider": {
+                      "type": "string",
+                      "enum": [
+                        "gemini",
+                        "openai",
+                        "telegram"
+                      ]
+                    },
+                    "revision": {
+                      "type": "integer",
+                      "minimum": 0
+                    },
+                    "configured": {
+                      "type": "boolean"
+                    }
+                  },
+                  "required": [
+                    "provider",
+                    "revision",
+                    "configured"
+                  ]
+                }
+              }
+            }
+          },
+          "401": {
+            "description": "Authentication required"
+          },
+          "403": {
+            "description": "Admin or CSRF check failed"
+          },
+          "409": {
+            "description": "Conflict"
+          },
+          "422": {
+            "description": "Invalid request"
+          },
+          "503": {
+            "description": "Service unavailable"
+          }
+        }
+      },
+      "put": {
+        "operationId": "put_integration_credential",
+        "parameters": [
+          {
+            "name": "provider",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "enum": [
+                "gemini",
+                "openai",
+                "telegram"
+              ]
+            }
+          }
+        ],
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": {
+              "schema": {
+                "type": "object",
+                "additionalProperties": false,
+                "properties": {
+                  "expected_revision": {
+                    "type": "integer",
+                    "minimum": 0
+                  },
+                  "value": {
+                    "type": "string",
+                    "writeOnly": true
+                  }
+                },
+                "required": [
+                  "expected_revision",
+                  "value"
+                ]
+              }
+            }
+          }
+        },
+        "responses": {
+          "200": {
+            "description": "Credential metadata only",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object",
+                  "additionalProperties": false,
+                  "properties": {
+                    "provider": {
+                      "type": "string",
+                      "enum": [
+                        "gemini",
+                        "openai",
+                        "telegram"
+                      ]
+                    },
+                    "revision": {
+                      "type": "integer",
+                      "minimum": 0
+                    },
+                    "configured": {
+                      "type": "boolean"
+                    }
+                  },
+                  "required": [
+                    "provider",
+                    "revision",
+                    "configured"
+                  ]
+                }
+              }
+            }
+          },
+          "401": {
+            "description": "Authentication required"
+          },
+          "403": {
+            "description": "Admin or CSRF check failed"
+          },
+          "409": {
+            "description": "Conflict"
+          },
+          "422": {
+            "description": "Invalid request"
+          },
+          "503": {
+            "description": "Service unavailable"
+          }
+        }
+      },
+      "delete": {
+        "operationId": "delete_integration_credential",
+        "parameters": [
+          {
+            "name": "provider",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "enum": [
+                "gemini",
+                "openai",
+                "telegram"
+              ]
+            }
+          }
+        ],
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": {
+              "schema": {
+                "type": "object",
+                "additionalProperties": false,
+                "properties": {
+                  "expected_revision": {
+                    "type": "integer",
+                    "minimum": 0
+                  }
+                },
+                "required": [
+                  "expected_revision"
+                ]
+              }
+            }
+          }
+        },
+        "responses": {
+          "200": {
+            "description": "Credential metadata only",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object",
+                  "additionalProperties": false,
+                  "properties": {
+                    "provider": {
+                      "type": "string",
+                      "enum": [
+                        "gemini",
+                        "openai",
+                        "telegram"
+                      ]
+                    },
+                    "revision": {
+                      "type": "integer",
+                      "minimum": 0
+                    },
+                    "configured": {
+                      "type": "boolean"
+                    }
+                  },
+                  "required": [
+                    "provider",
+                    "revision",
+                    "configured"
+                  ]
+                }
+              }
+            }
+          },
+          "401": {
+            "description": "Authentication required"
+          },
+          "403": {
+            "description": "Admin or CSRF check failed"
+          },
+          "409": {
+            "description": "Conflict"
+          },
+          "422": {
+            "description": "Invalid request"
+          },
+          "503": {
+            "description": "Service unavailable"
+          }
+        }
+      }
+    },
+    "/api/v1/configuration/readiness": {
+      "get": {
+        "operationId": "get_configuration_readiness",
+        "responses": {
+          "200": {
+            "description": "Configuration readiness",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object",
+                  "additionalProperties": false,
+                  "properties": {
+                    "ai_configured": {
+                      "type": "boolean"
+                    },
+                    "telegram_configured": {
+                      "type": "boolean"
+                    }
+                  },
+                  "required": [
+                    "ai_configured",
+                    "telegram_configured"
+                  ]
+                }
+              }
+            }
+          },
+          "401": {
+            "description": "Authentication required"
+          },
+          "403": {
+            "description": "Admin or CSRF check failed"
+          },
+          "409": {
+            "description": "Revision conflict"
+          },
+          "422": {
+            "description": "Invalid request"
+          },
+          "503": {
+            "description": "Service unavailable"
+          }
+        }
+      }
+    },
+    "/api/v1/configuration/operational": {
+      "get": {
+        "operationId": "get_operational_configuration",
+        "description": "Return the current non-secret collection, processing, and delivery controls.",
+        "responses": {
+          "200": {
+            "description": "Operational settings",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/OperationalSettings"
+                }
+              }
+            }
+          },
+          "401": {
+            "description": "Authentication required"
+          },
+          "403": {
+            "description": "Admin check failed"
+          },
+          "503": {
+            "description": "Service unavailable"
+          }
+        }
+      },
+      "put": {
+        "operationId": "update_operational_configuration",
+        "description": "Save operational settings using compare-and-swap revision control.",
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/OperationalSettingsUpdate"
+              }
+            }
+          }
+        },
+        "responses": {
+          "200": {
+            "description": "Saved operational settings",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/OperationalSettings"
+                }
+              }
+            }
+          },
+          "401": {
+            "description": "Authentication required"
+          },
+          "403": {
+            "description": "Admin or CSRF check failed"
+          },
+          "409": {
+            "description": "Revision conflict"
+          },
+          "422": {
+            "description": "Invalid settings"
+          },
+          "503": {
+            "description": "Service unavailable"
+          }
+        }
+      }
+    },
+    "/api/v1/configuration/telegram": {
+      "get": {
+        "operationId": "get_telegram_configuration",
+        "responses": {
+          "200": {
+            "description": "Telegram configuration",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object",
+                  "additionalProperties": false,
+                  "properties": {
+                    "revision": {
+                      "type": "integer",
+                      "minimum": 0
+                    },
+                    "chat_id": {
+                      "type": "string"
+                    },
+                    "service_chat_id": {
+                      "type": "string"
+                    }
+                  },
+                  "required": [
+                    "revision",
+                    "chat_id",
+                    "service_chat_id"
+                  ]
+                }
+              }
+            }
+          },
+          "401": {
+            "description": "Authentication required"
+          },
+          "403": {
+            "description": "Admin or CSRF check failed"
+          },
+          "409": {
+            "description": "Revision conflict"
+          },
+          "422": {
+            "description": "Invalid request"
+          },
+          "503": {
+            "description": "Service unavailable"
+          }
+        }
+      },
+      "put": {
+        "operationId": "update_telegram_configuration",
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": {
+              "schema": {
+                "type": "object",
+                "additionalProperties": false,
+                "properties": {
+                  "expected_revision": {
+                    "type": "integer",
+                    "minimum": 0
+                  },
+                  "chat_id": {
+                    "type": "string"
+                  },
+                  "service_chat_id": {
+                    "type": "string"
+                  }
+                },
+                "required": [
+                  "expected_revision",
+                  "chat_id",
+                  "service_chat_id"
+                ]
+              }
+            }
+          }
+        },
+        "responses": {
+          "200": {
+            "description": "Telegram configuration",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object",
+                  "additionalProperties": false,
+                  "properties": {
+                    "revision": {
+                      "type": "integer",
+                      "minimum": 0
+                    },
+                    "chat_id": {
+                      "type": "string"
+                    },
+                    "service_chat_id": {
+                      "type": "string"
+                    }
+                  },
+                  "required": [
+                    "revision",
+                    "chat_id",
+                    "service_chat_id"
+                  ]
+                }
+              }
+            }
+          },
+          "401": {
+            "description": "Authentication required"
+          },
+          "403": {
+            "description": "Admin or CSRF check failed"
+          },
+          "409": {
+            "description": "Revision conflict"
+          },
+          "422": {
+            "description": "Invalid request"
+          },
+          "503": {
+            "description": "Service unavailable"
           }
         }
       }

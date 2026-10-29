@@ -122,6 +122,7 @@ type Service struct {
 	telegramNotifier      TelegramSettingsNotifier
 	telegramConfiguration TelegramConfigurationReader
 	mappingInvalidator    MappingCacheInvalidator
+	jobPreflight          func(context.Context, string, map[string]any) error
 }
 
 func New(repo Repository, jobService *jobs.Service, notifier MappingCacheNotifier) *Service {
@@ -392,6 +393,9 @@ func (s *Service) GetJob(ctx context.Context, id string) (map[string]any, error)
 	}
 	return map[string]any{"success": true, "job_id": j.ID, "kind": j.Kind, "status": j.Status, "created_at": j.CreatedAt, "started_at": j.StartedAt, "finished_at": j.FinishedAt, "result": j.Result, "error_code": j.ErrorCode, "worker_available": j.WorkerAvailable}, nil
 }
+func (s *Service) SetJobPreflight(fn func(context.Context, string, map[string]any) error) {
+	s.jobPreflight = fn
+}
 func (s *Service) enqueue(ctx context.Context, kind string, payload map[string]any, key string) (map[string]any, error) {
 	if s.jobs == nil {
 		return nil, ErrAdapterUnavailable
@@ -408,6 +412,11 @@ func (s *Service) enqueue(ctx context.Context, kind string, payload map[string]a
 	}
 	if !safeIdempotencyKey(key) {
 		return nil, &APIError{Status: 422, Detail: "idempotency key must be a safe 1-200 character token"}
+	}
+	if s.jobPreflight != nil {
+		if err := s.jobPreflight(ctx, kind, payload); err != nil {
+			return nil, err
+		}
 	}
 	result, err := s.jobs.Submit(ctx, jobs.SubmitCommand{Kind: kind, Payload: payload, IdempotencyKey: key})
 	if err != nil {
@@ -451,6 +460,11 @@ func (s *Service) AcceptScheduledJob(ctx context.Context, cmd jobs.OccurrenceCom
 	}
 	if err := jobs.ValidateOccurrence(cmd); err != nil {
 		return jobs.AcceptedOccurrence{}, &APIError{Status: 422, Detail: "invalid scheduled job envelope"}
+	}
+	if s.jobPreflight != nil {
+		if err := s.jobPreflight(ctx, cmd.Operation, cmd.Payload); err != nil {
+			return jobs.AcceptedOccurrence{}, err
+		}
 	}
 	return s.jobs.AcceptOccurrence(ctx, cmd)
 }

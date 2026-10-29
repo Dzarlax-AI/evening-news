@@ -69,7 +69,7 @@ flowchart LR
 
 The Go web service serves the public reader, admin pages, health endpoints, and management APIs. One Go background process hosts the scheduler, queue worker, ingestion, article processing and execution components. The private Go domain process owns analysis, callbacks, editorial generation, Telegram delivery and maintenance. The extractor remains a separate Go service. The private domain and background processes communicate over authenticated HTTP and use database-backed ownership fences.
 
-The one-shot `news-migrate` command runs before schema-dependent services start; the web and domain processes do not apply migrations at startup. `WEB_BACKEND_URL` names the private domain origin, and `WEB_BACKEND_TOKEN` is shared by the web and domain processes. Provider credentials belong to the domain process, not the web process. Delivery receipts and failure semantics are described in [Go digest delivery](docs/go-digest-delivery.md).
+The managed profile runs a one-shot database provisioner before schema-dependent services start; the web and domain processes do not apply migrations at startup. In the legacy profile, `WEB_BACKEND_URL` names the private domain origin, and `WEB_BACKEND_TOKEN` is shared by the web and domain processes. Provider credentials belong to the domain process, not the web process. Delivery receipts and failure semantics are described in [Go digest delivery](docs/go-digest-delivery.md).
 
 The final Go domain migration is a development candidate. The image acceptance, recovery and backup gates must pass before it can be considered ready for release; no deployment is implied by the source tree.
 
@@ -89,33 +89,25 @@ Public data endpoints live under `/api/public/`; the authenticated management AP
 
 ## Local development
 
-The example Compose stack starts the Go web service, one background runtime, the private Go domain executor, the extractor, and separate PostgreSQL instances for News and scheduler data. A one-shot migration command uses the executor image before schema-dependent services start. It does not include the production egress policy service or shared browser. The production layout is documented separately; the minimal local profile uses HTTP-only extraction and does not include browser rendering.
+For a fresh installation, the managed Compose profile starts the Go web service, one background runtime, the private Go domain process, the extractor, and one PostgreSQL 17 server. It creates separate News and scheduler databases and least-privilege runtime roles on that server. Private per-role configuration, database passwords, service tokens, and signing keys are generated into persistent local volumes. No AI provider or Telegram key is needed to start the app. HTTP-only extraction is the zero-configuration default; an optional protected setup flow can attach a fresh install to an existing native browser and egress stack without creating browser services.
 
-Copy `.env.example` to `.env` and replace its development placeholders. It lists every required Compose key, including distinct web, executor, scheduler, worker, ingestion, and processing database URLs. Follow the local database setup sequence in [the News deployment guide](deploy/news/README.md) to migrate first, then provision the ingestion and processing roles before starting the background service. The local worker DSN uses `newsuser`; that owner role is only for the disposable local profile.
+The only optional `.env` value is `SITE_BASE_URL`. Leaving it unset uses `http://localhost:8000`. The local HTTP exception requires a loopback site origin, and the host port is bound to `127.0.0.1`. Public sites require HTTPS; trusted proxy CIDRs are supplied separately through a protected installer options file.
 
 ```sh
 cp .env.example .env
+make managed-up
+make managed-token
 ```
 
-Provider keys are configured on the private domain executor, which owns AI transport and Telegram delivery. The local Compose file maps `WEB_DATABASE_URL` to the web service's `DATABASE_URL` and `EXECUTOR_DATABASE_URL` to the executor and migration service's `DATABASE_URL`. The background components use separate worker, execution, scheduler, ingestion, and processing database variables. The Go web service receives its database URL, admin/JWT settings, `WEB_BACKEND_URL` and `WEB_BACKEND_TOKEN`, scheduler client settings, and HTTP trust configuration; it does not receive AI or Telegram provider keys.
+Open [http://localhost:8000/setup](http://localhost:8000/setup), paste the one-time token printed by `make managed-token`, and create the first administrator. The token expires after 15 minutes and is consumed when the account is claimed. Then configure AI, Telegram, sources, categories, and scheduling in the setup screens. Saving AI settings does not send a provider request. Use `make managed-logs` to inspect service logs and `make managed-stop` to stop services while preserving installation data.
 
-Complete the migration and runtime-role provisioning sequence in [the News deployment guide](deploy/news/README.md#fresh-local-compose-database-setup) before starting the full stack. Then start the remaining services:
-
-```sh
-docker compose -f docker-compose.example.yml up --build -d
-```
-
-The app is available at `http://localhost:8000`. The `migrate` service exits after its one-shot bootstrap; inspect its logs if schema-dependent services do not start. The dev overlay is optional:
-
-```sh
-docker compose -f docker-compose.example.yml -f docker-compose.dev.yml up --build -d
-```
+`make dev` remains the separate legacy Compose profile. Its detailed DSNs, service environment and migration steps are in the [legacy local deployment guide](deploy/news/README.md) and [legacy environment example](.env.legacy.example). The [configuration guide](docs/configuration.md) covers the complete catalog, the protected native-browser attach flow, separately gated external-database installation, and dry-run/apply workflow for existing-installation adoption. The `.env.full.example` and machine-readable catalog cover advanced generator and operator inputs across supported profiles.
 
 ## AI providers
 
-The installation uses one active provider for article analysis, editorial digest generation, and auxiliary text generation. Gemini is the default; OpenAI can be selected with its own model for each purpose. Configure keys in the executor environment and use the admin AI settings to change the installation-wide provider and model profile. Saved settings take precedence over the initial environment defaults. There is no automatic fallback to another provider; a missing active key or model is an error. The admin settings do not accept or expose API keys.
+The installation uses one active provider for article analysis, editorial digest generation, and auxiliary text generation. Gemini is the default; OpenAI can be selected with its own model for each purpose. In the managed profile, enter provider credentials in the admin AI settings; values are stored encrypted in PostgreSQL and the UI does not return them. In the legacy profile, provider keys come from the private domain process environment. Saved provider/model settings take precedence over initial environment defaults. There is no automatic fallback to another provider; a missing active key or model is an error.
 
-For Gemini, set `GEMINI_API_KEY`; `SUMMARIZATION_MODEL` selects the article model, `DIGEST_MODEL` the digest model, and optional `TEXT_MODEL` defaults to the summarization model. To start with OpenAI, set `AI_PROVIDER=openai`, `OPENAI_API_KEY`, `OPENAI_ARTICLE_MODEL`, `OPENAI_DIGEST_MODEL`, and `OPENAI_TEXT_MODEL`. OpenAI model names have no built-in defaults. Set both provider keys in the executor environment before switching between them. Keep provider secrets out of the web, background and extractor environments.
+For legacy configuration, set `GEMINI_API_KEY`; `SUMMARIZATION_MODEL` selects the article model, `DIGEST_MODEL` the digest model, and optional `TEXT_MODEL` defaults to the summarization model. To use OpenAI, set `AI_PROVIDER=openai`, `OPENAI_API_KEY`, `OPENAI_ARTICLE_MODEL`, `OPENAI_DIGEST_MODEL`, and `OPENAI_TEXT_MODEL`. OpenAI model names have no built-in defaults. Keep provider secrets out of the web, background and extractor environments.
 
 Optionally set `AI_MODEL_PRICES` in the executor environment to a JSON object keyed by `provider/model`. Each value has three non-negative numeric fields: `input`, `output`, and `cached_input`, in USD per million tokens. For example, `{"openai/example-model":{"input":1,"output":2,"cached_input":0.5}}` demonstrates the format only; these numbers are not vendor prices. The runtime looks up the provider-reported model first, then the requested model when an explicit price exists for that alias. Leave the value empty when prices are not configured: the corresponding cost is unknown. Cached input is charged at its configured rate instead of being counted again at the ordinary input rate.
 
@@ -131,7 +123,7 @@ The News application and its tooling use Go. The separate shared browser retains
 
 ## Configuration and documentation
 
-The Compose example is the source of truth for the complete local service configuration. The Go web environment includes `DATABASE_URL`, `ADMIN_USERNAME`, `ADMIN_PASSWORD`, `JWT_SECRET`, `WEB_BACKEND_URL`, `WEB_BACKEND_TOKEN`, scheduler receiver settings, and HTTP trust settings. `WEB_BACKEND_URL` must be a fixed executor origin; the client does not accept arbitrary backend paths or URLs. The background runtime receives five component-specific database URLs; provision the execution role explicitly and do not fall back to the worker DSN. Production environment preparation and explicit per-service mappings are documented in [the News deployment guide](deploy/news/README.md).
+The [configuration guide](docs/configuration.md) describes managed and legacy profiles and links the complete machine-readable environment catalog. The catalog records each deployable name's owner, type, default, secret status, storage, reload behavior, migration notes, precedence, source locations and managed role allowlist. `WEB_BACKEND_URL` must be a fixed private domain origin; the client does not accept arbitrary backend paths or URLs. The older multi-DSN Compose profile remains documented in [the legacy News deployment guide](deploy/news/README.md).
 
 English technical guides:
 

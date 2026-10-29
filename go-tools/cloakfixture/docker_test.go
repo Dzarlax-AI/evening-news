@@ -70,6 +70,18 @@ func TestContainerAppliesCapsAndNeverPulls(t *testing.T) {
 	}
 }
 
+func TestWorkerAnchorPublishesPublicFixtureAdmissionHost(t *testing.T) {
+	f := &fakeDocker{labels: map[string]string{"run-worker-anchor": "right"}}
+	g := &dockerGate{docker: f, id: "right", prefix: "run"}
+	if err := g.container(context.Background(), "worker-anchor", alpineImage, "control", "172.29.20.3", "32m", "0.125", "32", nil, nil, workerAnchorExtra(), []string{"sleep", "300"}); err != nil {
+		t.Fatal(err)
+	}
+	args := strings.Join(f.calls[0], " ")
+	if !strings.Contains(args, "--add-host native-fixture.test:11.203.254.242") || strings.Contains(args, "1.1.1.1") {
+		t.Fatalf("worker anchor missing public fixture host entry: %s", args)
+	}
+}
+
 type cancelAwareDocker struct{ fakeDocker }
 
 func (f *cancelAwareDocker) Run(ctx context.Context, args ...string) (string, error) {

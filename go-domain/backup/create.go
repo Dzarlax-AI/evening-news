@@ -21,7 +21,10 @@ import (
 	"time"
 )
 
-type Service struct{ Root, DatabaseURL, DumpBinary string }
+type Service struct {
+	Root, DatabaseURL, DumpBinary string
+	Managed                       bool
+}
 
 func New(root, dsn string) *Service {
 	return &Service{Root: root, DatabaseURL: dsn, DumpBinary: "pg_dump"}
@@ -78,7 +81,17 @@ func (s *Service) Create(ctx context.Context, f authority.Fence) (size int64, re
 
 	defer dump.Close()
 	phase = "pg_dump"
-	cmd := exec.CommandContext(ctx, dumpBinary, "-h", cfg.Host, "-p", strconv.Itoa(int(cfg.Port)), "-U", cfg.User, "--no-owner", "--no-acl", cfg.Database)
+	args := []string{"-h", cfg.Host, "-p", strconv.Itoa(int(cfg.Port)), "-U", cfg.User, "--no-owner", "--no-acl"}
+	if s.Managed {
+		var schema string
+		if f.Pool == nil || f.Pool.QueryRow(ctx, "SELECT current_schema()").Scan(&schema) != nil || schema == "" {
+			return 0, errors.New("managed backup schema unavailable")
+		}
+		quoted := pgx.Identifier{schema}.Sanitize()
+		args = append(args, "--schema="+quoted, "--exclude-table="+quoted+".managed_admin", "--exclude-table="+quoted+".setup_tokens")
+	}
+	args = append(args, cfg.Database)
+	cmd := exec.CommandContext(ctx, dumpBinary, args...)
 	cmd.Env = withoutEnv(os.Environ(), "PGPASSWORD")
 	cmd.Env = append(cmd.Env, "PGPASSWORD="+cfg.Password)
 	cmd.Stdout = dump
@@ -115,7 +128,11 @@ func (s *Service) Create(ctx context.Context, f authority.Fence) (size int64, re
 		return 0, ctx.Err()
 	}
 	phase = "copy_inputs"
-	for _, item := range []string{".env", "docker-compose.yml", "data", "logs"} {
+	items := []string{".env", "docker-compose.yml", "data", "logs"}
+	if s.Managed {
+		items = nil
+	}
+	for _, item := range items {
 		source := filepath.Join(s.Root, item)
 		if _, e := os.Lstat(source); errors.Is(e, os.ErrNotExist) {
 			continue
@@ -127,6 +144,13 @@ func (s *Service) Create(ctx context.Context, f authority.Fence) (size int64, re
 		}
 	}
 	metadata := map[string]any{"backup_date": time.Now().UTC().Format("2006-01-02T15:04:05.999999"), "database": cfg.Database, "database_type": "PostgreSQL", "version": "v2.0", "host": "internal_hostname", "contents": []string{"database.sql - Full PostgreSQL dump", ".env - Environment configuration", "docker-compose.yml - Docker configuration", "data/ - Application data files", "logs/ - Application logs"}}
+	if s.Managed {
+		metadata["version"] = "managed-v1"
+		metadata["contents"] = []string{"database.sql - application data and encrypted credentials"}
+		metadata["requires_private_state"] = true
+		metadata["administrator_included"] = false
+		metadata["recovery_note"] = "Use the offline encrypted recovery bundle to restore administrator and machine secrets"
+	}
 	raw, err := json.MarshalIndent(metadata, "", "  ")
 	if err != nil {
 		return 0, err

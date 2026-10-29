@@ -10,13 +10,22 @@ import (
 	"github.com/Dzarlax-AI/evening-news/go-web/internal/auth"
 )
 
-type Handler struct{ root ScheduleSettingsRoot }
+type Handler struct {
+	root           ScheduleSettingsRoot
+	createDisabled bool
+}
 
 func NewHandler(root ScheduleSettingsRoot) *Handler {
 	if root == nil {
 		root = NewRoot(nil, nil, nil)
 	}
 	return &Handler{root: root}
+}
+
+func NewManagedHandler(root ScheduleSettingsRoot) *Handler {
+	h := NewHandler(root)
+	h.createDisabled = true
+	return h
 }
 
 func (h *Handler) Register(mux *http.ServeMux, service *auth.Service) {
@@ -36,6 +45,9 @@ func (h *Handler) createSetting(w http.ResponseWriter, r *http.Request) {
 	if err != nil {
 		writeValidation(w, err)
 		return
+	}
+	if h.createDisabled {
+		request.Enabled = false
 	}
 	out, rootErr := h.root.Create(r.Context(), request)
 	writeResult(w, out, rootErr)

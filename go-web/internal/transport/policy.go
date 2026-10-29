@@ -17,7 +17,17 @@ type Policy struct {
 	TrustedProxies []*net.IPNet
 	PublicOrigin   string
 	Development    bool
+	LocalHTTPSetup bool
 	RequestTimeout time.Duration
+}
+
+type secureRequestKey struct{}
+
+// SecureRequest is set by the transport boundary for TLS, an explicitly trusted
+// TLS proxy, or an explicitly enabled loopback-published local setup profile.
+func SecureRequest(r *http.Request) bool {
+	v, _ := r.Context().Value(secureRequestKey{}).(bool)
+	return v
 }
 
 // Wrap never obtains identity or the public scheme from an untrusted header.
@@ -42,6 +52,26 @@ func (p Policy) Wrap(next http.Handler) (http.Handler, error) {
 		if !trustedPeer(r.RemoteAddr, p.TrustedProxies) {
 			r.Header.Del("X-authentik-username")
 		}
+		// The explicit local installation profile publishes only on host loopback.
+		// It is opt-in and cannot be used with a public site origin or peer.
+		localHTTP := false
+		if p.LocalHTTPSetup && public != nil && public.Scheme == "http" && loopbackHost(public.Hostname()) && hostAllowed(r.Host, []string{"localhost", "127.0.0.1", "::1"}) {
+			peer, _, err := net.SplitHostPort(r.RemoteAddr)
+			if err == nil {
+				ip := net.ParseIP(peer)
+				localHTTP = ip != nil && (ip.IsLoopback() || ip.IsPrivate())
+			}
+		}
+		secure := localHTTP || r.TLS != nil || (trustedPeer(r.RemoteAddr, p.TrustedProxies) && strings.EqualFold(strings.TrimSpace(r.Header.Get("X-Forwarded-Proto")), "https"))
+		if p.Development {
+			host, _, err := net.SplitHostPort(r.RemoteAddr)
+			if err != nil {
+				host = r.RemoteAddr
+			}
+			ip := net.ParseIP(host)
+			secure = secure || (ip != nil && ip.IsLoopback())
+		}
+		r = r.WithContext(context.WithValue(r.Context(), secureRequestKey{}, secure))
 		r.URL.Scheme = "http"
 		if r.TLS != nil {
 			r.URL.Scheme = "https"
@@ -121,4 +151,8 @@ func trustedPeer(remote string, ranges []*net.IPNet) bool {
 		}
 	}
 	return false
+}
+
+func loopbackHost(host string) bool {
+	return host == "localhost" || host == "127.0.0.1" || host == "::1"
 }

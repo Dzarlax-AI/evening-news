@@ -4,7 +4,9 @@ ARG GO_BUILD_IMAGE=golang:1.25.6-alpine
 ARG GO_DOMAIN_BUILD_IMAGE=golang:1.26.10-alpine
 
 FROM --platform=$BUILDPLATFORM ${GO_BUILD_IMAGE} AS go-web-build
-WORKDIR /src
+WORKDIR /src/go-web
+COPY go-tools/go.mod go-tools/go.sum /src/go-tools/
+COPY go-tools/runtimeconfig/ /src/go-tools/runtimeconfig/
 COPY go-web/go.mod go-web/go.sum ./
 RUN go mod download && go mod verify
 COPY go-web/ ./
@@ -20,6 +22,8 @@ COPY go-editorial/ /src/go-editorial/
 COPY go/ /src/go/
 COPY go-tools/go.mod go-tools/go.sum /src/go-tools/
 COPY go-tools/incidentfilter/ /src/go-tools/incidentfilter/
+COPY go-tools/runtimeconfig/ /src/go-tools/runtimeconfig/
+COPY go-tools/managedsetup/ /src/go-tools/managedsetup/
 RUN go mod download && go mod verify
 COPY go-domain/ ./
 ARG TARGETOS
@@ -27,12 +31,16 @@ ARG TARGETARCH
 RUN CGO_ENABLED=0 GOOS=${TARGETOS} GOARCH=${TARGETARCH} \
     go build -trimpath -ldflags="-s -w" -o /out/news-domain ./cmd/news-domain && \
     CGO_ENABLED=0 GOOS=${TARGETOS} GOARCH=${TARGETARCH} \
-    go build -trimpath -ldflags="-s -w" -o /out/news-migrate ./cmd/news-migrate
+    go build -trimpath -ldflags="-s -w" -o /out/news-migrate ./cmd/news-migrate && \
+    CGO_ENABLED=0 GOOS=${TARGETOS} GOARCH=${TARGETARCH} \
+    go build -trimpath -ldflags="-s -w" -o /out/newsctl ./cmd/newsctl
 
 FROM --platform=$BUILDPLATFORM ${GO_BUILD_IMAGE} AS go-background-build
 WORKDIR /src/go-background
 # Local replacements must be present before go mod download.
 COPY go-background/go.mod go-background/go.sum ./
+COPY go-tools/go.mod go-tools/go.sum /src/go-tools/
+COPY go-tools/runtimeconfig/ /src/go-tools/runtimeconfig/
 COPY go-worker/ /src/go-worker/
 COPY go-scheduler/ /src/go-scheduler/
 COPY go-ingestion/ /src/go-ingestion/
@@ -98,6 +106,7 @@ ENV NEWS_BACKUP_MATCH_PG_MAJOR=1
 WORKDIR /app
 COPY --from=go-domain-build /out/news-domain /usr/local/bin/news-domain
 COPY --from=go-domain-build /out/news-migrate /usr/local/bin/news-migrate
+COPY --from=go-domain-build /out/newsctl /usr/local/bin/newsctl
 USER 10001:10001
 EXPOSE 8100
 HEALTHCHECK --interval=10s --timeout=6s --start-period=30s --retries=3 \

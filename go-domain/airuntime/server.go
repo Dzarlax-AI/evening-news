@@ -21,8 +21,9 @@ import (
 	"syscall"
 	"time"
 
-	ai "github.com/Dzarlax-AI/go-ai"
 	"github.com/Dzarlax-AI/evening-news/go-domain/analysis"
+	"github.com/Dzarlax-AI/evening-news/go-domain/credentialstore"
+	ai "github.com/Dzarlax-AI/go-ai"
 	"github.com/jackc/pgx/v5/pgxpool"
 )
 
@@ -42,27 +43,32 @@ type Config struct {
 }
 
 func ConfigFromEnv() (Config, error) {
-	return configFromEnv(true)
+	return configFromLookup(true, os.Getenv, os.LookupEnv)
 }
 
 // DomainConfigFromEnv loads the same provider and delivery settings without
 // requiring the retired Unix RPC socket and its ephemeral token.
 func DomainConfigFromEnv() (Config, error) {
-	return configFromEnv(false)
+	return configFromLookup(false, os.Getenv, os.LookupEnv)
 }
 
-func configFromEnv(unixRPC bool) (Config, error) {
-	c := Config{Socket: os.Getenv("NEWS_AI_SOCKET"), Token: os.Getenv("NEWS_AI_TOKEN"), DatabaseURL: normalizeDSN(os.Getenv("DATABASE_URL")), APIKey: os.Getenv("GEMINI_API_KEY"), Endpoint: os.Getenv("GEMINI_API_ENDPOINT"), Model: os.Getenv("SUMMARIZATION_MODEL"), LocalCategory: os.Getenv("LOCAL_CATEGORY"), RPS: 3, DBMaxConns: 2}
-	c.ActiveProvider = os.Getenv("AI_PROVIDER")
+// DomainConfigFromLookup loads a managed service-scoped source without environment mutation.
+func DomainConfigFromLookup(get func(string) string, lookup func(string) (string, bool)) (Config, error) {
+	return configFromLookup(false, get, lookup)
+}
+
+func configFromLookup(unixRPC bool, get func(string) string, lookup func(string) (string, bool)) (Config, error) {
+	c := Config{Socket: get("NEWS_AI_SOCKET"), Token: get("NEWS_AI_TOKEN"), DatabaseURL: normalizeDSN(get("DATABASE_URL")), APIKey: get("GEMINI_API_KEY"), Endpoint: get("GEMINI_API_ENDPOINT"), Model: get("SUMMARIZATION_MODEL"), LocalCategory: get("LOCAL_CATEGORY"), RPS: 3, DBMaxConns: 2}
+	c.ActiveProvider = get("AI_PROVIDER")
 	if c.ActiveProvider == "" {
 		c.ActiveProvider = "gemini"
 	}
-	c.OpenAIKey = os.Getenv("OPENAI_API_KEY")
+	c.OpenAIKey = get("OPENAI_API_KEY")
 	c.OpenAIEndpoint = "https://api.openai.com/v1"
-	c.OpenAIArticleModel = os.Getenv("OPENAI_ARTICLE_MODEL")
-	c.OpenAIDigestModel = os.Getenv("OPENAI_DIGEST_MODEL")
-	c.OpenAITextModel = os.Getenv("OPENAI_TEXT_MODEL")
-	c.TextModel = os.Getenv("TEXT_MODEL")
+	c.OpenAIArticleModel = get("OPENAI_ARTICLE_MODEL")
+	c.OpenAIDigestModel = get("OPENAI_DIGEST_MODEL")
+	c.OpenAITextModel = get("OPENAI_TEXT_MODEL")
+	c.TextModel = get("TEXT_MODEL")
 	c.Endpoint = strings.TrimSuffix(c.Endpoint, "/%s:generateContent")
 	if !unixRPC && c.Endpoint == "" {
 		c.Endpoint = "https://generativelanguage.googleapis.com/v1/models"
@@ -70,12 +76,12 @@ func configFromEnv(unixRPC bool) (Config, error) {
 	if !unixRPC && c.Model == "" {
 		c.Model = "gemini-3.5-flash-lite"
 	}
-	c.TelegramToken = os.Getenv("TELEGRAM_TOKEN")
-	c.TelegramMain = os.Getenv("TELEGRAM_CHAT_ID")
-	c.TelegramService = os.Getenv("TELEGRAM_SERVICE_CHAT_ID")
+	c.TelegramToken = get("TELEGRAM_TOKEN")
+	c.TelegramMain = get("TELEGRAM_CHAT_ID")
+	c.TelegramService = get("TELEGRAM_SERVICE_CHAT_ID")
 	c.TelegramEndpoint = "https://api.telegram.org"
-	if os.Getenv("NEWS_FIXTURE_MODE") == "1" {
-		fixtureEndpoint := os.Getenv("NEWS_TEST_TELEGRAM_ENDPOINT")
+	if get("NEWS_FIXTURE_MODE") == "1" {
+		fixtureEndpoint := get("NEWS_TEST_TELEGRAM_ENDPOINT")
 		u, err := url.Parse(fixtureEndpoint)
 		if err != nil || u.Scheme != "http" || (u.Hostname() != "127.0.0.1" && u.Hostname() != "localhost" && u.Hostname() != "fixture-services") || u.User != nil || u.RawQuery != "" || u.Fragment != "" {
 			return c, errors.New("ai_runtime_fixture_configuration")
@@ -83,8 +89,8 @@ func configFromEnv(unixRPC bool) (Config, error) {
 		c.TelegramEndpoint = fixtureEndpoint
 	}
 
-	c.DigestModel = os.Getenv("DIGEST_MODEL")
-	c.SiteBase = os.Getenv("SITE_BASE_URL")
+	c.DigestModel = get("DIGEST_MODEL")
+	c.SiteBase = get("SITE_BASE_URL")
 	if !unixRPC && c.DigestModel == "" {
 		c.DigestModel = "gemini-3.5-flash-lite"
 	}
@@ -92,7 +98,7 @@ func configFromEnv(unixRPC bool) (Config, error) {
 		c.SiteBase = "https://news.dzarlax.dev"
 	}
 	c.TelegramRich = true
-	if raw, present := os.LookupEnv("TELEGRAM_RICH_MESSAGES_ENABLED"); present {
+	if raw, present := lookup("TELEGRAM_RICH_MESSAGES_ENABLED"); present {
 		switch strings.ToLower(raw) {
 		case "1", "true", "yes", "on", "y", "t":
 			c.TelegramRich = true
@@ -111,27 +117,27 @@ func configFromEnv(unixRPC bool) (Config, error) {
 	if c.ActiveProvider != "gemini" && c.ActiveProvider != "openai" {
 		return c, errors.New("ai_runtime_provider_configuration")
 	}
-	if err := validateGeminiEndpoint(c.Endpoint, os.Getenv("NEWS_FIXTURE_MODE") == "1"); err != nil {
+	if err := validateGeminiEndpoint(c.Endpoint, get("NEWS_FIXTURE_MODE") == "1"); err != nil {
 		return c, errors.New("ai_runtime_provider_configuration")
 	}
 	if _, err := providerURL(c.Endpoint, c.Model); err != nil {
 		return c, errors.New("ai_runtime_provider_configuration")
 	}
-	if raw := os.Getenv("RPS"); raw != "" {
+	if raw := get("RPS"); raw != "" {
 		n, e := strconv.Atoi(raw)
 		if e != nil || n < 1 {
 			return c, errors.New("ai_runtime_rps_configuration")
 		}
 		c.RPS = n
 	}
-	if raw := os.Getenv("NEWS_AI_DB_MAX_CONNS"); raw != "" {
+	if raw := get("NEWS_AI_DB_MAX_CONNS"); raw != "" {
 		n, e := strconv.Atoi(raw)
 		if e != nil || n < 1 || n > 2 {
 			return c, errors.New("ai_runtime_database_pool_configuration")
 		}
 		c.DBMaxConns = int32(n)
 	}
-	if raw := os.Getenv("AI_MODEL_PRICES"); raw != "" {
+	if raw := get("AI_MODEL_PRICES"); raw != "" {
 		if json.Unmarshal([]byte(raw), &c.Prices) != nil {
 			return c, errors.New("ai_runtime_price_configuration")
 		}
@@ -141,9 +147,9 @@ func configFromEnv(unixRPC bool) (Config, error) {
 			}
 		}
 	}
-	c.InputRate = parseRate(os.Getenv("AI_INPUT_COST_PER_1M"))
-	c.OutputRate = parseRate(os.Getenv("AI_OUTPUT_COST_PER_1M"))
-	c.CachedRate = parseRate(os.Getenv("AI_CACHED_INPUT_COST_PER_1M"))
+	c.InputRate = parseRate(get("AI_INPUT_COST_PER_1M"))
+	c.OutputRate = parseRate(get("AI_OUTPUT_COST_PER_1M"))
+	c.CachedRate = parseRate(get("AI_CACHED_INPUT_COST_PER_1M"))
 	return c, nil
 }
 
@@ -174,6 +180,7 @@ func normalizeDSN(s string) string {
 }
 
 type Server struct {
+	credentials   *credentialstore.Store
 	config        Config
 	db            *pgxpool.Pool
 	limiter       *SlidingWindow
@@ -219,6 +226,10 @@ func NewServer(c Config, db *pgxpool.Pool) *Server {
 	s.mux.HandleFunc("POST /v1/categories/invalidate", s.invalidate)
 	return s
 }
+
+// SetCredentialStore enables managed credential resolution before serving requests.
+func (s *Server) SetCredentialStore(store *credentialstore.Store) { s.credentials = store }
+
 func (s *Server) Handler() http.Handler { return s.auth(s.mux) }
 
 // BeginDrain revokes direct operations. The owning server must then wait for

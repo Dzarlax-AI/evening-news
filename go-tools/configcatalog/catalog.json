@@ -1,0 +1,4050 @@
+[
+  {
+    "key": "<TOKEN_ENV_FLAG>",
+    "owner": "operator tools",
+    "type": "secret string",
+    "default": "EXTRACTOR_TEST_TOKEN; override with --token-env",
+    "secret": true,
+    "store": "operator/CI tool process environment",
+    "reload": "read per tool invocation",
+    "migration": "operator tool setting, not application migration state",
+    "precedence": "operator-selected --token-env name",
+    "sources": [
+      "go-tools/cmd/compare-extractor-service/main.go:31"
+    ],
+    "class": "operator_or_ci",
+    "managed_roles": []
+  },
+  {
+    "key": "ADMIN_PASSWORD",
+    "owner": "Compose example, web",
+    "type": "secret string",
+    "default": "empty; required in legacy web",
+    "secret": true,
+    "store": "runtime process environment",
+    "reload": "process startup; restart or recreate after changing environment",
+    "migration": "retain effective value per consuming role; no automatic adoption implied",
+    "precedence": "explicit value, then component default; see source locations for validation",
+    "sources": [
+      "go-web/internal/config/config.go:128"
+    ],
+    "class": "runtime",
+    "managed_roles": []
+  },
+  {
+    "key": "ADMIN_USERNAME",
+    "owner": "Compose example, web",
+    "type": "string",
+    "default": "admin",
+    "secret": false,
+    "store": "legacy process environment; managed role manifest for web",
+    "reload": "process startup; restart or recreate after changing environment",
+    "migration": "preserve effective value and consuming role during adoption; verify managed parity before switching",
+    "precedence": "selected role manifest takes precedence without environment fallback; legacy environment when no file is selected; component default if absent",
+    "sources": [
+      "go-web/internal/config/config.go:127",
+      "go-web/internal/config/config.go:50"
+    ],
+    "class": "runtime",
+    "managed_roles": [
+      "web"
+    ]
+  },
+  {
+    "key": "AI_CACHED_INPUT_COST_PER_1M",
+    "owner": "domain",
+    "type": "string",
+    "default": "0 if absent/invalid",
+    "secret": false,
+    "store": "legacy process environment; managed role manifest for domain",
+    "reload": "process startup; restart or recreate after changing environment",
+    "migration": "preserve effective value and consuming role during adoption; verify managed parity before switching",
+    "precedence": "selected role manifest takes precedence without environment fallback; legacy environment when no file is selected; component default if absent",
+    "sources": [
+      "go-domain/airuntime/server.go:152",
+      "go-domain/cmd/news-domain/runtime_config.go:25"
+    ],
+    "class": "runtime",
+    "managed_roles": [
+      "domain"
+    ]
+  },
+  {
+    "key": "AI_INPUT_COST_PER_1M",
+    "owner": "domain",
+    "type": "string",
+    "default": "0 if absent/invalid",
+    "secret": false,
+    "store": "legacy process environment; managed role manifest for domain",
+    "reload": "process startup; restart or recreate after changing environment",
+    "migration": "preserve effective value and consuming role during adoption; verify managed parity before switching",
+    "precedence": "selected role manifest takes precedence without environment fallback; legacy environment when no file is selected; component default if absent",
+    "sources": [
+      "go-domain/airuntime/server.go:150",
+      "go-domain/cmd/news-domain/runtime_config.go:25"
+    ],
+    "class": "runtime",
+    "managed_roles": [
+      "domain"
+    ]
+  },
+  {
+    "key": "AI_MODEL_PRICES",
+    "owner": "Compose example, domain",
+    "type": "JSON",
+    "default": "empty; model prices unknown",
+    "secret": false,
+    "store": "legacy process environment; managed role manifest for domain",
+    "reload": "process startup; restart or recreate after changing environment",
+    "migration": "preserve effective value and consuming role during adoption; verify managed parity before switching",
+    "precedence": "selected role manifest takes precedence without environment fallback; legacy environment when no file is selected; component default if absent",
+    "sources": [
+      "go-domain/airuntime/server.go:140",
+      "go-domain/cmd/news-domain/runtime_config.go:25"
+    ],
+    "class": "runtime",
+    "managed_roles": [
+      "domain"
+    ]
+  },
+  {
+    "key": "AI_OUTPUT_COST_PER_1M",
+    "owner": "domain",
+    "type": "string",
+    "default": "0 if absent/invalid",
+    "secret": false,
+    "store": "legacy process environment; managed role manifest for domain",
+    "reload": "process startup; restart or recreate after changing environment",
+    "migration": "preserve effective value and consuming role during adoption; verify managed parity before switching",
+    "precedence": "selected role manifest takes precedence without environment fallback; legacy environment when no file is selected; component default if absent",
+    "sources": [
+      "go-domain/airuntime/server.go:151",
+      "go-domain/cmd/news-domain/runtime_config.go:25"
+    ],
+    "class": "runtime",
+    "managed_roles": [
+      "domain"
+    ]
+  },
+  {
+    "key": "AI_PROVIDER",
+    "owner": "Compose example, domain",
+    "type": "string",
+    "default": "gemini",
+    "secret": false,
+    "store": "legacy process environment; managed role manifest for domain; AI profiles persisted in PostgreSQL",
+    "reload": "persisted profile read through settings snapshots; initial source loaded at process startup",
+    "migration": "preserve effective value and consuming role during adoption; verify managed parity before switching",
+    "precedence": "persisted AI profile overrides initial defaults from selected domain config source",
+    "sources": [
+      "go-domain/airuntime/server.go:62",
+      "go-domain/cmd/news-domain/runtime_config.go:25"
+    ],
+    "class": "runtime",
+    "managed_roles": [
+      "domain"
+    ]
+  },
+  {
+    "key": "ALLOWED_ORIGINS",
+    "owner": "Compose example, web",
+    "type": "comma-separated list",
+    "default": "web: http://localhost:8000,http://127.0.0.1:8000,https://news.dzarlax.dev; example Compose: http://localhost:8000",
+    "secret": false,
+    "store": "legacy process environment; managed role manifest for web",
+    "reload": "process startup; restart or recreate after changing environment",
+    "migration": "preserve effective value and consuming role during adoption; verify managed parity before switching",
+    "precedence": "selected role manifest takes precedence without environment fallback; legacy environment when no file is selected; component default if absent",
+    "sources": [
+      "go-web/internal/config/config.go:144",
+      "go-web/internal/config/config.go:50"
+    ],
+    "class": "runtime",
+    "managed_roles": [
+      "web"
+    ]
+  },
+  {
+    "key": "ALLOW_CREATE_ALL",
+    "owner": "domain",
+    "type": "boolean",
+    "default": "true",
+    "secret": false,
+    "store": "legacy process environment; managed role manifest for domain",
+    "reload": "process startup; restart or recreate after changing environment",
+    "migration": "preserve effective value and consuming role during adoption; verify managed parity before switching",
+    "precedence": "selected role manifest takes precedence without environment fallback; legacy environment when no file is selected; component default if absent",
+    "sources": [
+      "go-domain/cmd/news-domain/main.go:266",
+      "go-domain/cmd/news-domain/runtime_config.go:25",
+      "go-domain/cmd/news-migrate/main.go:26"
+    ],
+    "class": "runtime",
+    "managed_roles": [
+      "domain"
+    ]
+  },
+  {
+    "key": "ARTICLE_AI_TOKEN",
+    "owner": "Compose example, deployment profile, domain, processing",
+    "type": "secret string",
+    "default": "empty; required by consumer",
+    "secret": true,
+    "store": "legacy process environment; managed role manifest for domain, background",
+    "reload": "process startup; restart or recreate after changing environment",
+    "migration": "preserve effective value and consuming role during adoption; verify managed parity before switching",
+    "precedence": "selected role manifest takes precedence without environment fallback; legacy environment when no file is selected; component default if absent",
+    "sources": [
+      "go-background/cmd/news-background/runtime_config.go:13",
+      "go-background/cmd/news-background/runtime_config.go:14",
+      "go-domain/cmd/news-domain/main.go:159",
+      "go-domain/cmd/news-domain/runtime_config.go:25",
+      "go-domain/cmd/news-domain/runtime_config.go:26",
+      "go-processing/runner/runner.go:93"
+    ],
+    "class": "runtime",
+    "managed_roles": [
+      "domain",
+      "background"
+    ]
+  },
+  {
+    "key": "ARTICLE_AI_URL",
+    "owner": "deployment profile, processing",
+    "type": "URL",
+    "default": "empty; required by consumer",
+    "secret": false,
+    "store": "legacy process environment; managed role manifest for background",
+    "reload": "process startup; restart or recreate after changing environment",
+    "migration": "preserve effective value and consuming role during adoption; verify managed parity before switching",
+    "precedence": "selected role manifest takes precedence without environment fallback; legacy environment when no file is selected; component default if absent",
+    "sources": [
+      "go-background/cmd/news-background/runtime_config.go:13",
+      "go-processing/runner/runner.go:92"
+    ],
+    "class": "runtime",
+    "managed_roles": [
+      "background"
+    ]
+  },
+  {
+    "key": "ARTICLE_INGESTION_DATABASE_URL",
+    "owner": "deployment profile",
+    "type": "PostgreSQL URL (contains credentials)",
+    "default": "Compose: required",
+    "secret": true,
+    "store": "Compose interpolation environment or deployment env file",
+    "reload": "rerender Compose and recreate affected service",
+    "migration": "Compose maps this role-specific input to DATABASE_URL; preserve distinct database roles",
+    "precedence": "Compose interpolation source then template default/required rule; inspect actual file",
+    "sources": [
+      "deploy/news-ingestion/compose.ingestion.yml:7",
+      "deploy/news-ingestion/ingestion.env.example:4"
+    ],
+    "class": "compose_input",
+    "managed_roles": []
+  },
+  {
+    "key": "ARTICLE_INGESTION_DB_MAX_CONNS",
+    "owner": "Compose example, ingestion",
+    "type": "number",
+    "default": "5",
+    "secret": false,
+    "store": "legacy process environment; managed role manifest for background",
+    "reload": "process startup; restart or recreate after changing environment",
+    "migration": "preserve effective value and consuming role during adoption; verify managed parity before switching",
+    "precedence": "selected role manifest takes precedence without environment fallback; legacy environment when no file is selected; component default if absent",
+    "sources": [
+      "go-background/cmd/news-background/runtime_config.go:13",
+      "go-ingestion/runner/runner.go:52"
+    ],
+    "class": "runtime",
+    "managed_roles": [
+      "background"
+    ]
+  },
+  {
+    "key": "ARTICLE_INGESTION_IMAGE",
+    "owner": "deployment profile",
+    "type": "string",
+    "default": "Compose: required",
+    "secret": false,
+    "store": "Compose interpolation environment or deployment env file",
+    "reload": "rerender Compose and recreate affected service",
+    "migration": "retain effective value per consuming role; no automatic adoption implied",
+    "precedence": "Compose interpolation source then template default/required rule; inspect actual file",
+    "sources": [
+      "deploy/news-ingestion/compose.ingestion.yml:3",
+      "deploy/news-ingestion/ingestion.env.example:3"
+    ],
+    "class": "compose_input",
+    "managed_roles": []
+  },
+  {
+    "key": "ARTICLE_INGESTION_LISTEN",
+    "owner": "ingestion",
+    "type": "string",
+    "default": ":8093",
+    "secret": false,
+    "store": "legacy process environment; managed role manifest for background",
+    "reload": "process startup; restart or recreate after changing environment",
+    "migration": "preserve effective value and consuming role during adoption; verify managed parity before switching",
+    "precedence": "selected role manifest takes precedence without environment fallback; legacy environment when no file is selected; component default if absent",
+    "sources": [
+      "go-background/cmd/news-background/runtime_config.go:13",
+      "go-ingestion/runner/runner.go:44"
+    ],
+    "class": "runtime",
+    "managed_roles": [
+      "background"
+    ]
+  },
+  {
+    "key": "ARTICLE_INGESTION_MODE",
+    "owner": "deployment profile",
+    "type": "string",
+    "default": "set directly by cited Compose profile; see source",
+    "secret": false,
+    "store": "container environment set by Compose profile",
+    "reload": "rerender and recreate affected container",
+    "migration": "profile-specific container output; preserve only if its actual consumer requires it",
+    "precedence": "explicit Compose environment mapping; its interpolated inputs are separate catalog keys",
+    "sources": [
+      "docker-compose.example.yml:99"
+    ],
+    "class": "compose_output",
+    "managed_roles": []
+  },
+  {
+    "key": "ARTICLE_INGESTION_TOKEN",
+    "owner": "Compose example, deployment profile, ingestion",
+    "type": "secret string",
+    "default": "empty; required by consumer",
+    "secret": true,
+    "store": "legacy process environment; managed role manifest for background",
+    "reload": "process startup; restart or recreate after changing environment",
+    "migration": "preserve effective value and consuming role during adoption; verify managed parity before switching",
+    "precedence": "selected role manifest takes precedence without environment fallback; legacy environment when no file is selected; component default if absent",
+    "sources": [
+      "go-background/cmd/news-background/runtime_config.go:13",
+      "go-background/cmd/news-background/runtime_config.go:14",
+      "go-ingestion/runner/runner.go:45"
+    ],
+    "class": "runtime",
+    "managed_roles": [
+      "background"
+    ]
+  },
+  {
+    "key": "ARTICLE_INGESTION_URL",
+    "owner": "deployment profile",
+    "type": "string",
+    "default": "set directly by cited Compose profile; see source",
+    "secret": false,
+    "store": "container environment set by Compose profile",
+    "reload": "rerender and recreate affected container",
+    "migration": "profile-specific container output; preserve only if its actual consumer requires it",
+    "precedence": "explicit Compose environment mapping; its interpolated inputs are separate catalog keys",
+    "sources": [
+      "docker-compose.example.yml:100"
+    ],
+    "class": "compose_output",
+    "managed_roles": []
+  },
+  {
+    "key": "ARTICLE_PROCESSING_DATABASE_URL",
+    "owner": "deployment profile",
+    "type": "PostgreSQL URL (contains credentials)",
+    "default": "Compose: required",
+    "secret": true,
+    "store": "Compose interpolation environment or deployment env file",
+    "reload": "rerender Compose and recreate affected service",
+    "migration": "Compose maps this role-specific input to DATABASE_URL; preserve distinct database roles",
+    "precedence": "Compose interpolation source then template default/required rule; inspect actual file",
+    "sources": [
+      "deploy/news-processing/compose.processing.yml:8",
+      "deploy/news-processing/processing.env.example:3"
+    ],
+    "class": "compose_input",
+    "managed_roles": []
+  },
+  {
+    "key": "ARTICLE_PROCESSING_DB_MAX_CONNS",
+    "owner": "processing",
+    "type": "number",
+    "default": "5",
+    "secret": false,
+    "store": "legacy process environment; managed role manifest for background",
+    "reload": "process startup; restart or recreate after changing environment",
+    "migration": "preserve effective value and consuming role during adoption; verify managed parity before switching",
+    "precedence": "selected role manifest takes precedence without environment fallback; legacy environment when no file is selected; component default if absent",
+    "sources": [
+      "go-background/cmd/news-background/runtime_config.go:13",
+      "go-processing/runner/runner.go:111"
+    ],
+    "class": "runtime",
+    "managed_roles": [
+      "background"
+    ]
+  },
+  {
+    "key": "ARTICLE_PROCESSING_IMAGE",
+    "owner": "deployment profile",
+    "type": "string",
+    "default": "Compose: required",
+    "secret": false,
+    "store": "Compose interpolation environment or deployment env file",
+    "reload": "rerender Compose and recreate affected service",
+    "migration": "retain effective value per consuming role; no automatic adoption implied",
+    "precedence": "Compose interpolation source then template default/required rule; inspect actual file",
+    "sources": [
+      "deploy/news-processing/compose.processing.yml:4",
+      "deploy/news-processing/processing.env.example:2"
+    ],
+    "class": "compose_input",
+    "managed_roles": []
+  },
+  {
+    "key": "ARTICLE_PROCESSING_LISTEN",
+    "owner": "processing",
+    "type": "string",
+    "default": ":8094",
+    "secret": false,
+    "store": "legacy process environment; managed role manifest for background",
+    "reload": "process startup; restart or recreate after changing environment",
+    "migration": "preserve effective value and consuming role during adoption; verify managed parity before switching",
+    "precedence": "selected role manifest takes precedence without environment fallback; legacy environment when no file is selected; component default if absent",
+    "sources": [
+      "go-background/cmd/news-background/runtime_config.go:13",
+      "go-processing/runner/runner.go:96"
+    ],
+    "class": "runtime",
+    "managed_roles": [
+      "background"
+    ]
+  },
+  {
+    "key": "ARTICLE_PROCESSING_TOKEN",
+    "owner": "Compose example, deployment profile, processing",
+    "type": "secret string",
+    "default": "empty; required by consumer",
+    "secret": true,
+    "store": "legacy process environment; managed role manifest for background",
+    "reload": "process startup; restart or recreate after changing environment",
+    "migration": "preserve effective value and consuming role during adoption; verify managed parity before switching",
+    "precedence": "selected role manifest takes precedence without environment fallback; legacy environment when no file is selected; component default if absent",
+    "sources": [
+      "go-background/cmd/news-background/runtime_config.go:13",
+      "go-background/cmd/news-background/runtime_config.go:14",
+      "go-processing/runner/runner.go:91"
+    ],
+    "class": "runtime",
+    "managed_roles": [
+      "background"
+    ]
+  },
+  {
+    "key": "ARTICLE_PROCESSING_URL",
+    "owner": "deployment profile",
+    "type": "string",
+    "default": "set directly by cited Compose profile; see source",
+    "secret": false,
+    "store": "container environment set by Compose profile",
+    "reload": "rerender and recreate affected container",
+    "migration": "profile-specific container output; preserve only if its actual consumer requires it",
+    "precedence": "explicit Compose environment mapping; its interpolated inputs are separate catalog keys",
+    "sources": [
+      "docker-compose.example.yml:96"
+    ],
+    "class": "compose_output",
+    "managed_roles": []
+  },
+  {
+    "key": "BACKGROUND_EXECUTION_MODE",
+    "owner": "domain, web",
+    "type": "string",
+    "default": "web: worker; domain treats any value except embedded as worker",
+    "secret": false,
+    "store": "legacy process environment; managed role manifest for web, domain",
+    "reload": "process startup; restart or recreate after changing environment",
+    "migration": "preserve effective value and consuming role during adoption; verify managed parity before switching",
+    "precedence": "selected role manifest takes precedence without environment fallback; legacy environment when no file is selected; component default if absent",
+    "sources": [
+      "go-domain/cmd/news-domain/main.go:272",
+      "go-domain/cmd/news-domain/runtime_config.go:25",
+      "go-web/internal/config/config.go:139",
+      "go-web/internal/config/config.go:50"
+    ],
+    "class": "runtime",
+    "managed_roles": [
+      "web",
+      "domain"
+    ]
+  },
+  {
+    "key": "BACKGROUND_HEALTH_LISTEN",
+    "owner": "background",
+    "type": "string",
+    "default": ":8095",
+    "secret": false,
+    "store": "legacy process environment; managed role manifest for background",
+    "reload": "process startup; restart or recreate after changing environment",
+    "migration": "preserve effective value and consuming role during adoption; verify managed parity before switching",
+    "precedence": "selected role manifest takes precedence without environment fallback; legacy environment when no file is selected; component default if absent",
+    "sources": [
+      "go-background/cmd/news-background/main.go:40",
+      "go-background/cmd/news-background/runtime_config.go:13",
+      "go-background/internal/config/config.go:49"
+    ],
+    "class": "runtime",
+    "managed_roles": [
+      "background"
+    ]
+  },
+  {
+    "key": "BACKGROUND_SHUTDOWN_TIMEOUT_SECONDS",
+    "owner": "background",
+    "type": "number",
+    "default": "60 seconds",
+    "secret": false,
+    "store": "legacy process environment; managed role manifest for background",
+    "reload": "process startup; restart or recreate after changing environment",
+    "migration": "preserve effective value and consuming role during adoption; verify managed parity before switching",
+    "precedence": "selected role manifest takes precedence without environment fallback; legacy environment when no file is selected; component default if absent",
+    "sources": [
+      "go-background/cmd/news-background/runtime_config.go:13",
+      "go-background/internal/config/config.go:56"
+    ],
+    "class": "runtime",
+    "managed_roles": [
+      "background"
+    ]
+  },
+  {
+    "key": "BACKGROUND_WORKER_BACKOFF_MAX",
+    "owner": "background",
+    "type": "Go duration",
+    "default": "5s",
+    "secret": false,
+    "store": "legacy process environment; managed role manifest for background",
+    "reload": "process startup; restart or recreate after changing environment",
+    "migration": "preserve effective value and consuming role during adoption; verify managed parity before switching",
+    "precedence": "selected role manifest takes precedence without environment fallback; legacy environment when no file is selected; component default if absent",
+    "sources": [
+      "go-background/cmd/news-background/runtime_config.go:13",
+      "go-background/internal/config/config.go:62"
+    ],
+    "class": "runtime",
+    "managed_roles": [
+      "background"
+    ]
+  },
+  {
+    "key": "BACKGROUND_WORKER_BACKOFF_MIN",
+    "owner": "background",
+    "type": "Go duration",
+    "default": "250ms",
+    "secret": false,
+    "store": "legacy process environment; managed role manifest for background",
+    "reload": "process startup; restart or recreate after changing environment",
+    "migration": "preserve effective value and consuming role during adoption; verify managed parity before switching",
+    "precedence": "selected role manifest takes precedence without environment fallback; legacy environment when no file is selected; component default if absent",
+    "sources": [
+      "go-background/cmd/news-background/runtime_config.go:13",
+      "go-background/internal/config/config.go:59"
+    ],
+    "class": "runtime",
+    "managed_roles": [
+      "background"
+    ]
+  },
+  {
+    "key": "BROWSER_PROXY_ENABLED",
+    "owner": "deployment profile",
+    "type": "string",
+    "default": "set directly by cited Compose profile; see source",
+    "secret": false,
+    "store": "container environment set by Compose profile",
+    "reload": "rerender and recreate affected container",
+    "migration": "profile-specific container output; preserve only if its actual consumer requires it",
+    "precedence": "explicit Compose environment mapping; its interpolated inputs are separate catalog keys",
+    "sources": [
+      "deploy/news-extractor/compose.native.yml:10",
+      "deploy/news-extractor/compose.python-proxy.yml:7"
+    ],
+    "class": "compose_output",
+    "managed_roles": []
+  },
+  {
+    "key": "BROWSER_PROXY_TOKEN",
+    "owner": "deployment profile",
+    "type": "secret string",
+    "default": "set directly by cited Compose profile; see source",
+    "secret": true,
+    "store": "container environment set by Compose profile",
+    "reload": "rerender and recreate affected container",
+    "migration": "profile-specific container output; preserve only if its actual consumer requires it",
+    "precedence": "explicit Compose environment mapping; its interpolated inputs are separate catalog keys",
+    "sources": [
+      "deploy/news-extractor/compose.native.yml:12",
+      "deploy/news-extractor/compose.python-proxy.yml:9"
+    ],
+    "class": "compose_output",
+    "managed_roles": []
+  },
+  {
+    "key": "BROWSER_PROXY_URL",
+    "owner": "deployment profile",
+    "type": "string",
+    "default": "set directly by cited Compose profile; see source",
+    "secret": false,
+    "store": "container environment set by Compose profile",
+    "reload": "rerender and recreate affected container",
+    "migration": "profile-specific container output; preserve only if its actual consumer requires it",
+    "precedence": "explicit Compose environment mapping; its interpolated inputs are separate catalog keys",
+    "sources": [
+      "deploy/news-extractor/compose.native.yml:11",
+      "deploy/news-extractor/compose.python-proxy.yml:8"
+    ],
+    "class": "compose_output",
+    "managed_roles": []
+  },
+  {
+    "key": "BROWSER_RESTART_MARKER_PATH",
+    "owner": "deployment profile",
+    "type": "string",
+    "default": "set directly by cited Compose profile; see source",
+    "secret": false,
+    "store": "container environment set by Compose profile",
+    "reload": "rerender and recreate affected container",
+    "migration": "profile-specific container output; preserve only if its actual consumer requires it",
+    "precedence": "explicit Compose environment mapping; its interpolated inputs are separate catalog keys",
+    "sources": [
+      "deploy/news-extractor/compose.native.yml:9"
+    ],
+    "class": "compose_output",
+    "managed_roles": []
+  },
+  {
+    "key": "BROWSER_WS_ENDPOINT",
+    "owner": "deployment profile",
+    "type": "string",
+    "default": "set directly by cited Compose profile; see source",
+    "secret": false,
+    "store": "container environment set by Compose profile",
+    "reload": "rerender and recreate affected container",
+    "migration": "profile-specific container output; preserve only if its actual consumer requires it",
+    "precedence": "explicit Compose environment mapping; its interpolated inputs are separate catalog keys",
+    "sources": [
+      "deploy/news-extractor/compose.native.yml:8"
+    ],
+    "class": "compose_output",
+    "managed_roles": []
+  },
+  {
+    "key": "CACHE_DIR",
+    "owner": "deployment profile",
+    "type": "string",
+    "default": "set directly by cited Compose profile; see source",
+    "secret": false,
+    "store": "container environment set by Compose profile",
+    "reload": "rerender and recreate affected container",
+    "migration": "profile-specific container output; preserve only if its actual consumer requires it",
+    "precedence": "explicit Compose environment mapping; its interpolated inputs are separate catalog keys",
+    "sources": [
+      "docker-compose.example.yml:118"
+    ],
+    "class": "compose_output",
+    "managed_roles": []
+  },
+  {
+    "key": "CATEGORIZATION_MODEL",
+    "owner": "Compose example",
+    "type": "string",
+    "default": "Compose: default 'gemini-3.5-flash-lite'",
+    "secret": false,
+    "store": "Compose interpolation environment or deployment env file",
+    "reload": "rerender Compose and recreate affected service",
+    "migration": "legacy Compose passthrough; no current Go environment reader discovered; do not assume it affects Go runtime",
+    "precedence": "Compose interpolation sets a container variable; no current Go reader discovered",
+    "sources": [
+      "docker-compose.example.yml:83"
+    ],
+    "class": "compose_input",
+    "managed_roles": []
+  },
+  {
+    "key": "CHROME_ENDPOINT",
+    "owner": "extractor",
+    "type": "URL",
+    "default": "empty / unset",
+    "secret": false,
+    "store": "legacy process environment; managed role manifest for extractor",
+    "reload": "process startup; restart or recreate after changing environment",
+    "migration": "preserve effective value and consuming role during adoption; verify managed parity before switching",
+    "precedence": "selected role manifest takes precedence without environment fallback; legacy environment when no file is selected; component default if absent",
+    "sources": [
+      "go/cmd/extract-service/main.go:74",
+      "go/runtimefile/lookup.go:21"
+    ],
+    "class": "runtime",
+    "managed_roles": [
+      "extractor"
+    ]
+  },
+  {
+    "key": "CHROME_HEALTHCHECK_FD_THRESHOLD",
+    "sources": [
+      "deploy/news-extractor/browser/entrypoint.py:61"
+    ],
+    "owner": "browser wrapper",
+    "type": "number",
+    "default": "800",
+    "secret": false,
+    "store": "runtime process environment",
+    "reload": "process startup; restart or recreate after changing environment",
+    "migration": "retain effective value per consuming role; no automatic adoption implied",
+    "precedence": "explicit value, then component default; see source locations for validation",
+    "class": "runtime",
+    "managed_roles": []
+  },
+  {
+    "key": "CLOAK_CONTROLLER_IPS",
+    "sources": [
+      "deploy/news-extractor/browser/entrypoint.py:58",
+      "deploy/news-extractor/compose.shared-browser.yml:14"
+    ],
+    "owner": "browser wrapper",
+    "type": "JSON",
+    "default": "empty; wrapper validates controllers",
+    "secret": false,
+    "store": "runtime process environment",
+    "reload": "process startup; restart or recreate after changing environment",
+    "migration": "retain effective value per consuming role; no automatic adoption implied",
+    "precedence": "explicit value, then component default; see source locations for validation",
+    "class": "runtime",
+    "managed_roles": []
+  },
+  {
+    "key": "CLOAK_PROXY_IP",
+    "sources": [
+      "deploy/news-extractor/browser/entrypoint.py:59",
+      "deploy/news-extractor/compose.shared-browser.yml:13"
+    ],
+    "owner": "browser wrapper",
+    "type": "string",
+    "default": "empty / unset",
+    "secret": false,
+    "store": "runtime process environment",
+    "reload": "process startup; restart or recreate after changing environment",
+    "migration": "retain effective value per consuming role; no automatic adoption implied",
+    "precedence": "explicit value, then component default; see source locations for validation",
+    "class": "runtime",
+    "managed_roles": []
+  },
+  {
+    "key": "CLOAK_SELF_IP",
+    "sources": [
+      "deploy/news-extractor/browser/entrypoint.py:57",
+      "deploy/news-extractor/compose.shared-browser.yml:12"
+    ],
+    "owner": "browser wrapper",
+    "type": "string",
+    "default": "empty / unset",
+    "secret": false,
+    "store": "runtime process environment",
+    "reload": "process startup; restart or recreate after changing environment",
+    "migration": "retain effective value per consuming role; no automatic adoption implied",
+    "precedence": "explicit value, then component default; see source locations for validation",
+    "class": "runtime",
+    "managed_roles": []
+  },
+  {
+    "key": "DATABASE_URL",
+    "owner": "domain, ingestion, processing, web, worker",
+    "type": "PostgreSQL URL (contains credentials)",
+    "default": "empty; required by consumer",
+    "secret": true,
+    "store": "legacy process environment; managed role manifest for web, domain",
+    "reload": "process startup; restart or recreate after changing environment",
+    "migration": "preserve effective value and consuming role during adoption; verify managed parity before switching",
+    "precedence": "selected role manifest takes precedence without environment fallback; legacy environment when no file is selected; component default if absent",
+    "sources": [
+      "go-domain/airuntime/server.go:61",
+      "go-domain/cmd/news-domain/runtime_config.go:25",
+      "go-domain/cmd/news-domain/runtime_config.go:26",
+      "go-domain/cmd/news-migrate/main.go:22",
+      "go-ingestion/runner/runner.go:43",
+      "go-processing/runner/runner.go:90",
+      "go-web/internal/config/config.go:125",
+      "go-web/internal/config/config.go:50",
+      "go-web/internal/config/config.go:51",
+      "go-worker/internal/config/config.go:31"
+    ],
+    "class": "runtime",
+    "managed_roles": [
+      "web",
+      "domain"
+    ]
+  },
+  {
+    "key": "DB_MAX_OVERFLOW",
+    "owner": "domain",
+    "type": "number",
+    "default": "10",
+    "secret": false,
+    "store": "legacy process environment; managed role manifest for domain",
+    "reload": "process startup; restart or recreate after changing environment",
+    "migration": "preserve effective value and consuming role during adoption; verify managed parity before switching",
+    "precedence": "selected role manifest takes precedence without environment fallback; legacy environment when no file is selected; component default if absent",
+    "sources": [
+      "go-domain/cmd/news-domain/main.go:61",
+      "go-domain/cmd/news-domain/runtime_config.go:25"
+    ],
+    "class": "runtime",
+    "managed_roles": [
+      "domain"
+    ]
+  },
+  {
+    "key": "DB_PASSWORD",
+    "owner": "Compose example",
+    "type": "secret string",
+    "default": "Compose: required",
+    "secret": true,
+    "store": "Compose interpolation environment or deployment env file",
+    "reload": "rerender Compose and recreate affected service",
+    "migration": "retain effective value per consuming role; no automatic adoption implied",
+    "precedence": "Compose interpolation source then template default/required rule; inspect actual file",
+    "sources": [
+      "docker-compose.example.yml:226"
+    ],
+    "class": "compose_input",
+    "managed_roles": []
+  },
+  {
+    "key": "DB_POOL_SIZE",
+    "owner": "domain",
+    "type": "number",
+    "default": "5",
+    "secret": false,
+    "store": "legacy process environment; managed role manifest for domain",
+    "reload": "process startup; restart or recreate after changing environment",
+    "migration": "preserve effective value and consuming role during adoption; verify managed parity before switching",
+    "precedence": "selected role manifest takes precedence without environment fallback; legacy environment when no file is selected; component default if absent",
+    "sources": [
+      "go-domain/cmd/news-domain/main.go:55",
+      "go-domain/cmd/news-domain/runtime_config.go:25"
+    ],
+    "class": "runtime",
+    "managed_roles": [
+      "domain"
+    ]
+  },
+  {
+    "key": "DEVELOPMENT",
+    "owner": "Compose example, web",
+    "type": "boolean",
+    "default": "false",
+    "secret": false,
+    "store": "legacy process environment; managed role manifest for web",
+    "reload": "process startup; restart or recreate after changing environment",
+    "migration": "preserve effective value and consuming role during adoption; verify managed parity before switching",
+    "precedence": "selected role manifest takes precedence without environment fallback; legacy environment when no file is selected; component default if absent",
+    "sources": [
+      "go-web/internal/config/config.go:106",
+      "go-web/internal/config/config.go:50"
+    ],
+    "class": "runtime",
+    "managed_roles": [
+      "web"
+    ]
+  },
+  {
+    "key": "DIGEST_MODEL",
+    "owner": "Compose example, domain",
+    "type": "string",
+    "default": "domain: gemini-3.5-flash-lite; legacy RPC: empty",
+    "secret": false,
+    "store": "legacy process environment; managed role manifest for domain; AI profiles persisted in PostgreSQL",
+    "reload": "persisted profile read through settings snapshots; initial source loaded at process startup",
+    "migration": "preserve effective value and consuming role during adoption; verify managed parity before switching",
+    "precedence": "persisted AI profile overrides initial defaults from selected domain config source",
+    "sources": [
+      "go-domain/airuntime/server.go:92",
+      "go-domain/cmd/news-domain/runtime_config.go:25"
+    ],
+    "class": "runtime",
+    "managed_roles": [
+      "domain"
+    ]
+  },
+  {
+    "key": "DOCKER_CONFIG",
+    "owner": "operator tools",
+    "type": "path",
+    "default": "unset: not forwarded to Compose subprocess",
+    "secret": false,
+    "store": "operator/CI tool process environment",
+    "reload": "read per tool invocation",
+    "migration": "operator tool setting, not application migration state",
+    "precedence": "inherited process value is forwarded; other host variables excluded",
+    "sources": [
+      "go-tools/cmd/prepare-runtime-env/main.go:72"
+    ],
+    "class": "operator_or_ci",
+    "managed_roles": []
+  },
+  {
+    "key": "DOMAIN_SERVICE_URL",
+    "owner": "background",
+    "type": "URL",
+    "default": "http://executor:8100",
+    "secret": false,
+    "store": "legacy process environment; managed role manifest for background",
+    "reload": "process startup; restart or recreate after changing environment",
+    "migration": "preserve effective value and consuming role during adoption; verify managed parity before switching",
+    "precedence": "selected role manifest takes precedence without environment fallback; legacy environment when no file is selected; component default if absent",
+    "sources": [
+      "go-background/cmd/news-background/runtime_config.go:13",
+      "go-background/internal/config/config.go:85"
+    ],
+    "class": "runtime",
+    "managed_roles": [
+      "background"
+    ]
+  },
+  {
+    "key": "EGRESS_ALLOW_WILDCARD_BIND",
+    "owner": "egress",
+    "type": "boolean",
+    "default": "false",
+    "secret": false,
+    "store": "legacy process environment; managed role manifest for egress",
+    "reload": "process startup; restart or recreate after changing environment",
+    "migration": "preserve effective value and consuming role during adoption; verify managed parity before switching",
+    "precedence": "selected role manifest takes precedence without environment fallback; legacy environment when no file is selected; component default if absent",
+    "sources": [
+      "go/cmd/extract-egress/main.go:69",
+      "go/runtimefile/lookup.go:23"
+    ],
+    "class": "runtime",
+    "managed_roles": [
+      "egress"
+    ]
+  },
+  {
+    "key": "EGRESS_LISTEN_ADDR",
+    "owner": "egress",
+    "type": "string",
+    "default": "127.0.0.1:8081",
+    "secret": false,
+    "store": "legacy process environment; managed role manifest for egress",
+    "reload": "process startup; restart or recreate after changing environment",
+    "migration": "preserve effective value and consuming role during adoption; verify managed parity before switching",
+    "precedence": "selected role manifest takes precedence without environment fallback; legacy environment when no file is selected; component default if absent",
+    "sources": [
+      "go/cmd/extract-egress/main.go:56",
+      "go/runtimefile/lookup.go:23"
+    ],
+    "class": "runtime",
+    "managed_roles": [
+      "egress"
+    ]
+  },
+  {
+    "key": "EGRESS_MAX_CONCURRENT",
+    "owner": "egress",
+    "type": "number",
+    "default": "32",
+    "secret": false,
+    "store": "legacy process environment; managed role manifest for egress",
+    "reload": "process startup; restart or recreate after changing environment",
+    "migration": "preserve effective value and consuming role during adoption; verify managed parity before switching",
+    "precedence": "selected role manifest takes precedence without environment fallback; legacy environment when no file is selected; component default if absent",
+    "sources": [
+      "go/cmd/extract-egress/main.go:77",
+      "go/runtimefile/lookup.go:23"
+    ],
+    "class": "runtime",
+    "managed_roles": [
+      "egress"
+    ]
+  },
+  {
+    "key": "EGRESS_MAX_LIFETIME_SECONDS",
+    "owner": "egress",
+    "type": "number",
+    "default": "35 seconds",
+    "secret": false,
+    "store": "legacy process environment; managed role manifest for egress",
+    "reload": "process startup; restart or recreate after changing environment",
+    "migration": "preserve effective value and consuming role during adoption; verify managed parity before switching",
+    "precedence": "selected role manifest takes precedence without environment fallback; legacy environment when no file is selected; component default if absent",
+    "sources": [
+      "go/cmd/extract-egress/main.go:86",
+      "go/runtimefile/lookup.go:23"
+    ],
+    "class": "runtime",
+    "managed_roles": [
+      "egress"
+    ]
+  },
+  {
+    "key": "EGRESS_MAX_TUNNEL_BYTES",
+    "owner": "egress",
+    "type": "number",
+    "default": "33554432 bytes",
+    "secret": false,
+    "store": "legacy process environment; managed role manifest for egress",
+    "reload": "process startup; restart or recreate after changing environment",
+    "migration": "preserve effective value and consuming role during adoption; verify managed parity before switching",
+    "precedence": "selected role manifest takes precedence without environment fallback; legacy environment when no file is selected; component default if absent",
+    "sources": [
+      "go/cmd/extract-egress/main.go:82",
+      "go/runtimefile/lookup.go:23"
+    ],
+    "class": "runtime",
+    "managed_roles": [
+      "egress"
+    ]
+  },
+  {
+    "key": "EGRESS_TEST_ALLOWLIST",
+    "owner": "egress",
+    "type": "JSON",
+    "default": "empty / unset",
+    "secret": false,
+    "store": "test/fixture environment only",
+    "reload": "process startup; restart or recreate after changing environment",
+    "migration": "retain effective value per consuming role; no automatic adoption implied",
+    "precedence": "explicit value, then component default; see source locations for validation",
+    "sources": [
+      "go/cmd/extract-egress/main.go:95",
+      "go/runtimefile/lookup.go:23"
+    ],
+    "class": "fixture_only",
+    "managed_roles": [
+      "egress"
+    ]
+  },
+  {
+    "key": "EGRESS_TEST_MODE",
+    "owner": "egress",
+    "type": "boolean",
+    "default": "false",
+    "secret": false,
+    "store": "test/fixture environment only",
+    "reload": "process startup; restart or recreate after changing environment",
+    "migration": "retain effective value per consuming role; no automatic adoption implied",
+    "precedence": "explicit value, then component default; see source locations for validation",
+    "sources": [
+      "go/cmd/extract-egress/main.go:91",
+      "go/runtimefile/lookup.go:23"
+    ],
+    "class": "fixture_only",
+    "managed_roles": [
+      "egress"
+    ]
+  },
+  {
+    "key": "EGRESS_TOKEN",
+    "owner": "egress",
+    "type": "secret string",
+    "default": "empty; required (16–256 bytes)",
+    "secret": true,
+    "store": "legacy process environment; managed role manifest for egress",
+    "reload": "process startup; restart or recreate after changing environment",
+    "migration": "preserve effective value and consuming role during adoption; verify managed parity before switching",
+    "precedence": "selected role manifest takes precedence without environment fallback; legacy environment when no file is selected; component default if absent",
+    "sources": [
+      "go/cmd/extract-egress/main.go:76",
+      "go/runtimefile/lookup.go:23"
+    ],
+    "class": "runtime",
+    "managed_roles": [
+      "egress"
+    ]
+  },
+  {
+    "key": "EVENING_NEWS_BACKGROUND_CONTAINER",
+    "owner": "operator tools",
+    "type": "string",
+    "default": "empty / unset",
+    "secret": false,
+    "store": "operator/CI tool process environment",
+    "reload": "process startup; restart or recreate after changing environment",
+    "migration": "retain effective value per consuming role; no automatic adoption implied",
+    "precedence": "explicit value, then component default; see source locations for validation",
+    "sources": [
+      "go-tools/cmd/collect-runtime-incident/main.go:37"
+    ],
+    "class": "operator_or_ci",
+    "managed_roles": []
+  },
+  {
+    "key": "EVENING_NEWS_DB_CONTAINER",
+    "owner": "operator tools",
+    "type": "string",
+    "default": "empty / unset",
+    "secret": false,
+    "store": "operator/CI tool process environment",
+    "reload": "process startup; restart or recreate after changing environment",
+    "migration": "retain effective value per consuming role; no automatic adoption implied",
+    "precedence": "explicit value, then component default; see source locations for validation",
+    "sources": [
+      "go-tools/cmd/collect-runtime-incident/main.go:37"
+    ],
+    "class": "operator_or_ci",
+    "managed_roles": []
+  },
+  {
+    "key": "EVENING_NEWS_DB_NAME",
+    "owner": "operator tools",
+    "type": "string",
+    "default": "empty / unset",
+    "secret": false,
+    "store": "operator/CI tool process environment",
+    "reload": "process startup; restart or recreate after changing environment",
+    "migration": "retain effective value per consuming role; no automatic adoption implied",
+    "precedence": "explicit value, then component default; see source locations for validation",
+    "sources": [
+      "go-tools/cmd/collect-runtime-incident/main.go:31"
+    ],
+    "class": "operator_or_ci",
+    "managed_roles": []
+  },
+  {
+    "key": "EVENING_NEWS_DB_SCHEMA",
+    "owner": "operator tools",
+    "type": "string",
+    "default": "empty / unset",
+    "secret": false,
+    "store": "operator/CI tool process environment",
+    "reload": "process startup; restart or recreate after changing environment",
+    "migration": "retain effective value per consuming role; no automatic adoption implied",
+    "precedence": "explicit value, then component default; see source locations for validation",
+    "sources": [
+      "go-tools/cmd/collect-runtime-incident/main.go:35"
+    ],
+    "class": "operator_or_ci",
+    "managed_roles": []
+  },
+  {
+    "key": "EVENING_NEWS_DB_USER",
+    "owner": "operator tools",
+    "type": "string",
+    "default": "empty / unset",
+    "secret": false,
+    "store": "operator/CI tool process environment",
+    "reload": "process startup; restart or recreate after changing environment",
+    "migration": "retain effective value per consuming role; no automatic adoption implied",
+    "precedence": "explicit value, then component default; see source locations for validation",
+    "sources": [
+      "go-tools/cmd/collect-runtime-incident/main.go:37"
+    ],
+    "class": "operator_or_ci",
+    "managed_roles": []
+  },
+  {
+    "key": "EVENING_NEWS_DOMAIN_CONTAINER",
+    "owner": "operator tools",
+    "type": "string",
+    "default": "empty / unset",
+    "secret": false,
+    "store": "operator/CI tool process environment",
+    "reload": "process startup; restart or recreate after changing environment",
+    "migration": "retain effective value per consuming role; no automatic adoption implied",
+    "precedence": "explicit value, then component default; see source locations for validation",
+    "sources": [
+      "go-tools/cmd/collect-runtime-incident/main.go:37"
+    ],
+    "class": "operator_or_ci",
+    "managed_roles": []
+  },
+  {
+    "key": "EVENING_NEWS_EXTRACTOR_CONTAINER",
+    "owner": "operator tools",
+    "type": "string",
+    "default": "empty / unset",
+    "secret": false,
+    "store": "operator/CI tool process environment",
+    "reload": "process startup; restart or recreate after changing environment",
+    "migration": "retain effective value per consuming role; no automatic adoption implied",
+    "precedence": "explicit value, then component default; see source locations for validation",
+    "sources": [
+      "go-tools/cmd/collect-runtime-incident/main.go:37"
+    ],
+    "class": "operator_or_ci",
+    "managed_roles": []
+  },
+  {
+    "key": "EVENING_NEWS_SSH_HOST",
+    "owner": "operator tools",
+    "type": "string",
+    "default": "empty / unset",
+    "secret": false,
+    "store": "operator/CI tool process environment",
+    "reload": "process startup; restart or recreate after changing environment",
+    "migration": "retain effective value per consuming role; no automatic adoption implied",
+    "precedence": "explicit value, then component default; see source locations for validation",
+    "sources": [
+      "go-tools/cmd/collect-runtime-incident/main.go:37"
+    ],
+    "class": "operator_or_ci",
+    "managed_roles": []
+  },
+  {
+    "key": "EXECUTION_DATABASE_URL",
+    "owner": "Compose example, background",
+    "type": "PostgreSQL URL (contains credentials)",
+    "default": "empty; required by consumer",
+    "secret": true,
+    "store": "legacy process environment; managed role manifest for background",
+    "reload": "process startup; restart or recreate after changing environment",
+    "migration": "preserve effective value and consuming role during adoption; verify managed parity before switching",
+    "precedence": "selected role manifest takes precedence without environment fallback; legacy environment when no file is selected; component default if absent",
+    "sources": [
+      "go-background/cmd/news-background/runtime_config.go:13",
+      "go-background/cmd/news-background/runtime_config.go:14",
+      "go-background/internal/config/config.go:79"
+    ],
+    "class": "runtime",
+    "managed_roles": [
+      "background"
+    ]
+  },
+  {
+    "key": "EXECUTION_DB_SCHEMA",
+    "owner": "background",
+    "type": "string",
+    "default": "empty / unset",
+    "secret": false,
+    "store": "legacy process environment; managed role manifest for background",
+    "reload": "process startup; restart or recreate after changing environment",
+    "migration": "preserve effective value and consuming role during adoption; verify managed parity before switching",
+    "precedence": "selected role manifest takes precedence without environment fallback; legacy environment when no file is selected; component default if absent",
+    "sources": [
+      "go-background/cmd/news-background/runtime_config.go:13",
+      "go-background/internal/config/config.go:80"
+    ],
+    "class": "runtime",
+    "managed_roles": [
+      "background"
+    ]
+  },
+  {
+    "key": "EXECUTION_MAX_CONNECTIONS",
+    "owner": "Compose example, background",
+    "type": "number",
+    "default": "2",
+    "secret": false,
+    "store": "legacy process environment; managed role manifest for background",
+    "reload": "process startup; restart or recreate after changing environment",
+    "migration": "preserve effective value and consuming role during adoption; verify managed parity before switching",
+    "precedence": "selected role manifest takes precedence without environment fallback; legacy environment when no file is selected; component default if absent",
+    "sources": [
+      "go-background/cmd/news-background/runtime_config.go:13",
+      "go-background/internal/config/config.go:86"
+    ],
+    "class": "runtime",
+    "managed_roles": [
+      "background"
+    ]
+  },
+  {
+    "key": "EXECUTION_SERVICE_URL",
+    "owner": "domain",
+    "type": "URL",
+    "default": "http://background:8101",
+    "secret": false,
+    "store": "legacy process environment; managed role manifest for domain",
+    "reload": "process startup; restart or recreate after changing environment",
+    "migration": "preserve effective value and consuming role during adoption; verify managed parity before switching",
+    "precedence": "selected role manifest takes precedence without environment fallback; legacy environment when no file is selected; component default if absent",
+    "sources": [
+      "go-domain/cmd/news-domain/main.go:163",
+      "go-domain/cmd/news-domain/runtime_config.go:25"
+    ],
+    "class": "runtime",
+    "managed_roles": [
+      "domain"
+    ]
+  },
+  {
+    "key": "EXECUTOR_DATABASE_URL",
+    "owner": "Compose example",
+    "type": "PostgreSQL URL (contains credentials)",
+    "default": "Compose: required",
+    "secret": true,
+    "store": "Compose interpolation environment or deployment env file",
+    "reload": "rerender Compose and recreate affected service",
+    "migration": "Compose maps this role-specific input to DATABASE_URL; preserve distinct database roles",
+    "precedence": "Compose interpolation source then template default/required rule; inspect actual file",
+    "sources": [
+      "docker-compose.example.yml:56",
+      "docker-compose.example.yml:73"
+    ],
+    "class": "compose_input",
+    "managed_roles": []
+  },
+  {
+    "key": "EXTRACTION_BROWSER_MAX_BYTES",
+    "owner": "deployment profile, processing",
+    "type": "number",
+    "default": "5242880 bytes",
+    "secret": false,
+    "store": "legacy process environment; managed role manifest for background",
+    "reload": "process startup; restart or recreate after changing environment",
+    "migration": "preserve effective value and consuming role during adoption; verify managed parity before switching",
+    "precedence": "selected role manifest takes precedence without environment fallback; legacy environment when no file is selected; component default if absent",
+    "sources": [
+      "go-background/cmd/news-background/runtime_config.go:13",
+      "go-processing/runner/runner.go:120"
+    ],
+    "class": "runtime",
+    "managed_roles": [
+      "background"
+    ]
+  },
+  {
+    "key": "EXTRACTION_HTTP_MAX_BYTES",
+    "owner": "Compose example, deployment profile, domain, processing",
+    "type": "number",
+    "default": "5242880 bytes",
+    "secret": false,
+    "store": "legacy process environment; managed role manifest for domain, background",
+    "reload": "process startup; restart or recreate after changing environment",
+    "migration": "preserve effective value and consuming role during adoption; verify managed parity before switching",
+    "precedence": "selected role manifest takes precedence without environment fallback; legacy environment when no file is selected; component default if absent",
+    "sources": [
+      "go-background/cmd/news-background/runtime_config.go:13",
+      "go-domain/cmd/news-domain/main.go:390",
+      "go-domain/cmd/news-domain/runtime_config.go:25",
+      "go-processing/runner/runner.go:119"
+    ],
+    "class": "runtime",
+    "managed_roles": [
+      "domain",
+      "background"
+    ]
+  },
+  {
+    "key": "EXTRACTION_SERVICE_MODE",
+    "owner": "deployment profile",
+    "type": "string",
+    "default": "set directly by cited Compose profile; see source",
+    "secret": false,
+    "store": "container environment set by Compose profile",
+    "reload": "rerender and recreate affected container",
+    "migration": "profile-specific container output; preserve only if its actual consumer requires it",
+    "precedence": "explicit Compose environment mapping; its interpolated inputs are separate catalog keys",
+    "sources": [
+      "docker-compose.example.yml:111",
+      "deploy/news-extractor/compose.native.yml:13",
+      "deploy/news-extractor/compose.rollback.yml:5",
+      "deploy/news-extractor/compose.native-canary.yml:6",
+      "deploy/news-extractor/compose.standby.yml:7",
+      "deploy/news-extractor/compose.canary.yml:5"
+    ],
+    "class": "compose_output",
+    "managed_roles": []
+  },
+  {
+    "key": "EXTRACTION_SERVICE_NATIVE_BROWSER",
+    "owner": "deployment profile, ingestion, processing",
+    "type": "boolean",
+    "default": "false",
+    "secret": false,
+    "store": "legacy process environment; managed role manifest for background",
+    "reload": "process startup; restart or recreate after changing environment",
+    "migration": "preserve effective value and consuming role during adoption; verify managed parity before switching",
+    "precedence": "selected role manifest takes precedence without environment fallback; legacy environment when no file is selected; component default if absent",
+    "sources": [
+      "go-background/cmd/news-background/runtime_config.go:13",
+      "go-ingestion/runner/runner.go:59",
+      "go-processing/runner/runner.go:135"
+    ],
+    "class": "runtime",
+    "managed_roles": [
+      "background"
+    ]
+  },
+  {
+    "key": "EXTRACTION_SERVICE_PYTHON_FALLBACK",
+    "owner": "deployment profile",
+    "type": "string",
+    "default": "set directly by cited Compose profile; see source",
+    "secret": false,
+    "store": "container environment set by Compose profile",
+    "reload": "rerender and recreate affected container",
+    "migration": "profile-specific container output; preserve only if its actual consumer requires it",
+    "precedence": "explicit Compose environment mapping; its interpolated inputs are separate catalog keys",
+    "sources": [
+      "docker-compose.example.yml:114",
+      "deploy/news-extractor/compose.native.yml:17",
+      "deploy/news-extractor/compose.rollback.yml:7",
+      "deploy/news-extractor/compose.native-canary.yml:8",
+      "deploy/news-extractor/compose.standby.yml:11"
+    ],
+    "class": "compose_output",
+    "managed_roles": []
+  },
+  {
+    "key": "EXTRACTION_SERVICE_TIMEOUT_SECONDS",
+    "owner": "deployment profile, processing",
+    "type": "number",
+    "default": "30 seconds",
+    "secret": false,
+    "store": "legacy process environment; managed role manifest for background",
+    "reload": "process startup; restart or recreate after changing environment",
+    "migration": "preserve effective value and consuming role during adoption; verify managed parity before switching",
+    "precedence": "selected role manifest takes precedence without environment fallback; legacy environment when no file is selected; component default if absent",
+    "sources": [
+      "go-background/cmd/news-background/runtime_config.go:13",
+      "go-processing/runner/runner.go:121"
+    ],
+    "class": "runtime",
+    "managed_roles": [
+      "background"
+    ]
+  },
+  {
+    "key": "EXTRACTION_SERVICE_TOKEN",
+    "owner": "Compose example, deployment profile, domain, ingestion, processing",
+    "type": "secret string",
+    "default": "empty; required by consumer",
+    "secret": true,
+    "store": "legacy process environment; managed role manifest for domain, background",
+    "reload": "process startup; restart or recreate after changing environment",
+    "migration": "Compose may map to EXTRACTOR_SERVICE_TOKEN; preserve purpose and token parity",
+    "precedence": "selected role manifest takes precedence without environment fallback; legacy environment when no file is selected; component default if absent",
+    "sources": [
+      "go-background/cmd/news-background/runtime_config.go:13",
+      "go-background/cmd/news-background/runtime_config.go:14",
+      "go-domain/cmd/news-domain/main.go:251",
+      "go-domain/cmd/news-domain/runtime_config.go:25",
+      "go-domain/cmd/news-domain/runtime_config.go:26",
+      "go-ingestion/runner/runner.go:47",
+      "go-processing/runner/runner.go:95"
+    ],
+    "class": "runtime",
+    "managed_roles": [
+      "domain",
+      "background"
+    ]
+  },
+  {
+    "key": "EXTRACTION_SERVICE_TOTAL_BUDGET_SECONDS",
+    "owner": "deployment profile, processing",
+    "type": "number",
+    "default": "120 seconds",
+    "secret": false,
+    "store": "legacy process environment; managed role manifest for background",
+    "reload": "process startup; restart or recreate after changing environment",
+    "migration": "preserve effective value and consuming role during adoption; verify managed parity before switching",
+    "precedence": "selected role manifest takes precedence without environment fallback; legacy environment when no file is selected; component default if absent",
+    "sources": [
+      "go-background/cmd/news-background/runtime_config.go:13",
+      "go-processing/runner/runner.go:122"
+    ],
+    "class": "runtime",
+    "managed_roles": [
+      "background"
+    ]
+  },
+  {
+    "key": "EXTRACTION_SERVICE_URL",
+    "owner": "deployment profile, domain, ingestion, processing",
+    "type": "URL",
+    "default": "empty; required by consumer",
+    "secret": false,
+    "store": "legacy process environment; managed role manifest for domain, background",
+    "reload": "process startup; restart or recreate after changing environment",
+    "migration": "preserve effective value and consuming role during adoption; verify managed parity before switching",
+    "precedence": "selected role manifest takes precedence without environment fallback; legacy environment when no file is selected; component default if absent",
+    "sources": [
+      "go-background/cmd/news-background/runtime_config.go:13",
+      "go-domain/cmd/news-domain/main.go:251",
+      "go-domain/cmd/news-domain/runtime_config.go:25",
+      "go-domain/cmd/news-domain/runtime_config.go:26",
+      "go-ingestion/runner/runner.go:46",
+      "go-processing/runner/runner.go:94"
+    ],
+    "class": "runtime",
+    "managed_roles": [
+      "domain",
+      "background"
+    ]
+  },
+  {
+    "key": "EXTRACTION_TEXT_MAX_CHARS",
+    "owner": "Compose example, deployment profile, domain, processing",
+    "type": "number",
+    "default": "100000 characters",
+    "secret": false,
+    "store": "legacy process environment; managed role manifest for domain, background",
+    "reload": "process startup; restart or recreate after changing environment",
+    "migration": "preserve effective value and consuming role during adoption; verify managed parity before switching",
+    "precedence": "selected role manifest takes precedence without environment fallback; legacy environment when no file is selected; component default if absent",
+    "sources": [
+      "go-background/cmd/news-background/runtime_config.go:13",
+      "go-domain/cmd/news-domain/main.go:378",
+      "go-domain/cmd/news-domain/runtime_config.go:25",
+      "go-processing/runner/runner.go:118"
+    ],
+    "class": "runtime",
+    "managed_roles": [
+      "domain",
+      "background"
+    ]
+  },
+  {
+    "key": "EXTRACTOR_BROWSER_BACKEND",
+    "owner": "extractor",
+    "type": "string",
+    "default": "empty / unset",
+    "secret": false,
+    "store": "legacy process environment; managed role manifest for extractor",
+    "reload": "process startup; restart or recreate after changing environment",
+    "migration": "preserve effective value and consuming role during adoption; verify managed parity before switching",
+    "precedence": "selected role manifest takes precedence without environment fallback; legacy environment when no file is selected; component default if absent",
+    "sources": [
+      "go/cmd/extract-service/native_runtime.go:19",
+      "go/runtimefile/lookup.go:21"
+    ],
+    "class": "runtime",
+    "managed_roles": [
+      "extractor"
+    ]
+  },
+  {
+    "key": "EXTRACTOR_BROWSER_CONCURRENT",
+    "owner": "Compose example, extractor",
+    "type": "number",
+    "default": "standalone: 1; example Compose: 2",
+    "secret": false,
+    "store": "legacy process environment; managed role manifest for extractor",
+    "reload": "process startup; restart or recreate after changing environment",
+    "migration": "preserve effective value and consuming role during adoption; verify managed parity before switching",
+    "precedence": "selected role manifest takes precedence without environment fallback; legacy environment when no file is selected; component default if absent",
+    "sources": [
+      "go/cmd/extract-service/main.go:70",
+      "go/runtimefile/lookup.go:21"
+    ],
+    "class": "runtime",
+    "managed_roles": [
+      "extractor"
+    ]
+  },
+  {
+    "key": "EXTRACTOR_HTTP_ONLY",
+    "owner": "extractor",
+    "type": "boolean",
+    "default": "true",
+    "secret": false,
+    "store": "legacy process environment; managed role manifest for extractor",
+    "reload": "process startup; restart or recreate after changing environment",
+    "migration": "preserve effective value and consuming role during adoption; verify managed parity before switching",
+    "precedence": "selected role manifest takes precedence without environment fallback; legacy environment when no file is selected; component default if absent",
+    "sources": [
+      "go/cmd/extract-service/main.go:75",
+      "go/runtimefile/lookup.go:21"
+    ],
+    "class": "runtime",
+    "managed_roles": [
+      "extractor"
+    ]
+  },
+  {
+    "key": "EXTRACTOR_MAX_CONCURRENT",
+    "owner": "Compose example, extractor",
+    "type": "number",
+    "default": "standalone: 5; example Compose: 4",
+    "secret": false,
+    "store": "legacy process environment; managed role manifest for extractor",
+    "reload": "process startup; restart or recreate after changing environment",
+    "migration": "preserve effective value and consuming role during adoption; verify managed parity before switching",
+    "precedence": "selected role manifest takes precedence without environment fallback; legacy environment when no file is selected; component default if absent",
+    "sources": [
+      "go/cmd/extract-service/main.go:66",
+      "go/runtimefile/lookup.go:21"
+    ],
+    "class": "runtime",
+    "managed_roles": [
+      "extractor"
+    ]
+  },
+  {
+    "key": "EXTRACTOR_NATIVE_DIAGNOSTICS",
+    "owner": "extractor",
+    "type": "string",
+    "default": "empty / unset",
+    "secret": false,
+    "store": "legacy process environment; managed role manifest for extractor",
+    "reload": "process startup; restart or recreate after changing environment",
+    "migration": "preserve effective value and consuming role during adoption; verify managed parity before switching",
+    "precedence": "selected role manifest takes precedence without environment fallback; legacy environment when no file is selected; component default if absent",
+    "sources": [
+      "go/cmd/extract-service/native_runtime.go:25",
+      "go/cmd/extract-service/native_runtime.go:28",
+      "go/runtimefile/lookup.go:21"
+    ],
+    "class": "runtime",
+    "managed_roles": [
+      "extractor"
+    ]
+  },
+  {
+    "key": "EXTRACTOR_NATIVE_NETWORK_ISOLATED",
+    "owner": "extractor",
+    "type": "boolean",
+    "default": "empty / unset",
+    "secret": false,
+    "store": "legacy process environment; managed role manifest for extractor",
+    "reload": "process startup; restart or recreate after changing environment",
+    "migration": "preserve effective value and consuming role during adoption; verify managed parity before switching",
+    "precedence": "selected role manifest takes precedence without environment fallback; legacy environment when no file is selected; component default if absent",
+    "sources": [
+      "go/cmd/extract-service/native_runtime.go:22",
+      "go/runtimefile/lookup.go:21"
+    ],
+    "class": "runtime",
+    "managed_roles": [
+      "extractor"
+    ]
+  },
+  {
+    "key": "EXTRACTOR_NATIVE_PROXY_TOKEN",
+    "owner": "extractor",
+    "type": "secret string",
+    "default": "empty / unset",
+    "secret": true,
+    "store": "legacy process environment; managed role manifest for extractor",
+    "reload": "process startup; restart or recreate after changing environment",
+    "migration": "preserve effective value and consuming role during adoption; verify managed parity before switching",
+    "precedence": "selected role manifest takes precedence without environment fallback; legacy environment when no file is selected; component default if absent",
+    "sources": [
+      "go/cmd/extract-service/native_runtime.go:21",
+      "go/runtimefile/lookup.go:21"
+    ],
+    "class": "runtime",
+    "managed_roles": [
+      "extractor"
+    ]
+  },
+  {
+    "key": "EXTRACTOR_NATIVE_PROXY_URL",
+    "owner": "extractor",
+    "type": "URL",
+    "default": "empty / unset",
+    "secret": false,
+    "store": "legacy process environment; managed role manifest for extractor",
+    "reload": "process startup; restart or recreate after changing environment",
+    "migration": "preserve effective value and consuming role during adoption; verify managed parity before switching",
+    "precedence": "selected role manifest takes precedence without environment fallback; legacy environment when no file is selected; component default if absent",
+    "sources": [
+      "go/cmd/extract-service/native_runtime.go:20",
+      "go/runtimefile/lookup.go:21"
+    ],
+    "class": "runtime",
+    "managed_roles": [
+      "extractor"
+    ]
+  },
+  {
+    "key": "EXTRACTOR_NATIVE_READY_SELECTOR",
+    "owner": "extractor",
+    "type": "string",
+    "default": "empty / unset",
+    "secret": false,
+    "store": "legacy process environment; managed role manifest for extractor",
+    "reload": "process startup; restart or recreate after changing environment",
+    "migration": "preserve effective value and consuming role during adoption; verify managed parity before switching",
+    "precedence": "selected role manifest takes precedence without environment fallback; legacy environment when no file is selected; component default if absent",
+    "sources": [
+      "go/cmd/extract-service/main.go:89",
+      "go/cmd/extract-service/native_runtime.go:23",
+      "go/runtimefile/lookup.go:21"
+    ],
+    "class": "runtime",
+    "managed_roles": [
+      "extractor"
+    ]
+  },
+  {
+    "key": "EXTRACTOR_SERVICE_TOKEN",
+    "owner": "extractor",
+    "type": "secret string",
+    "default": "empty; required by consumer",
+    "secret": true,
+    "store": "legacy process environment; managed role manifest for extractor",
+    "reload": "process startup; restart or recreate after changing environment",
+    "migration": "preserve effective value and consuming role during adoption; verify managed parity before switching",
+    "precedence": "selected role manifest takes precedence without environment fallback; legacy environment when no file is selected; component default if absent",
+    "sources": [
+      "go/cmd/extract-service/main.go:164",
+      "go/runtimefile/lookup.go:21"
+    ],
+    "class": "runtime",
+    "managed_roles": [
+      "extractor"
+    ]
+  },
+  {
+    "key": "EXTRACTOR_TEST_TOKEN",
+    "owner": "operator tools",
+    "type": "secret string",
+    "default": "empty / unset",
+    "secret": true,
+    "store": "test/fixture environment only",
+    "reload": "process startup; restart or recreate after changing environment",
+    "migration": "retain effective value per consuming role; no automatic adoption implied",
+    "precedence": "explicit value, then component default; see source locations for validation",
+    "sources": [
+      "go-tools/cmd/smoke-extractor-service/main.go:21"
+    ],
+    "class": "fixture_only",
+    "managed_roles": []
+  },
+  {
+    "key": "FIXTURE_DATABASE_URL",
+    "owner": "operator tools",
+    "type": "PostgreSQL URL (contains credentials)",
+    "default": "empty / unset",
+    "secret": true,
+    "store": "test/fixture environment only",
+    "reload": "process startup; restart or recreate after changing environment",
+    "migration": "retain effective value per consuming role; no automatic adoption implied",
+    "precedence": "explicit value, then component default; see source locations for validation",
+    "sources": [
+      "go-tools/cmd/check-fixture-receipts/main.go:19",
+      "go-tools/cmd/check-fixture-receipts/main.go:24",
+      "go-tools/cmd/fixture-worker-lock/main.go:13",
+      "go-tools/cmd/fixture-worker-lock/main.go:18",
+      "go-tools/cmd/seed-fixture-sources/main.go:17"
+    ],
+    "class": "fixture_only",
+    "managed_roles": []
+  },
+  {
+    "key": "GEMINI_API_ENDPOINT",
+    "owner": "domain",
+    "type": "URL",
+    "default": "domain: https://generativelanguage.googleapis.com/v1/models; legacy RPC: empty",
+    "secret": false,
+    "store": "legacy process environment; managed role manifest for domain",
+    "reload": "process startup; restart or recreate after changing environment",
+    "migration": "preserve effective value and consuming role during adoption; verify managed parity before switching",
+    "precedence": "selected role manifest takes precedence without environment fallback; legacy environment when no file is selected; component default if absent",
+    "sources": [
+      "go-domain/airuntime/server.go:61",
+      "go-domain/cmd/news-domain/runtime_config.go:25"
+    ],
+    "class": "runtime",
+    "managed_roles": [
+      "domain"
+    ]
+  },
+  {
+    "key": "GEMINI_API_KEY",
+    "owner": "Compose example, domain, standalone editorial",
+    "type": "secret string",
+    "default": "empty / unset",
+    "secret": true,
+    "store": "legacy domain environment; managed encrypted credentials in PostgreSQL",
+    "reload": "legacy: process startup; managed: credential snapshot resolved for each operation",
+    "migration": "credentials require explicit secure import; never copy plaintext to public artifacts",
+    "precedence": "legacy: environment; managed domain: encrypted credential store, including absent/deleted credentials; no environment fallback",
+    "sources": [
+      "go-domain/airuntime/server.go:61",
+      "go-editorial/cmd/news-editorial/main.go:46"
+    ],
+    "class": "runtime",
+    "managed_roles": []
+  },
+  {
+    "key": "GEMINI_ENDPOINT",
+    "owner": "standalone editorial",
+    "type": "URL",
+    "default": "standalone editorial: https://generativelanguage.googleapis.com/v1beta/models/<model>:generateContent",
+    "secret": false,
+    "store": "runtime process environment",
+    "reload": "process startup; restart or recreate after changing environment",
+    "migration": "retain effective value per consuming role; no automatic adoption implied",
+    "precedence": "explicit value, then component default; see source locations for validation",
+    "sources": [
+      "go-editorial/cmd/news-editorial/main.go:46"
+    ],
+    "class": "runtime",
+    "managed_roles": []
+  },
+  {
+    "key": "GEMINI_MODEL",
+    "owner": "standalone editorial",
+    "type": "string",
+    "default": "empty / unset",
+    "secret": false,
+    "store": "runtime process environment",
+    "reload": "process startup; restart or recreate after changing environment",
+    "migration": "retain effective value per consuming role; no automatic adoption implied",
+    "precedence": "explicit value, then component default; see source locations for validation",
+    "sources": [
+      "go-editorial/cmd/news-editorial/main.go:46"
+    ],
+    "class": "runtime",
+    "managed_roles": []
+  },
+  {
+    "key": "GHCR_REPOSITORY",
+    "owner": "operator tools",
+    "type": "string",
+    "default": "dzarlax-ai/rss-scheduler",
+    "secret": false,
+    "store": "operator/CI tool process environment",
+    "reload": "process startup; restart or recreate after changing environment",
+    "migration": "retain effective value per consuming role; no automatic adoption implied",
+    "precedence": "explicit value, then component default; see source locations for validation",
+    "sources": [
+      "go-tools/cmd/check-ghcr-tag-absent/main.go:10"
+    ],
+    "class": "operator_or_ci",
+    "managed_roles": []
+  },
+  {
+    "key": "GHCR_TOKEN",
+    "owner": "operator tools",
+    "type": "secret string",
+    "default": "empty / unset",
+    "secret": true,
+    "store": "operator/CI tool process environment",
+    "reload": "process startup; restart or recreate after changing environment",
+    "migration": "retain effective value per consuming role; no automatic adoption implied",
+    "precedence": "explicit value, then component default; see source locations for validation",
+    "sources": [
+      "go-tools/cmd/check-ghcr-tag-absent/main.go:14"
+    ],
+    "class": "operator_or_ci",
+    "managed_roles": []
+  },
+  {
+    "key": "GHCR_USERNAME",
+    "owner": "operator tools",
+    "type": "string",
+    "default": "empty / unset",
+    "secret": false,
+    "store": "operator/CI tool process environment",
+    "reload": "process startup; restart or recreate after changing environment",
+    "migration": "retain effective value per consuming role; no automatic adoption implied",
+    "precedence": "explicit value, then component default; see source locations for validation",
+    "sources": [
+      "go-tools/cmd/check-ghcr-tag-absent/main.go:14"
+    ],
+    "class": "operator_or_ci",
+    "managed_roles": []
+  },
+  {
+    "key": "HOME",
+    "owner": "operator tools",
+    "type": "path",
+    "default": "unset: not forwarded to Compose subprocess",
+    "secret": false,
+    "store": "operator/CI tool process environment",
+    "reload": "read per tool invocation",
+    "migration": "operator tool setting, not application migration state",
+    "precedence": "inherited process value is forwarded; other host variables excluded",
+    "sources": [
+      "go-tools/cmd/prepare-runtime-env/main.go:72"
+    ],
+    "class": "operator_or_ci",
+    "managed_roles": []
+  },
+  {
+    "key": "IMAGE_TAG",
+    "owner": "operator tools",
+    "type": "string",
+    "default": "empty / unset",
+    "secret": false,
+    "store": "operator/CI tool process environment",
+    "reload": "process startup; restart or recreate after changing environment",
+    "migration": "retain effective value per consuming role; no automatic adoption implied",
+    "precedence": "explicit value, then component default; see source locations for validation",
+    "sources": [
+      "go-tools/cmd/check-ghcr-tag-absent/main.go:14"
+    ],
+    "class": "operator_or_ci",
+    "managed_roles": []
+  },
+  {
+    "key": "INGESTION_DATABASE_URL",
+    "owner": "Compose example, background",
+    "type": "PostgreSQL URL (contains credentials)",
+    "default": "empty; required by consumer",
+    "secret": true,
+    "store": "legacy process environment; managed role manifest for background",
+    "reload": "process startup; restart or recreate after changing environment",
+    "migration": "preserve effective value and consuming role during adoption; verify managed parity before switching",
+    "precedence": "selected role manifest takes precedence without environment fallback; legacy environment when no file is selected; component default if absent",
+    "sources": [
+      "go-background/cmd/news-background/runtime_config.go:13",
+      "go-background/cmd/news-background/runtime_config.go:14",
+      "go-background/internal/config/config.go:131"
+    ],
+    "class": "runtime",
+    "managed_roles": [
+      "background"
+    ]
+  },
+  {
+    "key": "JOB_EXECUTOR_HOST",
+    "owner": "domain",
+    "type": "string",
+    "default": "0.0.0.0",
+    "secret": false,
+    "store": "legacy process environment; managed role manifest for domain",
+    "reload": "process startup; restart or recreate after changing environment",
+    "migration": "preserve effective value and consuming role during adoption; verify managed parity before switching",
+    "precedence": "selected role manifest takes precedence without environment fallback; legacy environment when no file is selected; component default if absent",
+    "sources": [
+      "go-domain/cmd/news-domain/main.go:313",
+      "go-domain/cmd/news-domain/runtime_config.go:25"
+    ],
+    "class": "runtime",
+    "managed_roles": [
+      "domain"
+    ]
+  },
+  {
+    "key": "JOB_EXECUTOR_LISTEN",
+    "owner": "background",
+    "type": "string",
+    "default": ":8101",
+    "secret": false,
+    "store": "legacy process environment; managed role manifest for background",
+    "reload": "process startup; restart or recreate after changing environment",
+    "migration": "preserve effective value and consuming role during adoption; verify managed parity before switching",
+    "precedence": "selected role manifest takes precedence without environment fallback; legacy environment when no file is selected; component default if absent",
+    "sources": [
+      "go-background/cmd/news-background/runtime_config.go:13",
+      "go-background/internal/config/config.go:84"
+    ],
+    "class": "runtime",
+    "managed_roles": [
+      "background"
+    ]
+  },
+  {
+    "key": "JOB_EXECUTOR_PORT",
+    "owner": "domain",
+    "type": "number",
+    "default": "8100",
+    "secret": false,
+    "store": "legacy process environment; managed role manifest for domain",
+    "reload": "process startup; restart or recreate after changing environment",
+    "migration": "preserve effective value and consuming role during adoption; verify managed parity before switching",
+    "precedence": "selected role manifest takes precedence without environment fallback; legacy environment when no file is selected; component default if absent",
+    "sources": [
+      "go-domain/cmd/news-domain/healthcheck.go:31",
+      "go-domain/cmd/news-domain/main.go:317",
+      "go-domain/cmd/news-domain/runtime_config.go:25"
+    ],
+    "class": "runtime",
+    "managed_roles": [
+      "domain"
+    ]
+  },
+  {
+    "key": "JOB_EXECUTOR_REQUEST_TIMEOUT_SECONDS",
+    "owner": "worker",
+    "type": "number",
+    "default": "5 seconds",
+    "secret": false,
+    "store": "legacy process environment; managed role manifest for background",
+    "reload": "process startup; restart or recreate after changing environment",
+    "migration": "preserve effective value and consuming role during adoption; verify managed parity before switching",
+    "precedence": "selected role manifest takes precedence without environment fallback; legacy environment when no file is selected; component default if absent",
+    "sources": [
+      "go-background/cmd/news-background/runtime_config.go:13",
+      "go-worker/internal/config/config.go:69"
+    ],
+    "class": "runtime",
+    "managed_roles": [
+      "background"
+    ]
+  },
+  {
+    "key": "JOB_EXECUTOR_TOKEN",
+    "owner": "Compose example, background, deployment profile, domain, ingestion, worker",
+    "type": "secret string",
+    "default": "empty; required by consumer",
+    "secret": true,
+    "store": "legacy process environment; managed role manifest for domain, background",
+    "reload": "process startup; restart or recreate after changing environment",
+    "migration": "preserve effective value and consuming role during adoption; verify managed parity before switching",
+    "precedence": "selected role manifest takes precedence without environment fallback; legacy environment when no file is selected; component default if absent",
+    "sources": [
+      "go-background/cmd/news-background/runtime_config.go:13",
+      "go-background/cmd/news-background/runtime_config.go:14",
+      "go-background/internal/config/config.go:81",
+      "go-domain/cmd/news-domain/healthcheck.go:27",
+      "go-domain/cmd/news-domain/main.go:159",
+      "go-domain/cmd/news-domain/runtime_config.go:25",
+      "go-domain/cmd/news-domain/runtime_config.go:26",
+      "go-ingestion/runner/runner.go:49",
+      "go-worker/internal/config/config.go:47"
+    ],
+    "class": "runtime",
+    "managed_roles": [
+      "domain",
+      "background"
+    ]
+  },
+  {
+    "key": "JOB_EXECUTOR_URL",
+    "owner": "deployment profile, ingestion, worker",
+    "type": "URL",
+    "default": "worker: required; ingestion selector fallback: http://127.0.0.1:8100",
+    "secret": false,
+    "store": "legacy process environment; managed role manifest for background",
+    "reload": "process startup; restart or recreate after changing environment",
+    "migration": "preserve effective value and consuming role during adoption; verify managed parity before switching",
+    "precedence": "selected role manifest takes precedence without environment fallback; legacy environment when no file is selected; component default if absent",
+    "sources": [
+      "go-background/cmd/news-background/runtime_config.go:13",
+      "go-ingestion/runner/runner.go:48",
+      "go-worker/internal/config/config.go:41"
+    ],
+    "class": "runtime",
+    "managed_roles": [
+      "background"
+    ]
+  },
+  {
+    "key": "JWT_SECRET",
+    "owner": "Compose example, web",
+    "type": "secret string",
+    "default": "empty; legacy web falls back to ADMIN_PASSWORD; managed web requires an independent key",
+    "secret": true,
+    "store": "legacy process environment; managed role manifest for web",
+    "reload": "process startup; restart or recreate after changing environment",
+    "migration": "preserve effective value and consuming role during adoption; verify managed parity before switching",
+    "precedence": "selected role manifest takes precedence without environment fallback; legacy environment when no file is selected; component default if absent",
+    "sources": [
+      "go-web/internal/config/config.go:129",
+      "go-web/internal/config/config.go:50",
+      "go-web/internal/config/config.go:51"
+    ],
+    "class": "runtime",
+    "managed_roles": [
+      "web"
+    ]
+  },
+  {
+    "key": "LISTEN_ADDR",
+    "owner": "extractor, scheduler",
+    "type": "string",
+    "default": "standalone scheduler and extractor: :8080; background uses SCHEDULER_LISTEN_ADDR",
+    "secret": false,
+    "store": "legacy process environment; managed role manifest for extractor",
+    "reload": "process startup; restart or recreate after changing environment",
+    "migration": "preserve effective value and consuming role during adoption; verify managed parity before switching",
+    "precedence": "selected role manifest takes precedence without environment fallback; legacy environment when no file is selected; component default if absent",
+    "sources": [
+      "go-scheduler/cmd/scheduler/main.go:19",
+      "go-scheduler/internal/config/config.go:40",
+      "go/cmd/extract-service/main.go:62",
+      "go/runtimefile/lookup.go:21"
+    ],
+    "class": "runtime",
+    "managed_roles": [
+      "extractor"
+    ]
+  },
+  {
+    "key": "LOCAL_CATEGORY",
+    "owner": "domain",
+    "type": "string",
+    "default": "empty / unset",
+    "secret": false,
+    "store": "legacy process environment; managed role manifest for domain",
+    "reload": "process startup; restart or recreate after changing environment",
+    "migration": "preserve effective value and consuming role during adoption; verify managed parity before switching",
+    "precedence": "selected role manifest takes precedence without environment fallback; legacy environment when no file is selected; component default if absent",
+    "sources": [
+      "go-domain/airuntime/server.go:61",
+      "go-domain/cmd/news-domain/runtime_config.go:25"
+    ],
+    "class": "runtime",
+    "managed_roles": [
+      "domain"
+    ]
+  },
+  {
+    "key": "LOCAL_HTTP_SETUP",
+    "owner": "web",
+    "type": "boolean",
+    "default": "false",
+    "secret": false,
+    "store": "legacy process environment; managed role manifest for web",
+    "reload": "restart the web process",
+    "migration": "not applicable; loopback HTTP setup exception only",
+    "precedence": "managed web role value when NEWS_RUNTIME_FILE is set; otherwise process environment",
+    "sources": [
+      "go-web/internal/config/config.go:118",
+      "go-web/internal/config/config.go:50"
+    ],
+    "class": "runtime",
+    "managed_roles": [
+      "web"
+    ]
+  },
+  {
+    "key": "LOG_LEVEL",
+    "owner": "Compose example",
+    "type": "string",
+    "default": "Compose: default 'INFO'",
+    "secret": false,
+    "store": "Compose interpolation environment or deployment env file",
+    "reload": "rerender Compose and recreate affected service",
+    "migration": "legacy Compose passthrough; no current Go environment reader discovered; do not assume it affects Go runtime",
+    "precedence": "Compose interpolation sets a container variable; no current Go reader discovered",
+    "sources": [
+      "docker-compose.example.yml:115"
+    ],
+    "class": "compose_input",
+    "managed_roles": []
+  },
+  {
+    "key": "MAX_WORKERS",
+    "owner": "Compose example, deployment profile, processing",
+    "type": "number",
+    "default": "5",
+    "secret": false,
+    "store": "legacy process environment; managed role manifest for background",
+    "reload": "process startup; restart or recreate after changing environment",
+    "migration": "preserve effective value and consuming role during adoption; verify managed parity before switching",
+    "precedence": "selected role manifest takes precedence without environment fallback; legacy environment when no file is selected; component default if absent",
+    "sources": [
+      "go-background/cmd/news-background/runtime_config.go:13",
+      "go-processing/runner/runner.go:112"
+    ],
+    "class": "runtime",
+    "managed_roles": [
+      "background"
+    ]
+  },
+  {
+    "key": "NEWS_AI_DB_MAX_CONNS",
+    "owner": "domain",
+    "type": "number",
+    "default": "2",
+    "secret": false,
+    "store": "legacy process environment; managed role manifest for domain",
+    "reload": "process startup; restart or recreate after changing environment",
+    "migration": "preserve effective value and consuming role during adoption; verify managed parity before switching",
+    "precedence": "selected role manifest takes precedence without environment fallback; legacy environment when no file is selected; component default if absent",
+    "sources": [
+      "go-domain/airuntime/server.go:133",
+      "go-domain/cmd/news-domain/runtime_config.go:25"
+    ],
+    "class": "runtime",
+    "managed_roles": [
+      "domain"
+    ]
+  },
+  {
+    "key": "NEWS_AI_SOCKET",
+    "owner": "domain",
+    "type": "string",
+    "default": "empty / unset",
+    "secret": false,
+    "store": "runtime process environment",
+    "reload": "process startup; restart or recreate after changing environment",
+    "migration": "retain effective value per consuming role; no automatic adoption implied",
+    "precedence": "explicit value, then component default; see source locations for validation",
+    "sources": [
+      "go-domain/airuntime/server.go:61"
+    ],
+    "class": "runtime",
+    "managed_roles": []
+  },
+  {
+    "key": "NEWS_AI_TOKEN",
+    "owner": "domain",
+    "type": "secret string",
+    "default": "empty / unset",
+    "secret": true,
+    "store": "runtime process environment",
+    "reload": "process startup; restart or recreate after changing environment",
+    "migration": "retain effective value per consuming role; no automatic adoption implied",
+    "precedence": "explicit value, then component default; see source locations for validation",
+    "sources": [
+      "go-domain/airuntime/server.go:61"
+    ],
+    "class": "runtime",
+    "managed_roles": []
+  },
+  {
+    "key": "NEWS_APP_IMAGE",
+    "owner": "deployment profile",
+    "type": "string",
+    "default": "Compose: required",
+    "secret": false,
+    "store": "Compose interpolation environment or deployment env file",
+    "reload": "rerender Compose and recreate affected service",
+    "migration": "retain effective value per consuming role; no automatic adoption implied",
+    "precedence": "Compose interpolation source then template default/required rule; inspect actual file",
+    "sources": [
+      "deploy/news-extractor/compose.native.yml:6",
+      "deploy/news-extractor/compose.standby.yml:5"
+    ],
+    "class": "compose_input",
+    "managed_roles": []
+  },
+  {
+    "key": "NEWS_APP_IP",
+    "owner": "deployment profile",
+    "type": "string",
+    "default": "Compose: required",
+    "secret": false,
+    "store": "Compose interpolation environment or deployment env file",
+    "reload": "rerender Compose and recreate affected service",
+    "migration": "retain effective value per consuming role; no automatic adoption implied",
+    "precedence": "Compose interpolation source then template default/required rule; inspect actual file",
+    "sources": [
+      "deploy/news-extractor/compose.native.yml:31"
+    ],
+    "class": "compose_input",
+    "managed_roles": []
+  },
+  {
+    "key": "NEWS_BACKUP_MATCH_PG_MAJOR",
+    "owner": "domain",
+    "type": "string",
+    "default": "empty; disabled",
+    "secret": false,
+    "store": "runtime process environment",
+    "reload": "process startup; restart or recreate after changing environment",
+    "migration": "retain effective value per consuming role; no automatic adoption implied",
+    "precedence": "explicit value, then component default; see source locations for validation",
+    "sources": [
+      "go-domain/backup/create.go:51"
+    ],
+    "class": "runtime",
+    "managed_roles": []
+  },
+  {
+    "key": "NEWS_BROWSER_CONTROLLER_IPS",
+    "owner": "deployment profile",
+    "type": "string",
+    "default": "Compose: required",
+    "secret": false,
+    "store": "Compose interpolation environment or deployment env file",
+    "reload": "rerender Compose and recreate affected service",
+    "migration": "retain effective value per consuming role; no automatic adoption implied",
+    "precedence": "Compose interpolation source then template default/required rule; inspect actual file",
+    "sources": [
+      "deploy/news-extractor/compose.shared-browser.yml:14"
+    ],
+    "class": "compose_input",
+    "managed_roles": []
+  },
+  {
+    "key": "NEWS_BROWSER_CONTROL_VOLUME",
+    "owner": "deployment profile",
+    "type": "string",
+    "default": "Compose: required",
+    "secret": false,
+    "store": "Compose interpolation environment or deployment env file",
+    "reload": "rerender Compose and recreate affected service",
+    "migration": "retain effective value per consuming role; no automatic adoption implied",
+    "precedence": "Compose interpolation source then template default/required rule; inspect actual file",
+    "sources": [
+      "deploy/news-extractor/compose.native.yml:96",
+      "deploy/news-extractor/compose.shared-browser.yml:46"
+    ],
+    "class": "compose_input",
+    "managed_roles": []
+  },
+  {
+    "key": "NEWS_BROWSER_IMAGE",
+    "owner": "deployment profile",
+    "type": "string",
+    "default": "Compose: required",
+    "secret": false,
+    "store": "Compose interpolation environment or deployment env file",
+    "reload": "rerender Compose and recreate affected service",
+    "migration": "retain effective value per consuming role; no automatic adoption implied",
+    "precedence": "Compose interpolation source then template default/required rule; inspect actual file",
+    "sources": [
+      "deploy/news-extractor/compose.shared-browser.yml:6"
+    ],
+    "class": "compose_input",
+    "managed_roles": []
+  },
+  {
+    "key": "NEWS_BROWSER_IP",
+    "owner": "deployment profile",
+    "type": "string",
+    "default": "Compose: required",
+    "secret": false,
+    "store": "Compose interpolation environment or deployment env file",
+    "reload": "rerender Compose and recreate affected service",
+    "migration": "retain effective value per consuming role; no automatic adoption implied",
+    "precedence": "Compose interpolation source then template default/required rule; inspect actual file",
+    "sources": [
+      "deploy/news-extractor/compose.native.yml:8",
+      "deploy/news-extractor/compose.native.yml:42",
+      "deploy/news-extractor/compose.shared-browser.yml:12",
+      "deploy/news-extractor/compose.shared-browser.yml:17"
+    ],
+    "class": "compose_input",
+    "managed_roles": []
+  },
+  {
+    "key": "NEWS_CONTROL_NETWORK",
+    "owner": "deployment profile",
+    "type": "string",
+    "default": "Compose: required",
+    "secret": false,
+    "store": "Compose interpolation environment or deployment env file",
+    "reload": "rerender Compose and recreate affected service",
+    "migration": "retain effective value per consuming role; no automatic adoption implied",
+    "precedence": "Compose interpolation source then template default/required rule; inspect actual file",
+    "sources": [
+      "deploy/news-extractor/compose.native.yml:101",
+      "deploy/news-extractor/compose.shared-browser.yml:50"
+    ],
+    "class": "compose_input",
+    "managed_roles": []
+  },
+  {
+    "key": "NEWS_CONTROL_SUBNET",
+    "owner": "deployment profile",
+    "type": "string",
+    "default": "Compose: required",
+    "secret": false,
+    "store": "Compose interpolation environment or deployment env file",
+    "reload": "rerender Compose and recreate affected service",
+    "migration": "retain effective value per consuming role; no automatic adoption implied",
+    "precedence": "Compose interpolation source then template default/required rule; inspect actual file",
+    "sources": [
+      "deploy/news-extractor/compose.shared-browser.yml:54"
+    ],
+    "class": "compose_input",
+    "managed_roles": []
+  },
+  {
+    "key": "NEWS_CREDENTIAL_KEY",
+    "owner": "domain",
+    "type": "secret base64 key",
+    "default": "none; required in managed domain manifest",
+    "secret": true,
+    "store": "private domain role manifest only",
+    "reload": "domain process startup; preserve key state when restoring",
+    "migration": "preserve installation key and key ID; never regenerate over existing ciphertext",
+    "precedence": "managed manifest only; no legacy environment fallback",
+    "sources": [
+      "go-domain/cmd/news-domain/runtime_config.go:25",
+      "go-domain/cmd/news-domain/runtime_config.go:26"
+    ],
+    "class": "managed_manifest",
+    "managed_roles": [
+      "domain"
+    ]
+  },
+  {
+    "key": "NEWS_CREDENTIAL_KEY_ID",
+    "owner": "domain",
+    "type": "key identifier",
+    "default": "none; required in managed domain manifest",
+    "secret": false,
+    "store": "private domain role manifest only",
+    "reload": "domain process startup; preserve key state when restoring",
+    "migration": "preserve installation key and key ID; never regenerate over existing ciphertext",
+    "precedence": "managed manifest only; no legacy environment fallback",
+    "sources": [
+      "go-domain/cmd/news-domain/runtime_config.go:25",
+      "go-domain/cmd/news-domain/runtime_config.go:26"
+    ],
+    "class": "managed_manifest",
+    "managed_roles": [
+      "domain"
+    ]
+  },
+  {
+    "key": "NEWS_EXTRACTOR_IMAGE",
+    "owner": "deployment profile",
+    "type": "string",
+    "default": "Compose: required",
+    "secret": false,
+    "store": "Compose interpolation environment or deployment env file",
+    "reload": "rerender Compose and recreate affected service",
+    "migration": "retain effective value per consuming role; no automatic adoption implied",
+    "precedence": "Compose interpolation source then template default/required rule; inspect actual file",
+    "sources": [
+      "deploy/news-extractor/compose.native.yml:34",
+      "deploy/news-extractor/compose.native.yml:67",
+      "deploy/news-extractor/compose.standby.yml:15"
+    ],
+    "class": "compose_input",
+    "managed_roles": []
+  },
+  {
+    "key": "NEWS_EXTRACTOR_TOKEN",
+    "owner": "deployment profile",
+    "type": "secret string",
+    "default": "Compose: required",
+    "secret": true,
+    "store": "Compose interpolation environment or deployment env file",
+    "reload": "rerender Compose and recreate affected service",
+    "migration": "retain effective value per consuming role; no automatic adoption implied",
+    "precedence": "Compose interpolation source then template default/required rule; inspect actual file",
+    "sources": [
+      "deploy/news-extractor/compose.native.yml:15",
+      "deploy/news-extractor/compose.native.yml:37",
+      "deploy/news-extractor/compose.standby.yml:10",
+      "deploy/news-extractor/compose.standby.yml:19"
+    ],
+    "class": "compose_input",
+    "managed_roles": []
+  },
+  {
+    "key": "NEWS_FIXTURE_CONFIRM",
+    "owner": "operator tools",
+    "type": "string",
+    "default": "empty / unset",
+    "secret": false,
+    "store": "test/fixture environment only",
+    "reload": "process startup; restart or recreate after changing environment",
+    "migration": "retain effective value per consuming role; no automatic adoption implied",
+    "precedence": "explicit value, then component default; see source locations for validation",
+    "sources": [
+      "go-tools/cmd/check-fixture-receipts/main.go:19",
+      "go-tools/cmd/fixture-worker-lock/main.go:13",
+      "go-tools/cmd/seed-fixture-sources/main.go:18"
+    ],
+    "class": "fixture_only",
+    "managed_roles": []
+  },
+  {
+    "key": "NEWS_FIXTURE_MODE",
+    "owner": "domain",
+    "type": "string",
+    "default": "empty / unset",
+    "secret": false,
+    "store": "test/fixture environment only",
+    "reload": "process startup; restart or recreate after changing environment",
+    "migration": "retain effective value per consuming role; no automatic adoption implied",
+    "precedence": "explicit value, then component default; see source locations for validation",
+    "sources": [
+      "go-domain/airuntime/server.go:120",
+      "go-domain/airuntime/server.go:83"
+    ],
+    "class": "fixture_only",
+    "managed_roles": []
+  },
+  {
+    "key": "NEWS_FIXTURE_PG_MAJOR",
+    "owner": "operator tools",
+    "type": "string",
+    "default": "17; fixture accepts 16 or 17",
+    "secret": false,
+    "store": "test/fixture environment only",
+    "reload": "process startup; restart or recreate after changing environment",
+    "migration": "retain effective value per consuming role; no automatic adoption implied",
+    "precedence": "explicit value, then component default; see source locations for validation",
+    "sources": [
+      "go-tools/cmd/vertical-fixture-gate/main.go:1367"
+    ],
+    "class": "fixture_only",
+    "managed_roles": []
+  },
+  {
+    "key": "NEWS_INGESTION_NETWORK",
+    "owner": "deployment profile",
+    "type": "string",
+    "default": "Compose: required",
+    "secret": false,
+    "store": "Compose interpolation environment or deployment env file",
+    "reload": "rerender Compose and recreate affected service",
+    "migration": "retain effective value per consuming role; no automatic adoption implied",
+    "precedence": "Compose interpolation source then template default/required rule; inspect actual file",
+    "sources": [
+      "deploy/news-ingestion/compose.ingestion.yml:35",
+      "deploy/news-ingestion/ingestion.env.example:11"
+    ],
+    "class": "compose_input",
+    "managed_roles": []
+  },
+  {
+    "key": "NEWS_LIMIT_DAYS",
+    "owner": "Compose example, deployment profile, processing",
+    "type": "number",
+    "default": "1 when limit enabled",
+    "secret": false,
+    "store": "legacy process environment; managed role manifest for background",
+    "reload": "process startup; restart or recreate after changing environment",
+    "migration": "preserve effective value and consuming role during adoption; verify managed parity before switching",
+    "precedence": "selected role manifest takes precedence without environment fallback; legacy environment when no file is selected; component default if absent",
+    "sources": [
+      "go-background/cmd/news-background/runtime_config.go:13",
+      "go-processing/runner/runner.go:153"
+    ],
+    "class": "runtime",
+    "managed_roles": [
+      "background"
+    ]
+  },
+  {
+    "key": "NEWS_LIMIT_ENABLED",
+    "owner": "Compose example, deployment profile, processing",
+    "type": "boolean",
+    "default": "false",
+    "secret": false,
+    "store": "legacy process environment; managed role manifest for background",
+    "reload": "process startup; restart or recreate after changing environment",
+    "migration": "preserve effective value and consuming role during adoption; verify managed parity before switching",
+    "precedence": "selected role manifest takes precedence without environment fallback; legacy environment when no file is selected; component default if absent",
+    "sources": [
+      "go-background/cmd/news-background/runtime_config.go:13",
+      "go-processing/runner/runner.go:140"
+    ],
+    "class": "runtime",
+    "managed_roles": [
+      "background"
+    ]
+  },
+  {
+    "key": "NEWS_LIMIT_MAX_ARTICLES",
+    "owner": "Compose example, deployment profile, processing",
+    "type": "string",
+    "default": "50 when limit enabled",
+    "secret": false,
+    "store": "legacy process environment; managed role manifest for background",
+    "reload": "process startup; restart or recreate after changing environment",
+    "migration": "preserve effective value and consuming role during adoption; verify managed parity before switching",
+    "precedence": "selected role manifest takes precedence without environment fallback; legacy environment when no file is selected; component default if absent",
+    "sources": [
+      "go-background/cmd/news-background/runtime_config.go:13",
+      "go-processing/runner/runner.go:145"
+    ],
+    "class": "runtime",
+    "managed_roles": [
+      "background"
+    ]
+  },
+  {
+    "key": "NEWS_LIMIT_NEWEST_DATE",
+    "owner": "Compose example, deployment profile, processing",
+    "type": "string",
+    "default": "empty; no upper date",
+    "secret": false,
+    "store": "legacy process environment; managed role manifest for background",
+    "reload": "process startup; restart or recreate after changing environment",
+    "migration": "preserve effective value and consuming role during adoption; verify managed parity before switching",
+    "precedence": "selected role manifest takes precedence without environment fallback; legacy environment when no file is selected; component default if absent",
+    "sources": [
+      "go-background/cmd/news-background/runtime_config.go:13",
+      "go-processing/runner/runner.go:161"
+    ],
+    "class": "runtime",
+    "managed_roles": [
+      "background"
+    ]
+  },
+  {
+    "key": "NEWS_LIMIT_PER_SOURCE",
+    "owner": "Compose example, deployment profile, processing",
+    "type": "string",
+    "default": "50 when limit enabled",
+    "secret": false,
+    "store": "legacy process environment; managed role manifest for background",
+    "reload": "process startup; restart or recreate after changing environment",
+    "migration": "preserve effective value and consuming role during adoption; verify managed parity before switching",
+    "precedence": "selected role manifest takes precedence without environment fallback; legacy environment when no file is selected; component default if absent",
+    "sources": [
+      "go-background/cmd/news-background/runtime_config.go:13",
+      "go-processing/runner/runner.go:149"
+    ],
+    "class": "runtime",
+    "managed_roles": [
+      "background"
+    ]
+  },
+  {
+    "key": "NEWS_NATIVE_CHROME_ENDPOINT",
+    "owner": "deployment profile",
+    "type": "URL",
+    "default": "Compose: required",
+    "secret": false,
+    "store": "Compose interpolation environment or deployment env file",
+    "reload": "rerender Compose and recreate affected service",
+    "migration": "retain effective value per consuming role; no automatic adoption implied",
+    "precedence": "Compose interpolation source then template default/required rule; inspect actual file",
+    "sources": [
+      "deploy/news-extractor/compose.native-standby.yml:10"
+    ],
+    "class": "compose_input",
+    "managed_roles": []
+  },
+  {
+    "key": "NEWS_NATIVE_NETWORK_ISOLATION_ASSERTION",
+    "owner": "deployment profile",
+    "type": "string",
+    "default": "Compose: required",
+    "secret": false,
+    "store": "Compose interpolation environment or deployment env file",
+    "reload": "rerender Compose and recreate affected service",
+    "migration": "retain effective value per consuming role; no automatic adoption implied",
+    "precedence": "Compose interpolation source then template default/required rule; inspect actual file",
+    "sources": [
+      "deploy/news-extractor/compose.native-standby.yml:13"
+    ],
+    "class": "compose_input",
+    "managed_roles": []
+  },
+  {
+    "key": "NEWS_NATIVE_PROXY_TOKEN",
+    "owner": "deployment profile",
+    "type": "secret string",
+    "default": "Compose: required",
+    "secret": true,
+    "store": "Compose interpolation environment or deployment env file",
+    "reload": "rerender Compose and recreate affected service",
+    "migration": "retain effective value per consuming role; no automatic adoption implied",
+    "precedence": "Compose interpolation source then template default/required rule; inspect actual file",
+    "sources": [
+      "deploy/news-extractor/compose.native-standby.yml:12",
+      "deploy/news-extractor/compose.python-proxy.yml:9"
+    ],
+    "class": "compose_input",
+    "managed_roles": []
+  },
+  {
+    "key": "NEWS_NATIVE_PROXY_URL",
+    "owner": "deployment profile",
+    "type": "URL",
+    "default": "Compose: required",
+    "secret": false,
+    "store": "Compose interpolation environment or deployment env file",
+    "reload": "rerender Compose and recreate affected service",
+    "migration": "retain effective value per consuming role; no automatic adoption implied",
+    "precedence": "Compose interpolation source then template default/required rule; inspect actual file",
+    "sources": [
+      "deploy/news-extractor/compose.native-standby.yml:11",
+      "deploy/news-extractor/compose.python-proxy.yml:8"
+    ],
+    "class": "compose_input",
+    "managed_roles": []
+  },
+  {
+    "key": "NEWS_OUTBOUND_NETWORK",
+    "owner": "deployment profile",
+    "type": "string",
+    "default": "Compose: required",
+    "secret": false,
+    "store": "Compose interpolation environment or deployment env file",
+    "reload": "rerender Compose and recreate affected service",
+    "migration": "retain effective value per consuming role; no automatic adoption implied",
+    "precedence": "Compose interpolation source then template default/required rule; inspect actual file",
+    "sources": [
+      "deploy/news-extractor/compose.native.yml:103"
+    ],
+    "class": "compose_input",
+    "managed_roles": []
+  },
+  {
+    "key": "NEWS_OUTBOUND_SUBNET",
+    "owner": "deployment profile",
+    "type": "string",
+    "default": "Compose: required",
+    "secret": false,
+    "store": "Compose interpolation environment or deployment env file",
+    "reload": "rerender Compose and recreate affected service",
+    "migration": "retain effective value per consuming role; no automatic adoption implied",
+    "precedence": "Compose interpolation source then template default/required rule; inspect actual file",
+    "sources": [
+      "deploy/news-extractor/compose.native.yml:106"
+    ],
+    "class": "compose_input",
+    "managed_roles": []
+  },
+  {
+    "key": "NEWS_PROCESSING_NETWORK",
+    "owner": "deployment profile",
+    "type": "string",
+    "default": "Compose: required",
+    "secret": false,
+    "store": "Compose interpolation environment or deployment env file",
+    "reload": "rerender Compose and recreate affected service",
+    "migration": "retain effective value per consuming role; no automatic adoption implied",
+    "precedence": "Compose interpolation source then template default/required rule; inspect actual file",
+    "sources": [
+      "deploy/news-processing/compose.processing.yml:48",
+      "deploy/news-processing/processing.env.example:9"
+    ],
+    "class": "compose_input",
+    "managed_roles": []
+  },
+  {
+    "key": "NEWS_PROXY_IP",
+    "owner": "deployment profile",
+    "type": "string",
+    "default": "Compose: required",
+    "secret": false,
+    "store": "Compose interpolation environment or deployment env file",
+    "reload": "rerender Compose and recreate affected service",
+    "migration": "retain effective value per consuming role; no automatic adoption implied",
+    "precedence": "Compose interpolation source then template default/required rule; inspect actual file",
+    "sources": [
+      "deploy/news-extractor/compose.native.yml:11",
+      "deploy/news-extractor/compose.native.yml:43",
+      "deploy/news-extractor/compose.native.yml:70",
+      "deploy/news-extractor/compose.native.yml:75",
+      "deploy/news-extractor/compose.shared-browser.yml:13"
+    ],
+    "class": "compose_input",
+    "managed_roles": []
+  },
+  {
+    "key": "NEWS_PROXY_TOKEN",
+    "owner": "deployment profile",
+    "type": "secret string",
+    "default": "Compose: required",
+    "secret": true,
+    "store": "Compose interpolation environment or deployment env file",
+    "reload": "rerender Compose and recreate affected service",
+    "migration": "retain effective value per consuming role; no automatic adoption implied",
+    "precedence": "Compose interpolation source then template default/required rule; inspect actual file",
+    "sources": [
+      "deploy/news-extractor/compose.native.yml:12",
+      "deploy/news-extractor/compose.native.yml:44",
+      "deploy/news-extractor/compose.native.yml:71"
+    ],
+    "class": "compose_input",
+    "managed_roles": []
+  },
+  {
+    "key": "NEWS_RUNTIME_FILE",
+    "owner": "domain, web",
+    "type": "string",
+    "default": "unset selects legacy; domain and background reject explicitly empty value; web/extractor/egress select legacy for empty value",
+    "secret": false,
+    "store": "bootstrap selector in each process environment; never a secret value itself",
+    "reload": "process startup; restart or recreate after changing environment",
+    "migration": "select per-service private file only after provisioning and parity validation; retain role isolation",
+    "precedence": "explicit value, then component default; see source locations for validation",
+    "sources": [
+      "go-background/cmd/news-background/main.go:55",
+      "go-background/cmd/news-background/runtime_config.go:9",
+      "go-domain/cmd/news-domain/runtime_config.go:21",
+      "go-web/internal/config/config.go:49",
+      "go/runtimefile/lookup.go:10",
+      "go/runtimefile/lookup.go:32"
+    ],
+    "class": "runtime",
+    "managed_roles": []
+  },
+  {
+    "key": "NEWS_SCHEDULER_DIR",
+    "owner": "deployment profile",
+    "type": "string",
+    "default": "Compose: required",
+    "secret": false,
+    "store": "Compose interpolation environment or deployment env file",
+    "reload": "rerender Compose and recreate affected service",
+    "migration": "retain effective value per consuming role; no automatic adoption implied",
+    "precedence": "Compose interpolation source then template default/required rule; inspect actual file",
+    "sources": [
+      "deploy/news-scheduler/compose.scheduler.yml:7",
+      "deploy/news-scheduler/compose.scheduler.yml:18",
+      "deploy/news-scheduler/compose.scheduler.yml:29"
+    ],
+    "class": "compose_input",
+    "managed_roles": []
+  },
+  {
+    "key": "NEWS_SNAPSHOT_DATABASE_URL",
+    "owner": "operator tools",
+    "type": "PostgreSQL URL (contains credentials)",
+    "default": "empty; scheduler bridge falls back to TEST_DATABASE_URL",
+    "secret": true,
+    "store": "operator/CI tool process environment",
+    "reload": "process startup; restart or recreate after changing environment",
+    "migration": "retain effective value per consuming role; no automatic adoption implied",
+    "precedence": "NEWS_SNAPSHOT_DATABASE_URL, then TEST_DATABASE_URL",
+    "sources": [
+      "go-tools/cmd/scheduler-bridge/main.go:33"
+    ],
+    "class": "operator_or_ci",
+    "managed_roles": []
+  },
+  {
+    "key": "NEWS_TEST_TELEGRAM_ENDPOINT",
+    "owner": "domain",
+    "type": "URL",
+    "default": "empty / unset",
+    "secret": false,
+    "store": "test/fixture environment only",
+    "reload": "process startup; restart or recreate after changing environment",
+    "migration": "retain effective value per consuming role; no automatic adoption implied",
+    "precedence": "explicit value, then component default; see source locations for validation",
+    "sources": [
+      "go-domain/airuntime/server.go:84"
+    ],
+    "class": "fixture_only",
+    "managed_roles": []
+  },
+  {
+    "key": "NEWS_WORKER_IP",
+    "owner": "deployment profile",
+    "type": "string",
+    "default": "Compose: required",
+    "secret": false,
+    "store": "Compose interpolation environment or deployment env file",
+    "reload": "rerender Compose and recreate affected service",
+    "migration": "retain effective value per consuming role; no automatic adoption implied",
+    "precedence": "Compose interpolation source then template default/required rule; inspect actual file",
+    "sources": [
+      "deploy/news-extractor/compose.native.yml:14",
+      "deploy/news-extractor/compose.native.yml:48"
+    ],
+    "class": "compose_input",
+    "managed_roles": []
+  },
+  {
+    "key": "OPENAI_API_KEY",
+    "owner": "Compose example, domain",
+    "type": "secret string",
+    "default": "empty / unset",
+    "secret": true,
+    "store": "legacy domain environment; managed encrypted credentials in PostgreSQL",
+    "reload": "legacy: process startup; managed: credential snapshot resolved for each operation",
+    "migration": "credentials require explicit secure import; never copy plaintext to public artifacts",
+    "precedence": "legacy: environment; managed domain: encrypted credential store, including absent/deleted credentials; no environment fallback",
+    "sources": [
+      "go-domain/airuntime/server.go:66"
+    ],
+    "class": "runtime",
+    "managed_roles": []
+  },
+  {
+    "key": "OPENAI_ARTICLE_MODEL",
+    "owner": "Compose example, domain",
+    "type": "string",
+    "default": "empty / unset",
+    "secret": false,
+    "store": "legacy process environment; managed role manifest for domain; AI profiles persisted in PostgreSQL",
+    "reload": "persisted profile read through settings snapshots; initial source loaded at process startup",
+    "migration": "preserve effective value and consuming role during adoption; verify managed parity before switching",
+    "precedence": "persisted AI profile overrides initial defaults from selected domain config source",
+    "sources": [
+      "go-domain/airuntime/server.go:68",
+      "go-domain/cmd/news-domain/runtime_config.go:25"
+    ],
+    "class": "runtime",
+    "managed_roles": [
+      "domain"
+    ]
+  },
+  {
+    "key": "OPENAI_DIGEST_MODEL",
+    "owner": "Compose example, domain",
+    "type": "string",
+    "default": "empty / unset",
+    "secret": false,
+    "store": "legacy process environment; managed role manifest for domain; AI profiles persisted in PostgreSQL",
+    "reload": "persisted profile read through settings snapshots; initial source loaded at process startup",
+    "migration": "preserve effective value and consuming role during adoption; verify managed parity before switching",
+    "precedence": "persisted AI profile overrides initial defaults from selected domain config source",
+    "sources": [
+      "go-domain/airuntime/server.go:69",
+      "go-domain/cmd/news-domain/runtime_config.go:25"
+    ],
+    "class": "runtime",
+    "managed_roles": [
+      "domain"
+    ]
+  },
+  {
+    "key": "OPENAI_TEXT_MODEL",
+    "owner": "Compose example, domain",
+    "type": "string",
+    "default": "empty / unset",
+    "secret": false,
+    "store": "legacy process environment; managed role manifest for domain; AI profiles persisted in PostgreSQL",
+    "reload": "persisted profile read through settings snapshots; initial source loaded at process startup",
+    "migration": "preserve effective value and consuming role during adoption; verify managed parity before switching",
+    "precedence": "persisted AI profile overrides initial defaults from selected domain config source",
+    "sources": [
+      "go-domain/airuntime/server.go:70",
+      "go-domain/cmd/news-domain/runtime_config.go:25"
+    ],
+    "class": "runtime",
+    "managed_roles": [
+      "domain"
+    ]
+  },
+  {
+    "key": "PAGE_MONITOR_SOURCE_MODE",
+    "owner": "deployment profile",
+    "type": "string",
+    "default": "set directly by cited Compose profile; see source",
+    "secret": false,
+    "store": "container environment set by Compose profile",
+    "reload": "rerender and recreate affected container",
+    "migration": "profile-specific container output; preserve only if its actual consumer requires it",
+    "precedence": "explicit Compose environment mapping; its interpolated inputs are separate catalog keys",
+    "sources": [
+      "docker-compose.example.yml:110",
+      "deploy/news-extractor/compose.native.yml:19"
+    ],
+    "class": "compose_output",
+    "managed_roles": []
+  },
+  {
+    "key": "PATH",
+    "owner": "operator tools",
+    "type": "path",
+    "default": "unset: not forwarded to Compose subprocess",
+    "secret": false,
+    "store": "operator/CI tool process environment",
+    "reload": "read per tool invocation",
+    "migration": "operator tool setting, not application migration state",
+    "precedence": "inherited process value is forwarded; other host variables excluded",
+    "sources": [
+      "go-tools/cmd/prepare-runtime-env/main.go:72"
+    ],
+    "class": "operator_or_ci",
+    "managed_roles": []
+  },
+  {
+    "key": "POSTGRES_DB",
+    "owner": "deployment profile",
+    "type": "string",
+    "default": "set directly by cited Compose profile; see source",
+    "secret": false,
+    "store": "container environment set by Compose profile",
+    "reload": "rerender and recreate affected container",
+    "migration": "profile-specific container output; preserve only if its actual consumer requires it",
+    "precedence": "explicit Compose environment mapping; its interpolated inputs are separate catalog keys",
+    "sources": [
+      "docker-compose.example.yml:224",
+      "docker-compose.example.yml:259"
+    ],
+    "class": "compose_output",
+    "managed_roles": []
+  },
+  {
+    "key": "POSTGRES_PASSWORD",
+    "owner": "deployment profile",
+    "type": "secret string",
+    "default": "set directly by cited Compose profile; see source",
+    "secret": true,
+    "store": "container environment set by Compose profile",
+    "reload": "rerender and recreate affected container",
+    "migration": "profile-specific container output; preserve only if its actual consumer requires it",
+    "precedence": "explicit Compose environment mapping; its interpolated inputs are separate catalog keys",
+    "sources": [
+      "docker-compose.example.yml:226",
+      "docker-compose.example.yml:261"
+    ],
+    "class": "compose_output",
+    "managed_roles": []
+  },
+  {
+    "key": "POSTGRES_PASSWORD_FILE",
+    "owner": "managed PostgreSQL container",
+    "type": "absolute path",
+    "default": "/run/news/postgres-password",
+    "secret": true,
+    "store": "managed_postgres_secret volume; Compose container environment output",
+    "reload": "restart PostgreSQL to re-read the file path",
+    "migration": "managed profile only; the password file is created by installer state preparation",
+    "precedence": "fixed managed Compose output",
+    "sources": [
+      "docker-compose.managed.yml:27"
+    ],
+    "class": "compose_output",
+    "managed_roles": []
+  },
+  {
+    "key": "POSTGRES_USER",
+    "owner": "deployment profile",
+    "type": "string",
+    "default": "set directly by cited Compose profile; see source",
+    "secret": false,
+    "store": "container environment set by Compose profile",
+    "reload": "rerender and recreate affected container",
+    "migration": "profile-specific container output; preserve only if its actual consumer requires it",
+    "precedence": "explicit Compose environment mapping; its interpolated inputs are separate catalog keys",
+    "sources": [
+      "docker-compose.example.yml:225",
+      "docker-compose.example.yml:260"
+    ],
+    "class": "compose_output",
+    "managed_roles": []
+  },
+  {
+    "key": "PROCESSING_ATTEMPT_TIMEOUT_SECONDS",
+    "owner": "Compose example, deployment profile, processing",
+    "type": "number",
+    "default": "600 seconds",
+    "secret": false,
+    "store": "legacy process environment; managed role manifest for background",
+    "reload": "process startup; restart or recreate after changing environment",
+    "migration": "preserve effective value and consuming role during adoption; verify managed parity before switching",
+    "precedence": "selected role manifest takes precedence without environment fallback; legacy environment when no file is selected; component default if absent",
+    "sources": [
+      "go-background/cmd/news-background/runtime_config.go:13",
+      "go-processing/runner/runner.go:115"
+    ],
+    "class": "runtime",
+    "managed_roles": [
+      "background"
+    ]
+  },
+  {
+    "key": "PROCESSING_BATCH_SIZE",
+    "owner": "Compose example, deployment profile, processing",
+    "type": "number",
+    "default": "25",
+    "secret": false,
+    "store": "legacy process environment; managed role manifest for background",
+    "reload": "process startup; restart or recreate after changing environment",
+    "migration": "preserve effective value and consuming role during adoption; verify managed parity before switching",
+    "precedence": "selected role manifest takes precedence without environment fallback; legacy environment when no file is selected; component default if absent",
+    "sources": [
+      "go-background/cmd/news-background/runtime_config.go:13",
+      "go-processing/runner/runner.go:113"
+    ],
+    "class": "runtime",
+    "managed_roles": [
+      "background"
+    ]
+  },
+  {
+    "key": "PROCESSING_DATABASE_URL",
+    "owner": "Compose example, background",
+    "type": "PostgreSQL URL (contains credentials)",
+    "default": "empty; required by consumer",
+    "secret": true,
+    "store": "legacy process environment; managed role manifest for background",
+    "reload": "process startup; restart or recreate after changing environment",
+    "migration": "preserve effective value and consuming role during adoption; verify managed parity before switching",
+    "precedence": "selected role manifest takes precedence without environment fallback; legacy environment when no file is selected; component default if absent",
+    "sources": [
+      "go-background/cmd/news-background/runtime_config.go:13",
+      "go-background/cmd/news-background/runtime_config.go:14",
+      "go-background/internal/config/config.go:133"
+    ],
+    "class": "runtime",
+    "managed_roles": [
+      "background"
+    ]
+  },
+  {
+    "key": "PROCESSING_MAX_ATTEMPTS",
+    "owner": "Compose example, deployment profile, processing",
+    "type": "number",
+    "default": "3",
+    "secret": false,
+    "store": "legacy process environment; managed role manifest for background",
+    "reload": "process startup; restart or recreate after changing environment",
+    "migration": "preserve effective value and consuming role during adoption; verify managed parity before switching",
+    "precedence": "selected role manifest takes precedence without environment fallback; legacy environment when no file is selected; component default if absent",
+    "sources": [
+      "go-background/cmd/news-background/runtime_config.go:13",
+      "go-processing/runner/runner.go:114"
+    ],
+    "class": "runtime",
+    "managed_roles": [
+      "background"
+    ]
+  },
+  {
+    "key": "PROCESSING_RETRY_INITIAL_SECONDS",
+    "owner": "Compose example, deployment profile, processing",
+    "type": "number",
+    "default": "1800 seconds",
+    "secret": false,
+    "store": "legacy process environment; managed role manifest for background",
+    "reload": "process startup; restart or recreate after changing environment",
+    "migration": "preserve effective value and consuming role during adoption; verify managed parity before switching",
+    "precedence": "selected role manifest takes precedence without environment fallback; legacy environment when no file is selected; component default if absent",
+    "sources": [
+      "go-background/cmd/news-background/runtime_config.go:13",
+      "go-processing/runner/runner.go:116"
+    ],
+    "class": "runtime",
+    "managed_roles": [
+      "background"
+    ]
+  },
+  {
+    "key": "PROCESSING_RETRY_LATER_SECONDS",
+    "owner": "Compose example, deployment profile, processing",
+    "type": "number",
+    "default": "21600 seconds",
+    "secret": false,
+    "store": "legacy process environment; managed role manifest for background",
+    "reload": "process startup; restart or recreate after changing environment",
+    "migration": "preserve effective value and consuming role during adoption; verify managed parity before switching",
+    "precedence": "selected role manifest takes precedence without environment fallback; legacy environment when no file is selected; component default if absent",
+    "sources": [
+      "go-background/cmd/news-background/runtime_config.go:13",
+      "go-processing/runner/runner.go:117"
+    ],
+    "class": "runtime",
+    "managed_roles": [
+      "background"
+    ]
+  },
+  {
+    "key": "REVISION",
+    "owner": "Compose example",
+    "type": "string",
+    "default": "Compose: default 'local'",
+    "secret": false,
+    "store": "Compose interpolation environment or deployment env file",
+    "reload": "rerender Compose and recreate affected service",
+    "migration": "retain effective value per consuming role; no automatic adoption implied",
+    "precedence": "Compose interpolation source then template default/required rule; inspect actual file",
+    "sources": [
+      "docker-compose.example.yml:8",
+      "docker-compose.example.yml:53",
+      "docker-compose.example.yml:71",
+      "docker-compose.example.yml:149"
+    ],
+    "class": "compose_input",
+    "managed_roles": []
+  },
+  {
+    "key": "RPS",
+    "owner": "domain",
+    "type": "number",
+    "default": "3",
+    "secret": false,
+    "store": "legacy process environment; managed role manifest for domain",
+    "reload": "process startup; restart or recreate after changing environment",
+    "migration": "preserve effective value and consuming role during adoption; verify managed parity before switching",
+    "precedence": "selected role manifest takes precedence without environment fallback; legacy environment when no file is selected; component default if absent",
+    "sources": [
+      "go-domain/airuntime/server.go:126",
+      "go-domain/cmd/news-domain/runtime_config.go:25"
+    ],
+    "class": "runtime",
+    "managed_roles": [
+      "domain"
+    ]
+  },
+  {
+    "key": "SCHEDULED_JOBS_RECEIPT_LIMIT",
+    "owner": "Compose example, web",
+    "type": "number",
+    "default": "100000",
+    "secret": false,
+    "store": "legacy process environment; managed role manifest for web",
+    "reload": "process startup; restart or recreate after changing environment",
+    "migration": "preserve effective value and consuming role during adoption; verify managed parity before switching",
+    "precedence": "selected role manifest takes precedence without environment fallback; legacy environment when no file is selected; component default if absent",
+    "sources": [
+      "go-web/internal/config/config.go:138",
+      "go-web/internal/config/config.go:50"
+    ],
+    "class": "runtime",
+    "managed_roles": [
+      "web"
+    ]
+  },
+  {
+    "key": "SCHEDULED_JOBS_TOKEN",
+    "owner": "Compose example, deployment profile, web",
+    "type": "secret string",
+    "default": "empty; required by consumer",
+    "secret": true,
+    "store": "legacy process environment; managed role manifest for web",
+    "reload": "process startup; restart or recreate after changing environment",
+    "migration": "preserve effective value and consuming role during adoption; verify managed parity before switching",
+    "precedence": "selected role manifest takes precedence without environment fallback; legacy environment when no file is selected; component default if absent",
+    "sources": [
+      "go-web/internal/config/config.go:137",
+      "go-web/internal/config/config.go:50",
+      "go-web/internal/config/config.go:51"
+    ],
+    "class": "runtime",
+    "managed_roles": [
+      "web"
+    ]
+  },
+  {
+    "key": "SCHEDULER_ALLOW_HTTP_TARGETS",
+    "owner": "scheduler",
+    "type": "boolean",
+    "default": "false",
+    "secret": false,
+    "store": "legacy process environment; managed role manifest for background",
+    "reload": "process startup; restart or recreate after changing environment",
+    "migration": "preserve effective value and consuming role during adoption; verify managed parity before switching",
+    "precedence": "selected role manifest takes precedence without environment fallback; legacy environment when no file is selected; component default if absent",
+    "sources": [
+      "go-background/cmd/news-background/runtime_config.go:13",
+      "go-scheduler/internal/config/config.go:96"
+    ],
+    "class": "runtime",
+    "managed_roles": [
+      "background"
+    ]
+  },
+  {
+    "key": "SCHEDULER_API_ALLOW_HTTP",
+    "owner": "web",
+    "type": "boolean",
+    "default": "false",
+    "secret": false,
+    "store": "legacy process environment; managed role manifest for web",
+    "reload": "process startup; restart or recreate after changing environment",
+    "migration": "preserve effective value and consuming role during adoption; verify managed parity before switching",
+    "precedence": "selected role manifest takes precedence without environment fallback; legacy environment when no file is selected; component default if absent",
+    "sources": [
+      "go-web/internal/config/config.go:114",
+      "go-web/internal/config/config.go:50",
+      "go-web/internal/schedules/client.go:65"
+    ],
+    "class": "runtime",
+    "managed_roles": [
+      "web"
+    ]
+  },
+  {
+    "key": "SCHEDULER_API_TOKEN",
+    "owner": "Compose example, deployment profile, operator tools, scheduler, web",
+    "type": "secret string",
+    "default": "empty; required by consumer",
+    "secret": true,
+    "store": "legacy process environment; managed role manifest for web, background",
+    "reload": "process startup; restart or recreate after changing environment",
+    "migration": "preserve effective value and consuming role during adoption; verify managed parity before switching",
+    "precedence": "selected role manifest takes precedence without environment fallback; legacy environment when no file is selected; component default if absent",
+    "sources": [
+      "go-background/cmd/news-background/runtime_config.go:13",
+      "go-background/cmd/news-background/runtime_config.go:14",
+      "go-scheduler/internal/config/config.go:39",
+      "go-tools/cmd/scheduler-bridge/main.go:37",
+      "go-web/internal/config/config.go:124",
+      "go-web/internal/config/config.go:50",
+      "go-web/internal/config/config.go:51",
+      "go-web/internal/schedules/client.go:80"
+    ],
+    "class": "runtime",
+    "managed_roles": [
+      "web",
+      "background"
+    ]
+  },
+  {
+    "key": "SCHEDULER_API_URL",
+    "owner": "web",
+    "type": "URL",
+    "default": "empty / unset",
+    "secret": false,
+    "store": "legacy process environment; managed role manifest for web",
+    "reload": "process startup; restart or recreate after changing environment",
+    "migration": "preserve effective value and consuming role during adoption; verify managed parity before switching",
+    "precedence": "selected role manifest takes precedence without environment fallback; legacy environment when no file is selected; component default if absent",
+    "sources": [
+      "go-web/internal/config/config.go:124",
+      "go-web/internal/config/config.go:50",
+      "go-web/internal/config/config.go:51",
+      "go-web/internal/schedules/client.go:80"
+    ],
+    "class": "runtime",
+    "managed_roles": [
+      "web"
+    ]
+  },
+  {
+    "key": "SCHEDULER_DATABASE_URL",
+    "owner": "Compose example, background, deployment profile, scheduler",
+    "type": "PostgreSQL URL (contains credentials)",
+    "default": "empty; required by consumer",
+    "secret": true,
+    "store": "legacy process environment; managed role manifest for background",
+    "reload": "process startup; restart or recreate after changing environment",
+    "migration": "preserve effective value and consuming role during adoption; verify managed parity before switching",
+    "precedence": "selected role manifest takes precedence without environment fallback; legacy environment when no file is selected; component default if absent",
+    "sources": [
+      "go-background/cmd/news-background/runtime_config.go:13",
+      "go-background/cmd/news-background/runtime_config.go:14",
+      "go-background/internal/config/config.go:129",
+      "go-scheduler/internal/config/config.go:37"
+    ],
+    "class": "runtime",
+    "managed_roles": [
+      "background"
+    ]
+  },
+  {
+    "key": "SCHEDULER_DB_MAX_CONNS",
+    "owner": "scheduler",
+    "type": "number",
+    "default": "8",
+    "secret": false,
+    "store": "legacy process environment; managed role manifest for background",
+    "reload": "process startup; restart or recreate after changing environment",
+    "migration": "preserve effective value and consuming role during adoption; verify managed parity before switching",
+    "precedence": "selected role manifest takes precedence without environment fallback; legacy environment when no file is selected; component default if absent",
+    "sources": [
+      "go-background/cmd/news-background/runtime_config.go:13",
+      "go-scheduler/internal/config/config.go:56"
+    ],
+    "class": "runtime",
+    "managed_roles": [
+      "background"
+    ]
+  },
+  {
+    "key": "SCHEDULER_DB_PASSWORD",
+    "owner": "Compose example",
+    "type": "secret string",
+    "default": "Compose: required",
+    "secret": true,
+    "store": "Compose interpolation environment or deployment env file",
+    "reload": "rerender Compose and recreate affected service",
+    "migration": "retain effective value per consuming role; no automatic adoption implied",
+    "precedence": "Compose interpolation source then template default/required rule; inspect actual file",
+    "sources": [
+      "docker-compose.example.yml:261"
+    ],
+    "class": "compose_input",
+    "managed_roles": []
+  },
+  {
+    "key": "SCHEDULER_DB_SCHEMA",
+    "owner": "deployment profile, scheduler",
+    "type": "string",
+    "default": "empty; required by consumer",
+    "secret": false,
+    "store": "legacy process environment; managed role manifest for background",
+    "reload": "process startup; restart or recreate after changing environment",
+    "migration": "preserve effective value and consuming role during adoption; verify managed parity before switching",
+    "precedence": "selected role manifest takes precedence without environment fallback; legacy environment when no file is selected; component default if absent",
+    "sources": [
+      "go-background/cmd/news-background/runtime_config.go:13",
+      "go-scheduler/internal/config/config.go:38"
+    ],
+    "class": "runtime",
+    "managed_roles": [
+      "background"
+    ]
+  },
+  {
+    "key": "SCHEDULER_ENABLED",
+    "owner": "deployment profile",
+    "type": "string",
+    "default": "set directly by cited Compose profile; see source",
+    "secret": false,
+    "store": "container environment set by Compose profile",
+    "reload": "rerender and recreate affected container",
+    "migration": "profile-specific container output; preserve only if its actual consumer requires it",
+    "precedence": "explicit Compose environment mapping; its interpolated inputs are separate catalog keys",
+    "sources": [
+      "docker-compose.example.yml:103",
+      "deploy/news-scheduler/compose.service-mode.yml:7",
+      "deploy/news-scheduler/compose.service-mode.yml:15"
+    ],
+    "class": "compose_output",
+    "managed_roles": []
+  },
+  {
+    "key": "SCHEDULER_HTTP_TIMEOUT",
+    "owner": "scheduler",
+    "type": "Go duration",
+    "default": "10s",
+    "secret": false,
+    "store": "legacy process environment; managed role manifest for background",
+    "reload": "process startup; restart or recreate after changing environment",
+    "migration": "preserve effective value and consuming role during adoption; verify managed parity before switching",
+    "precedence": "selected role manifest takes precedence without environment fallback; legacy environment when no file is selected; component default if absent",
+    "sources": [
+      "go-background/cmd/news-background/runtime_config.go:13",
+      "go-scheduler/internal/config/config.go:73"
+    ],
+    "class": "runtime",
+    "managed_roles": [
+      "background"
+    ]
+  },
+  {
+    "key": "SCHEDULER_HTTP_TIMEOUT_SECONDS",
+    "owner": "web",
+    "type": "number",
+    "default": "5 seconds in legacy web scheduler client",
+    "secret": false,
+    "store": "runtime process environment",
+    "reload": "process startup; restart or recreate after changing environment",
+    "migration": "retain effective value per consuming role; no automatic adoption implied",
+    "precedence": "explicit value, then component default; see source locations for validation",
+    "sources": [
+      "go-web/internal/schedules/client.go:73"
+    ],
+    "class": "runtime",
+    "managed_roles": []
+  },
+  {
+    "key": "SCHEDULER_IMAGE",
+    "owner": "deployment profile",
+    "type": "string",
+    "default": "Compose: required",
+    "secret": false,
+    "store": "Compose interpolation environment or deployment env file",
+    "reload": "rerender Compose and recreate affected service",
+    "migration": "retain effective value per consuming role; no automatic adoption implied",
+    "precedence": "Compose interpolation source then template default/required rule; inspect actual file",
+    "sources": [
+      "deploy/news-scheduler/compose.scheduler.yml:26"
+    ],
+    "class": "compose_input",
+    "managed_roles": []
+  },
+  {
+    "key": "SCHEDULER_LISTEN_ADDR",
+    "owner": "background",
+    "type": "string",
+    "default": ":8080 in background",
+    "secret": false,
+    "store": "legacy process environment; managed role manifest for background",
+    "reload": "process startup; restart or recreate after changing environment",
+    "migration": "preserve effective value and consuming role during adoption; verify managed parity before switching",
+    "precedence": "selected role manifest takes precedence without environment fallback; legacy environment when no file is selected; component default if absent",
+    "sources": [
+      "go-background/cmd/news-background/runtime_config.go:13",
+      "go-background/internal/config/config.go:101",
+      "go-background/internal/config/config.go:141"
+    ],
+    "class": "runtime",
+    "managed_roles": [
+      "background"
+    ]
+  },
+  {
+    "key": "SCHEDULER_MAX_INFLIGHT",
+    "owner": "scheduler",
+    "type": "number",
+    "default": "4",
+    "secret": false,
+    "store": "legacy process environment; managed role manifest for background",
+    "reload": "process startup; restart or recreate after changing environment",
+    "migration": "preserve effective value and consuming role during adoption; verify managed parity before switching",
+    "precedence": "selected role manifest takes precedence without environment fallback; legacy environment when no file is selected; component default if absent",
+    "sources": [
+      "go-background/cmd/news-background/runtime_config.go:13",
+      "go-scheduler/internal/config/config.go:61"
+    ],
+    "class": "runtime",
+    "managed_roles": [
+      "background"
+    ]
+  },
+  {
+    "key": "SCHEDULER_MAX_OUTBOX",
+    "owner": "scheduler",
+    "type": "number",
+    "default": "10000",
+    "secret": false,
+    "store": "legacy process environment; managed role manifest for background",
+    "reload": "process startup; restart or recreate after changing environment",
+    "migration": "preserve effective value and consuming role during adoption; verify managed parity before switching",
+    "precedence": "selected role manifest takes precedence without environment fallback; legacy environment when no file is selected; component default if absent",
+    "sources": [
+      "go-background/cmd/news-background/runtime_config.go:13",
+      "go-scheduler/internal/config/config.go:65"
+    ],
+    "class": "runtime",
+    "managed_roles": [
+      "background"
+    ]
+  },
+  {
+    "key": "SCHEDULER_POLL_INTERVAL",
+    "owner": "scheduler",
+    "type": "Go duration",
+    "default": "1s",
+    "secret": false,
+    "store": "legacy process environment; managed role manifest for background",
+    "reload": "process startup; restart or recreate after changing environment",
+    "migration": "preserve effective value and consuming role during adoption; verify managed parity before switching",
+    "precedence": "selected role manifest takes precedence without environment fallback; legacy environment when no file is selected; component default if absent",
+    "sources": [
+      "go-background/cmd/news-background/runtime_config.go:13",
+      "go-scheduler/internal/config/config.go:69"
+    ],
+    "class": "runtime",
+    "managed_roles": [
+      "background"
+    ]
+  },
+  {
+    "key": "SCHEDULER_START_PAUSED",
+    "owner": "scheduler",
+    "type": "boolean",
+    "default": "false",
+    "secret": false,
+    "store": "legacy process environment; managed role manifest for background",
+    "reload": "process startup; restart or recreate after changing environment",
+    "migration": "preserve effective value and consuming role during adoption; verify managed parity before switching",
+    "precedence": "selected role manifest takes precedence without environment fallback; legacy environment when no file is selected; component default if absent",
+    "sources": [
+      "go-background/cmd/news-background/runtime_config.go:13",
+      "go-scheduler/internal/config/config.go:42"
+    ],
+    "class": "runtime",
+    "managed_roles": [
+      "background"
+    ]
+  },
+  {
+    "key": "SCHEDULER_TARGET_<ALIAS>_TOKEN",
+    "owner": "scheduler",
+    "type": "secret string",
+    "default": "empty; required by consumer",
+    "secret": true,
+    "store": "runtime process environment",
+    "reload": "process startup; restart or recreate after changing environment",
+    "migration": "retain effective value per consuming role; no automatic adoption implied",
+    "precedence": "explicit value, then component default; see source locations for validation",
+    "sources": [
+      "go-scheduler/internal/config/config.go:107"
+    ],
+    "class": "runtime",
+    "managed_roles": []
+  },
+  {
+    "key": "SCHEDULER_TARGET_<ALIAS>_URL",
+    "owner": "scheduler",
+    "type": "URL",
+    "default": "empty; required by consumer",
+    "secret": false,
+    "store": "runtime process environment",
+    "reload": "process startup; restart or recreate after changing environment",
+    "migration": "retain effective value per consuming role; no automatic adoption implied",
+    "precedence": "explicit value, then component default; see source locations for validation",
+    "sources": [
+      "go-scheduler/internal/config/config.go:106"
+    ],
+    "class": "runtime",
+    "managed_roles": []
+  },
+  {
+    "key": "SCHEDULER_TARGET_ALIASES",
+    "owner": "deployment profile, scheduler",
+    "type": "comma-separated list",
+    "default": "empty; at least one alias required",
+    "secret": false,
+    "store": "legacy process environment; managed role manifest for background",
+    "reload": "process startup; restart or recreate after changing environment",
+    "migration": "preserve effective value and consuming role during adoption; verify managed parity before switching",
+    "precedence": "selected role manifest takes precedence without environment fallback; legacy environment when no file is selected; component default if absent",
+    "sources": [
+      "go-background/cmd/news-background/runtime_config.go:13",
+      "go-scheduler/internal/config/config.go:91"
+    ],
+    "class": "runtime",
+    "managed_roles": [
+      "background"
+    ]
+  },
+  {
+    "key": "SCHEDULER_TARGET_NEWS_WORKER_TOKEN",
+    "owner": "deployment profile",
+    "type": "secret string",
+    "default": "no runtime fallback; deployment template value supplied by operator",
+    "secret": true,
+    "store": "legacy process environment; managed role manifest for background",
+    "reload": "rerender Compose and recreate affected service",
+    "migration": "preserve effective value and consuming role during adoption; verify managed parity before switching",
+    "precedence": "selected role manifest takes precedence without environment fallback; legacy environment when no file is selected; component default if absent",
+    "sources": [
+      "go-background/cmd/news-background/runtime_config.go:13",
+      "go-background/cmd/news-background/runtime_config.go:14"
+    ],
+    "class": "compose_input",
+    "managed_roles": [
+      "background"
+    ]
+  },
+  {
+    "key": "SCHEDULER_TARGET_NEWS_WORKER_URL",
+    "owner": "deployment profile",
+    "type": "URL",
+    "default": "no runtime fallback; deployment template value supplied by operator",
+    "secret": false,
+    "store": "legacy process environment; managed role manifest for background",
+    "reload": "rerender Compose and recreate affected service",
+    "migration": "preserve effective value and consuming role during adoption; verify managed parity before switching",
+    "precedence": "selected role manifest takes precedence without environment fallback; legacy environment when no file is selected; component default if absent",
+    "sources": [
+      "go-background/cmd/news-background/runtime_config.go:13"
+    ],
+    "class": "compose_input",
+    "managed_roles": [
+      "background"
+    ]
+  },
+  {
+    "key": "SCHEDULE_DISPATCH_MODE",
+    "owner": "web",
+    "type": "string",
+    "default": "service",
+    "secret": false,
+    "store": "legacy process environment; managed role manifest for web",
+    "reload": "process startup; restart or recreate after changing environment",
+    "migration": "preserve effective value and consuming role during adoption; verify managed parity before switching",
+    "precedence": "selected role manifest takes precedence without environment fallback; legacy environment when no file is selected; component default if absent",
+    "sources": [
+      "go-web/internal/config/config.go:140",
+      "go-web/internal/config/config.go:50"
+    ],
+    "class": "runtime",
+    "managed_roles": [
+      "web"
+    ]
+  },
+  {
+    "key": "SELECTOR_SERVICE_URL",
+    "owner": "ingestion",
+    "type": "URL",
+    "default": "JOB_EXECUTOR_URL if nonempty, otherwise http://127.0.0.1:8100",
+    "secret": false,
+    "store": "legacy process environment; managed role manifest for background",
+    "reload": "process startup; restart or recreate after changing environment",
+    "migration": "preserve effective value and consuming role during adoption; verify managed parity before switching",
+    "precedence": "selected role manifest takes precedence without environment fallback; legacy environment when no file is selected; component default if absent",
+    "sources": [
+      "go-background/cmd/news-background/runtime_config.go:13",
+      "go-ingestion/runner/runner.go:48"
+    ],
+    "class": "runtime",
+    "managed_roles": [
+      "background"
+    ]
+  },
+  {
+    "key": "SITE_BASE_URL",
+    "owner": "Compose example, domain, web",
+    "type": "URL",
+    "default": "web and domain: https://news.dzarlax.dev; example Compose: http://localhost:8000",
+    "secret": false,
+    "store": "legacy process environment; managed role manifest for web, domain",
+    "reload": "process startup; restart or recreate after changing environment",
+    "migration": "preserve effective value and consuming role during adoption; verify managed parity before switching",
+    "precedence": "selected role manifest takes precedence without environment fallback; legacy environment when no file is selected; component default if absent",
+    "sources": [
+      "go-domain/airuntime/server.go:93",
+      "go-domain/cmd/news-domain/runtime_config.go:25",
+      "go-domain/cmd/newsctl/external.go:72",
+      "go-web/internal/config/config.go:147",
+      "go-web/internal/config/config.go:50"
+    ],
+    "class": "runtime",
+    "managed_roles": [
+      "web",
+      "domain"
+    ]
+  },
+  {
+    "key": "SOURCE_MANAGER_MODE",
+    "owner": "deployment profile",
+    "type": "string",
+    "default": "set directly by cited Compose profile; see source",
+    "secret": false,
+    "store": "container environment set by Compose profile",
+    "reload": "rerender and recreate affected container",
+    "migration": "profile-specific container output; preserve only if its actual consumer requires it",
+    "precedence": "explicit Compose environment mapping; its interpolated inputs are separate catalog keys",
+    "sources": [
+      "docker-compose.example.yml:108"
+    ],
+    "class": "compose_output",
+    "managed_roles": []
+  },
+  {
+    "key": "SUMMARIZATION_MODEL",
+    "owner": "Compose example, domain",
+    "type": "string",
+    "default": "domain: gemini-3.5-flash-lite; legacy RPC: required",
+    "secret": false,
+    "store": "legacy process environment; managed role manifest for domain; AI profiles persisted in PostgreSQL",
+    "reload": "persisted profile read through settings snapshots; initial source loaded at process startup",
+    "migration": "preserve effective value and consuming role during adoption; verify managed parity before switching",
+    "precedence": "persisted AI profile overrides initial defaults from selected domain config source",
+    "sources": [
+      "go-domain/airuntime/server.go:61",
+      "go-domain/cmd/news-domain/runtime_config.go:25"
+    ],
+    "class": "runtime",
+    "managed_roles": [
+      "domain"
+    ]
+  },
+  {
+    "key": "TELEGRAM_CHAT_ID",
+    "owner": "Compose example, domain",
+    "type": "string",
+    "default": "empty / unset",
+    "secret": false,
+    "store": "legacy process environment; managed role manifest for domain; settings table",
+    "reload": "database destinations read on delivery; initial config loaded at process startup",
+    "migration": "preserve effective value and consuming role during adoption; verify managed parity before switching",
+    "precedence": "database destination override then selected domain config source; service destination falls back to main",
+    "sources": [
+      "go-domain/airuntime/server.go:80",
+      "go-domain/cmd/news-domain/runtime_config.go:25"
+    ],
+    "class": "runtime",
+    "managed_roles": [
+      "domain"
+    ]
+  },
+  {
+    "key": "TELEGRAM_RICH_MESSAGES_ENABLED",
+    "owner": "domain",
+    "type": "boolean",
+    "default": "true",
+    "secret": false,
+    "store": "legacy process environment; managed role manifest for domain",
+    "reload": "process startup; restart or recreate after changing environment",
+    "migration": "preserve effective value and consuming role during adoption; verify managed parity before switching",
+    "precedence": "selected role manifest takes precedence without environment fallback; legacy environment when no file is selected; component default if absent",
+    "sources": [
+      "go-domain/airuntime/server.go:101",
+      "go-domain/cmd/news-domain/runtime_config.go:25"
+    ],
+    "class": "runtime",
+    "managed_roles": [
+      "domain"
+    ]
+  },
+  {
+    "key": "TELEGRAM_SERVICE_CHAT_ID",
+    "owner": "Compose example, domain",
+    "type": "string",
+    "default": "empty / unset",
+    "secret": false,
+    "store": "legacy process environment; managed role manifest for domain; settings table",
+    "reload": "database destinations read on delivery; initial config loaded at process startup",
+    "migration": "preserve effective value and consuming role during adoption; verify managed parity before switching",
+    "precedence": "database destination override then selected domain config source; service destination falls back to main",
+    "sources": [
+      "go-domain/airuntime/server.go:81",
+      "go-domain/cmd/news-domain/runtime_config.go:25"
+    ],
+    "class": "runtime",
+    "managed_roles": [
+      "domain"
+    ]
+  },
+  {
+    "key": "TELEGRAM_SOURCE_MODE",
+    "owner": "deployment profile",
+    "type": "string",
+    "default": "set directly by cited Compose profile; see source",
+    "secret": false,
+    "store": "container environment set by Compose profile",
+    "reload": "rerender and recreate affected container",
+    "migration": "profile-specific container output; preserve only if its actual consumer requires it",
+    "precedence": "explicit Compose environment mapping; its interpolated inputs are separate catalog keys",
+    "sources": [
+      "docker-compose.example.yml:109",
+      "deploy/news-extractor/compose.native.yml:18"
+    ],
+    "class": "compose_output",
+    "managed_roles": []
+  },
+  {
+    "key": "TELEGRAM_TOKEN",
+    "owner": "Compose example, domain",
+    "type": "secret string",
+    "default": "empty / unset",
+    "secret": true,
+    "store": "legacy domain environment; managed encrypted credentials in PostgreSQL",
+    "reload": "legacy: process startup; managed: credential snapshot resolved for each operation",
+    "migration": "credentials require explicit secure import; never copy plaintext to public artifacts",
+    "precedence": "legacy: environment; managed domain: encrypted credential store, including absent/deleted credentials; no environment fallback",
+    "sources": [
+      "go-domain/airuntime/server.go:79"
+    ],
+    "class": "runtime",
+    "managed_roles": []
+  },
+  {
+    "key": "TEST_DATABASE_URL",
+    "owner": "operator tools",
+    "type": "PostgreSQL URL (contains credentials)",
+    "default": "empty / unset",
+    "secret": true,
+    "store": "test/fixture environment only",
+    "reload": "process startup; restart or recreate after changing environment",
+    "migration": "retain effective value per consuming role; no automatic adoption implied",
+    "precedence": "explicit value, then component default; see source locations for validation",
+    "sources": [
+      "go-tools/cmd/scheduler-bridge/main.go:35"
+    ],
+    "class": "fixture_only",
+    "managed_roles": []
+  },
+  {
+    "key": "TEXT_MODEL",
+    "owner": "Compose example, domain",
+    "type": "string",
+    "default": "empty; AI settings fallback to summarization model",
+    "secret": false,
+    "store": "legacy process environment; managed role manifest for domain; AI profiles persisted in PostgreSQL",
+    "reload": "persisted profile read through settings snapshots; initial source loaded at process startup",
+    "migration": "preserve effective value and consuming role during adoption; verify managed parity before switching",
+    "precedence": "persisted AI profile overrides initial defaults from selected domain config source",
+    "sources": [
+      "go-domain/airuntime/server.go:71",
+      "go-domain/cmd/news-domain/runtime_config.go:25"
+    ],
+    "class": "runtime",
+    "managed_roles": [
+      "domain"
+    ]
+  },
+  {
+    "key": "TRUSTED_HOSTS",
+    "owner": "Compose example, deployment profile, web",
+    "type": "comma-separated list",
+    "default": "web: localhost,127.0.0.1,news.dzarlax.dev; example Compose: localhost,127.0.0.1,web",
+    "secret": false,
+    "store": "legacy process environment; managed role manifest for web",
+    "reload": "process startup; restart or recreate after changing environment",
+    "migration": "preserve effective value and consuming role during adoption; verify managed parity before switching",
+    "precedence": "selected role manifest takes precedence without environment fallback; legacy environment when no file is selected; component default if absent",
+    "sources": [
+      "go-web/internal/config/config.go:145",
+      "go-web/internal/config/config.go:50"
+    ],
+    "class": "runtime",
+    "managed_roles": [
+      "web"
+    ]
+  },
+  {
+    "key": "TRUSTED_PROXY_CIDRS",
+    "owner": "Compose example, web",
+    "type": "comma-separated list",
+    "default": "empty / unset",
+    "secret": false,
+    "store": "legacy process environment; managed role manifest for web",
+    "reload": "process startup; restart or recreate after changing environment",
+    "migration": "preserve effective value and consuming role during adoption; verify managed parity before switching",
+    "precedence": "selected role manifest takes precedence without environment fallback; legacy environment when no file is selected; component default if absent",
+    "sources": [
+      "go-web/internal/config/config.go:146",
+      "go-web/internal/config/config.go:50"
+    ],
+    "class": "runtime",
+    "managed_roles": [
+      "web"
+    ]
+  },
+  {
+    "key": "TRUST_FORWARD_AUTH",
+    "owner": "Compose example, web",
+    "type": "boolean",
+    "default": "false",
+    "secret": false,
+    "store": "legacy process environment; managed role manifest for web",
+    "reload": "process startup; restart or recreate after changing environment",
+    "migration": "preserve effective value and consuming role during adoption; verify managed parity before switching",
+    "precedence": "selected role manifest takes precedence without environment fallback; legacy environment when no file is selected; component default if absent",
+    "sources": [
+      "go-web/internal/config/config.go:110",
+      "go-web/internal/config/config.go:50"
+    ],
+    "class": "runtime",
+    "managed_roles": [
+      "web"
+    ]
+  },
+  {
+    "key": "WEB_BACKEND_TOKEN",
+    "owner": "Compose example, domain, web",
+    "type": "secret string",
+    "default": "empty; required by consumer",
+    "secret": true,
+    "store": "legacy process environment; managed role manifest for web, domain",
+    "reload": "process startup; restart or recreate after changing environment",
+    "migration": "preserve effective value and consuming role during adoption; verify managed parity before switching",
+    "precedence": "selected role manifest takes precedence without environment fallback; legacy environment when no file is selected; component default if absent",
+    "sources": [
+      "go-domain/cmd/news-domain/main.go:288",
+      "go-domain/cmd/news-domain/runtime_config.go:25",
+      "go-domain/cmd/news-domain/runtime_config.go:26",
+      "go-web/internal/backend/backend.go:113",
+      "go-web/internal/config/config.go:142",
+      "go-web/internal/config/config.go:50",
+      "go-web/internal/config/config.go:51"
+    ],
+    "class": "runtime",
+    "managed_roles": [
+      "web",
+      "domain"
+    ]
+  },
+  {
+    "key": "WEB_BACKEND_URL",
+    "owner": "web",
+    "type": "URL",
+    "default": "empty; required by consumer",
+    "secret": false,
+    "store": "legacy process environment; managed role manifest for web",
+    "reload": "process startup; restart or recreate after changing environment",
+    "migration": "preserve effective value and consuming role during adoption; verify managed parity before switching",
+    "precedence": "selected role manifest takes precedence without environment fallback; legacy environment when no file is selected; component default if absent",
+    "sources": [
+      "go-web/internal/backend/backend.go:112",
+      "go-web/internal/config/config.go:141",
+      "go-web/internal/config/config.go:50",
+      "go-web/internal/config/config.go:51"
+    ],
+    "class": "runtime",
+    "managed_roles": [
+      "web"
+    ]
+  },
+  {
+    "key": "WEB_DATABASE_URL",
+    "owner": "Compose example",
+    "type": "PostgreSQL URL (contains credentials)",
+    "default": "Compose: required",
+    "secret": true,
+    "store": "Compose interpolation environment or deployment env file",
+    "reload": "rerender Compose and recreate affected service",
+    "migration": "Compose maps this role-specific input to DATABASE_URL; preserve distinct database roles",
+    "precedence": "Compose interpolation source then template default/required rule; inspect actual file",
+    "sources": [
+      "docker-compose.example.yml:12"
+    ],
+    "class": "compose_input",
+    "managed_roles": []
+  },
+  {
+    "key": "WEB_LISTEN_ADDRESS",
+    "owner": "web",
+    "type": "string",
+    "default": ":8000",
+    "secret": false,
+    "store": "legacy process environment; managed role manifest for web",
+    "reload": "process startup; restart or recreate after changing environment",
+    "migration": "preserve effective value and consuming role during adoption; verify managed parity before switching",
+    "precedence": "selected role manifest takes precedence without environment fallback; legacy environment when no file is selected; component default if absent",
+    "sources": [
+      "go-web/internal/config/config.go:126",
+      "go-web/internal/config/config.go:50"
+    ],
+    "class": "runtime",
+    "managed_roles": [
+      "web"
+    ]
+  },
+  {
+    "key": "WORKER_DATABASE_URL",
+    "owner": "Compose example, background",
+    "type": "PostgreSQL URL (contains credentials)",
+    "default": "empty; required by consumer",
+    "secret": true,
+    "store": "legacy process environment; managed role manifest for background",
+    "reload": "process startup; restart or recreate after changing environment",
+    "migration": "preserve effective value and consuming role during adoption; verify managed parity before switching",
+    "precedence": "selected role manifest takes precedence without environment fallback; legacy environment when no file is selected; component default if absent",
+    "sources": [
+      "go-background/cmd/news-background/runtime_config.go:13",
+      "go-background/cmd/news-background/runtime_config.go:14",
+      "go-background/internal/config/config.go:127"
+    ],
+    "class": "runtime",
+    "managed_roles": [
+      "background"
+    ]
+  },
+  {
+    "key": "WORKER_JOB_RETENTION_DAYS",
+    "owner": "Compose example, worker",
+    "type": "number",
+    "default": "7",
+    "secret": false,
+    "store": "legacy process environment; managed role manifest for background",
+    "reload": "process startup; restart or recreate after changing environment",
+    "migration": "preserve effective value and consuming role during adoption; verify managed parity before switching",
+    "precedence": "selected role manifest takes precedence without environment fallback; legacy environment when no file is selected; component default if absent",
+    "sources": [
+      "go-background/cmd/news-background/runtime_config.go:13",
+      "go-worker/internal/config/config.go:60"
+    ],
+    "class": "runtime",
+    "managed_roles": [
+      "background"
+    ]
+  },
+  {
+    "key": "WORKER_MAX_JOB_ATTEMPTS",
+    "owner": "Compose example, worker",
+    "type": "number",
+    "default": "3",
+    "secret": false,
+    "store": "legacy process environment; managed role manifest for background",
+    "reload": "process startup; restart or recreate after changing environment",
+    "migration": "preserve effective value and consuming role during adoption; verify managed parity before switching",
+    "precedence": "selected role manifest takes precedence without environment fallback; legacy environment when no file is selected; component default if absent",
+    "sources": [
+      "go-background/cmd/news-background/runtime_config.go:13",
+      "go-worker/internal/config/config.go:65"
+    ],
+    "class": "runtime",
+    "managed_roles": [
+      "background"
+    ]
+  },
+  {
+    "key": "WORKER_POLL_INTERVAL_SECONDS",
+    "owner": "Compose example, worker",
+    "type": "number",
+    "default": "1 second",
+    "secret": false,
+    "store": "legacy process environment; managed role manifest for background",
+    "reload": "process startup; restart or recreate after changing environment",
+    "migration": "preserve effective value and consuming role during adoption; verify managed parity before switching",
+    "precedence": "selected role manifest takes precedence without environment fallback; legacy environment when no file is selected; component default if absent",
+    "sources": [
+      "go-background/cmd/news-background/runtime_config.go:13",
+      "go-worker/internal/config/config.go:52"
+    ],
+    "class": "runtime",
+    "managed_roles": [
+      "background"
+    ]
+  },
+  {
+    "key": "WORKER_SHUTDOWN_DRAIN_SECONDS",
+    "owner": "Compose example, worker",
+    "type": "number",
+    "default": "20 seconds",
+    "secret": false,
+    "store": "legacy process environment; managed role manifest for background",
+    "reload": "process startup; restart or recreate after changing environment",
+    "migration": "preserve effective value and consuming role during adoption; verify managed parity before switching",
+    "precedence": "selected role manifest takes precedence without environment fallback; legacy environment when no file is selected; component default if absent",
+    "sources": [
+      "go-background/cmd/news-background/runtime_config.go:13",
+      "go-worker/internal/config/config.go:56"
+    ],
+    "class": "runtime",
+    "managed_roles": [
+      "background"
+    ]
+  }
+]

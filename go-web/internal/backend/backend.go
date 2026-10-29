@@ -141,6 +141,36 @@ type AISettingsOperations interface {
 	UpdateAISettings(context.Context, json.RawMessage) (json.RawMessage, error)
 }
 
+type CredentialOperations interface {
+	Credential(context.Context, string, string, json.RawMessage) (json.RawMessage, error)
+}
+
+type ConfigurationOperations interface {
+	Configuration(context.Context, string, string, json.RawMessage) (json.RawMessage, error)
+}
+
+func (c *Client) Configuration(ctx context.Context, method, group string, body json.RawMessage) (json.RawMessage, error) {
+	if group != "telegram" && group != "operational" && group != "readiness" {
+		return nil, &APIError{Status: 422, Detail: "Invalid configuration group"}
+	}
+	var reader io.Reader
+	if body != nil {
+		reader = bytes.NewReader(body)
+	}
+	return c.rawJSON(ctx, method, "/configuration/"+group, reader, "application/json")
+}
+
+func (c *Client) Credential(ctx context.Context, method, provider string, body json.RawMessage) (json.RawMessage, error) {
+	if provider != "gemini" && provider != "openai" && provider != "telegram" {
+		return nil, &APIError{Status: 422, Detail: "Invalid provider"}
+	}
+	var reader io.Reader
+	if body != nil {
+		reader = bytes.NewReader(body)
+	}
+	return c.rawJSON(ctx, method, "/credentials/"+provider, reader, "application/json")
+}
+
 func (c *Client) GetAISettings(ctx context.Context) (json.RawMessage, error) {
 	return c.json(ctx, http.MethodGet, "/ai/settings", nil)
 }

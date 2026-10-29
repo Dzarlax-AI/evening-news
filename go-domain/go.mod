@@ -6,6 +6,8 @@ require github.com/jackc/pgx/v5 v5.11.0
 
 require (
 	codeberg.org/readeck/go-readability/v2 v2.1.3 // indirect
+	filippo.io/age v1.3.2 // indirect
+	filippo.io/hpke v0.4.0 // indirect
 	github.com/PuerkitoBio/goquery v1.10.3 // indirect
 	github.com/andybalholm/cascadia v1.3.3 // indirect
 	github.com/go-shiori/dom v0.0.0-20230515143342-73569d674e1c // indirect
@@ -16,6 +18,8 @@ require (
 	github.com/mmcdole/goxpp v1.1.1-0.20240225020742-a0c311522b23 // indirect
 	github.com/modern-go/concurrent v0.0.0-20180306012644-bacd9c7ef1dd // indirect
 	github.com/modern-go/reflect2 v1.0.2 // indirect
+	golang.org/x/crypto v0.58.0 // indirect
+	golang.org/x/term v0.47.0 // indirect
 )
 
 require (

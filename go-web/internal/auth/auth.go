@@ -6,6 +6,7 @@ import (
 	"encoding/base64"
 	"encoding/json"
 	"errors"
+	"github.com/Dzarlax-AI/evening-news/go-web/internal/transport"
 	"net"
 	"net/http"
 	"strings"
@@ -47,14 +48,19 @@ type AuthError struct {
 func (e *AuthError) Error() string { return e.Detail }
 
 type Service struct {
-	config Config
-	secret []byte
-	now    func() time.Time
-	mu     sync.Mutex
-	failed map[string]int
-	locked map[string]time.Time
-	rates  map[string]rateEntry
+	managed *ManagedStore
+	config  Config
+	secret  []byte
+	now     func() time.Time
+	mu      sync.Mutex
+	failed  map[string]int
+	locked  map[string]time.Time
+	rates   map[string]rateEntry
 }
+
+func (s *Service) UseManaged(store *ManagedStore) { s.managed = store }
+func (s *Service) Managed() bool                  { return s.managed != nil }
+
 type rateEntry struct {
 	start time.Time
 	count int
@@ -74,6 +80,13 @@ func (s *Service) Mint(username, level string) (string, error) {
 	}
 	now := s.now().UTC()
 	claims := map[string]any{"sub": username, "level": level, "iat": now.Unix(), "exp": now.Add(TokenTTL).Unix(), "type": "access"}
+	if s.managed != nil {
+		rev, err := s.managed.revision(username)
+		if err != nil {
+			return "", err
+		}
+		claims["revision"] = rev
+	}
 	return s.sign(claims)
 }
 
@@ -144,7 +157,11 @@ func (s *Service) verify(token string) (Principal, bool) {
 			return Principal{}, false
 		}
 	}
-	return Principal{Username: sub, Level: level, ExpiresAt: exp}, true
+	p := Principal{Username: sub, Level: level, ExpiresAt: exp}
+	if s.managed != nil && !s.managed.validRevision(p, claims) {
+		return Principal{}, false
+	}
+	return p, true
 }
 
 func numericDate(v any) (time.Time, bool) {
@@ -169,6 +186,9 @@ func numericDate(v any) (time.Time, bool) {
 }
 
 func (s *Service) API(r *http.Request) (Principal, error) {
+	if s.managed != nil && !transport.SecureRequest(r) {
+		return Principal{}, &AuthError{Status: 403, Detail: "HTTPS or explicit local setup required"}
+	}
 	if p, ok := s.forwardPrincipal(r); ok {
 		return p, nil
 	}
@@ -183,7 +203,7 @@ func (s *Service) API(r *http.Request) (Principal, error) {
 		}
 	}
 	if scheme, value, ok := authHeader(r); ok && strings.EqualFold(scheme, "Basic") {
-		if user, pass, valid := decodeBasic(value); valid && s.credentials(user, pass) {
+		if user, pass, valid := decodeBasic(value); valid && s.basicCredentials(r, user, pass) {
 			return Principal{Username: user, Level: LevelAdmin, ExpiresAt: time.Unix(s.now().Add(TokenTTL).Unix(), 0).UTC()}, nil
 		}
 	}
@@ -191,15 +211,25 @@ func (s *Service) API(r *http.Request) (Principal, error) {
 }
 
 func (s *Service) AdminPage(r *http.Request) (Principal, error) {
+	if s.managed != nil && !transport.SecureRequest(r) {
+		return Principal{}, &AuthError{Status: 403, Detail: "HTTPS or explicit local setup required"}
+	}
 	if p, ok := s.forwardPrincipal(r); ok {
 		return p, nil
 	}
-	if s.config.Password == "" {
+	if s.managed != nil {
+		if c, err := r.Cookie(AdminCookie); err == nil {
+			if p, ok := s.verify(c.Value); ok && p.Level == LevelAdmin {
+				return p, nil
+			}
+		}
+	}
+	if s.config.Password == "" && s.managed == nil {
 		return Principal{}, &AuthError{Status: http.StatusNotImplemented, Detail: "Admin authentication not configured. Please set ADMIN_PASSWORD environment variable."}
 	}
 	scheme, value, ok := authHeader(r)
 	if ok && strings.EqualFold(scheme, "Basic") {
-		if user, pass, valid := decodeBasic(value); valid && s.credentials(user, pass) {
+		if user, pass, valid := decodeBasic(value); valid && s.basicCredentials(r, user, pass) {
 			return Principal{Username: user, Level: LevelAdmin, ExpiresAt: time.Unix(s.now().Add(TokenTTL).Unix(), 0).UTC()}, nil
 		}
 	}
@@ -207,6 +237,9 @@ func (s *Service) AdminPage(r *http.Request) (Principal, error) {
 }
 
 func (s *Service) PublicAdmin(r *http.Request) (Principal, bool) {
+	if s.managed != nil && !transport.SecureRequest(r) {
+		return Principal{}, false
+	}
 	if p, ok := s.forwardPrincipal(r); ok {
 		return p, true
 	}
@@ -231,12 +264,44 @@ func (s *Service) forwardPrincipal(r *http.Request) (Principal, bool) {
 }
 
 func (s *Service) credentials(user, pass string) bool {
+	if s.managed != nil {
+		return s.managed.credentials(user, pass)
+	}
 	if s.config.Username == "" || s.config.Password == "" {
 		return false
 	}
 	usernameMatches := hmac.Equal([]byte(user), []byte(s.config.Username))
 	passwordMatches := hmac.Equal([]byte(pass), []byte(s.config.Password))
 	return usernameMatches && passwordMatches
+}
+
+func (s *Service) basicCredentials(r *http.Request, user, pass string) bool {
+	if s.managed == nil {
+		return s.credentials(user, pass)
+	}
+	ip := remoteIP(r)
+	now := s.now()
+	s.mu.Lock()
+	s.prune(now)
+	until := s.locked[ip]
+	allowed := !now.Before(until) && s.allow(ip, now, 5)
+	s.mu.Unlock()
+	if !allowed {
+		return false
+	}
+	valid := s.credentials(user, pass)
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	if valid {
+		delete(s.failed, ip)
+		delete(s.locked, ip)
+	} else {
+		s.failed[ip]++
+		if s.failed[ip] >= lockThreshold {
+			s.locked[ip] = now.Add(lockDuration)
+		}
+	}
+	return valid
 }
 
 func authHeader(r *http.Request) (string, string, bool) {
@@ -281,15 +346,19 @@ func (s *Service) login(r *http.Request) (Principal, *AuthError) {
 	ip := remoteIP(r)
 	now := s.now()
 	s.mu.Lock()
-	defer s.mu.Unlock()
 	s.prune(now)
 	if until, ok := s.locked[ip]; ok && now.Before(until) {
+		s.mu.Unlock()
 		return Principal{}, &AuthError{Status: 429, Detail: "Too many failed attempts. Try again in 5 minutes."}
 	}
 	if !s.allow(ip, now, 5) {
+		s.mu.Unlock()
 		return Principal{}, &AuthError{Status: 429, Detail: "Rate limit exceeded"}
 	}
-	if s.config.Password == "" {
+	// Verification may query PostgreSQL and run Argon2. Rate bookkeeping must
+	// not hold the global service mutex across either operation.
+	s.mu.Unlock()
+	if s.config.Password == "" && s.managed == nil {
 		return Principal{}, &AuthError{Status: 501, Detail: "Admin authentication not configured"}
 	}
 	scheme, value, ok := authHeader(r)
@@ -298,14 +367,18 @@ func (s *Service) login(r *http.Request) (Principal, *AuthError) {
 		return Principal{}, &AuthError{Status: 401, Detail: "Not authenticated", Challenge: "Basic"}
 	}
 	if !s.credentials(user, pass) {
+		s.mu.Lock()
+		defer s.mu.Unlock()
 		s.failed[ip]++
 		if s.failed[ip] >= lockThreshold {
 			s.locked[ip] = now.Add(lockDuration)
 		}
 		return Principal{}, &AuthError{Status: 401, Detail: "Invalid credentials", Challenge: "Basic"}
 	}
+	s.mu.Lock()
 	delete(s.failed, ip)
 	delete(s.locked, ip)
+	s.mu.Unlock()
 	return Principal{Username: user, Level: LevelAdmin}, nil
 }
 

@@ -93,6 +93,10 @@ func RunObserver(ctx context.Context, p *Profiles, peer *CDPPeer, commandDir, re
 				result, e = p.Profile(ctx, 1)
 			case "profile_two":
 				result, e = p.Profile(ctx, 2)
+			case "supplied_content":
+				result, e = p.Worker.SuppliedContentRequest(ctx)
+			case "page_monitor":
+				result, e = p.Worker.PageMonitorRequest(ctx)
 			case "cancellation":
 				result, e = p.Cancellation(ctx)
 			case "upstream_error":

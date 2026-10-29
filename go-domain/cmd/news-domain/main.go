@@ -22,9 +22,9 @@ import (
 	"github.com/Dzarlax-AI/evening-news/go-domain/authority"
 	"github.com/Dzarlax-AI/evening-news/go-domain/backup"
 	"github.com/Dzarlax-AI/evening-news/go-domain/callbacks"
+	"github.com/Dzarlax-AI/evening-news/go-domain/credentialstore"
 	"github.com/Dzarlax-AI/evening-news/go-domain/digestworkflow"
 	"github.com/Dzarlax-AI/evening-news/go-domain/domainops"
-	"github.com/Dzarlax-AI/evening-news/go-domain/envbool"
 	"github.com/Dzarlax-AI/evening-news/go-domain/extractorclient"
 	"github.com/Dzarlax-AI/evening-news/go-domain/learning"
 	"github.com/Dzarlax-AI/evening-news/go-domain/media"
@@ -48,16 +48,17 @@ func tokenOK(s string) bool {
 	}
 	return true
 }
-func poolBudget() (int32, error) {
+func poolBudget() (int32, error) { return poolBudgetFrom(os.Getenv) }
+func poolBudgetFrom(get func(string) string) (int32, error) {
 	size, overflow := 5, 10
 	var err error
-	if v := os.Getenv("DB_POOL_SIZE"); v != "" {
+	if v := get("DB_POOL_SIZE"); v != "" {
 		size, err = strconv.Atoi(v)
 		if err != nil {
 			return 0, err
 		}
 	}
-	if v := os.Getenv("DB_MAX_OVERFLOW"); v != "" {
+	if v := get("DB_MAX_OVERFLOW"); v != "" {
 		overflow, err = strconv.Atoi(v)
 		if err != nil {
 			return 0, err
@@ -147,15 +148,19 @@ func incidentLogFilter(args []string, in io.Reader, out io.Writer) int {
 	return 0
 }
 func run() error {
-	config, err := airuntime.DomainConfigFromEnv()
+	source, err := loadSource()
+	if err != nil {
+		return errors.New("invalid runtime manifest")
+	}
+	config, err := airuntime.DomainConfigFromLookup(source.get, source.lookup)
 	if err != nil {
 		return errors.New("invalid runtime configuration")
 	}
-	jobToken, aiToken := os.Getenv("JOB_EXECUTOR_TOKEN"), os.Getenv("ARTICLE_AI_TOKEN")
+	jobToken, aiToken := source.get("JOB_EXECUTOR_TOKEN"), source.get("ARTICLE_AI_TOKEN")
 	if !tokenOK(jobToken) || !tokenOK(aiToken) {
 		return errors.New("invalid private service tokens")
 	}
-	origin := os.Getenv("EXECUTION_SERVICE_URL")
+	origin := source.get("EXECUTION_SERVICE_URL")
 	if origin == "" {
 		origin = "http://background:8101"
 	}
@@ -164,15 +169,15 @@ func run() error {
 		return errors.New("invalid execution authority configuration")
 	}
 	defer execution.Close()
-	maxConns, err := poolBudget()
+	maxConns, err := poolBudgetFrom(source.get)
 	if err != nil {
 		return err
 	}
-	limit, err := textLimit()
+	limit, err := textLimitFrom(source.get)
 	if err != nil {
 		return err
 	}
-	mediaLimit, err := mediaByteLimit()
+	mediaLimit, err := mediaByteLimitFrom(source.get)
 	if err != nil {
 		return err
 	}
@@ -193,6 +198,16 @@ func run() error {
 			pool.Close()
 		}
 	}()
+	if source.managed {
+		check, cancel := context.WithTimeout(root, 3*time.Second)
+		var id string
+		var complete bool
+		err := pool.QueryRow(check, `SELECT installation_id,provisioning_complete FROM installation_state WHERE id=1`).Scan(&id, &complete)
+		cancel()
+		if err != nil || id != source.installation || !complete {
+			return errors.New("managed installation is not activated")
+		}
+	}
 	guard, err := authority.AcquireGuard(root, pool)
 	if err != nil {
 		return errors.New("domain singleton unavailable")
@@ -206,6 +221,11 @@ func run() error {
 		_ = guard.Close(ctx)
 	}()
 	runtime := airuntime.NewServer(config, pool)
+	var credentials *credentialstore.Store
+	if source.managed {
+		credentials = &credentialstore.Store{Pool: pool, Key: source.key, KeyID: source.keyID, InstallationID: source.installation}
+		runtime.SetCredentialStore(credentials)
+	}
 	attention, err := runtime.StartupAISettings(root)
 	if err != nil {
 		return errors.New("invalid effective AI settings")
@@ -222,11 +242,13 @@ func run() error {
 		return errors.New("domain identity unavailable")
 	}
 	ops := domainops.New(appCtx, jobToken, instance, guard, execution, pool, runtime)
-	ops.Backup = backup.New(".", config.DatabaseURL)
+	backupService := backup.New(".", config.DatabaseURL)
+	backupService.Managed = source.managed
+	ops.Backup = backupService
 	mediaService := media.New()
 	mediaService.MaxBytes = mediaLimit
 	ops.Media = mediaService
-	extractorURL, extractorToken := os.Getenv("EXTRACTION_SERVICE_URL"), os.Getenv("EXTRACTION_SERVICE_TOKEN")
+	extractorURL, extractorToken := source.get("EXTRACTION_SERVICE_URL"), source.get("EXTRACTION_SERVICE_TOKEN")
 	if !tokenOK(extractorToken) {
 		return errors.New("invalid extractor token")
 	}
@@ -240,13 +262,30 @@ func run() error {
 	memory.Guard = guard
 	mux.Handle("POST /internal/v1/article-ai", &callbacks.Handler{Token: aiToken, Guard: guard, Authority: execution, Pool: pool, Admission: callbacks.NewAdmission(16, 64, 1024*1024), Compute: &callbacks.ArticleCompute{Runtime: runtime, Learning: memory, MaxTextChars: limit}})
 	mux.Handle("POST /internal/v1/ingestion/selectors", &selectors.Handler{Token: jobToken, Guard: guard, Authority: execution, Pool: pool, Store: memory, Analyzer: selectors.NewAnalyzer(runtime)})
-	allowCreateAll, err := envbool.Read("ALLOW_CREATE_ALL", true)
+	allowCreateAll := true
+	if raw, present := source.lookup("ALLOW_CREATE_ALL"); present && raw != "" {
+		allowCreateAll, err = strconv.ParseBool(raw)
+	}
 	if err != nil {
 		return errors.New("invalid ALLOW_CREATE_ALL")
 	}
-	worker := os.Getenv("BACKGROUND_EXECUTION_MODE") != "embedded"
-	web := &webbackend.Server{Guard: guard, Pool: pool, Runtime: runtime, Worker: worker, AllowCreateAll: allowCreateAll, TelegramToken: config.TelegramToken, ChatID: config.TelegramMain, ServiceChatID: config.TelegramService}
-	mux.Handle("/internal/web/v1/", webbackend.Boundary{Token: os.Getenv("WEB_BACKEND_TOKEN"), Worker: worker, Next: web.Handler()})
+	worker := source.get("BACKGROUND_EXECUTION_MODE") != "embedded"
+	web := &webbackend.Server{Credentials: credentials, Guard: guard, Pool: pool, Runtime: runtime, Worker: worker, AllowCreateAll: allowCreateAll, TelegramToken: config.TelegramToken, ChatID: config.TelegramMain, ServiceChatID: config.TelegramService}
+	mux.HandleFunc("GET /internal/v1/runtime-configuration", func(w http.ResponseWriter, r *http.Request) {
+		expected := "Bearer " + jobToken
+		given := r.Header.Get("Authorization")
+		if len(given) != len(expected) || subtle.ConstantTimeCompare([]byte(given), []byte(expected)) != 1 {
+			http.Error(w, "Unauthorized", 401)
+			return
+		}
+		if guard.Check(r.Context()) != nil {
+			http.Error(w, "Unavailable", 503)
+			return
+		}
+		web.RuntimeConfiguration(w, r)
+	})
+	mux.Handle("/internal/v1/job-configuration", jobConfigurationHandler{pool: pool, guard: guard, token: jobToken})
+	mux.Handle("/internal/web/v1/", webbackend.Boundary{Token: source.get("WEB_BACKEND_TOKEN"), Worker: worker, Next: web.Handler()})
 	terminal := terminalevents.New(jobToken, pool, guard, execution, func(ctx context.Context, title, message string) bool {
 		result, err := runtime.SendServiceTest(ctx, "🚨 <b>"+title+"</b>\n\n"+message)
 		return err == nil && result.State == telegramdelivery.Sent
@@ -271,11 +310,11 @@ func run() error {
 		w.Header().Set("Content-Type", "application/json")
 		_ = json.NewEncoder(w).Encode(map[string]any{"domain_instance_id": instance, "active_operations": active, "ready": true})
 	})
-	host := os.Getenv("JOB_EXECUTOR_HOST")
+	host := source.get("JOB_EXECUTOR_HOST")
 	if host == "" {
 		host = "0.0.0.0"
 	}
-	port := os.Getenv("JOB_EXECUTOR_PORT")
+	port := source.get("JOB_EXECUTOR_PORT")
 	if port == "" {
 		port = "8100"
 	}
@@ -334,8 +373,9 @@ loop:
 	runtime.CloseUsage(5 * time.Second)
 	return serveErr
 }
-func textLimit() (int, error) {
-	v := strings.TrimSpace(os.Getenv("EXTRACTION_TEXT_MAX_CHARS"))
+func textLimit() (int, error) { return textLimitFrom(os.Getenv) }
+func textLimitFrom(get func(string) string) (int, error) {
+	v := strings.TrimSpace(get("EXTRACTION_TEXT_MAX_CHARS"))
 	if v == "" {
 		return 100000, nil
 	}
@@ -345,8 +385,9 @@ func textLimit() (int, error) {
 	}
 	return n, nil
 }
-func mediaByteLimit() (int64, error) {
-	v := strings.TrimSpace(os.Getenv("EXTRACTION_HTTP_MAX_BYTES"))
+func mediaByteLimit() (int64, error) { return mediaByteLimitFrom(os.Getenv) }
+func mediaByteLimitFrom(get func(string) string) (int64, error) {
+	v := strings.TrimSpace(get("EXTRACTION_HTTP_MAX_BYTES"))
 	if v == "" {
 		return 5 * 1024 * 1024, nil
 	}

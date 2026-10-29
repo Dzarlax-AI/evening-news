@@ -14,7 +14,7 @@ func SafeExecutionFailureReason(err error) string {
 	var failure interface{ SafeFailureReason() string }
 	if errors.As(err, &failure) {
 		switch failure.SafeFailureReason() {
-		case "digest_domain_status_failed", "digest_processing_failed", "digest_summary_status_failed", "digest_summary_status_result_failed", "digest_summaries_generate_failed", "digest_prepare_failed", "digest_prepare_result_failed", "digest_publish_failed", "digest_publish_result_failed":
+		case "digest_domain_status_failed", "digest_processing_failed", "digest_operational_settings_failed", "digest_operational_settings_invalid_failed", "digest_summary_status_failed", "digest_summary_status_result_failed", "digest_summaries_generate_failed", "digest_prepare_failed", "digest_prepare_result_failed", "digest_publish_failed", "digest_publish_result_failed":
 			return failure.SafeFailureReason()
 		}
 	}

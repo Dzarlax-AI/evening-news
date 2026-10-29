@@ -87,7 +87,7 @@
                     </div>
                     <div class="form-group">
                         <label>
-                            <input type="checkbox" id="new-enabled" checked>
+                            <input type="checkbox" id="new-enabled">
                             Включено
                         </label>
                     </div>
@@ -759,7 +759,7 @@ function closeCreateModal() {
     document.getElementById('new-minute').value = 0;
     document.getElementById('new-interval').value = 30;
     document.getElementById('new-timezone').value = 'Europe/Belgrade';
-    document.getElementById('new-enabled').checked = true;
+    document.getElementById('new-enabled').checked = false;
     document.querySelectorAll('#new-weekdays .weekday-btn').forEach(btn => {
         btn.classList.add('active');
     });

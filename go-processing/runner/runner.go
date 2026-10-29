@@ -46,7 +46,22 @@ type Config struct {
 	NativeBrowser           bool
 	DateFrom                *time.Time
 	DateTo                  *time.Time
+	LoadOperationalSnapshot func(context.Context, string, int64) (OperationalSnapshot, error)
 }
+
+type OperationalSnapshot struct {
+	Revision          int64
+	PinnedAt          time.Time
+	LimitsEnabled     bool
+	MaxArticles       int
+	PerSource         int
+	Days              int
+	NewestDate        string
+	ProcessingEnabled bool
+	DeliveryEnabled   bool
+}
+
+type OperationalSnapshotReader func(context.Context, string, int64) (OperationalSnapshot, error)
 
 func LoadConfig(env func(string) string) (Config, error) {
 	get := func(k string, d int, lo, hi int) (int, error) {
@@ -204,6 +219,15 @@ func Run(ctx context.Context, c Config, onReady func()) error {
 		DateFrom:       c.DateFrom,
 		DateTo:         c.DateTo,
 		Duplicates:     processing.NewDuplicateCache(),
+	}
+	if c.LoadOperationalSnapshot != nil {
+		p.LoadOperationalSnapshot = func(ctx context.Context, f store.Fence) (processing.OperationalSnapshot, error) {
+			v, err := c.LoadOperationalSnapshot(ctx, f.Envelope.JobID, int64(f.Envelope.AttemptGeneration))
+			if err != nil {
+				return processing.OperationalSnapshot{}, err
+			}
+			return processing.OperationalSnapshot{Revision: v.Revision, PinnedAt: v.PinnedAt, LimitsEnabled: v.LimitsEnabled, MaxArticles: v.MaxArticles, PerSource: v.PerSource, Days: v.Days, NewestDate: v.NewestDate, ProcessingEnabled: v.ProcessingEnabled, DeliveryEnabled: v.DeliveryEnabled}, nil
+		}
 	}
 	h := processing.NewHandlerWithContext(ctx, db, p, processing.Config{Token: c.Token})
 	srv := &http.Server{

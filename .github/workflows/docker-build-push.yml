@@ -6,6 +6,10 @@ on:
       - 'db/**'
       - 'docker/**'
       - 'docker-bake.hcl'
+      - 'docker-compose.managed.yml'
+      - '.env.legacy.example'
+      - '.env.full.example'
+      - 'docs/configuration.md'
       - 'docker-compose.example.yml'
       - 'docker-compose.dev.yml'
       - 'Makefile'
@@ -37,6 +41,10 @@ on:
       - 'db/**'
       - 'docker/**'
       - 'docker-bake.hcl'
+      - 'docker-compose.managed.yml'
+      - '.env.legacy.example'
+      - '.env.full.example'
+      - 'docs/configuration.md'
       - 'docker-compose.example.yml'
       - 'docker-compose.dev.yml'
       - 'Makefile'
@@ -114,6 +122,45 @@ jobs:
           fi
           go vet ./...
 
+  managed-recovery:
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    strategy:
+      fail-fast: false
+      matrix:
+        postgres: ['16', '17']
+    services:
+      postgres:
+        image: postgres:${{ matrix.postgres }}-alpine
+        env:
+          POSTGRES_USER: postgres
+          POSTGRES_PASSWORD: fixture-only
+          POSTGRES_DB: news_fixture
+        options: >-
+          --health-cmd "pg_isready -U postgres -d news_fixture"
+          --health-interval 5s --health-timeout 5s --health-retries 12
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          persist-credentials: false
+      - uses: actions/setup-go@v5
+        with:
+          go-version: '1.26.10'
+          cache: false
+      - name: Build isolated installer tests
+        working-directory: go-domain
+        run: CGO_ENABLED=0 GOOS=linux GOARCH=amd64 go test -c -o "$RUNNER_TEMP/news-installer.test" ./cmd/newsctl
+      - name: Check fresh roles and encrypted restore with matching PostgreSQL client
+        env:
+          PG_CONTAINER: ${{ job.services.postgres.id }}
+        run: |
+          set -eu
+          trap 'rm -f "$RUNNER_TEMP/news-installer.test"' EXIT
+          docker cp "$RUNNER_TEMP/news-installer.test" "$PG_CONTAINER:/tmp/news-installer.test"
+          docker exec "$PG_CONTAINER" mkdir -p "$GITHUB_WORKSPACE/go-scheduler/migrations"
+          docker cp go-scheduler/migrations/001_initial.sql "$PG_CONTAINER:$GITHUB_WORKSPACE/go-scheduler/migrations/001_initial.sql"
+          docker exec -e NEWS_INSTALLER_TEST_RECOVERY=1 -e 'NEWS_INSTALLER_TEST_DATABASE_URL=postgres://postgres:fixture-only@127.0.0.1:5432/news_fixture?sslmode=disable' "$PG_CONTAINER" /tmp/news-installer.test -test.run '^Test(FreshProvision|AdoptionImportPostgresFixture|ExternalInstallPostgresFixture)$' -test.count=1 -test.timeout=5m
+
   cross-build-arm64:
     runs-on: ubuntu-latest
     timeout-minutes: 35
@@ -133,9 +180,9 @@ jobs:
 
   assemble-fixture:
     if: ${{ !(github.event_name == 'workflow_dispatch' && inputs.publish && github.ref == 'refs/heads/main') }}
-    needs: [go-core-tests, cross-build-arm64]
+    needs: [go-core-tests, cross-build-arm64, managed-recovery]
     runs-on: ubuntu-latest
-    timeout-minutes: 35
+    timeout-minutes: 55
     strategy:
       fail-fast: false
       matrix:
@@ -153,7 +200,9 @@ jobs:
       - uses: docker/setup-buildx-action@v3
       - name: Build fixture gate
         working-directory: go-tools
-        run: go build -o "$RUNNER_TEMP/news-vertical-fixture-gate" ./cmd/vertical-fixture-gate
+        run: |
+          go build -o "$RUNNER_TEMP/news-vertical-fixture-gate" ./cmd/vertical-fixture-gate
+          go build -o "$RUNNER_TEMP/news-managed-adoption-gate" ./cmd/managed-adoption-gate
       - name: Pull isolated fixture infrastructure
         run: docker pull postgres:${{ matrix.postgres }}-alpine && docker pull alpine:3.21
       - name: Build all three candidate core images
@@ -171,16 +220,26 @@ jobs:
           NEWS_FIXTURE_PG_MAJOR: ${{ matrix.postgres }}
         run: >-
           "$RUNNER_TEMP/news-vertical-fixture-gate" --output-dir "artifacts/acceptance-${NEWS_FIXTURE_PG_MAJOR}"
+      - name: Run isolated legacy adoption acceptance
+        run: >-
+          "$RUNNER_TEMP/news-managed-adoption-gate"
+          --postgres-major "${{ matrix.postgres }}"
+          --output-dir "artifacts/managed-adoption-${{ matrix.postgres }}"
+      - name: Remove fixture gate binaries
+        if: always()
+        run: rm -f "$RUNNER_TEMP/news-vertical-fixture-gate" "$RUNNER_TEMP/news-managed-adoption-gate"
       - uses: actions/upload-artifact@v4
         if: always()
         with:
           name: core-image-acceptance-pg${{ matrix.postgres }}
-          path: artifacts/acceptance-${{ matrix.postgres }}/
+          path: |
+            artifacts/acceptance-${{ matrix.postgres }}/
+            artifacts/managed-adoption-${{ matrix.postgres }}/
           if-no-files-found: ignore
 
   publish-reviewed-main:
     if: ${{ github.event_name == 'workflow_dispatch' && inputs.publish && github.ref == 'refs/heads/main' }}
-    needs: [go-core-tests, cross-build-arm64]
+    needs: [go-core-tests, cross-build-arm64, managed-recovery]
     concurrency:
       group: core-image-publish-${{ github.sha }}
       cancel-in-progress: false
@@ -200,7 +259,9 @@ jobs:
       - uses: docker/setup-buildx-action@v3
       - name: Build fixture gate
         working-directory: go-tools
-        run: go build -o "$RUNNER_TEMP/news-vertical-fixture-gate" ./cmd/vertical-fixture-gate
+        run: |
+          go build -o "$RUNNER_TEMP/news-vertical-fixture-gate" ./cmd/vertical-fixture-gate
+          go build -o "$RUNNER_TEMP/news-managed-adoption-gate" ./cmd/managed-adoption-gate
       - name: Pull isolated fixture infrastructure
         run: docker pull postgres:16-alpine && docker pull postgres:17-alpine && docker pull alpine:3.21
       - name: Build candidate images once
@@ -215,9 +276,13 @@ jobs:
         run: docker build --platform linux/amd64 -f docker/Dockerfile.extractor -t evening-news-collector:consolidation-fixture go
       - name: Run isolated acceptance on PostgreSQL 16 and 17
         run: |
+          set -eu
+          trap 'rm -f "$RUNNER_TEMP/news-vertical-fixture-gate" "$RUNNER_TEMP/news-managed-adoption-gate"' EXIT
           NEWS_FIXTURE_PG_MAJOR=16 "$RUNNER_TEMP/news-vertical-fixture-gate" --output-dir artifacts/acceptance-16
           NEWS_FIXTURE_PG_MAJOR=17 "$RUNNER_TEMP/news-vertical-fixture-gate" --output-dir artifacts/acceptance-17
           cmp artifacts/acceptance-16/receipt.json artifacts/acceptance-17/receipt.json
+          "$RUNNER_TEMP/news-managed-adoption-gate" --postgres-major 16 --output-dir artifacts/managed-adoption-16
+          "$RUNNER_TEMP/news-managed-adoption-gate" --postgres-major 17 --output-dir artifacts/managed-adoption-17
       - uses: docker/login-action@v3
         with:
           registry: ghcr.io
@@ -252,5 +317,7 @@ jobs:
         if: always()
         with:
           name: release-core-fixture-${{ github.sha }}
-          path: artifacts/acceptance-*/
+          path: |
+            artifacts/acceptance-*/
+            artifacts/managed-adoption-*/
           if-no-files-found: ignore

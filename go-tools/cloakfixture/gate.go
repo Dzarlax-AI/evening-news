@@ -22,6 +22,14 @@ import (
 )
 
 const expectedBrowserSHA = "715722e8605ae3ce81523c1218aba1ec89425786ab33ceaf99f8a6cb5e70e6e8"
+const fixtureAdmissionIP = "11.203.254.242"
+
+func workerAnchorExtra() []string {
+	// The worker's container-network namespace inherits this anchor's hosts
+	// entry. Admission accepts the fixture IP as public, while the anchor's nft
+	// policy still permits traffic only to the browser and isolated egress.
+	return []string{"--add-host", "native-fixture.test:" + fixtureAdmissionIP}
+}
 
 type GateConfig struct{ Worker, Egress, Fixture, Relay, X11, Output, StageParent string }
 type browserMetadata struct {
@@ -179,6 +187,22 @@ func (g *dockerGate) send(ctx context.Context, dir, action string) (json.RawMess
 	return result, nil
 }
 
+func (g *dockerGate) stopOwnedContainer(ctx context.Context, name string) error {
+	if err := g.verify(ctx, name, false); err != nil {
+		return err
+	}
+	if _, err := g.docker.Run(ctx, "rm", "-f", name); err != nil {
+		return err
+	}
+	for i := range g.containers {
+		if g.containers[i] == name {
+			g.containers = append(g.containers[:i], g.containers[i+1:]...)
+			return nil
+		}
+	}
+	return errors.New("owned_container_tracking_invalid")
+}
+
 // RunGate executes the disposable synthetic gate, with private finite evidence.
 func RunGate(ctx context.Context, cfg GateConfig) (err error) {
 	if err = hostBudget(); err != nil {
@@ -274,7 +298,11 @@ func RunGate(ctx context.Context, cfg GateConfig) (err error) {
 		{"origin", "fixture", "11.203.254.242"},
 	}
 	for _, anchor := range anchors {
-		if e = g.container(ctx, anchor.role+"-anchor", alpineImage, anchor.network, anchor.address, "32m", "0.125", "32", []string{cfg.Fixture + ":/fixture:ro"}, nil, nil, []string{"sleep", "300"}); e != nil {
+		extra := []string(nil)
+		if anchor.role == "worker" {
+			extra = workerAnchorExtra()
+		}
+		if e = g.container(ctx, anchor.role+"-anchor", alpineImage, anchor.network, anchor.address, "32m", "0.125", "32", []string{cfg.Fixture + ":/fixture:ro"}, nil, extra, []string{"sleep", "300"}); e != nil {
 			return e
 		}
 	}
@@ -302,7 +330,7 @@ func RunGate(ctx context.Context, cfg GateConfig) (err error) {
 			return err
 		}
 	}
-	for _, dir := range []string{"fixture", "fixture/release", "commands", "results"} {
+	for _, dir := range []string{"fixture", "fixture/release", "commands", "results", "runtime"} {
 		if e = os.Mkdir(filepath.Join(stage, dir), 0700); e != nil {
 			return errors.New("stage_creation_failed")
 		}
@@ -320,6 +348,27 @@ func RunGate(ctx context.Context, cfg GateConfig) (err error) {
 	if e = os.WriteFile(tokenPath, []byte(token+"\n"), 0600); e != nil {
 		return errors.New("stage_creation_failed")
 	}
+	managedEgressPath := filepath.Join(stage, "runtime", "egress.json")
+	managedExtractorPath := filepath.Join(stage, "runtime", "extractor.json")
+	egressValues := map[string]string{
+		"EGRESS_LISTEN_ADDR": ip(5) + ":8081", "EGRESS_TOKEN": token, "EGRESS_MAX_CONCURRENT": "4",
+		"EGRESS_MAX_LIFETIME_SECONDS": "35", "EGRESS_TEST_MODE": "true",
+		"EGRESS_TEST_ALLOWLIST": `{"native-fixture.test":"11.203.254.242"}`,
+	}
+	extractorValues := map[string]string{
+		"LISTEN_ADDR": "0.0.0.0:8080", "EXTRACTOR_HTTP_ONLY": "false", "EXTRACTOR_MAX_CONCURRENT": "5",
+		"EXTRACTOR_BROWSER_CONCURRENT": "2", "EXTRACTOR_BROWSER_BACKEND": "native",
+		"EXTRACTOR_NATIVE_NETWORK_ISOLATED": "true", "EXTRACTOR_NATIVE_READY_SELECTOR": `[data-ready="true"]`,
+		"EXTRACTOR_NATIVE_DIAGNOSTICS": "synthetic-soak", "EXTRACTOR_SERVICE_TOKEN": token,
+		"CHROME_ENDPOINT": "http://" + ip(2) + ":9222", "EXTRACTOR_NATIVE_PROXY_URL": "http://" + ip(5) + ":8081",
+		"EXTRACTOR_NATIVE_PROXY_TOKEN": token,
+	}
+	if e = writeRuntimeManifest(managedEgressPath, "egress", egressValues); e != nil {
+		return e
+	}
+	if e = writeRuntimeManifest(managedExtractorPath, "extractor", extractorValues); e != nil {
+		return e
+	}
 	phase = "browser"
 	args := append([]string{}, meta.Args...)
 	args = append(args, "--ignore-certificate-errors-spki-list="+spki, "--remote-debugging-port=5100", "--remote-debugging-address=127.0.0.1", "--user-data-dir=/tmp/native-shadow-browser")
@@ -334,8 +383,16 @@ func RunGate(ctx context.Context, cfg GateConfig) (err error) {
 		return errors.New("relay_start_failed")
 	}
 	phase = "egress"
-	env = []string{"EGRESS_LISTEN_ADDR=" + ip(5) + ":8081", "EGRESS_TOKEN=" + token, "EGRESS_MAX_CONCURRENT=4", "EGRESS_MAX_LIFETIME_SECONDS=35", "EGRESS_TEST_MODE=true", `EGRESS_TEST_ALLOWLIST={"native-fixture.test":"11.203.254.242"}`}
-	if e = g.container(ctx, "egress", alpineImage, "@gateway-anchor", "", "128m", "0.25", "64", []string{cfg.Egress + ":/extract-egress:ro"}, env, nil, []string{"/extract-egress"}); e != nil {
+	startEgress := func(managed bool) error {
+		env := []string{"EGRESS_LISTEN_ADDR=" + egressValues["EGRESS_LISTEN_ADDR"], "EGRESS_TOKEN=" + token, "EGRESS_MAX_CONCURRENT=4", "EGRESS_MAX_LIFETIME_SECONDS=35", "EGRESS_TEST_MODE=true", "EGRESS_TEST_ALLOWLIST=" + egressValues["EGRESS_TEST_ALLOWLIST"]}
+		mounts := []string{cfg.Egress + ":/extract-egress:ro"}
+		if managed {
+			mounts = append(mounts, managedEgressPath+":/run/news/runtime.json:ro")
+			env = []string{"NEWS_RUNTIME_FILE=/run/news/runtime.json", "EGRESS_LISTEN_ADDR=127.0.0.1:1", "EGRESS_TOKEN=ambient-conflict-token", "EGRESS_MAX_CONCURRENT=1", "EGRESS_MAX_LIFETIME_SECONDS=1", "EGRESS_TEST_MODE=false", `EGRESS_TEST_ALLOWLIST={}`}
+		}
+		return g.container(ctx, "egress", alpineImage, "@gateway-anchor", "", "128m", "0.25", "64", mounts, env, nil, []string{"/extract-egress"})
+	}
+	if e = startEgress(false); e != nil {
 		return e
 	}
 	phase = "origin"
@@ -367,9 +424,22 @@ func RunGate(ctx context.Context, cfg GateConfig) (err error) {
 	}, 30*time.Second); e != nil {
 		return e
 	}
-	startWorker := func(limit int) error {
-		env := []string{"LISTEN_ADDR=0.0.0.0:8080", "EXTRACTOR_HTTP_ONLY=false", "EXTRACTOR_MAX_CONCURRENT=5", fmt.Sprintf("EXTRACTOR_BROWSER_CONCURRENT=%d", limit), "EXTRACTOR_BROWSER_BACKEND=native", "EXTRACTOR_NATIVE_NETWORK_ISOLATED=true", `EXTRACTOR_NATIVE_READY_SELECTOR=[data-ready="true"]`, "EXTRACTOR_NATIVE_DIAGNOSTICS=synthetic-soak", "EXTRACTOR_SERVICE_TOKEN=" + token, "CHROME_ENDPOINT=http://" + ip(2) + ":9222", "EXTRACTOR_NATIVE_PROXY_URL=http://" + ip(5) + ":8081", "EXTRACTOR_NATIVE_PROXY_TOKEN=" + token}
-		if e := g.container(ctx, "worker", alpineImage, "@worker-anchor", "", "256m", "1", "128", []string{cfg.Worker + ":/extract-service:ro"}, env, nil, []string{"/extract-service"}); e != nil {
+	startWorker := func(limit int, managed bool) error {
+		values := extractorValues
+		if limit == 1 {
+			values = make(map[string]string, len(extractorValues))
+			for k, v := range extractorValues {
+				values[k] = v
+			}
+			values["EXTRACTOR_BROWSER_CONCURRENT"] = "1"
+		}
+		env := []string{"LISTEN_ADDR=" + values["LISTEN_ADDR"], "EXTRACTOR_HTTP_ONLY=" + values["EXTRACTOR_HTTP_ONLY"], "EXTRACTOR_MAX_CONCURRENT=" + values["EXTRACTOR_MAX_CONCURRENT"], "EXTRACTOR_BROWSER_CONCURRENT=" + values["EXTRACTOR_BROWSER_CONCURRENT"], "EXTRACTOR_BROWSER_BACKEND=" + values["EXTRACTOR_BROWSER_BACKEND"], "EXTRACTOR_NATIVE_NETWORK_ISOLATED=" + values["EXTRACTOR_NATIVE_NETWORK_ISOLATED"], "EXTRACTOR_NATIVE_READY_SELECTOR=" + values["EXTRACTOR_NATIVE_READY_SELECTOR"], "EXTRACTOR_NATIVE_DIAGNOSTICS=" + values["EXTRACTOR_NATIVE_DIAGNOSTICS"], "EXTRACTOR_SERVICE_TOKEN=" + token, "CHROME_ENDPOINT=" + values["CHROME_ENDPOINT"], "EXTRACTOR_NATIVE_PROXY_URL=" + values["EXTRACTOR_NATIVE_PROXY_URL"], "EXTRACTOR_NATIVE_PROXY_TOKEN=" + token}
+		mounts := []string{cfg.Worker + ":/extract-service:ro"}
+		if managed {
+			mounts = append(mounts, managedExtractorPath+":/run/news/runtime.json:ro")
+			env = []string{"NEWS_RUNTIME_FILE=/run/news/runtime.json", "LISTEN_ADDR=127.0.0.1:1", "EXTRACTOR_HTTP_ONLY=true", "EXTRACTOR_MAX_CONCURRENT=1", "EXTRACTOR_BROWSER_CONCURRENT=1", "EXTRACTOR_BROWSER_BACKEND=invalid", "EXTRACTOR_NATIVE_NETWORK_ISOLATED=false", "EXTRACTOR_NATIVE_READY_SELECTOR=invalid", "EXTRACTOR_NATIVE_DIAGNOSTICS=ambient-conflict", "EXTRACTOR_SERVICE_TOKEN=ambient-conflict-token", "CHROME_ENDPOINT=http://127.0.0.1:1", "EXTRACTOR_NATIVE_PROXY_URL=http://127.0.0.1:1", "EXTRACTOR_NATIVE_PROXY_TOKEN=ambient-conflict-token"}
+		}
+		if e := g.container(ctx, "worker", alpineImage, "@worker-anchor", "", "256m", "1", "128", mounts, env, nil, []string{"/extract-service"}); e != nil {
 			return e
 		}
 		return g.wait(ctx, func() bool {
@@ -378,7 +448,7 @@ func RunGate(ctx context.Context, cfg GateConfig) (err error) {
 		}, 30*time.Second)
 	}
 	phase = "profile_one"
-	if e = startWorker(1); e != nil {
+	if e = startWorker(1, false); e != nil {
 		return e
 	}
 	one, e := g.send(ctx, stage, "profile_one")
@@ -395,11 +465,33 @@ func RunGate(ctx context.Context, cfg GateConfig) (err error) {
 		return e
 	}
 	g.containers = g.containers[:len(g.containers)-1]
+	if e = g.stopOwnedContainer(ctx, g.prefix+"-egress"); e != nil {
+		return e
+	}
+	if e = startEgress(true); e != nil {
+		return e
+	}
+	if e = g.wait(ctx, func() bool {
+		_, x := g.docker.Run(ctx, "exec", g.prefix+"-egress", "/extract-egress", "--healthcheck")
+		return x == nil
+	}, 25*time.Second); e != nil {
+		return e
+	}
 	phase = "profile_two"
-	if e = startWorker(2); e != nil {
+	if e = startWorker(2, true); e != nil {
 		return e
 	}
 	two, e := g.send(ctx, stage, "profile_two")
+	if e != nil {
+		return e
+	}
+	phase = "managed_supplied_content"
+	suppliedContent, e := g.send(ctx, stage, "supplied_content")
+	if e != nil {
+		return e
+	}
+	phase = "managed_page_monitor"
+	pageMonitor, e := g.send(ctx, stage, "page_monitor")
 	if e != nil {
 		return e
 	}
@@ -423,6 +515,8 @@ func RunGate(ctx context.Context, cfg GateConfig) (err error) {
 		return e
 	}
 	report["profiles"] = map[string]json.RawMessage{"one": one, "two": two}
+	report["managed_runtime_file"] = map[string]any{"extractor": "passed", "egress": "passed", "conflicting_environment_values": "ignored"}
+	report["managed_probes"] = map[string]json.RawMessage{"supplied_content": suppliedContent, "page_monitor": pageMonitor}
 	report["cancellation"] = cancellation
 	report["upstream_error"] = upstream
 	report["browser_generation_reused_for_both_profiles"] = true

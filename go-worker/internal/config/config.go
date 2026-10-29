@@ -1,6 +1,7 @@
 package config
 
 import (
+	"context"
 	"errors"
 	"fmt"
 	"net/url"
@@ -11,6 +12,7 @@ import (
 )
 
 type Config struct {
+	BeforeRecovery    func(context.Context) error
 	DatabaseURL       string
 	ExecutorURL       string
 	ExecutorToken     string

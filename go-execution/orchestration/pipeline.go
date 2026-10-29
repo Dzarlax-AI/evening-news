@@ -20,12 +20,14 @@ type Config struct {
 	Ingestion  ServiceConfig
 	Processing ServiceConfig
 	HTTPClient *http.Client
+	PrepareJob func(context.Context, execution.ExecutionContext) (JobOperationalConfig, error)
 }
 
 type Pipeline struct {
 	domain     *DomainClient
 	ingestion  *serviceRunClient
 	processing *serviceRunClient
+	prepareJob func(context.Context, execution.ExecutionContext) (JobOperationalConfig, error)
 }
 
 type digestStageError struct {
@@ -61,7 +63,7 @@ func NewPipeline(cfg Config) (*Pipeline, error) {
 	if err != nil {
 		return nil, err
 	}
-	return &Pipeline{domain: domain, ingestion: ingest, processing: processing}, nil
+	return &Pipeline{domain: domain, ingestion: ingest, processing: processing, prepareJob: cfg.PrepareJob}, nil
 }
 
 // Ready performs the authenticated Python domain check used by the embedded
@@ -82,6 +84,23 @@ func (p *Pipeline) Execute(ctx context.Context, f execution.ExecutionContext, ki
 	var input map[string]any
 	if err := json.Unmarshal(payload, &input); err != nil {
 		return execution.Result{}, errors.New("job payload is invalid")
+	}
+	var operational *JobOperationalConfig
+	if p.prepareJob != nil {
+		pinned, err := p.prepareJob(ctx, f)
+		if err != nil {
+			if kind == "news_digest" || kind == "telegram_digest" {
+				return execution.Result{}, digestStageError{stage: "operational_settings"}
+			}
+			return execution.Result{}, errors.New("job operational settings unavailable")
+		}
+		if pinned.JobID != f.JobID || pinned.AttemptGeneration != f.AttemptGeneration || pinned.PinnedAt.IsZero() || pinned.Settings.validate() != nil {
+			if kind == "news_digest" || kind == "telegram_digest" {
+				return execution.Result{}, digestStageError{stage: "operational_settings_invalid"}
+			}
+			return execution.Result{}, errors.New("job operational settings are invalid")
+		}
+		operational = &pinned
 	}
 	status, err := p.domain.Status(ctx)
 	if err != nil {
@@ -104,27 +123,34 @@ func (p *Pipeline) Execute(ctx context.Context, f execution.ExecutionContext, ki
 	var result map[string]any
 	switch kind {
 	case "news_processing":
-		result, err = p.fullCycle(ctx, f, call)
+		result, err = p.fullCycle(ctx, f, call, operational)
 	case "news_digest":
 		result = map[string]any{}
 		if boolDefault(input, "run_processing", true) {
-			result, err = p.fullCycle(ctx, f, call)
+			result, err = p.fullCycle(ctx, f, call, operational)
 			if err != nil {
 				err = digestStageError{stage: "processing"}
 			}
 		}
-		if err == nil && boolDefault(input, "send_telegram", true) {
+		if err == nil && boolDefault(input, "send_telegram", true) && (operational == nil || operational.Settings.DeliveryEnabled) {
 			parts, e := p.digest(ctx, f, call)
 			if e != nil {
 				err = e
 			} else {
 				result["parts_sent"] = parts
 			}
+		} else if err == nil && operational != nil && !operational.Settings.DeliveryEnabled {
+			result["status"] = "delivery_disabled"
+			result["parts_sent"] = 0
 		}
 	case "telegram_digest":
-		var parts int
-		parts, err = p.digest(ctx, f, call)
-		result = map[string]any{"parts_sent": parts}
+		if operational != nil && !operational.Settings.DeliveryEnabled {
+			result = map[string]any{"status": "delivery_disabled", "parts_sent": 0}
+		} else {
+			var parts int
+			parts, err = p.digest(ctx, f, call)
+			result = map[string]any{"parts_sent": parts}
+		}
 	case "summaries_generate":
 		result, err = call("summaries_generate", "summaries_generate", map[string]any{})
 	case "backup":
@@ -148,6 +174,10 @@ func (p *Pipeline) Execute(ctx context.Context, f execution.ExecutionContext, ki
 			}
 		}
 	case "article_reprocess":
+		if operational != nil && !operational.Settings.ProcessingEnabled {
+			result = map[string]any{"status": "processing_disabled"}
+			break
+		}
 		ids, ok := articleIDs(input["article_ids"])
 		if !ok {
 			err = errors.New("article reprocess payload is invalid")
@@ -172,7 +202,11 @@ func (p *Pipeline) Execute(ctx context.Context, f execution.ExecutionContext, ki
 		dryRun := boolDefault(input, "dry_run", false)
 		_ = limit
 		_ = dryRun // Processing dispatch reads the admitted persisted job payload.
-		result, err = p.processing.execute(ctx, f)
+		if operational != nil && !operational.Settings.ProcessingEnabled {
+			result = map[string]any{"status": "processing_disabled"}
+		} else {
+			result, err = p.processing.execute(ctx, f)
+		}
 	default:
 		err = fmt.Errorf("unsupported job kind %q", kind)
 	}
@@ -190,16 +224,19 @@ func (p *Pipeline) Execute(ctx context.Context, f execution.ExecutionContext, ki
 	return execution.Result{Value: out}, nil
 }
 
-func (p *Pipeline) fullCycle(ctx context.Context, f execution.ExecutionContext, call func(string, string, any) (map[string]any, error)) (map[string]any, error) {
+func (p *Pipeline) fullCycle(ctx context.Context, f execution.ExecutionContext, call func(string, string, any) (map[string]any, error), operational *JobOperationalConfig) (map[string]any, error) {
 	started := time.Now()
 	ingest, err := p.ingestion.execute(ctx, f)
 	if err != nil {
 		return nil, errors.New("article ingestion failed")
 	}
 	result := map[string]any{"sources_synced": metric(ingest["sources_completed"]), "articles_fetched": metric(ingest["articles_fetched"]), "errors_count": metric(ingest["errors_count"])}
-	processed, err := p.processing.execute(ctx, f)
-	if err != nil {
-		return nil, errors.New("article processing failed")
+	processed := map[string]any{"status": "processing_disabled"}
+	if operational == nil || operational.Settings.ProcessingEnabled {
+		processed, err = p.processing.execute(ctx, f)
+		if err != nil {
+			return nil, errors.New("article processing failed")
+		}
 	}
 	status, _ := processed["status"].(string)
 	if status == "success" || status == "warning" {
@@ -268,7 +305,7 @@ func (p *Pipeline) digest(ctx context.Context, f execution.ExecutionContext, cal
 
 func boundedProjection(kind string, v map[string]any) map[string]any {
 	out := map[string]any{"status": "success"}
-	statuses := map[string]bool{"success": true, "warning": true, "deferred": true, "dry_run": true, "completed": true, "rejected": true, "exhausted": true, "retry_wait": true, "incomplete": true, "settled": true, "busy": true}
+	statuses := map[string]bool{"success": true, "warning": true, "deferred": true, "dry_run": true, "completed": true, "rejected": true, "exhausted": true, "retry_wait": true, "incomplete": true, "settled": true, "busy": true, "processing_disabled": true, "delivery_disabled": true}
 	if s, ok := v["status"].(string); ok && statuses[s] {
 		out["status"] = s
 	}

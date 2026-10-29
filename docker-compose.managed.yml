@@ -1,0 +1,146 @@
+# Fresh managed installations only. Run setup prepare before compose up.
+services:
+  setup:
+    profiles: [setup]
+    build:
+      context: .
+      dockerfile: docker/Dockerfile
+      target: executor
+    user: "0:0"
+    entrypoint: ["/usr/local/bin/newsctl"]
+    environment:
+      SITE_BASE_URL: ${SITE_BASE_URL:-http://localhost:8000}
+    volumes: &installer_volumes
+      - managed_setup:/state/setup
+      - managed_web:/state/web
+      - managed_domain:/state/domain
+      - managed_background:/state/background
+      - managed_extractor:/state/extractor
+      - managed_egress:/state/egress
+      - managed_postgres_secret:/state/postgres-secret
+      - managed_postgres:/state/pg:ro
+  postgres:
+    image: postgres:17-alpine
+    environment:
+      POSTGRES_USER: news_owner
+      POSTGRES_DB: postgres
+      POSTGRES_PASSWORD_FILE: /run/news/postgres-password
+    volumes:
+      - managed_postgres:/var/lib/postgresql/data
+      - managed_postgres_secret:/run/news:ro
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U news_owner -d postgres"]
+      interval: 5s
+      timeout: 5s
+      retries: 12
+    restart: unless-stopped
+  migrate:
+    build:
+      context: .
+      dockerfile: docker/Dockerfile
+      target: executor
+    user: "0:0"
+    entrypoint: ["/usr/local/bin/newsctl", "provision"]
+    volumes: *installer_volumes
+    depends_on:
+      postgres:
+        condition: service_healthy
+    restart: "no"
+  extractor:
+    build:
+      context: ./go
+      dockerfile: ../docker/Dockerfile.extractor
+    environment:
+      NEWS_RUNTIME_FILE: /run/news/runtime.json
+    volumes:
+      - managed_extractor:/run/news:ro
+    restart: unless-stopped
+  executor:
+    build:
+      context: .
+      dockerfile: docker/Dockerfile
+      target: executor
+    environment:
+      NEWS_RUNTIME_FILE: /run/news/runtime.json
+    volumes:
+      - managed_domain:/run/news:ro
+      - app_cache:/app/cache
+      - app_backups:/app/backups
+    depends_on:
+      migrate:
+        condition: service_completed_successfully
+      extractor:
+        condition: service_healthy
+    restart: unless-stopped
+  egress:
+    profiles: [native-browser]
+    build:
+      context: ./go
+      dockerfile: ../docker/Dockerfile.extractor
+    entrypoint: ["/extract-egress"]
+    environment:
+      NEWS_RUNTIME_FILE: /run/news/runtime.json
+    volumes:
+      - managed_egress:/run/news:ro
+    restart: unless-stopped
+    init: true
+    read_only: true
+    cap_drop: [ALL]
+    security_opt: [no-new-privileges:true]
+    pids_limit: 64
+    mem_limit: 128m
+    cpus: 0.25
+    stop_grace_period: 10s
+    healthcheck:
+      test: ["CMD", "/extract-egress", "-healthcheck"]
+      interval: 15s
+      timeout: 3s
+      start_period: 5s
+      retries: 3
+  background:
+    build:
+      context: .
+      dockerfile: docker/Dockerfile
+      target: background
+    environment:
+      NEWS_RUNTIME_FILE: /run/news/runtime.json
+    volumes:
+      - managed_background:/run/news:ro
+    depends_on:
+      migrate:
+        condition: service_completed_successfully
+      executor:
+        condition: service_healthy
+    read_only: true
+    cap_drop: [ALL]
+    security_opt: [no-new-privileges:true]
+    restart: unless-stopped
+  web:
+    build:
+      context: .
+      dockerfile: docker/Dockerfile
+      target: web
+    ports: ["127.0.0.1:8000:8000"]
+    environment:
+      NEWS_RUNTIME_FILE: /run/news/runtime.json
+    volumes:
+      - managed_web:/run/news:ro
+    depends_on:
+      migrate:
+        condition: service_completed_successfully
+      executor:
+        condition: service_healthy
+      background:
+        condition: service_started
+    restart: unless-stopped
+volumes:
+  managed_setup:
+  managed_web:
+  managed_domain:
+  managed_background:
+  managed_extractor:
+  managed_egress:
+  managed_postgres_secret:
+  managed_postgres:
+  app_cache:
+  app_backups:

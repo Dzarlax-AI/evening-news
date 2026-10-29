@@ -49,3 +49,47 @@ func TestDomainProbeUsesOnlyFixedInternalTarget(t *testing.T) {
 		t.Fatal(err)
 	}
 }
+
+type loginFake struct{ t *testing.T }
+
+func (f loginFake) Do(r *http.Request) (*http.Response, error) {
+	if r.URL.String() != "http://web:8000/auth/login" || r.Method != "POST" || r.Header.Get("X-Forwarded-Proto") != "https" {
+		f.t.Fatal("wrong managed login probe")
+	}
+	return &http.Response{StatusCode: 200, Body: io.NopCloser(strings.NewReader(`{"access_token":"fixture"}`))}, nil
+}
+
+func TestLoginProbeAllowsOnlyFixedTrustedHTTPSAssertion(t *testing.T) {
+	valid, _ := json.Marshal(command{Target: "web", Method: "POST", Path: "/auth/login", Headers: map[string]string{"X-Forwarded-Proto": "https"}})
+	if err := runWithClient(bytes.NewReader(valid), io.Discard, loginFake{t}); err != nil {
+		t.Fatal("fixed login https assertion rejected")
+	}
+	for name, input := range map[string]command{
+		"wrong scheme":       {Target: "web", Method: "POST", Path: "/auth/login", Headers: map[string]string{"X-Forwarded-Proto": "http"}},
+		"wrong endpoint":     {Target: "web", Method: "POST", Path: "/auth/me", Headers: map[string]string{"X-Forwarded-Proto": "https"}},
+		"wrong method":       {Target: "web", Method: "GET", Path: "/auth/login", Headers: map[string]string{"X-Forwarded-Proto": "https"}},
+		"identity header":    {Target: "web", Method: "POST", Path: "/auth/login", Headers: map[string]string{"X-Forwarded-User": "admin"}},
+		"invalid article id": {Target: "web", Method: "GET", Path: "/api/v1/articles/../secret", Headers: map[string]string{"X-Forwarded-Proto": "https"}},
+		"other target":       {Target: "domain", Method: "GET", Path: "/api/v1/articles/1", Headers: map[string]string{"X-Forwarded-Proto": "https"}},
+	} {
+		t.Run(name, func(t *testing.T) {
+			raw, _ := json.Marshal(input)
+			if err := runWithClient(bytes.NewReader(raw), io.Discard, loginFake{t}); err == nil {
+				t.Fatal("unexpected probe header accepted")
+			}
+		})
+	}
+	article, _ := json.Marshal(command{Target: "web", Method: "GET", Path: "/api/v1/articles/123", Headers: map[string]string{"X-Forwarded-Proto": "https"}})
+	if err := runWithClient(bytes.NewReader(article), io.Discard, articleFake{t}); err != nil {
+		t.Fatal("fixed managed article https assertion rejected")
+	}
+}
+
+type articleFake struct{ t *testing.T }
+
+func (f articleFake) Do(r *http.Request) (*http.Response, error) {
+	if r.URL.String() != "http://web:8000/api/v1/articles/123" || r.Method != "GET" || r.Header.Get("X-Forwarded-Proto") != "https" {
+		f.t.Fatal("wrong managed article probe")
+	}
+	return &http.Response{StatusCode: 200, Body: io.NopCloser(strings.NewReader(`{}`))}, nil
+}

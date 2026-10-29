@@ -10,7 +10,30 @@ import (
 
 func RequireAPIAdmin(service *Service, next http.Handler) http.Handler {
 	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-		principal, err := service.API(r)
+		if service.managed != nil && mutating(r.Method) && crossSite(r) {
+			scheme, _, _ := authHeader(r)
+			if !strings.EqualFold(scheme, "Bearer") {
+				writeMiddlewareJSON(w, 403, map[string]string{"detail": "Cross-site request rejected"})
+				return
+			}
+		}
+		explicit := false
+		request := r.Clone(r.Context())
+		request.Header = r.Header.Clone()
+		request.Header.Del("Cookie")
+		request.Header.Del("X-authentik-username")
+		var principal Principal
+		var err error
+		if strings.TrimSpace(r.Header.Get("Authorization")) != "" {
+			principal, err = service.API(request)
+			explicit = err == nil
+		}
+		if !explicit {
+			fallback := r.Clone(r.Context())
+			fallback.Header = r.Header.Clone()
+			fallback.Header.Del("Authorization")
+			principal, err = service.API(fallback)
+		}
 		if err != nil {
 			writeMiddlewareAuthError(w, err)
 			return
@@ -19,8 +42,24 @@ func RequireAPIAdmin(service *Service, next http.Handler) http.Handler {
 			writeMiddlewareJSON(w, http.StatusForbidden, map[string]string{"detail": "Admin access required"})
 			return
 		}
-		if mutating(r.Method) && crossSite(r) && !explicitAuthorization(service, r) {
+		if mutating(r.Method) && crossSite(r) && !explicit {
 			writeMiddlewareJSON(w, http.StatusForbidden, map[string]string{"detail": "Cross-site cookie request rejected"})
+			return
+		}
+		if service.managed != nil && mutating(r.Method) && !explicit && (r.Header.Get("Origin") == "" || r.Header.Get("X-CSRF-Token") != "1") {
+			writeMiddlewareJSON(w, http.StatusForbidden, map[string]string{"detail": "CSRF check failed"})
+			return
+		}
+		next.ServeHTTP(w, r)
+	})
+}
+
+// ProtectManagedCookies applies to every route, including public-page mutations.
+func ProtectManagedCookies(next http.Handler) http.Handler {
+	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		_, cookieErr := r.Cookie(AdminCookie)
+		if (cookieErr == nil || r.Header.Get("X-authentik-username") != "") && mutating(r.Method) && (crossSite(r) || r.Header.Get("Origin") == "" || r.Header.Get("X-CSRF-Token") != "1") {
+			writeMiddlewareJSON(w, http.StatusForbidden, map[string]string{"detail": "CSRF check failed"})
 			return
 		}
 		next.ServeHTTP(w, r)

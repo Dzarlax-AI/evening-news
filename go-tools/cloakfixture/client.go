@@ -26,6 +26,13 @@ type RequestResult struct {
 	UpstreamStatus *int    `json:"upstream_status,omitempty"`
 	ContentChars   int     `json:"content_chars"`
 }
+type PageMonitorRequestResult struct {
+	Name        string `json:"name"`
+	Outcome     string `json:"outcome"`
+	FetchMethod string `json:"fetch_method"`
+	ItemCount   int    `json:"item_count"`
+	Title       string `json:"title,omitempty"`
+}
 type WorkerClient struct {
 	endpoint, token string
 	client          *http.Client
@@ -103,6 +110,105 @@ func (c *WorkerClient) Request(ctx context.Context, name, caseID string, budget 
 	}
 	return out, nil
 }
+
+// SuppliedContentRequest exercises extraction without browser access or an
+// upstream request. Its content is synthetic and supplied in the request.
+func (c *WorkerClient) SuppliedContentRequest(ctx context.Context) (RequestResult, error) {
+	var out RequestResult
+	var useBrowser = false
+	payload := map[string]any{
+		"request_id":  "cloak-http-only-acceptance",
+		"url":         "https://native-fixture.test/http-only",
+		"content":     fixtureBody,
+		"source_type": "article",
+		"strategy":    "source_content",
+		"use_browser": useBrowser,
+		"budget_ms":   5000,
+	}
+	raw, status, err := c.post(ctx, "/v1/extract", payload)
+	if err != nil || status != http.StatusOK {
+		return out, errors.New("worker_response_invalid")
+	}
+	var value struct {
+		Contract string `json:"contract_version"`
+		ID       string `json:"request_id"`
+		Outcome  string `json:"outcome"`
+		Result   struct {
+			Content string `json:"content"`
+		} `json:"result"`
+	}
+	if json.Unmarshal(raw, &value) != nil || value.Contract != "1" || value.ID != payload["request_id"] || value.Outcome != "success" || len([]rune(value.Result.Content)) < 200 {
+		return out, errors.New("worker_response_invalid")
+	}
+	return RequestResult{Name: "supplied_content", Outcome: value.Outcome, ContentChars: len([]rune(value.Result.Content))}, nil
+}
+
+// PageMonitorRequest verifies the native browser PageMonitor endpoint against
+// the isolated synthetic origin. The returned receipt contains no request
+// credentials or captured page body.
+func (c *WorkerClient) PageMonitorRequest(ctx context.Context) (PageMonitorRequestResult, error) {
+	var out PageMonitorRequestResult
+	useBrowser, waitForJS := true, false
+	payload := map[string]any{
+		"contract_version":  "1",
+		"request_id":        "cloak-page-monitor-acceptance",
+		"operation":         "fetch",
+		"url":               "https://native-fixture.test/page-monitor",
+		"source_name":       "Synthetic Cloak Fixture",
+		"budget_ms":         12000,
+		"limit":             5,
+		"min_title_length":  10,
+		"use_browser":       useBrowser,
+		"wait_for_js":       waitForJS,
+		"article_selectors": []string{"article"},
+		"title_selectors":   []string{"h2"},
+		"date_selectors":    []string{"time"},
+		"link_selectors":    []string{"a"},
+	}
+	raw, status, err := c.post(ctx, "/v1/page-monitor/extract", payload)
+	if err != nil || status != http.StatusOK {
+		return out, errors.New("worker_response_invalid")
+	}
+	var value struct {
+		Contract    string `json:"contract_version"`
+		ID          string `json:"request_id"`
+		Outcome     string `json:"outcome"`
+		FetchMethod string `json:"fetch_method"`
+		Items       []struct {
+			Title string `json:"title"`
+			Link  string `json:"link"`
+		} `json:"items"`
+	}
+	if json.Unmarshal(raw, &value) != nil || value.Contract != "1" || value.ID != payload["request_id"] || value.Outcome != "success" || value.FetchMethod != "native_browser" || len(value.Items) != 1 || value.Items[0].Title != "Synthetic PageMonitor story" || value.Items[0].Link != "https://native-fixture.test/story" {
+		return out, errors.New("worker_response_invalid")
+	}
+	return PageMonitorRequestResult{Name: "native_page_monitor", Outcome: value.Outcome, FetchMethod: value.FetchMethod, ItemCount: len(value.Items), Title: value.Items[0].Title}, nil
+}
+
+func (c *WorkerClient) post(ctx context.Context, path string, payload any) ([]byte, int, error) {
+	var invalid []byte
+	b, err := json.Marshal(payload)
+	if err != nil {
+		return invalid, 0, errors.New("worker_request_invalid")
+	}
+	request, err := http.NewRequestWithContext(ctx, http.MethodPost, c.endpoint+path, bytes.NewReader(b))
+	if err != nil {
+		return invalid, 0, errors.New("worker_request_invalid")
+	}
+	request.Header.Set("Content-Type", "application/json")
+	request.Header.Set("Authorization", "Bearer "+c.token)
+	response, err := c.client.Do(request)
+	if err != nil {
+		return invalid, 0, errors.New("worker_unavailable")
+	}
+	defer response.Body.Close()
+	raw, err := io.ReadAll(io.LimitReader(response.Body, 1024*1024+1))
+	if err != nil || len(raw) > 1024*1024 {
+		return invalid, 0, errors.New("worker_response_invalid")
+	}
+	return raw, response.StatusCode, nil
+}
+
 func ensureSuccess(rows ...RequestResult) error {
 	for _, r := range rows {
 		if r.Outcome != "success" || r.ContentChars < 200 {

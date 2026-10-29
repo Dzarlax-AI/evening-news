@@ -7,9 +7,39 @@
 
 <div class="settings-tabs">
     <button class="settings-tab active" onclick="switchSettingsTab('telegram')">Telegram</button>
+    {{if .Managed}}
+    <button class="settings-tab" onclick="switchSettingsTab('operational')">Рабочие настройки</button>
+    {{end}}
     <button class="settings-tab" onclick="switchSettingsTab('schedule')">Расписание</button>
     <button class="settings-tab" onclick="switchSettingsTab('ai')">AI</button>
 </div>
+
+{{if .Managed}}
+<div id="settings-tab-operational" class="settings-panel" style="display:none;">
+    <h2>Рабочие настройки</h2>
+    <div class="settings-card"><div class="settings-card-body">
+        <p class="settings-hint">Параметры применяются к новым заданиям. Текущий запуск использует сохранённый снимок.</p>
+        <form id="operational-form" onsubmit="operationalSave(event)">
+            <fieldset id="operational-fields" disabled>
+                <div class="settings-form-group"><label><input type="checkbox" id="ops-limits-enabled"> Ограничить обработку статей</label></div>
+                <div class="settings-form-row">
+                    <div class="settings-form-group"><label for="ops-max-articles">Статей за запуск</label><input class="settings-input" id="ops-max-articles" type="number" min="1" max="100000" required></div>
+                    <div class="settings-form-group"><label for="ops-per-source">Статей с источника</label><input class="settings-input" id="ops-per-source" type="number" min="1" max="100000" required></div>
+                    <div class="settings-form-group"><label for="ops-days">Возраст публикации, дней (0 — без ограничения)</label><input class="settings-input" id="ops-days" type="number" min="0" max="36500" required></div>
+                </div>
+                <div class="settings-form-group"><label for="ops-newest-date">Не новее даты (необязательно)</label><input class="settings-input" id="ops-newest-date" type="date"></div>
+                <div class="settings-form-group"><label><input type="checkbox" id="ops-processing-enabled"> Обрабатывать статьи</label></div>
+                <div class="settings-form-group"><label><input type="checkbox" id="ops-delivery-enabled"> Отправлять дайджесты</label></div>
+                <div style="display:flex;gap:10px;margin-top:16px;">
+                    <button class="btn btn--primary" type="submit">Сохранить</button>
+                    <button class="btn btn--secondary" type="button" onclick="operationalLoad()">Обновить</button>
+                </div>
+            </fieldset>
+        </form>
+        <p id="operational-status" role="status" aria-live="polite">Загрузка...</p>
+    </div></div>
+</div>
+{{end}}
 
 <!-- ==================== TELEGRAM TAB ==================== -->
 <div id="settings-tab-telegram" class="settings-panel">
@@ -30,8 +60,7 @@
         <div class="settings-card-header">Настройки каналов</div>
         <div class="settings-card-body">
             <p class="settings-hint">
-                Оставьте поле пустым, чтобы использовать значение из <code>.env</code>.
-                Заполненное значение сохраняется в БД и перекрывает переменную окружения.
+                {{if .Managed}}Каналы сохраняются в настройках приложения. Токен можно изменить в <a href="/setup">мастере настройки</a>.{{else}}Оставьте поле пустым, чтобы использовать значение из <code>.env</code>. Заполненное значение сохраняется в БД и перекрывает переменную окружения.{{end}}
             </p>
             <div class="settings-form-group">
                 <label>Основной канал <span class="settings-badge-blue">TELEGRAM_CHAT_ID</span></label>
@@ -45,7 +74,7 @@
             </div>
             <div style="display:flex;gap:10px;margin-top:16px;">
                 <button class="btn btn--primary" onclick="tgSaveSettings()">Сохранить</button>
-                <button class="btn btn--secondary" onclick="tgResetToEnv()">Сбросить (использовать .env)</button>
+                {{if not .Managed}}<button class="btn btn--secondary" onclick="tgResetToEnv()">Сбросить (использовать .env)</button>{{end}}
             </div>
             <div id="tg-save-result" class="settings-result" style="display:none;"></div>
         </div>
@@ -80,7 +109,7 @@
                 <div class="settings-form-group"><label for="ai-provider">Провайдер</label>
                     <select id="ai-provider" class="settings-input"><option value="gemini">Gemini</option><option value="openai">OpenAI</option></select>
                 </div>
-                <p class="settings-hint">Ключи задаются в окружении приватного сервиса. Их значения здесь недоступны.</p>
+                <p class="settings-hint">{{if .Managed}}Ключи можно изменить в <a href="/setup">мастере настройки</a>. Их значения здесь недоступны.{{else}}Ключи задаются в окружении приватного сервиса. Их значения здесь недоступны.{{end}}</p>
                 <div class="settings-form-row" style="grid-template-columns:repeat(auto-fit,minmax(220px,1fr));">
                     <div><h3>Gemini</h3><p id="ai-gemini-key"></p>
                         <div class="settings-form-group"><label for="ai-gemini-article">Модель статьи</label><input id="ai-gemini-article" class="settings-input" maxlength="128"></div>
@@ -257,7 +286,7 @@ function switchSettingsTab(tab) {
 
 document.addEventListener('DOMContentLoaded', () => {
     const stored = localStorage.getItem('settings_tab');
-    const saved = ['telegram', 'schedule', 'ai'].includes(stored) ? stored : 'telegram';
+    const saved = stored && document.getElementById('settings-tab-' + stored) ? stored : 'telegram';
     const tabs = document.querySelectorAll('.settings-tab');
     tabs.forEach(t => {
         t.classList.remove('active');
@@ -271,7 +300,52 @@ document.addEventListener('DOMContentLoaded', () => {
     tgLoadSettings();
     schLoadAll();
     aiLoad();
+    if (managedSettings) operationalLoad();
 });
+
+let operationalSettings = null;
+function operationalStatus(message) { document.getElementById('operational-status').textContent = message; }
+function operationalFill(value) {
+    operationalSettings = value;
+    document.getElementById('ops-limits-enabled').checked = value.limits_enabled;
+    document.getElementById('ops-max-articles').value = value.max_articles;
+    document.getElementById('ops-per-source').value = value.per_source;
+    document.getElementById('ops-days').value = value.days;
+    document.getElementById('ops-newest-date').value = value.newest_date || '';
+    document.getElementById('ops-processing-enabled').checked = value.processing_enabled;
+    document.getElementById('ops-delivery-enabled').checked = value.delivery_enabled;
+    document.getElementById('operational-fields').disabled = false;
+}
+async function operationalLoad() {
+    const fields = document.getElementById('operational-fields'); fields.disabled = true; operationalStatus('Загрузка...');
+    try {
+        const response = await fetch('/api/v1/configuration/operational');
+        if (!response.ok) throw new Error('Не удалось загрузить рабочие настройки.');
+        operationalFill(await window.readApiResponse(response));
+        operationalStatus('Настройки загружены.');
+    } catch (error) { operationalSettings = null; operationalStatus(error.message); }
+}
+async function operationalSave(event) {
+    event.preventDefault(); if (!operationalSettings) return;
+    const fields = document.getElementById('operational-fields'); fields.disabled = true; operationalStatus('Сохранение...');
+    const request = {
+        expected_revision: operationalSettings.revision,
+        limits_enabled: document.getElementById('ops-limits-enabled').checked,
+        max_articles: Number(document.getElementById('ops-max-articles').value),
+        per_source: Number(document.getElementById('ops-per-source').value),
+        days: Number(document.getElementById('ops-days').value),
+        newest_date: document.getElementById('ops-newest-date').value,
+        processing_enabled: document.getElementById('ops-processing-enabled').checked,
+        delivery_enabled: document.getElementById('ops-delivery-enabled').checked
+    };
+    try {
+        const response = await fetch('/api/v1/configuration/operational', {method:'PUT', headers:{'Content-Type':'application/json'}, body:JSON.stringify(request)});
+        if (response.status === 409) { await operationalLoad(); operationalStatus('Настройки изменились в другом окне. Проверьте значения и сохраните снова.'); return; }
+        if (response.status === 422) throw new Error('Проверьте диапазоны значений и дату.');
+        if (!response.ok) throw new Error('Не удалось сохранить рабочие настройки.');
+        operationalFill(await window.readApiResponse(response)); operationalStatus('Сохранено. Новые настройки применяются к следующему заданию.');
+    } catch (error) { operationalStatus(error.message); fields.disabled = false; }
+}
 
 let aiSettings = null;
 function aiMessage(message) { document.getElementById('ai-status').textContent = message; }
@@ -298,7 +372,7 @@ async function aiSave(event, reset) {
         const models = {}; for (const purpose of ['article', 'digest', 'text']) models[purpose] = document.getElementById('ai-' + name + '-' + purpose).value.trim();
         profiles[name] = {models};
     }
-    if (!reset && !aiSettings.configured[provider]) { aiMessage('Для выбранного провайдера не настроен ключ в окружении.'); return; }
+    if (!reset && !aiSettings.configured[provider]) { aiMessage('Для выбранного провайдера не настроен ключ.'); return; }
     if (!reset && Object.values(profiles[provider].models).some(v => !v)) { aiMessage('Заполните все три модели выбранного провайдера.'); return; }
     const fields = document.getElementById('ai-fields'); fields.disabled = true; aiMessage('Сохранение...');
     try {
@@ -316,7 +390,12 @@ async function aiSave(event, reset) {
 // ============================================================
 // TELEGRAM
 // ============================================================
+let managedTelegram = null;
+const managedSettings = {{.Managed}};
 async function tgLoadSettings() {
+    if (managedSettings) {
+        try { const [settings, credential] = await Promise.all([fetch('/api/v1/configuration/telegram').then(window.readApiResponse), fetch('/api/v1/credentials/telegram').then(window.readApiResponse)]); managedTelegram=settings; document.getElementById('tg-chat-id').value=settings.chat_id; document.getElementById('tg-service-chat-id').value=settings.service_chat_id; document.getElementById('tg-status-body').textContent=credential.configured ? 'Токен сохранён.' : 'Токен не задан.'; document.getElementById('tg-connection-status').textContent=credential.configured ? 'Токен настроен' : 'Токен не задан'; } catch(e) { document.getElementById('tg-status-body').textContent='Не удалось загрузить настройки.'; } return;
+    }
     try {
         const r = await fetch('/api/v1/telegram/settings');
         if (!r.ok) throw new Error(await r.text());
@@ -355,6 +434,10 @@ function tgPrefillForm(d) {
 }
 
 async function tgSaveSettings() {
+    if (managedSettings) {
+        if (!managedTelegram) { tgShowResult('tg-save-result', false, 'Сначала загрузите настройки.'); return; }
+        try { const r=await fetch('/api/v1/configuration/telegram',{method:'PUT',headers:{'Content-Type':'application/json'},body:JSON.stringify({expected_revision:managedTelegram.revision,chat_id:document.getElementById('tg-chat-id').value.trim(),service_chat_id:document.getElementById('tg-service-chat-id').value.trim()})}); if(r.status===409){await tgLoadSettings();tgShowResult('tg-save-result',false,'Настройки изменились и были обновлены. Повторите сохранение.');return;} if(!r.ok)throw Error('Не удалось сохранить настройки.');managedTelegram=await window.readApiResponse(r);tgShowResult('tg-save-result',true,'Сохранено'); }catch(e){tgShowResult('tg-save-result',false,e.message);} return;
+    }
     try {
         const r = await fetch('/api/v1/telegram/settings', {
             method: 'POST', headers: {'Content-Type':'application/json'},

@@ -89,3 +89,15 @@ func TestOriginRejectsInvalidAndReportsErrors(t *testing.T) {
 		t.Fatal("error accounting")
 	}
 }
+
+func TestOriginServesSyntheticPageMonitorDocument(t *testing.T) {
+	o, err := NewOrigin(t.TempDir())
+	if err != nil {
+		t.Fatal(err)
+	}
+	w := httptest.NewRecorder()
+	o.ServeHTTP(w, httptest.NewRequest(http.MethodGet, "https://fixture/page-monitor", nil))
+	if w.Code != http.StatusOK || !strings.Contains(w.Body.String(), "Synthetic PageMonitor story") || !strings.Contains(w.Body.String(), fixtureBody) {
+		t.Fatal("PageMonitor fixture document is incomplete")
+	}
+}
