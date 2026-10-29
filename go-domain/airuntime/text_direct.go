@@ -35,17 +35,18 @@ func (s *Server) generateDirect(ctx context.Context, prompt, domain, analysisTyp
 		}
 	}()
 	defer func() { close(stop); cancel() }()
-	if _, err := providerURL(s.config.Endpoint, s.config.Model); err != nil || len(prompt) > maxRPCBody/2 || domain == "" || len(domain) > 8192 {
+	if len(prompt) > maxRPCBody/2 || domain == "" || len(domain) > 8192 {
 		return "", errors.New("invalid_input")
 	}
-	req := generateRequest{Mode: "text", Prompt: prompt, Model: s.config.Model, AnalysisType: analysisType, Domain: domain, Options: generateOptions{Temperature: temperature, MaxTokens: maxTokens}}
-	value, err := s.breaker.Do(ctx, func() (any, error) {
-		return s.retry(ctx, func(attempt context.Context) (any, error) { return s.callGenerate(attempt, req) })
-	})
+	snap, err := s.snapshot(ctx, "text")
 	if err != nil {
 		return "", err
 	}
-	out := value.(generateOutput)
+	req := generateRequest{Mode: "text", Prompt: prompt, Model: snap.model, AnalysisType: analysisType, Domain: domain, Options: generateOptions{Temperature: temperature, MaxTokens: maxTokens}}
+	out, err := s.generateWithSnapshot(ctx, snap, req)
+	if err != nil {
+		return "", err
+	}
 	s.enqueueUsage(usageRecord{domain: domain, analysisType: req.AnalysisType, usage: out.usage, accountingTokens: out.accountingTokens, accountingTokenSet: out.accountingTokenSet})
 	choices, ok := out.result["choices"].([]any)
 	if !ok || len(choices) == 0 {

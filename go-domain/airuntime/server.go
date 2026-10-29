@@ -7,6 +7,7 @@ import (
 	"encoding/json"
 	"errors"
 	"io"
+	"log"
 	"math"
 	"net"
 	"net/http"
@@ -20,6 +21,7 @@ import (
 	"syscall"
 	"time"
 
+	ai "github.com/Dzarlax-AI/evening-news/go-ai"
 	"github.com/Dzarlax-AI/evening-news/go-domain/analysis"
 	"github.com/jackc/pgx/v5/pgxpool"
 )
@@ -27,14 +29,16 @@ import (
 const maxRPCBody = 5 << 20
 
 type Config struct {
-	Socket, Token, DatabaseURL, APIKey, Endpoint, Model, LocalCategory string
-	RPS                                                                int
-	InputRate, OutputRate, CachedRate                                  float64
-	DBMaxConns                                                         int32
-	TelegramToken, TelegramMain, TelegramService                       string
-	TelegramEndpoint                                                   string
-	DigestModel, SiteBase                                              string
-	TelegramRich                                                       bool
+	Prices                                                                                                       map[string]ModelPrice
+	Socket, Token, DatabaseURL, APIKey, Endpoint, Model, LocalCategory                                           string
+	ActiveProvider, OpenAIKey, OpenAIEndpoint, OpenAIArticleModel, OpenAIDigestModel, OpenAITextModel, TextModel string
+	RPS                                                                                                          int
+	InputRate, OutputRate, CachedRate                                                                            float64
+	DBMaxConns                                                                                                   int32
+	TelegramToken, TelegramMain, TelegramService                                                                 string
+	TelegramEndpoint                                                                                             string
+	DigestModel, SiteBase                                                                                        string
+	TelegramRich                                                                                                 bool
 }
 
 func ConfigFromEnv() (Config, error) {
@@ -49,6 +53,17 @@ func DomainConfigFromEnv() (Config, error) {
 
 func configFromEnv(unixRPC bool) (Config, error) {
 	c := Config{Socket: os.Getenv("NEWS_AI_SOCKET"), Token: os.Getenv("NEWS_AI_TOKEN"), DatabaseURL: normalizeDSN(os.Getenv("DATABASE_URL")), APIKey: os.Getenv("GEMINI_API_KEY"), Endpoint: os.Getenv("GEMINI_API_ENDPOINT"), Model: os.Getenv("SUMMARIZATION_MODEL"), LocalCategory: os.Getenv("LOCAL_CATEGORY"), RPS: 3, DBMaxConns: 2}
+	c.ActiveProvider = os.Getenv("AI_PROVIDER")
+	if c.ActiveProvider == "" {
+		c.ActiveProvider = "gemini"
+	}
+	c.OpenAIKey = os.Getenv("OPENAI_API_KEY")
+	c.OpenAIEndpoint = "https://api.openai.com/v1"
+	c.OpenAIArticleModel = os.Getenv("OPENAI_ARTICLE_MODEL")
+	c.OpenAIDigestModel = os.Getenv("OPENAI_DIGEST_MODEL")
+	c.OpenAITextModel = os.Getenv("OPENAI_TEXT_MODEL")
+	c.TextModel = os.Getenv("TEXT_MODEL")
+	c.Endpoint = strings.TrimSuffix(c.Endpoint, "/%s:generateContent")
 	if !unixRPC && c.Endpoint == "" {
 		c.Endpoint = "https://generativelanguage.googleapis.com/v1/models"
 	}
@@ -87,11 +102,17 @@ func configFromEnv(unixRPC bool) (Config, error) {
 			return c, errors.New("ai_runtime_telegram_rich_configuration")
 		}
 	}
-	if (unixRPC && (c.Socket == "" || c.Token == "")) || c.DatabaseURL == "" || strings.TrimSpace(c.APIKey) == "" || c.Endpoint == "" || c.Model == "" {
+	if (unixRPC && (c.Socket == "" || c.Token == "")) || c.DatabaseURL == "" || c.Endpoint == "" || c.Model == "" {
 		return c, errors.New("ai_runtime_missing_configuration")
 	}
 	if unixRPC && (len(c.Token) < 32 || len(c.Token) > 256) {
 		return c, errors.New("ai_runtime_token_configuration")
+	}
+	if c.ActiveProvider != "gemini" && c.ActiveProvider != "openai" {
+		return c, errors.New("ai_runtime_provider_configuration")
+	}
+	if err := validateGeminiEndpoint(c.Endpoint, os.Getenv("NEWS_FIXTURE_MODE") == "1"); err != nil {
+		return c, errors.New("ai_runtime_provider_configuration")
 	}
 	if _, err := providerURL(c.Endpoint, c.Model); err != nil {
 		return c, errors.New("ai_runtime_provider_configuration")
@@ -110,10 +131,36 @@ func configFromEnv(unixRPC bool) (Config, error) {
 		}
 		c.DBMaxConns = int32(n)
 	}
+	if raw := os.Getenv("AI_MODEL_PRICES"); raw != "" {
+		if json.Unmarshal([]byte(raw), &c.Prices) != nil {
+			return c, errors.New("ai_runtime_price_configuration")
+		}
+		for key, p := range c.Prices {
+			if key == "" || !p.valid() {
+				return c, errors.New("ai_runtime_price_configuration")
+			}
+		}
+	}
 	c.InputRate = parseRate(os.Getenv("AI_INPUT_COST_PER_1M"))
 	c.OutputRate = parseRate(os.Getenv("AI_OUTPUT_COST_PER_1M"))
 	c.CachedRate = parseRate(os.Getenv("AI_CACHED_INPUT_COST_PER_1M"))
 	return c, nil
+}
+
+// Only explicit fixture mode permits a local test upstream. Management settings
+// never carry endpoints, so a saved profile cannot change this boundary.
+func validateGeminiEndpoint(raw string, fixture bool) error {
+	u, err := url.Parse(raw)
+	if err != nil || u.User != nil || u.RawQuery != "" || u.Fragment != "" || (u.Path != "/v1/models" && u.Path != "/v1beta/models") {
+		return errors.New("invalid_endpoint")
+	}
+	if u.Scheme == "https" && u.Host == "generativelanguage.googleapis.com" {
+		return nil
+	}
+	if fixture && u.Scheme == "http" && (u.Hostname() == "127.0.0.1" || u.Hostname() == "::1" || u.Hostname() == "localhost" || u.Hostname() == "fixture-services") {
+		return nil
+	}
+	return errors.New("invalid_endpoint")
 }
 func parseRate(s string) float64 {
 	v, e := strconv.ParseFloat(s, 64)
@@ -127,26 +174,27 @@ func normalizeDSN(s string) string {
 }
 
 type Server struct {
-	config       Config
-	db           *pgxpool.Pool
-	limiter      *SlidingWindow
-	breaker      *Breaker
-	metadata     *MetadataStore
-	client       *http.Client
-	usage        chan usageRecord
-	workers      sync.WaitGroup
-	closing      chan struct{}
-	drainOnce    sync.Once
-	closeOnce    sync.Once
-	mux          *http.ServeMux
-	digest       *digestRegistry
-	usageMu      sync.RWMutex
-	usageClosed  bool
-	usageFailed  atomic.Uint64
-	usageDropped atomic.Uint64
-	usagePending atomic.Int64
-	ready        atomic.Bool
-	draining     atomic.Bool
+	config        Config
+	db            *pgxpool.Pool
+	limiter       *SlidingWindow
+	breaker       *Breaker
+	openAIBreaker *Breaker
+	metadata      *MetadataStore
+	client        *http.Client
+	usage         chan usageRecord
+	workers       sync.WaitGroup
+	closing       chan struct{}
+	drainOnce     sync.Once
+	closeOnce     sync.Once
+	mux           *http.ServeMux
+	digest        *digestRegistry
+	usageMu       sync.RWMutex
+	usageClosed   bool
+	usageFailed   atomic.Uint64
+	usageDropped  atomic.Uint64
+	usagePending  atomic.Int64
+	ready         atomic.Bool
+	draining      atomic.Bool
 }
 
 const articleAnalysisType = "combined_analysis"
@@ -159,7 +207,7 @@ type usageRecord struct {
 }
 
 func NewServer(c Config, db *pgxpool.Pool) *Server {
-	s := &Server{config: c, db: db, limiter: NewSlidingWindow(c.RPS), breaker: NewBreaker(), metadata: NewMetadataStore(db), client: &http.Client{}, usage: make(chan usageRecord, 64), closing: make(chan struct{}), mux: http.NewServeMux()}
+	s := &Server{config: c, db: db, limiter: NewSlidingWindow(c.RPS), breaker: NewBreaker(), openAIBreaker: NewBreaker(), metadata: NewMetadataStore(db), client: &http.Client{}, usage: make(chan usageRecord, 64), closing: make(chan struct{}), mux: http.NewServeMux()}
 	s.digest = &digestRegistry{entries: make(map[string]*digestReceipt)}
 	s.mux.HandleFunc("POST /v2/digest/operations", s.digestAccept)
 	s.mux.HandleFunc("GET /v2/digest/operations", s.digestStatus)
@@ -323,14 +371,6 @@ func (s *Server) analyze(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	defer cancel()
-	model := base.Model
-	if model == "" {
-		model = s.config.Model
-	}
-	if _, err := providerURL(s.config.Endpoint, model); err != nil {
-		writeJSON(w, 400, errorEnvelope("invalid_input", 400))
-		return
-	}
 	if base.Input.MaxTextChars > 1000000 {
 		writeJSON(w, 400, errorEnvelope("resource_limit", 400))
 		return
@@ -370,12 +410,11 @@ func (s *Server) AnalyzeArticle(ctx context.Context, input ArticleInput) (map[st
 }
 
 func (s *Server) analyzeArticle(ctx context.Context, input ArticleInput) (map[string]any, *analysis.Usage, error) {
-	if input.Model == "" {
-		input.Model = s.config.Model
+	snap, err := s.snapshot(ctx, "article")
+	if err != nil {
+		return nil, nil, err
 	}
-	if _, err := providerURL(s.config.Endpoint, input.Model); err != nil {
-		return nil, nil, &providerFailure{code: "invalid_input"}
-	}
+	input.Model = snap.model
 	cats, local := s.metadata.Load(ctx)
 	if input.MaxTextChars == 0 {
 		input.MaxTextChars = 100000
@@ -384,18 +423,12 @@ func (s *Server) analyzeArticle(ctx context.Context, input ArticleInput) (map[st
 		return nil, nil, &providerFailure{code: "resource_limit"}
 	}
 	req := analysis.Request{Version: 1, Title: input.Title, Content: input.Content, URL: input.URL, OriginalContext: input.OriginalContext, Categories: cats, LocalCategory: local, ConfiguredLocalCategory: s.config.LocalCategory, Model: input.Model, Endpoint: s.config.Endpoint, MaxTextChars: input.MaxTextChars}
-	value, err := s.breaker.Do(ctx, func() (any, error) {
-		return s.retry(ctx, func(attemptCtx context.Context) (any, error) {
-			client := *s.client
-			client.Timeout = 40 * time.Second
-			result, usage, e := analysis.Analyze(attemptCtx, req, analysis.ProviderConfig{APIKey: s.config.APIKey, Model: input.Model, Endpoint: s.config.Endpoint, Client: &client, BeforeAttempt: s.limiter.Acquire})
-			return analysisOutput{result, usage}, e
-		})
-	})
+	resultMap, usage, err := analysis.Analyze(ctx, req, analysis.ProviderConfig{Provider: snap.provider, Model: snap.model, Revision: snap.revision})
 	if err != nil {
 		return nil, nil, err
 	}
-	result := value.(analysisOutput)
+	value := analysisOutput{resultMap, usage}
+	result := value
 	if result.usage != nil {
 		s.enqueueUsage(usageRecord{domain: domainFor(input.URL), analysisType: articleAnalysisType, usage: *result.usage})
 	}
@@ -442,11 +475,13 @@ func (s *Server) generate(w http.ResponseWriter, r *http.Request) {
 		writeJSON(w, 400, errorEnvelope("invalid_input", 400))
 		return
 	}
-	if req.Model == "" {
-		req.Model = s.config.Model
-	}
-	if _, err := providerURL(s.config.Endpoint, req.Model); err != nil || len(req.Prompt) > maxRPCBody/2 || req.AnalysisType == "" || req.Domain == "" || len(req.AnalysisType) > 50 || len(req.Domain) > 8192 {
+	if len(req.Prompt) > maxRPCBody/2 || req.AnalysisType == "" || req.Domain == "" || len(req.AnalysisType) > 50 || len(req.Domain) > 8192 {
 		writeJSON(w, 400, errorEnvelope("invalid_input", 400))
+		return
+	}
+	snap, err := s.snapshot(ctx, "text")
+	if err != nil {
+		writeError(w, err)
 		return
 	}
 	if req.Mode == "text" {
@@ -455,14 +490,11 @@ func (s *Server) generate(w http.ResponseWriter, r *http.Request) {
 			return
 		}
 	}
-	value, err := s.breaker.Do(ctx, func() (any, error) {
-		return s.retry(ctx, func(attemptCtx context.Context) (any, error) { return s.callGenerate(attemptCtx, req) })
-	})
+	out, err := s.generateWithSnapshot(ctx, snap, req)
 	if err != nil {
 		writeError(w, err)
 		return
 	}
-	out := value.(generateOutput)
 	s.enqueueUsage(usageRecord{domain: req.Domain, analysisType: req.AnalysisType, usage: out.usage, accountingTokens: out.accountingTokens, accountingTokenSet: out.accountingTokenSet})
 	writeJSON(w, 200, map[string]any{"version": 1, "ok": true, "result": out.result})
 }
@@ -481,128 +513,6 @@ type providerFailure struct {
 }
 
 func (e *providerFailure) Error() string { return e.code }
-func (s *Server) callGenerate(ctx context.Context, v generateRequest) (any, error) {
-	if err := s.limiter.Acquire(ctx); err != nil {
-		return nil, &providerFailure{code: "provider_timeout", retryable: errors.Is(err, context.DeadlineExceeded)}
-	}
-	urlString, err := providerURL(s.config.Endpoint, v.Model)
-	if err != nil {
-		return nil, &providerFailure{code: "provider_invalid_configuration"}
-	}
-	temp, maxTokens := v.Options.Temperature, v.Options.MaxTokens
-	generation := map[string]any{"temperature": temp, "maxOutputTokens": maxTokens}
-	if v.Mode == "structured" {
-		temp, maxTokens = .1, 2000
-		generation = map[string]any{"temperature": temp, "maxOutputTokens": maxTokens, "responseMimeType": "application/json"}
-		var schema any
-		if json.Unmarshal(v.Schema, &schema) != nil {
-			return nil, &providerFailure{code: "invalid_input"}
-		}
-		generation["responseJsonSchema"] = schema
-	}
-	payload := map[string]any{"contents": []any{map[string]any{"role": "user", "parts": []any{map[string]string{"text": v.Prompt}}}}, "generationConfig": generation}
-	body, err := json.Marshal(payload)
-	if err != nil || len(body) > maxRPCBody {
-		return nil, &providerFailure{code: "provider_request_too_large"}
-	}
-	u, _ := url.Parse(urlString)
-	query := u.Query()
-	query.Set("key", s.config.APIKey)
-	u.RawQuery = query.Encode()
-	timeout := 30 * time.Second
-	if v.Mode == "structured" {
-		timeout = 40 * time.Second
-	}
-	attemptCtx, cancel := context.WithTimeout(ctx, timeout)
-	defer cancel()
-	req, err := http.NewRequestWithContext(attemptCtx, http.MethodPost, u.String(), bytes.NewReader(body))
-	if err != nil {
-		return nil, &providerFailure{code: "provider_invalid_configuration"}
-	}
-	req.Header.Set("Content-Type", "application/json")
-	client := *s.client
-	client.Timeout = timeout
-	client.CheckRedirect = func(*http.Request, []*http.Request) error { return http.ErrUseLastResponse }
-	resp, err := client.Do(req)
-	if err != nil {
-		if errors.Is(err, context.Canceled) && ctx.Err() != nil {
-			return nil, &providerFailure{code: "provider_cancelled"}
-		}
-		if errors.Is(err, context.DeadlineExceeded) || errors.Is(attemptCtx.Err(), context.DeadlineExceeded) {
-			return nil, &providerFailure{code: "provider_timeout", retryable: true}
-		}
-		return nil, &providerFailure{code: "provider_transport_error", retryable: true}
-	}
-	defer resp.Body.Close()
-	if resp.StatusCode != http.StatusOK {
-		_, _ = io.Copy(io.Discard, io.LimitReader(resp.Body, 64<<10))
-		status := resp.StatusCode
-		var after *float64
-		if status == 429 {
-			after = parseRetryAfter(resp.Header.Get("Retry-After"))
-		}
-		return nil, &providerFailure{code: "provider_http_error", status: &status, retryAfter: after}
-	}
-	responseBody, err := io.ReadAll(io.LimitReader(resp.Body, maxRPCBody+1))
-	if err != nil {
-		return nil, &providerFailure{code: "provider_response_read_error"}
-	}
-	if len(responseBody) > maxRPCBody {
-		return nil, &providerFailure{code: "provider_response_too_large"}
-	}
-	var raw struct {
-		Candidates []struct {
-			Content *struct {
-				Parts []struct {
-					Text *string `json:"text"`
-				} `json:"parts"`
-			} `json:"content"`
-		} `json:"candidates"`
-		Usage analysis.GeminiUsage `json:"usageMetadata"`
-	}
-	if json.Unmarshal(responseBody, &raw) != nil {
-		return nil, &providerFailure{code: "provider_invalid_response"}
-	}
-	if len(raw.Candidates) == 0 {
-		status := 200
-		return nil, &providerFailure{code: "provider_empty_response", status: &status}
-	}
-	text := ""
-	if raw.Candidates[0].Content != nil && len(raw.Candidates[0].Content.Parts) > 0 && raw.Candidates[0].Content.Parts[0].Text != nil {
-		text = *raw.Candidates[0].Content.Parts[0].Text
-	}
-	usage := normalizeUsage(raw.Usage)
-	var result map[string]any
-	if v.Mode == "text" {
-		result = map[string]any{"choices": []any{map[string]any{"message": map[string]string{"content": strings.TrimSpace(text)}}}, "usage": usage}
-	} else {
-		if raw.Candidates[0].Content == nil || len(raw.Candidates[0].Content.Parts) == 0 || raw.Candidates[0].Content.Parts[0].Text == nil {
-			status := 200
-			return nil, &providerFailure{code: "provider_empty_response", status: &status}
-		}
-		structured, e := parseLegacyStructured(text)
-		if e != nil {
-			status := 200
-			return nil, &providerFailure{code: "provider_invalid_json", status: &status}
-		}
-		result = map[string]any{"result": structured, "usage": usage}
-	}
-	accountingTokens := usage["total_tokens"].(int)
-	if accountingTokens == 0 {
-		accountingTokens = raw.Usage.PromptTokenCount + raw.Usage.CandidatesTokenCount
-	}
-	return generateOutput{result: result, usage: analysis.Usage{Model: v.Model, PromptTokens: usage["prompt_tokens"].(int), CompletionTokens: usage["completion_tokens"].(int), CachedTokens: usage["cached_tokens"].(int), TotalTokens: usage["total_tokens"].(int)}, accountingTokens: accountingTokens, accountingTokenSet: true}, nil
-}
-func normalizeUsage(u analysis.GeminiUsage) map[string]any {
-	total := 0
-	if u.TotalTokenCount != nil {
-		total = *u.TotalTokenCount
-	} else {
-		total = u.PromptTokenCount + u.CandidatesTokenCount + u.CachedContentTokenCount
-	}
-	return map[string]any{"prompt_tokens": u.PromptTokenCount, "completion_tokens": u.CandidatesTokenCount, "cached_tokens": u.CachedContentTokenCount, "total_tokens": total}
-}
-
 func parseLegacyStructured(response string) (any, error) {
 	text := strings.TrimSpace(response)
 	decode := func(raw string) (any, error) {
@@ -652,22 +562,6 @@ func providerURL(base, model string) (string, error) {
 	u.Path = strings.TrimRight(u.Path, "/") + "/" + url.PathEscape(model) + ":generateContent"
 	return u.String(), nil
 }
-func parseRetryAfter(raw string) *float64 {
-	if raw == "" {
-		return nil
-	}
-	if n, e := strconv.ParseFloat(strings.TrimSpace(raw), 64); e == nil && n >= 0 && !math.IsInf(n, 0) && !math.IsNaN(n) {
-		return &n
-	}
-	if d, e := http.ParseTime(raw); e == nil {
-		n := time.Until(d).Seconds()
-		if n < 0 {
-			n = 0
-		}
-		return &n
-	}
-	return nil
-}
 func (s *Server) retry(ctx context.Context, fn func(context.Context) (any, error)) (any, error) {
 	for attempt := 0; attempt < 3; attempt++ {
 		if ctx.Err() != nil {
@@ -700,7 +594,23 @@ func writeError(w http.ResponseWriter, err error) {
 	var detail map[string]any
 	var pf *providerFailure
 	var ae *analysis.AnalysisError
+	var aie *ai.Error
 	switch {
+	case errors.As(err, &aie):
+		code := "provider_" + aie.Kind
+		if aie.Kind == "http" {
+			code = "provider_http_error"
+		}
+		var status *int
+		if aie.StatusCode != 0 {
+			status = &aie.StatusCode
+		}
+		var after *float64
+		if aie.RetryAfter > 0 {
+			seconds := aie.RetryAfter.Seconds()
+			after = &seconds
+		}
+		detail = errorDetail(code, status, after, aie.Retryable)
 	case errors.As(err, &pf):
 		detail = errorDetail(pf.code, pf.status, pf.retryAfter, pf.retryable)
 	case errors.As(err, &ae):
@@ -783,18 +693,66 @@ func (s *Server) storeUsage(rec usageRecord) {
 	}
 }
 
-func usageInsert(rec usageRecord, c Config) map[string]any {
-	u := rec.usage
-	tokens := rec.accountingTokens
-	if !rec.accountingTokenSet {
-		tokens = u.TotalTokens
-		if tokens == 0 {
-			tokens = u.PromptTokens + u.CompletionTokens
+type ModelPrice struct {
+	Input, Output, CachedInput *float64 `json:"-"`
+}
+
+func (p *ModelPrice) UnmarshalJSON(data []byte) error {
+	var v struct {
+		Input       *float64 `json:"input"`
+		Output      *float64 `json:"output"`
+		CachedInput *float64 `json:"cached_input"`
+	}
+	if err := json.Unmarshal(data, &v); err != nil {
+		return err
+	}
+	p.Input, p.Output, p.CachedInput = v.Input, v.Output, v.CachedInput
+	return nil
+}
+func (p ModelPrice) valid() bool {
+	for _, v := range []*float64{p.Input, p.Output, p.CachedInput} {
+		if v == nil || *v < 0 || math.IsNaN(*v) || math.IsInf(*v, 0) {
+			return false
 		}
 	}
-	cost := (float64(u.PromptTokens)*c.InputRate + float64(u.CompletionTokens)*c.OutputRate + float64(u.CachedTokens)*c.CachedRate) / 1_000_000
-	return map[string]any{"domain": rec.domain, "analysis_type": rec.analysisType, "tokens_used": tokens, "cost": cost, "result": map[string]int{"prompt_tokens": u.PromptTokens, "completion_tokens": u.CompletionTokens, "cached_tokens": u.CachedTokens}}
+	return true
 }
+func usageInsert(rec usageRecord, c Config) map[string]any {
+	u := rec.usage
+	var tokens any
+	var cost any
+	if u.Normalized == nil {
+		n := rec.accountingTokens
+		if !rec.accountingTokenSet {
+			n = u.TotalTokens
+			if n == 0 {
+				n = u.PromptTokens + u.CompletionTokens
+			}
+		}
+		tokens = n
+		cost = (float64(u.PromptTokens)*c.InputRate + float64(u.CompletionTokens)*c.OutputRate + float64(u.CachedTokens)*c.CachedRate) / 1_000_000
+	} else {
+		n := u.Normalized
+		if n.TotalTokens != nil {
+			tokens = *n.TotalTokens
+		} else if n.InputTokens != nil && n.OutputTokens != nil {
+			tokens = *n.InputTokens + *n.OutputTokens
+		}
+		price, ok := c.Prices[u.Provider+"/"+u.Model]
+		if !ok && u.RequestedModel != "" {
+			price, ok = c.Prices[u.Provider+"/"+u.RequestedModel]
+		}
+		if ok && price.valid() && n.InputTokens != nil && n.OutputTokens != nil && n.CachedInputTokens != nil && *n.CachedInputTokens <= *n.InputTokens {
+			cost = (float64(*n.InputTokens-*n.CachedInputTokens)**price.Input + float64(*n.CachedInputTokens)**price.CachedInput + float64(*n.OutputTokens)**price.Output) / 1_000_000
+		}
+	}
+	var result any = map[string]int{"prompt_tokens": u.PromptTokens, "completion_tokens": u.CompletionTokens, "cached_tokens": u.CachedTokens}
+	if u.Normalized != nil {
+		result = map[string]any{"provider": u.Provider, "requested_model": u.RequestedModel, "model": u.Model, "profile_revision": u.ProfileRevision, "normalized_usage": u.Normalized, "cost_estimate": cost, "prompt_tokens": u.PromptTokens, "completion_tokens": u.CompletionTokens, "cached_tokens": u.CachedTokens}
+	}
+	return map[string]any{"domain": rec.domain, "analysis_type": rec.analysisType, "tokens_used": tokens, "cost": cost, "result": result}
+}
+
 func (s *Server) CloseUsage(timeout time.Duration) {
 	s.closeOnce.Do(func() {
 		s.usageMu.Lock()
@@ -813,6 +771,16 @@ func (s *Server) CloseUsage(timeout time.Duration) {
 // ServeUnix requires an already-created owner-only ephemeral directory and never
 // removes a pre-existing path. The caller owns parent-directory lifecycle.
 func ServeUnix(ctx context.Context, s *Server) error {
+	attention, err := s.StartupAISettings(ctx)
+	if err != nil {
+		if s.db != nil {
+			s.db.Close()
+		}
+		return errors.New("ai_runtime_provider_configuration")
+	}
+	if attention {
+		log.Print("AI settings require attention; generation unavailable until repaired")
+	}
 	dir := filepath.Dir(s.config.Socket)
 	st, e := os.Lstat(dir)
 	if e != nil {

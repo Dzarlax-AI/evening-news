@@ -88,7 +88,9 @@ func TestReceiptAndFencePostgres(t *testing.T) {
  CREATE TABLE IF NOT EXISTS articles(id int primary key,source_id int,title text,summary text,content text,url text,fetched_at timestamp,processing_state text,is_advertisement boolean);
  CREATE TABLE IF NOT EXISTS categories(id int primary key,name text,display_name text);
  CREATE TABLE IF NOT EXISTS article_categories(article_id int,category_id int,confidence double precision);
- CREATE TABLE settings(key text primary key,value jsonb);
+ CREATE TABLE settings(key text primary key,value json not null,updated_at timestamp);
+ CREATE TABLE ai_usage_tracking(id serial primary key,domain text,analysis_type text,tokens_used integer,credits_cost numeric(10,4),analysis_result json,created_at timestamp);
+ CREATE TABLE digest_usage_fixture (model text not null);
  CREATE TABLE IF NOT EXISTS editorial_digest_editions(id uuid primary key,edition_date date,locale text,policy_version text,snapshot_hash text,snapshot jsonb,edition jsonb,rendered jsonb,provider_usage jsonb,job_id uuid,attempt_generation int,created_at timestamp default timezone('UTC',now()),unique(job_id,attempt_generation,locale));
  CREATE TABLE IF NOT EXISTS digest_delivery_intents(id uuid primary key,edition_id uuid,destination_hash char(64),purpose text,render_hash char(64),job_id uuid,attempt_generation int,domain_instance_id uuid,state text,parts_sent int,rich_message bool,unique(edition_id,destination_hash,purpose));
  CREATE TABLE IF NOT EXISTS digest_delivery_parts(intent_id uuid,method text,part_index int,payload_hash char(64),job_id uuid,attempt_generation int,domain_instance_id uuid,state text,message_id bigint,status_code int,retry_after_seconds double precision,updated_at timestamp default now(),primary key(intent_id,method,part_index))`
@@ -202,9 +204,13 @@ func TestReceiptAndFencePostgres(t *testing.T) {
 		}
 		a := snap.Articles[0]
 		draft, _ := json.Marshal(map[string]any{"main_stories": []any{map[string]any{"title": a.Title, "summary": "Summary", "primary_article_id": a.ID, "article_ids": []string{a.ID}}}, "brief_stories": []any{}, "article_stories": map[string]any{a.ID: map[string]string{"brief_summary": "Summary", "span_id": a.Spans[0].ID}}})
-		json.NewEncoder(w).Encode(map[string]any{"candidates": []any{map[string]any{"finishReason": "STOP", "content": map[string]any{"parts": []any{map[string]string{"text": string(draft)}}}}}, "usageMetadata": map[string]int{"promptTokenCount": 1, "candidatesTokenCount": 1, "totalTokenCount": 2}})
+		json.NewEncoder(w).Encode(map[string]any{"candidates": []any{map[string]any{"finishReason": "STOP", "content": map[string]any{"parts": []any{map[string]string{"text": string(draft)}}}}}, "usageMetadata": map[string]int{"promptTokenCount": 1, "candidatesTokenCount": 1, "cachedContentTokenCount": 0, "thoughtsTokenCount": 0, "totalTokenCount": 2}})
 	}))
 	defer provider.Close()
+	wf.RecordUsage = func(ctx context.Context, tx pgx.Tx, u editorial.ProviderUsage) error {
+		_, err := tx.Exec(ctx, `INSERT INTO digest_usage_fixture(model) VALUES($1)`, u.Model)
+		return err
+	}
 	wf.Provider = editorial.ProviderConfig{APIKey: "fixture", Model: "fixture-model", Endpoint: provider.URL, Client: provider.Client()}
 	count, err := wf.Generate(ctx, job, 1, "00000000-0000-0000-0000-000000000006", time.Now())
 	if err != nil || count != 1 || providerCalls.Load() != 1 {
@@ -214,13 +220,18 @@ func TestReceiptAndFencePostgres(t *testing.T) {
 	if err != nil || count != 1 || providerCalls.Load() != 1 {
 		t.Fatal("edition was regenerated")
 	}
+	var usageCount int
+	if err = pool.QueryRow(ctx, `SELECT count(*) FROM digest_usage_fixture`).Scan(&usageCount); err != nil || usageCount != 1 {
+		t.Fatalf("digest usage count=%d err=%v", usageCount, err)
+	}
 	var persisted bool
 	if err = pool.QueryRow(ctx, `SELECT EXISTS(SELECT 1 FROM editorial_digest_editions WHERE job_id=$1 AND rendered->>'rich_html'<>'' AND edition->>'locale'='ru')`, job).Scan(&persisted); err != nil || !persisted {
 		t.Fatal("edition not readable")
 	}
 	// Exercise authenticated native accept/status through real PostgreSQL and
 	// a local fake Telegram provider, including repeat intent suppression.
-	runtime := airuntime.NewServer(airuntime.Config{Token: "01234567890123456789012345678901", RPS: 3, Endpoint: provider.URL + "/v1/models", APIKey: "fixture", DigestModel: "fixture-model", SiteBase: "https://news.fixture.test", TelegramToken: "fixture", TelegramMain: "fixture-main", TelegramService: "fixture-service", TelegramEndpoint: provider.URL + "/telegram", TelegramRich: true}, pool)
+	inputPrice, outputPrice, cachedPrice := 1.0, 2.0, 0.5
+	runtime := airuntime.NewServer(airuntime.Config{Prices: map[string]airuntime.ModelPrice{"gemini/fixture-model": {Input: &inputPrice, Output: &outputPrice, CachedInput: &cachedPrice}}, Model: "fixture-model", Token: "01234567890123456789012345678901", RPS: 3, Endpoint: provider.URL + "/v1/models", APIKey: "fixture", DigestModel: "fixture-model", SiteBase: "https://news.fixture.test", TelegramToken: "fixture", TelegramMain: "fixture-main", TelegramService: "fixture-service", TelegramEndpoint: provider.URL + "/telegram", TelegramRich: true}, pool)
 	call := func(operation, operationID string, input map[string]any) map[string]any {
 		raw, _ := json.Marshal(input)
 		sum := sha256.Sum256(raw)
@@ -262,6 +273,36 @@ func TestReceiptAndFencePostgres(t *testing.T) {
 		t.Fatal("native operation timed out")
 		return nil
 	}
+
+	// Exercise the actual private runtime generation and accounting, using the
+	// same deterministic edition identity after removing only the fixture row.
+	if _, err = pool.Exec(ctx, `DELETE FROM editorial_digest_editions WHERE job_id=$1`, job); err != nil {
+		t.Fatal(err)
+	}
+	generated := call("summaries_generate", "00000000-0000-0000-0000-000000000006", map[string]any{})
+	if generated["summaries_generated"] != float64(1) || providerCalls.Load() != 2 {
+		t.Fatalf("runtime generation=%v calls=%d", generated, providerCalls.Load())
+	}
+	var exactCost *float64
+	var providerName, requested string
+	var revision int
+	var total int
+	err = pool.QueryRow(ctx, `SELECT (analysis_result->>'cost_estimate')::float8,analysis_result->>'provider',analysis_result->>'requested_model',(analysis_result->>'profile_revision')::int,tokens_used FROM ai_usage_tracking WHERE analysis_type='digest'`).Scan(&exactCost, &providerName, &requested, &revision, &total)
+	if err != nil || exactCost == nil || *exactCost != .000003 || providerName != "gemini" || requested != "fixture-model" || revision != 0 || total != 2 {
+		t.Fatalf("digest accounting cost=%v provider=%q requested=%q revision=%d total=%d err=%v", exactCost, providerName, requested, revision, total, err)
+	}
+	var editionCost *float64
+	var editionProvider, editionModel string
+	if err = pool.QueryRow(ctx, `SELECT (provider_usage->>'cost')::float8,provider_usage->>'provider',provider_usage->>'requested_model' FROM editorial_digest_editions WHERE job_id=$1`, job).Scan(&editionCost, &editionProvider, &editionModel); err != nil || editionCost == nil || *editionCost != .000003 || editionProvider != "gemini" || editionModel != "fixture-model" {
+		t.Fatalf("edition cost=%v provider=%q model=%q err=%v", editionCost, editionProvider, editionModel, err)
+	}
+	generated = call("summaries_generate", "00000000-0000-0000-0000-000000000012", map[string]any{})
+	if generated["summaries_generated"] != float64(1) || providerCalls.Load() != 2 {
+		t.Fatalf("runtime regenerated: %v calls=%d", generated, providerCalls.Load())
+	}
+	if err = pool.QueryRow(ctx, `SELECT count(*) FROM ai_usage_tracking WHERE analysis_type='digest'`).Scan(&usageCount); err != nil || usageCount != 1 {
+		t.Fatalf("runtime usage count=%d err=%v", usageCount, err)
+	}
 	prepared := call("digest_prepare", "00000000-0000-0000-0000-000000000008", map[string]any{})
 	token, ok := prepared["prepared_token"].(string)
 	if !ok {
@@ -276,6 +317,9 @@ func TestReceiptAndFencePostgres(t *testing.T) {
 	published = call("digest_publish", "00000000-0000-0000-0000-000000000011", map[string]any{"prepared_token": token})
 	if published["success"] != true || telegramCalls.Load() != 1 {
 		t.Fatal("confirmed delivery was sent twice")
+	}
+	if err = pool.QueryRow(ctx, `SELECT count(*) FROM ai_usage_tracking WHERE analysis_type='digest'`).Scan(&usageCount); err != nil || usageCount != 1 || providerCalls.Load() != 2 {
+		t.Fatalf("delivery repeated usage: count=%d calls=%d err=%v", usageCount, providerCalls.Load(), err)
 	}
 	const childJob = "00000000-0000-0000-0000-000000000015"
 	if _, err = pool.Exec(ctx, `INSERT INTO background_jobs VALUES($1,'running',1,1,'news_digest','{}')`, childJob); err != nil {

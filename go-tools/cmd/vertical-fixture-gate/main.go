@@ -569,8 +569,11 @@ func (g *gate) run() (resultErr error) {
 		Valid     bool `json:"valid"`
 		Processed int  `json:"processed"`
 	}
-	if json.Unmarshal([]byte(receipt), &summary) != nil || !summary.Valid || summary.Processed < 1 {
+	if json.Unmarshal([]byte(receipt), &summary) != nil || !summary.Valid {
 		return errors.New("source receipts incomplete")
+	}
+	if summary.Processed < 1 {
+		return errors.New("no processed articles in receipt")
 	}
 	// The three Page Monitor sources intentionally start with inadequate
 	// selectors. At least two successful reparses but only one model study

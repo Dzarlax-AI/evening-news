@@ -4,6 +4,7 @@ import (
 	"context"
 	"errors"
 
+	ai "github.com/Dzarlax-AI/evening-news/go-ai"
 	"github.com/Dzarlax-AI/evening-news/go-domain/analysis"
 )
 
@@ -21,8 +22,17 @@ func (s *Server) AnalyzeCallback(ctx context.Context, input ArticleInput) (map[s
 	var retry *float64
 	var pe *providerFailure
 	var ae *analysis.AnalysisError
+	var aie *ai.Error
 	if errors.As(err, &pe) {
 		status, retry = pe.status, pe.retryAfter
+	} else if errors.As(err, &aie) {
+		if aie.StatusCode != 0 {
+			status = &aie.StatusCode
+		}
+		if aie.RetryAfter > 0 {
+			seconds := aie.RetryAfter.Seconds()
+			retry = &seconds
+		}
 	} else if errors.As(err, &ae) {
 		status, retry = ae.Detail.StatusCode, ae.Detail.RetryAfterSeconds
 	}

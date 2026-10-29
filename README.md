@@ -97,7 +97,7 @@ Copy `.env.example` to `.env` and replace its development placeholders. It lists
 cp .env.example .env
 ```
 
-Provider keys are configured on the private domain executor, which owns Gemini transport and Telegram delivery. The local Compose file maps `WEB_DATABASE_URL` to the web service's `DATABASE_URL` and `EXECUTOR_DATABASE_URL` to the executor and migration service's `DATABASE_URL`. The background components use separate worker, execution, scheduler, ingestion, and processing database variables. The Go web service receives its database URL, admin/JWT settings, `WEB_BACKEND_URL` and `WEB_BACKEND_TOKEN`, scheduler client settings, and HTTP trust configuration; it does not receive AI or Telegram provider keys.
+Provider keys are configured on the private domain executor, which owns AI transport and Telegram delivery. The local Compose file maps `WEB_DATABASE_URL` to the web service's `DATABASE_URL` and `EXECUTOR_DATABASE_URL` to the executor and migration service's `DATABASE_URL`. The background components use separate worker, execution, scheduler, ingestion, and processing database variables. The Go web service receives its database URL, admin/JWT settings, `WEB_BACKEND_URL` and `WEB_BACKEND_TOKEN`, scheduler client settings, and HTTP trust configuration; it does not receive AI or Telegram provider keys.
 
 Complete the migration and runtime-role provisioning sequence in [the News deployment guide](deploy/news/README.md#fresh-local-compose-database-setup) before starting the full stack. Then start the remaining services:
 
@@ -111,9 +111,21 @@ The app is available at `http://localhost:8000`. The `migrate` service exits aft
 docker compose -f docker-compose.example.yml -f docker-compose.dev.yml up --build -d
 ```
 
+## AI providers
+
+The installation uses one active provider for article analysis, editorial digest generation, and auxiliary text generation. Gemini is the default; OpenAI can be selected with its own model for each purpose. Configure keys in the executor environment and use the admin AI settings to change the installation-wide provider and model profile. Saved settings take precedence over the initial environment defaults. There is no automatic fallback to another provider; a missing active key or model is an error. The admin settings do not accept or expose API keys.
+
+For Gemini, set `GEMINI_API_KEY`; `SUMMARIZATION_MODEL` selects the article model, `DIGEST_MODEL` the digest model, and optional `TEXT_MODEL` defaults to the summarization model. To start with OpenAI, set `AI_PROVIDER=openai`, `OPENAI_API_KEY`, `OPENAI_ARTICLE_MODEL`, `OPENAI_DIGEST_MODEL`, and `OPENAI_TEXT_MODEL`. OpenAI model names have no built-in defaults. Set both provider keys in the executor environment before switching between them. Keep provider secrets out of the web, background and extractor environments.
+
+Optionally set `AI_MODEL_PRICES` in the executor environment to a JSON object keyed by `provider/model`. Each value has three non-negative numeric fields: `input`, `output`, and `cached_input`, in USD per million tokens. For example, `{"openai/example-model":{"input":1,"output":2,"cached_input":0.5}}` demonstrates the format only; these numbers are not vendor prices. The runtime looks up the provider-reported model first, then the requested model when an explicit price exists for that alias. Leave the value empty when prices are not configured: the corresponding cost is unknown. Cached input is charged at its configured rate instead of being counted again at the ordinary input rate.
+
+The independent [go-ai module](go-ai/README.md) supplies provider-neutral text and structured JSON requests and one HTTP attempt per call. News retains its own validation, retry policy, costs and editorial rules. Usage fields that the provider does not supply remain unknown; cached input is part of input and reasoning is part of output. Unknown usage or pricing must not be presented as free.
+
+The local provider tests use synthetic responses. Real-provider behavior and editorial quality require separate acceptance, including approval of the calls and their cost.
+
 ## Tests
 
-The Go components can be checked independently with `go test -race ./...`, `go vet ./...`, and `go mod verify` from each module directory. PostgreSQL integration tests require `TEST_DATABASE_URL` to point to a dedicated loopback test database. Do not use a production or shared database.
+`make test` and `make vet` include the standalone `go-ai` module. The Go components can also be checked independently with `go test -race ./...`, `go vet ./...`, and `go mod verify` from each module directory. PostgreSQL integration tests require `TEST_DATABASE_URL` to point to a dedicated loopback test database. Do not use a production or shared database.
 
 The News application and its tooling use Go. The separate shared browser retains its existing Python runtime; its isolated contract and Cloak fixture checks use Go. Exact-head CI remains pending; see [the Go tooling coverage map](go-tools/COVERAGE.md) for verified checks and remaining validation.
 

@@ -16,6 +16,7 @@ RUN CGO_ENABLED=0 GOOS=${TARGETOS} GOARCH=${TARGETARCH} \
 FROM --platform=$BUILDPLATFORM ${GO_DOMAIN_BUILD_IMAGE} AS go-domain-build
 WORKDIR /src/go-domain
 COPY go-domain/go.mod go-domain/go.sum ./
+COPY go-ai/ /src/go-ai/
 COPY go-editorial/ /src/go-editorial/
 COPY go/ /src/go/
 COPY go-tools/go.mod go-tools/go.sum /src/go-tools/

@@ -1,5 +1,7 @@
 package analysis
 
+import ai "github.com/Dzarlax-AI/evening-news/go-ai"
+
 // Request is the bounded, versioned stdin contract for one article analysis.
 type Request struct {
 	Version                 int                `json:"version"`
@@ -30,11 +32,15 @@ type Response struct {
 }
 
 type Usage struct {
-	Model            string `json:"model"`
-	PromptTokens     int    `json:"prompt_tokens"`
-	CompletionTokens int    `json:"completion_tokens"`
-	CachedTokens     int    `json:"cached_tokens"`
-	TotalTokens      int    `json:"total_tokens"`
+	RequestedModel   string    `json:"requested_model,omitempty"`
+	Provider         string    `json:"provider,omitempty"`
+	ProfileRevision  int64     `json:"profile_revision,omitempty"`
+	Normalized       *ai.Usage `json:"normalized_usage,omitempty"`
+	Model            string    `json:"model"`
+	PromptTokens     int       `json:"prompt_tokens"`
+	CompletionTokens int       `json:"completion_tokens"`
+	CachedTokens     int       `json:"cached_tokens"`
+	TotalTokens      int       `json:"total_tokens"`
 }
 
 type GeminiUsage struct {

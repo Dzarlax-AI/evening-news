@@ -78,76 +78,89 @@ func managementTimestamp() string {
 	return now.Format("2006-01-02T15:04:05.000000")
 }
 
+// New usage stores precise cost in JSON; explicit null or malformed metadata is
+// unknown. Older records without the field retain their legacy numeric cost.
+const aiCostJoin = `CROSS JOIN LATERAL (SELECT CASE
+ WHEN jsonb_typeof(analysis_result::jsonb) = 'object' AND analysis_result::jsonb ? 'cost_estimate'
+ THEN CASE WHEN jsonb_typeof(analysis_result::jsonb->'cost_estimate') = 'number'
+  THEN CASE WHEN (analysis_result::jsonb->>'cost_estimate')::numeric BETWEEN 0 AND 1e100::numeric
+   THEN (analysis_result::jsonb->>'cost_estimate')::numeric END END
+ ELSE credits_cost END AS precise_cost) cost_values`
+
 func (r *ManagementRepository) AIUsageStats(ctx context.Context, days int) (map[string]any, error) {
 	since := time.Now().UTC().AddDate(0, 0, -days)
 	today := time.Now().UTC().Format("2006-01-02")
 	var req, tokens, discovered, successful, requestsToday, tokensToday int64
-	var cost, costToday float64
-	err := r.pool.QueryRow(ctx, `SELECT count(*),coalesce(sum(tokens_used),0),coalesce(sum(credits_cost),0),coalesce(sum(patterns_discovered),0),coalesce(sum(patterns_successful),0) FROM ai_usage_tracking WHERE created_at >= $1 OR created_at IS NULL`, since).Scan(&req, &tokens, &cost, &discovered, &successful)
+	var cost, costToday *float64
+	var known, unknown, knownToday, unknownToday int64
+	err := r.pool.QueryRow(ctx, `SELECT count(*),coalesce(sum(tokens_used),0),sum(precise_cost),count(precise_cost),count(*)-count(precise_cost),coalesce(sum(patterns_discovered),0),coalesce(sum(patterns_successful),0) FROM ai_usage_tracking `+aiCostJoin+` WHERE created_at >= $1 OR created_at IS NULL`, since).Scan(&req, &tokens, &cost, &known, &unknown, &discovered, &successful)
 	if err != nil {
 		return nil, err
 	}
-	if err = r.pool.QueryRow(ctx, `SELECT count(*),coalesce(sum(tokens_used),0),coalesce(sum(credits_cost),0) FROM ai_usage_tracking WHERE created_at >= $1::date`, today).Scan(&requestsToday, &tokensToday, &costToday); err != nil {
+	if err = r.pool.QueryRow(ctx, `SELECT count(*),coalesce(sum(tokens_used),0),sum(precise_cost),count(precise_cost),count(*)-count(precise_cost) FROM ai_usage_tracking `+aiCostJoin+` WHERE created_at >= $1::date`, today).Scan(&requestsToday, &tokensToday, &costToday, &knownToday, &unknownToday); err != nil {
 		return nil, err
 	}
 	byType := []map[string]any{}
-	rows, err := r.pool.Query(ctx, `SELECT analysis_type,count(*),coalesce(sum(tokens_used),0),coalesce(sum(credits_cost),0) FROM ai_usage_tracking WHERE created_at >= $1 OR created_at IS NULL GROUP BY analysis_type ORDER BY sum(tokens_used) DESC`, since)
+	rows, err := r.pool.Query(ctx, `SELECT analysis_type,count(*),coalesce(sum(tokens_used),0),sum(precise_cost),count(precise_cost),count(*)-count(precise_cost) FROM ai_usage_tracking `+aiCostJoin+` WHERE created_at >= $1 OR created_at IS NULL GROUP BY analysis_type ORDER BY sum(tokens_used) DESC`, since)
 	if err != nil {
 		return nil, err
 	}
 	for rows.Next() {
 		var typ string
 		var n, t int64
-		var c float64
-		if err = rows.Scan(&typ, &n, &t, &c); err != nil {
+		var c *float64
+		var knownCost, unknownCost int64
+		if err = rows.Scan(&typ, &n, &t, &c, &knownCost, &unknownCost); err != nil {
 			rows.Close()
 			return nil, err
 		}
-		byType = append(byType, map[string]any{"type": typ, "requests": n, "tokens": t, "cost": c})
+		byType = append(byType, map[string]any{"type": typ, "requests": n, "tokens": t, "cost": c, "known_cost_count": knownCost, "unknown_cost_count": unknownCost})
 	}
 	rows.Close()
 	if err = rows.Err(); err != nil {
 		return nil, err
 	}
 	daily := []map[string]any{}
-	rows, err = r.pool.Query(ctx, `SELECT created_at::date,count(*),coalesce(sum(tokens_used),0),coalesce(sum(credits_cost),0) FROM ai_usage_tracking WHERE created_at >= $1 GROUP BY created_at::date ORDER BY created_at::date`, since)
+	rows, err = r.pool.Query(ctx, `SELECT created_at::date,count(*),coalesce(sum(tokens_used),0),sum(precise_cost),count(precise_cost),count(*)-count(precise_cost) FROM ai_usage_tracking `+aiCostJoin+` WHERE created_at >= $1 GROUP BY created_at::date ORDER BY created_at::date`, since)
 	if err != nil {
 		return nil, err
 	}
 	for rows.Next() {
 		var d time.Time
 		var n, t int64
-		var c float64
-		if err = rows.Scan(&d, &n, &t, &c); err != nil {
+		var c *float64
+		var knownCost, unknownCost int64
+		if err = rows.Scan(&d, &n, &t, &c, &knownCost, &unknownCost); err != nil {
 			rows.Close()
 			return nil, err
 		}
-		daily = append(daily, map[string]any{"date": d.Format("2006-01-02"), "requests": n, "tokens": t, "cost": c})
+		daily = append(daily, map[string]any{"date": d.Format("2006-01-02"), "requests": n, "tokens": t, "cost": c, "known_cost_count": knownCost, "unknown_cost_count": unknownCost})
 	}
 	rows.Close()
 	if err = rows.Err(); err != nil {
 		return nil, err
 	}
 	top := []map[string]any{}
-	rows, err = r.pool.Query(ctx, `SELECT domain,count(*),coalesce(sum(tokens_used),0),coalesce(sum(credits_cost),0) FROM ai_usage_tracking WHERE created_at >= $1 OR created_at IS NULL GROUP BY domain ORDER BY sum(tokens_used) DESC LIMIT 10`, since)
+	rows, err = r.pool.Query(ctx, `SELECT domain,count(*),coalesce(sum(tokens_used),0),sum(precise_cost),count(precise_cost),count(*)-count(precise_cost) FROM ai_usage_tracking `+aiCostJoin+` WHERE created_at >= $1 OR created_at IS NULL GROUP BY domain ORDER BY sum(tokens_used) DESC LIMIT 10`, since)
 	if err != nil {
 		return nil, err
 	}
 	for rows.Next() {
 		var d string
 		var n, t int64
-		var c float64
-		if err = rows.Scan(&d, &n, &t, &c); err != nil {
+		var c *float64
+		var knownCost, unknownCost int64
+		if err = rows.Scan(&d, &n, &t, &c, &knownCost, &unknownCost); err != nil {
 			rows.Close()
 			return nil, err
 		}
-		top = append(top, map[string]any{"domain": d, "requests": n, "tokens": t, "cost": c})
+		top = append(top, map[string]any{"domain": d, "requests": n, "tokens": t, "cost": c, "known_cost_count": knownCost, "unknown_cost_count": unknownCost})
 	}
 	rows.Close()
 	if err = rows.Err(); err != nil {
 		return nil, err
 	}
-	return map[string]any{"period_days": days, "total": map[string]any{"requests": req, "tokens": tokens, "cost": cost, "patterns_discovered": discovered, "patterns_successful": successful}, "today": map[string]any{"requests": requestsToday, "tokens": tokensToday, "cost": costToday}, "by_type": byType, "daily": daily, "top_domains": top, "timestamp": managementTimestamp()}, nil
+	return map[string]any{"period_days": days, "total": map[string]any{"requests": req, "tokens": tokens, "cost": cost, "known_cost_count": known, "unknown_cost_count": unknown, "patterns_discovered": discovered, "patterns_successful": successful}, "today": map[string]any{"requests": requestsToday, "tokens": tokensToday, "cost": costToday, "known_cost_count": knownToday, "unknown_cost_count": unknownToday}, "by_type": byType, "daily": daily, "top_domains": top, "timestamp": managementTimestamp()}, nil
 }
 
 func (r *ManagementRepository) ProcessingStats(ctx context.Context, days int) (map[string]any, error) {

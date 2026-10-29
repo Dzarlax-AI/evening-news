@@ -5,6 +5,7 @@ on:
     paths:
       - 'go-web/**'
       - 'go-domain/**'
+      - 'go-ai/**'
       - 'go-tools/**'
       - 'web/**'
       - 'tests/fixtures/web-contract-v1/**'
@@ -18,6 +19,7 @@ on:
     paths:
       - 'go-web/**'
       - 'go-domain/**'
+      - 'go-ai/**'
       - 'go-tools/**'
       - 'web/**'
       - 'tests/fixtures/web-contract-v1/**'

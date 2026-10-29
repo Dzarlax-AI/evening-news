@@ -59,7 +59,7 @@ func TestPostgresManagementSourceCategoryArticleAndSummaryContracts(t *testing.T
 		`CREATE TABLE background_jobs(id uuid PRIMARY KEY,kind varchar(40) NOT NULL,payload jsonb NOT NULL DEFAULT '{}'::jsonb,state varchar(24) NOT NULL DEFAULT 'queued',created_at timestamp DEFAULT timezone('UTC',now()),finished_at timestamp,result jsonb,error_code text,schedule_key varchar(128))`,
 		`CREATE TABLE background_worker_status(id integer PRIMARY KEY,generation bigint NOT NULL,status varchar(16) NOT NULL,heartbeat_at timestamp)`,
 		`CREATE TABLE processing_stats(id serial PRIMARY KEY,date date UNIQUE,articles_fetched integer DEFAULT 0,articles_processed integer DEFAULT 0,api_calls_made integer DEFAULT 0,errors_count integer DEFAULT 0,processing_time_seconds integer DEFAULT 0)`,
-		`CREATE TABLE ai_usage_tracking(id serial PRIMARY KEY,domain varchar(255) NOT NULL,analysis_type varchar(50) NOT NULL,tokens_used integer,credits_cost numeric(10,4),patterns_discovered integer DEFAULT 0,patterns_successful integer DEFAULT 0,created_at timestamp)`,
+		`CREATE TABLE ai_usage_tracking(id serial PRIMARY KEY,domain varchar(255) NOT NULL,analysis_type varchar(50) NOT NULL,tokens_used integer,credits_cost numeric(10,4),analysis_result json,patterns_discovered integer DEFAULT 0,patterns_successful integer DEFAULT 0,created_at timestamp)`,
 		`CREATE TABLE domain_stability(domain varchar(255) PRIMARY KEY,is_stable boolean DEFAULT false,success_rate_7d numeric(5,2) DEFAULT 0,success_rate_30d numeric(5,2) DEFAULT 0,total_attempts integer DEFAULT 0,successful_attempts integer DEFAULT 0,last_successful_extraction timestamp,last_failed_extraction timestamp,consecutive_successes integer DEFAULT 0,consecutive_failures integer DEFAULT 0)`,
 		`CREATE TABLE extraction_attempts(id serial PRIMARY KEY,article_url text NOT NULL,domain varchar(255) NOT NULL,extraction_strategy varchar(255) NOT NULL,success boolean NOT NULL,content_length integer,quality_score numeric(5,2),extraction_time_ms integer,created_at timestamp DEFAULT timezone('UTC',now()))`,
 		`CREATE TABLE settings(key varchar(255) PRIMARY KEY,value jsonb NOT NULL,description text,updated_at timestamp)`,
@@ -226,7 +226,7 @@ func TestPostgresManagementSourceCategoryArticleAndSummaryContracts(t *testing.T
 	if _, err = pool.Exec(ctx, `INSERT INTO daily_summaries(date,category,summary_text,articles_count) VALUES('2026-10-26','Tech','summary',1),('2026-10-25','Business','older',2)`); err != nil {
 		t.Fatal(err)
 	}
-	if _, err = pool.Exec(ctx, `INSERT INTO processing_stats(date,articles_fetched,articles_processed,api_calls_made,errors_count,processing_time_seconds) VALUES(timezone('UTC',now())::date,4,3,6,1,12); INSERT INTO ai_usage_tracking(domain,analysis_type,tokens_used,credits_cost,patterns_discovered,patterns_successful,created_at) VALUES('fixture.invalid','selector_discovery',120,.25,2,1,timezone('UTC',now())); INSERT INTO domain_stability(domain,is_stable,success_rate_7d,success_rate_30d,total_attempts,successful_attempts) VALUES('fixture.invalid',true,90,85,10,9); INSERT INTO extraction_attempts(article_url,domain,extraction_strategy,success,quality_score,extraction_time_ms) VALUES('https://fixture.invalid/1','fixture.invalid','rss',true,80,10),('https://fixture.invalid/2','fixture.invalid','rss',false,60,20)`); err != nil {
+	if _, err = pool.Exec(ctx, `INSERT INTO processing_stats(date,articles_fetched,articles_processed,api_calls_made,errors_count,processing_time_seconds) VALUES(timezone('UTC',now())::date,4,3,6,1,12); INSERT INTO ai_usage_tracking(domain,analysis_type,tokens_used,credits_cost,patterns_discovered,patterns_successful,created_at) VALUES('fixture.invalid','selector_discovery',120,.25,2,1,timezone('UTC',now())),('fixture.invalid','selector_discovery',NULL,NULL,0,0,timezone('UTC',now())); INSERT INTO domain_stability(domain,is_stable,success_rate_7d,success_rate_30d,total_attempts,successful_attempts) VALUES('fixture.invalid',true,90,85,10,9); INSERT INTO extraction_attempts(article_url,domain,extraction_strategy,success,quality_score,extraction_time_ms) VALUES('https://fixture.invalid/1','fixture.invalid','rss',true,80,10),('https://fixture.invalid/2','fixture.invalid','rss',false,60,20)`); err != nil {
 		t.Fatal(err)
 	}
 	dashboard, err := r.DashboardStats(ctx, 7)
@@ -236,6 +236,35 @@ func TestPostgresManagementSourceCategoryArticleAndSummaryContracts(t *testing.T
 	usage, err := r.AIUsageStats(ctx, 30)
 	if err != nil || usage["total"].(map[string]any)["tokens"] != int64(120) {
 		t.Fatalf("AI usage stats: %#v %v", usage, err)
+	}
+	totalUsage := usage["total"].(map[string]any)
+	if totalUsage["known_cost_count"] != int64(1) || totalUsage["unknown_cost_count"] != int64(1) || totalUsage["cost"].(*float64) == nil || *totalUsage["cost"].(*float64) != .25 {
+		t.Fatalf("partial AI cost: %#v", totalUsage)
+	}
+	if _, err = pool.Exec(ctx, `UPDATE ai_usage_tracking SET credits_cost=NULL`); err != nil {
+		t.Fatal(err)
+	}
+	usage, err = r.AIUsageStats(ctx, 30)
+	if err != nil || usage["total"].(map[string]any)["cost"].(*float64) != nil || usage["total"].(map[string]any)["unknown_cost_count"] != int64(2) {
+		t.Fatalf("unknown AI cost: %#v %v", usage, err)
+	}
+	// New precise metadata overrides the rounded legacy column. Explicit null
+	// and malformed metadata are unknown even when a stale legacy value exists.
+	if _, err = pool.Exec(ctx, `INSERT INTO ai_usage_tracking(domain,analysis_type,credits_cost,analysis_result,created_at) VALUES
+	 ('precision.invalid','text',0,'{"cost_estimate":0.000002}',timezone('UTC',now())),
+	 ('precision.invalid','text',0.5,'{"cost_estimate":null}',timezone('UTC',now())),
+	 ('precision.invalid','text',0.5,'{"cost_estimate":"invalid"}',timezone('UTC',now())),
+	 ('precision.invalid','text',0.5,'{"cost_estimate":{}}',timezone('UTC',now())),
+	 ('precision.invalid','text',0.25,'{}',timezone('UTC',now()))`); err != nil {
+		t.Fatal(err)
+	}
+	usage, err = r.AIUsageStats(ctx, 30)
+	if err != nil {
+		t.Fatal(err)
+	}
+	totalUsage = usage["total"].(map[string]any)
+	if totalUsage["known_cost_count"] != int64(2) || totalUsage["unknown_cost_count"] != int64(5) || totalUsage["cost"].(*float64) == nil || *totalUsage["cost"].(*float64) != 0.250002 {
+		t.Fatalf("precise AI cost: %#v", totalUsage)
 	}
 	processing, err := r.ProcessingStats(ctx, 30)
 	if err != nil || processing["totals"].(map[string]int64)["articles_processed"] != 3 {

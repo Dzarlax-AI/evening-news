@@ -5,6 +5,7 @@ on:
     paths:
       - 'go-ingestion/**'
       - 'go-domain/**'
+      - 'go-ai/**'
       - 'go-processing/**'
       - 'go/**'
       - 'go-worker/**'
@@ -19,6 +20,7 @@ on:
     paths:
       - 'go-ingestion/**'
       - 'go-domain/**'
+      - 'go-ai/**'
       - 'go-processing/**'
       - 'go/**'
       - 'go-worker/**'

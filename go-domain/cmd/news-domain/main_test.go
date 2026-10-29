@@ -115,6 +115,7 @@ func TestDomainProcessStartupAndDrainPostgres(t *testing.T) {
 	q.Set("search_path", schema)
 	u.RawQuery = q.Encode()
 	statements := []string{
+		`CREATE TABLE ` + ident + `.settings(key text primary key,value json not null,updated_at timestamp)`,
 		`CREATE TABLE ` + ident + `.background_worker_status(id integer primary key,owner_id uuid,generation integer,status text,lock_backend_pid integer,heartbeat_at timestamp)`,
 		`CREATE TABLE ` + ident + `.background_jobs(id uuid primary key,state text,owner_generation integer,attempt_generation integer,kind text,payload jsonb)`,
 		`CREATE TABLE ` + ident + `.background_job_executions(job_id uuid,attempt_generation integer,executor_instance_id uuid,owner_id uuid,worker_generation integer,deadline_at timestamp,state text)`,
@@ -192,6 +193,12 @@ func TestDomainProcessStartupAndDrainPostgres(t *testing.T) {
 			t.Fatal(err)
 		}
 	}
+	// The selected saved OpenAI profile has lost its key. The process must keep
+	// the choice visible for repair without sending an AI request or falling back.
+	if _, err = db.Exec(ctx, `INSERT INTO `+ident+`.settings(key,value) VALUES ('ai_settings_revision','1'),('ai_settings','{"active_provider":"openai","profiles":{"gemini":{"models":{"article":"fixture-model","digest":"fixture-model","text":"fixture-model"}},"openai":{"models":{"article":"openai-a","digest":"openai-d","text":"openai-t"}}}}')`); err != nil {
+		t.Fatal(err)
+	}
+	var providerCalls atomic.Int32
 	var mutateSource atomic.Bool
 	var blockSelector atomic.Bool
 	providerStarted := make(chan struct{}, 1)
@@ -230,6 +237,7 @@ func TestDomainProcessStartupAndDrainPostgres(t *testing.T) {
 			_ = json.NewEncoder(w).Encode(map[string]any{"contract_version": "1", "build_version": "fixture", "request_id": request.RequestID, "results": []any{map[string]any{"source_id": 11, "type": "rss", "outcome": "success", "rss_articles": []any{}}}})
 			return
 		}
+		providerCalls.Add(1)
 		requestBody, _ := io.ReadAll(r.Body)
 		if bytes.Contains(requestBody, []byte("Analyze this webpage")) {
 			selectorCalls.Add(1)
@@ -243,10 +251,10 @@ func TestDomainProcessStartupAndDrainPostgres(t *testing.T) {
 					t.Error(e)
 				}
 			}
-			_, _ = w.Write([]byte(`{"candidates":[{"content":{"parts":[{"text":"{\"content_selectors\":[\"article\"],\"title_selectors\":[\"h2\"],\"date_selectors\":[\"time\"],\"page_type\":\"news\"}"}]}}]}`))
+			_, _ = w.Write([]byte(`{"candidates":[{"finishReason":"STOP","content":{"parts":[{"text":"{\"content_selectors\":[\"article\"],\"title_selectors\":[\"h2\"],\"date_selectors\":[\"time\"],\"page_type\":\"news\"}"}]}}]}`))
 			return
 		}
-		_, _ = w.Write([]byte(`{"candidates":[{"content":{"parts":[{"text":"{\"summary\":\"ok\",\"categories\":[\"Business\"],\"is_advertisement\":false}"}]}}]}`))
+		_, _ = w.Write([]byte(`{"candidates":[{"finishReason":"STOP","content":{"parts":[{"text":"{\"summary\":\"ok\",\"categories\":[\"Business\"],\"is_advertisement\":false}"}]}}]}`))
 	}))
 	defer upstream.Close()
 	listener, err := net.Listen("tcp4", "127.0.0.1:0")
@@ -260,7 +268,7 @@ func TestDomainProcessStartupAndDrainPostgres(t *testing.T) {
 	}
 	listener.Close()
 	cmd := exec.Command(os.Args[0], "-test.run=^TestDomainProcessStartupAndDrainPostgres$")
-	cmd.Env = append(os.Environ(), "NEWS_DOMAIN_HELPER=1", "DATABASE_URL="+u.String(), "GEMINI_API_KEY=fixture-key", "GEMINI_API_ENDPOINT="+upstream.URL+"/v1/models", "SUMMARIZATION_MODEL=fixture-model", "JOB_EXECUTOR_TOKEN=fixture-executor-token", "ARTICLE_AI_TOKEN=fixture-article-token", "WEB_BACKEND_TOKEN=fixture-web-token", "BACKGROUND_EXECUTION_MODE=worker", "EXTRACTION_SERVICE_URL="+upstream.URL, "EXTRACTION_SERVICE_TOKEN=fixture-extractor-token", "JOB_EXECUTOR_HOST=127.0.0.1", "JOB_EXECUTOR_PORT="+port, "EXECUTION_SERVICE_URL="+upstream.URL, "NEWS_FIXTURE_MODE=0")
+	cmd.Env = append(os.Environ(), "NEWS_DOMAIN_HELPER=1", "DATABASE_URL="+u.String(), "GEMINI_API_KEY=fixture-key", "OPENAI_API_KEY=", "AI_PROVIDER=gemini", "GEMINI_API_ENDPOINT="+upstream.URL+"/v1/models", "SUMMARIZATION_MODEL=fixture-model", "JOB_EXECUTOR_TOKEN=fixture-executor-token", "ARTICLE_AI_TOKEN=fixture-article-token", "WEB_BACKEND_TOKEN=fixture-web-token", "BACKGROUND_EXECUTION_MODE=worker", "EXTRACTION_SERVICE_URL="+upstream.URL, "EXTRACTION_SERVICE_TOKEN=fixture-extractor-token", "JOB_EXECUTOR_HOST=127.0.0.1", "JOB_EXECUTOR_PORT="+port, "EXECUTION_SERVICE_URL="+upstream.URL, "NEWS_FIXTURE_MODE=1", "NEWS_TEST_TELEGRAM_ENDPOINT="+upstream.URL)
 	if err = cmd.Start(); err != nil {
 		t.Fatal(err)
 	}
@@ -297,6 +305,55 @@ func TestDomainProcessStartupAndDrainPostgres(t *testing.T) {
 	}
 	if err := json.NewDecoder(resp.Body).Decode(&domainStatus); err != nil || !domainStatus.Ready || domainStatus.ActiveOperations != 0 || len(domainStatus.DomainInstanceID) != 36 {
 		t.Fatalf("invalid domain readiness payload: %#v, %v", domainStatus, err)
+	}
+	settingsURL := "http://" + address + "/internal/web/v1/ai/settings"
+	settingsReq, _ := http.NewRequest(http.MethodGet, settingsURL, nil)
+	settingsReq.Header.Set("Authorization", "Bearer fixture-web-token")
+	settingsResp, e := client.Do(settingsReq)
+	if e != nil {
+		t.Fatal(e)
+	}
+	var settings map[string]any
+	e = json.NewDecoder(settingsResp.Body).Decode(&settings)
+	settingsResp.Body.Close()
+	if e != nil || settingsResp.StatusCode != 200 || settings["active_provider"] != "openai" || settings["source"] != "override" || settings["revision"] != float64(1) {
+		t.Fatalf("unavailable profile not visible: status=%d settings=%v err=%v", settingsResp.StatusCode, settings, e)
+	}
+	sourceFP := selectors.SourceFingerprint(9, "Synthetic", "custom", "https://source.example.test/news", true, `{"enable_ai_analysis": true}`)
+	var unavailableRequest map[string]any
+	if err = json.Unmarshal(envJSON, &unavailableRequest); err != nil {
+		t.Fatal(err)
+	}
+	unavailableRequest["operation"] = "study"
+	unavailableRequest["source_id"] = 9
+	unavailableRequest["source_fingerprint"] = sourceFP
+	unavailableRequest["study_html"] = `<article><h2>fixture</h2></article>`
+	unavailableBody, _ := json.Marshal(unavailableRequest)
+	unavailableReq, _ := http.NewRequest(http.MethodPost, "http://"+address+"/internal/v1/ingestion/selectors", bytes.NewReader(unavailableBody))
+	unavailableReq.Header.Set("Authorization", "Bearer fixture-executor-token")
+	unavailableResp, e := client.Do(unavailableReq)
+	if e != nil {
+		t.Fatal(e)
+	}
+	unavailableResp.Body.Close()
+	if unavailableResp.StatusCode != http.StatusNoContent || providerCalls.Load() != 0 {
+		t.Fatalf("invalid profile made provider calls or returned unexpected result: status=%d calls=%d", unavailableResp.StatusCode, providerCalls.Load())
+	}
+	resetPayload, _ := json.Marshal(map[string]any{"expected_revision": settings["revision"], "active_provider": settings["active_provider"], "profiles": settings["profiles"], "reset_to_env": true})
+	resetReq, _ := http.NewRequest(http.MethodPut, settingsURL, bytes.NewReader(resetPayload))
+	resetReq.Header.Set("Authorization", "Bearer fixture-web-token")
+	resetResp, e := client.Do(resetReq)
+	if e != nil {
+		t.Fatal(e)
+	}
+	var reset map[string]any
+	e = json.NewDecoder(resetResp.Body).Decode(&reset)
+	resetResp.Body.Close()
+	if e != nil || resetResp.StatusCode != 200 || reset["source"] != "env" || reset["active_provider"] != "gemini" || reset["revision"] != float64(2) {
+		t.Fatalf("reset failed: status=%d result=%v err=%v", resetResp.StatusCode, reset, e)
+	}
+	if providerCalls.Load() != 0 {
+		t.Fatalf("settings operation called provider")
 	}
 	for _, tc := range []struct {
 		token string
@@ -359,7 +416,7 @@ func TestDomainProcessStartupAndDrainPostgres(t *testing.T) {
 	if err = db.QueryRow(ctx, `SELECT config::text FROM `+ident+`.sources WHERE id=9`).Scan(&configText); err != nil {
 		t.Fatal(err)
 	}
-	sourceFP := selectors.SourceFingerprint(9, "Synthetic", "custom", "https://source.example.test/news", true, configText)
+	sourceFP = selectors.SourceFingerprint(9, "Synthetic", "custom", "https://source.example.test/news", true, configText)
 	var selectorRequest map[string]any
 	if err = json.Unmarshal(envJSON, &selectorRequest); err != nil {
 		t.Fatal(err)

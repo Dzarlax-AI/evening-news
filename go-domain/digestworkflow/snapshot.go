@@ -15,6 +15,7 @@ import (
 
 	"github.com/Dzarlax-AI/evening-news/go-domain/telegramdelivery"
 	"github.com/Dzarlax-AI/evening-news/go-editorial/editorial"
+	"github.com/jackc/pgx/v5"
 	"github.com/jackc/pgx/v5/pgxpool"
 	"golang.org/x/text/cases"
 )
@@ -25,10 +26,13 @@ var ErrInvalid = errors.New("editorial_invalid_result")
 var ErrLimit = errors.New("editorial_resource_limit")
 
 type Workflow struct {
-	Pool     *pgxpool.Pool
-	Fence    telegramdelivery.TransactionFence
-	Provider editorial.ProviderConfig
-	SiteBase string
+	Pool            *pgxpool.Pool
+	Fence           telegramdelivery.TransactionFence
+	Provider        editorial.ProviderConfig
+	ResolveProvider func(context.Context) (editorial.ProviderConfig, error)
+	RecordUsage     func(context.Context, pgx.Tx, editorial.ProviderUsage) error
+	PriceUsage      func(editorial.ProviderUsage) *float64
+	SiteBase        string
 }
 
 var categories = map[string]string{"serbia": "Сербия", "tech": "Технологии", "technology": "Технологии", "ai": "Искусственный интеллект", "politics": "Политика", "business": "Бизнес", "media": "Медиа", "science": "Наука", "health": "Здоровье", "world": "Мир", "culture": "Культура", "other": "Другое"}

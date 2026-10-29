@@ -46,7 +46,7 @@ func TestLegacyArticleAnalysisParityFixtures(t *testing.T) {
 				t.Fatal(err)
 			}
 			providerBody, err := json.Marshal(map[string]any{
-				"candidates":    []any{map[string]any{"content": map[string]any{"parts": []any{map[string]string{"text": string(providerJSON)}}}}},
+				"candidates":    []any{map[string]any{"finishReason": "STOP", "content": map[string]any{"parts": []any{map[string]string{"text": string(providerJSON)}}}}},
 				"usageMetadata": map[string]any{"promptTokenCount": 10, "candidatesTokenCount": 5, "cachedContentTokenCount": 2, "totalTokenCount": 0},
 			})
 			if err != nil {

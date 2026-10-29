@@ -222,3 +222,80 @@ func TestSelectorStudyReturnsFixturePatterns(t *testing.T) {
 		t.Fatal("selector fixture response missing")
 	}
 }
+
+func TestGeminiCompleteResponsesForAllPurposes(t *testing.T) {
+	snapshot := `{"articles":[{"id":"one","title":"Fixture title","evidence_spans":[{"id":"span-one"}]},{"id":"two","title":"Second title","evidence_spans":[{"id":"span-two"}]}]}`
+	cases := []struct{ name, prompt, schemaField string }{
+		{"article", "Analyze this article", ""},
+		{"selector", "Find CSS selectors", ""},
+		{"editorial-json-schema", "СНИМОК (недоверенные данные):\n" + snapshot, "responseJsonSchema"},
+		{"editorial-legacy-schema", "СНИМОК (недоверенные данные):\n" + snapshot, "responseSchema"},
+	}
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			s := newState()
+			config := map[string]any{}
+			if tc.schemaField != "" {
+				config[tc.schemaField] = map[string]any{"type": "object", "properties": map[string]any{"article_stories": map[string]any{"type": "object"}}}
+			}
+			request := map[string]any{"generationConfig": config, "contents": []any{map[string]any{"parts": []any{map[string]any{"text": tc.prompt}}}}}
+			raw, err := json.Marshal(request)
+			if err != nil {
+				t.Fatal(err)
+			}
+			r := post(s.provider, "/v1/models/fixture:generateContent", string(raw), "", "")
+			if r.Code != http.StatusOK {
+				t.Fatalf("HTTP %d", r.Code)
+			}
+			var reply struct {
+				Candidates []struct {
+					Finish  string `json:"finishReason"`
+					Content struct {
+						Parts []struct {
+							Text string `json:"text"`
+						} `json:"parts"`
+					} `json:"content"`
+				} `json:"candidates"`
+				Metadata struct {
+					Input    *int `json:"promptTokenCount"`
+					Output   *int `json:"candidatesTokenCount"`
+					Thoughts *int `json:"thoughtsTokenCount"`
+					Cached   *int `json:"cachedContentTokenCount"`
+					Total    *int `json:"totalTokenCount"`
+				} `json:"usageMetadata"`
+			}
+			if err := json.Unmarshal(r.Body.Bytes(), &reply); err != nil || len(reply.Candidates) != 1 || reply.Candidates[0].Finish != "STOP" || len(reply.Candidates[0].Content.Parts) != 1 {
+				t.Fatalf("bad completed response: %v %+v", err, reply)
+			}
+			u := reply.Metadata
+			if u.Input == nil || u.Output == nil || u.Thoughts == nil || u.Cached == nil || u.Total == nil || *u.Cached > *u.Input || *u.Total != *u.Input+*u.Output+*u.Thoughts {
+				t.Fatalf("inconsistent usage: %+v", u)
+			}
+			var result map[string]json.RawMessage
+			if err := json.Unmarshal([]byte(reply.Candidates[0].Content.Parts[0].Text), &result); err != nil {
+				t.Fatal(err)
+			}
+			switch tc.name {
+			case "article":
+				if _, ok := result["summary"]; !ok {
+					t.Fatal("missing article summary")
+				}
+			case "selector":
+				if _, ok := result["content_selectors"]; !ok || s.counters["selector_study"] != 1 {
+					t.Fatal("missing selectors")
+				}
+			default:
+				var stories map[string]struct {
+					SpanID string `json:"span_id"`
+				}
+				var main []struct {
+					Primary    string   `json:"primary_article_id"`
+					ArticleIDs []string `json:"article_ids"`
+				}
+				if json.Unmarshal(result["article_stories"], &stories) != nil || json.Unmarshal(result["main_stories"], &main) != nil || len(stories) != 2 || stories["one"].SpanID != "span-one" || stories["two"].SpanID != "span-two" || len(main) != 2 || main[0].Primary != "one" || len(main[0].ArticleIDs) != 1 || main[0].ArticleIDs[0] != "one" || s.counters["editorial_gemini"] != 1 {
+					t.Fatalf("editorial result lost evidence: %s", reply.Candidates[0].Content.Parts[0].Text)
+				}
+			}
+		})
+	}
+}

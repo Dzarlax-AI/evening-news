@@ -96,7 +96,7 @@ func fakeGemini(t *testing.T, draft modelDraft, status int) *httptest.Server {
 		t.Fatal(err)
 	}
 	return httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-		if r.Method != http.MethodPost || r.URL.Query().Get("key") != "fake-key" {
+		if r.Method != http.MethodPost || r.Header.Get("x-goog-api-key") != "fake-key" {
 			t.Errorf("unexpected request metadata")
 		}
 		var body map[string]any
@@ -560,7 +560,7 @@ func TestGenerateRejectsIncompleteProviderAndDoesNotFollowRedirects(t *testing.T
 	}))
 	_, err = Generate(context.Background(), s, RussianLocale, ProviderConfig{APIKey: "fake-key", Model: "fake-model", Endpoint: redirect.URL, Client: redirect.Client()})
 	redirect.Close()
-	if err == nil || err.Error() != "provider_rejected_request" || redirected {
+	if err == nil || !strings.Contains(err.Error(), "http") || redirected {
 		t.Fatalf("redirect was followed or not rejected: err=%v followed=%v", err, redirected)
 	}
 }

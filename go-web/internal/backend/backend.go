@@ -134,6 +134,19 @@ func (c *Client) AnalyzeCategories(ctx context.Context, in CategoryAnalysisReque
 	}
 	return c.json(ctx, http.MethodPost, "/categories/ai-category-analysis", in)
 }
+
+// AISettingsOperations is optional to preserve compatibility with other backend implementations.
+type AISettingsOperations interface {
+	GetAISettings(context.Context) (json.RawMessage, error)
+	UpdateAISettings(context.Context, json.RawMessage) (json.RawMessage, error)
+}
+
+func (c *Client) GetAISettings(ctx context.Context) (json.RawMessage, error) {
+	return c.json(ctx, http.MethodGet, "/ai/settings", nil)
+}
+func (c *Client) UpdateAISettings(ctx context.Context, in json.RawMessage) (json.RawMessage, error) {
+	return c.rawJSON(ctx, http.MethodPut, "/ai/settings", bytes.NewReader(in), "application/json")
+}
 func (c *Client) TestTelegram(ctx context.Context) (json.RawMessage, error) {
 	return c.json(ctx, http.MethodPost, "/telegram/test", struct{}{})
 }
@@ -346,3 +359,5 @@ func (b *boundedReadCloser) Read(p []byte) (int, error) {
 }
 
 var _ Operations = (*Client)(nil)
+
+var _ AISettingsOperations = (*Client)(nil)

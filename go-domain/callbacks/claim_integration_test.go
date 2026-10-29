@@ -208,7 +208,7 @@ func TestClaimPostgresRejectsChangedArticle(t *testing.T) {
 	var providerCalls atomic.Int32
 	provider := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		providerCalls.Add(1)
-		_, _ = w.Write([]byte(`{"candidates":[{"content":{"parts":[{"text":"{\"summary\":\"ok\",\"categories\":[\"Business\"],\"is_advertisement\":false}"}]}}]}`))
+		_, _ = w.Write([]byte(`{"candidates":[{"finishReason":"STOP","content":{"parts":[{"text":"{\"summary\":\"ok\",\"categories\":[\"Business\"],\"is_advertisement\":false}"}]}}]}`))
 	}))
 	defer provider.Close()
 	runtime := airuntime.NewServer(airuntime.Config{APIKey: "fixture", Endpoint: provider.URL + "/v1/models", Model: "fixture-model", RPS: 100}, nil)

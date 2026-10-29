@@ -2,7 +2,9 @@ package airuntime
 
 import (
 	"context"
+	"errors"
 	"fmt"
+	ai "github.com/Dzarlax-AI/evening-news/go-ai"
 	"sync"
 	"time"
 )
@@ -53,6 +55,10 @@ func (b *Breaker) Do(ctx context.Context, fn func() (any, error)) (any, error) {
 		return value, nil
 	}
 	if ctx.Err() != nil {
+		return nil, err
+	}
+	var providerErr *ai.Error
+	if errors.As(err, &providerErr) && !providerErr.Retryable {
 		return nil, err
 	}
 	b.failures++
