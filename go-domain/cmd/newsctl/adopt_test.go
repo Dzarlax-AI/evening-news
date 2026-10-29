@@ -200,6 +200,9 @@ func TestAdoptionImportPostgresFixture(t *testing.T) {
 	defer func() {
 		_, _ = admin.Exec(context.Background(), `DROP SCHEMA IF EXISTS news_scheduler_other CASCADE`)
 		_, _ = admin.Exec(context.Background(), `DROP SCHEMA IF EXISTS scheduler_service CASCADE`)
+		// This fixture grants USAGE on its isolated schema to exercise runtime
+		// parity. Revoke that dependency before dropping the fixture role.
+		_, _ = admin.Exec(context.Background(), "REVOKE USAGE ON SCHEMA "+ident+" FROM "+pgx.Identifier{roleName}.Sanitize())
 		_, _ = admin.Exec(context.Background(), "REVOKE USAGE ON SCHEMA public FROM "+pgx.Identifier{roleName}.Sanitize())
 		if _, e := admin.Exec(context.Background(), "DROP ROLE "+pgx.Identifier{roleName}.Sanitize()); e != nil {
 			t.Error("offline-check role cleanup failed")

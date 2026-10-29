@@ -273,10 +273,21 @@ func readExternalInput(path string) (externalInput, string, error) {
 }
 
 func externalDirectoriesClean(l managedsetup.Layout) error {
-	for _, d := range []struct {
+	directories := []struct {
 		path string
 		uid  int
-	}{{l.Setup, -1}, {l.Web, l.WebUID}, {l.Domain, l.DomainUID}, {l.Background, l.BackgroundUID}, {l.Extractor, l.ExtractorUID}, {l.Egress, l.EgressUID}} {
+	}{{l.Setup, -1}, {l.Web, l.WebUID}, {l.Domain, l.DomainUID}, {l.Background, l.BackgroundUID}, {l.Extractor, l.ExtractorUID}}
+	// The egress runtime volume exists only for the native browser profile.
+	// HTTP-only installs must not require an unused path, while layouts that
+	// provide the optional volume still receive the same private-directory
+	// checks as the other runtime roles.
+	if l.Egress != "" {
+		directories = append(directories, struct {
+			path string
+			uid  int
+		}{l.Egress, l.EgressUID})
+	}
+	for _, d := range directories {
 		if err := os.MkdirAll(d.path, 0700); err != nil {
 			return errors.New("external installer state directories unavailable")
 		}

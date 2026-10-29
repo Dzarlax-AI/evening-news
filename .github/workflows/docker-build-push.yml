@@ -180,7 +180,7 @@ jobs:
 
   assemble-fixture:
     if: ${{ !(github.event_name == 'workflow_dispatch' && inputs.publish && github.ref == 'refs/heads/main') }}
-    needs: [go-core-tests, cross-build-arm64]
+    needs: [go-core-tests, cross-build-arm64, managed-recovery]
     runs-on: ubuntu-latest
     timeout-minutes: 55
     strategy:
@@ -225,6 +225,9 @@ jobs:
           "$RUNNER_TEMP/news-managed-adoption-gate"
           --postgres-major "${{ matrix.postgres }}"
           --output-dir "artifacts/managed-adoption-${{ matrix.postgres }}"
+      - name: Remove fixture gate binaries
+        if: always()
+        run: rm -f "$RUNNER_TEMP/news-vertical-fixture-gate" "$RUNNER_TEMP/news-managed-adoption-gate"
       - uses: actions/upload-artifact@v4
         if: always()
         with:
@@ -236,7 +239,7 @@ jobs:
 
   publish-reviewed-main:
     if: ${{ github.event_name == 'workflow_dispatch' && inputs.publish && github.ref == 'refs/heads/main' }}
-    needs: [go-core-tests, cross-build-arm64]
+    needs: [go-core-tests, cross-build-arm64, managed-recovery]
     concurrency:
       group: core-image-publish-${{ github.sha }}
       cancel-in-progress: false
@@ -256,7 +259,9 @@ jobs:
       - uses: docker/setup-buildx-action@v3
       - name: Build fixture gate
         working-directory: go-tools
-        run: go build -o "$RUNNER_TEMP/news-vertical-fixture-gate" ./cmd/vertical-fixture-gate
+        run: |
+          go build -o "$RUNNER_TEMP/news-vertical-fixture-gate" ./cmd/vertical-fixture-gate
+          go build -o "$RUNNER_TEMP/news-managed-adoption-gate" ./cmd/managed-adoption-gate
       - name: Pull isolated fixture infrastructure
         run: docker pull postgres:16-alpine && docker pull postgres:17-alpine && docker pull alpine:3.21
       - name: Build candidate images once
@@ -271,9 +276,13 @@ jobs:
         run: docker build --platform linux/amd64 -f docker/Dockerfile.extractor -t evening-news-collector:consolidation-fixture go
       - name: Run isolated acceptance on PostgreSQL 16 and 17
         run: |
+          set -eu
+          trap 'rm -f "$RUNNER_TEMP/news-vertical-fixture-gate" "$RUNNER_TEMP/news-managed-adoption-gate"' EXIT
           NEWS_FIXTURE_PG_MAJOR=16 "$RUNNER_TEMP/news-vertical-fixture-gate" --output-dir artifacts/acceptance-16
           NEWS_FIXTURE_PG_MAJOR=17 "$RUNNER_TEMP/news-vertical-fixture-gate" --output-dir artifacts/acceptance-17
           cmp artifacts/acceptance-16/receipt.json artifacts/acceptance-17/receipt.json
+          "$RUNNER_TEMP/news-managed-adoption-gate" --postgres-major 16 --output-dir artifacts/managed-adoption-16
+          "$RUNNER_TEMP/news-managed-adoption-gate" --postgres-major 17 --output-dir artifacts/managed-adoption-17
       - uses: docker/login-action@v3
         with:
           registry: ghcr.io
@@ -308,5 +317,7 @@ jobs:
         if: always()
         with:
           name: release-core-fixture-${{ github.sha }}
-          path: artifacts/acceptance-*/
+          path: |
+            artifacts/acceptance-*/
+            artifacts/managed-adoption-*/
           if-no-files-found: ignore
