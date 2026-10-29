@@ -4,7 +4,7 @@ import (
 	"context"
 	"encoding/json"
 	"errors"
-	ai "github.com/Dzarlax-AI/evening-news/go-ai"
+	ai "github.com/Dzarlax-AI/go-ai"
 	"net/http"
 	"net/http/httptest"
 	"strings"

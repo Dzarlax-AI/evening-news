@@ -5,7 +5,6 @@ on:
     paths:
       - 'go-processing/**'
       - 'go-domain/**'
-      - 'go-ai/**'
       - 'tests/**'
       - 'deploy/news-processing/**'
       - 'docker-compose*.yml'
@@ -15,7 +14,6 @@ on:
     paths:
       - 'go-processing/**'
       - 'go-domain/**'
-      - 'go-ai/**'
       - 'tests/**'
       - 'deploy/news-processing/**'
       - '.github/workflows/go-article-processing.yml'

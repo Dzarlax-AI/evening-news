@@ -8,9 +8,9 @@ import (
 	"strings"
 	"testing"
 
-	ai "github.com/Dzarlax-AI/evening-news/go-ai"
-	"github.com/Dzarlax-AI/evening-news/go-ai/providers/gemini"
-	"github.com/Dzarlax-AI/evening-news/go-ai/providers/openai"
+	ai "github.com/Dzarlax-AI/go-ai"
+	"github.com/Dzarlax-AI/go-ai/providers/gemini"
+	"github.com/Dzarlax-AI/go-ai/providers/openai"
 )
 
 type fakeTransport func(*http.Request) (*http.Response, error)

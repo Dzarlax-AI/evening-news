@@ -1,0 +1,86 @@
+<!doctype html>
+<html lang="ru">
+<head><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1">
+<title>Вынос go-ai в Dzarlax-AI/go-ai</title>
+<style>
+:root{color-scheme:light}body{margin:0;background:#fcfaf7;color:#27272a;font:16px/1.6 system-ui,sans-serif}main{max-width:1060px;margin:auto;padding:28px}h1,h2{font-family:Georgia,serif;line-height:1.2}section{background:white;border:1px solid #dedbd6;border-radius:8px;padding:22px;margin:18px 0}a{color:#1d4ed8}code{background:#f2f0eb;padding:2px 5px}code,li,p,td{overflow-wrap:anywhere}.status{background:#fff8e8;border-left:4px solid #a16207;padding:14px}.scroll{overflow-x:auto}table{width:100%;border-collapse:collapse}td,th{border:1px solid #dedbd6;padding:10px;text-align:left;vertical-align:top}small{color:#57534e}@media(max-width:640px){main{padding:12px}section{padding:16px}}
+</style></head>
+<body><main>
+<h1>Самостоятельная библиотека go-ai</h1>
+<p>Редакция 1 · 29 октября 2026 · План одобрен · Реализация подготовлена, релизная приёмка ожидает публикации версии</p>
+<p class="status">Цель: модуль <code>github.com/Dzarlax-AI/go-ai</code> с собственными версиями и CI; News использует фиксированную версию без локального <code>replace</code>. Исполнитель после одобрения — Terra 6.1. Production, Health, Assistant, браузер и Readeck не меняем.</p>
+
+<section><h2>1. Проверенная исходная точка</h2>
+<p>News: ветка <code>codex/openai-provider-module</code>, HEAD <code>7921d3e681f0897d60c41dc71eea74718b9f604f</code>. <a href="https://github.com/Dzarlax-AI/evening-news/pull/45">PR #45</a> при подготовке плана открыт и не слит. Он добавляет OpenAI и Gemini и остаётся отдельным завершённым изменением. Состояние main и PR повторно проверяем перед реализацией; merge #45 этим планом автоматически не разрешается.</p>
+<ul>
+<li><code>go-ai/go.mod</code>: Go 1.25, module path <code>github.com/Dzarlax-AI/evening-news/go-ai</code>; внешних зависимостей нет.</li>
+<li><code>go-ai/ai.go</code>: публичные Provider, Request, Response, Usage, Config, Error; реализации в <code>providers/openai</code> и <code>providers/gemini</code>, общая внутренняя обработка в <code>internal/transport</code>.</li>
+<li><code>go-domain/go.mod</code> и <code>go-editorial/go.mod</code> требуют <code>v0.0.0</code> с <code>replace … =&gt; ../go-ai</code>. Остальные локальные News-модули сохраняют свои существующие связи.</li>
+<li><code>docker/Dockerfile</code> копирует <code>go-ai/</code> перед загрузкой зависимостей domain; Makefile включает его в общий список модулей.</li>
+<li>CI в <code>.github/workflows/docker-build-push.yml</code> отдельно проверяет go-ai, включает его в needs и path filters. Другие затронутые фильтры: go-article-ingestion.yml, go-article-processing.yml, web-api.yml.</li>
+<li>README News ссылается на локальный README библиотеки. В отслеживаемом дереве не обнаружен файл LICENSE; для нового репозитория пользователь явно выбрал MIT.</li>
+</ul>
+<p>Несвязанные локальные изменения сохраняются. Проверки реализации и новые сборки при подготовке этого плана не запускались; существующие результаты PR #45 не заменяют приёмку выноса.</p>
+</section>
+
+<section><h2>2. Граница библиотеки</h2>
+<p>Переносим существующий контракт и поведение без расширения API: одна HTTP-попытка, отмена через context, ограниченные размеры данных, структурированный JSON, безопасные ошибки, статусы complete/refusal/incomplete, известные и неизвестные значения usage. Сохраняем особенности схем и учёта токенов обоих провайдеров. Package name остаётся <code>ai</code>; меняется только module/import path.</p>
+<p>В News остаются промпты, редакционные проверки, ссылки, настройки установки, ключи из env, сохранение данных, цены, лимитер, повторы, breaker и Telegram. В библиотеке нет News-типов, загрузки env, БД, контейнера или сервера. Health и Assistant пока только потенциальные потребители: их код и конфигурацию не читаем и не меняем в рамках этого этапа.</p>
+<p>Не добавляем новых провайдеров, streaming, embeddings, function calling, автоматический fallback или другие модели. Русский дайджест и будущая сербская локализация сохраняют прежние границы.</p>
+</section>
+
+<section><h2>3. Репозиторий, лицензия и версии</h2>
+<p>Целевой репозиторий — <code>Dzarlax-AI/go-ai</code>, один Go-модуль в корне. Пользователь подтвердил публичный доступ и лицензию MIT. News сможет получать модуль без дополнительных credentials. Создание репозитория и публикация исходников выполняются после одобрения всего плана; выбор видимости и лицензии сам по себе не запускает реализацию.</p>
+<p>Первая версия — <code>v0.1.0</code> на проверенном коммите. Дальнейшие релизы — явные теги SemVer; выпущенные теги не перемещаем и не переписываем. До v1 изменения API документируются в CHANGELOG; News обновляет версию только отдельным проверяемым изменением. Зависимость не указывает на main, latest или локальную директорию.</p>
+<p>Новый репозиторий получает только текущие исходники библиотеки и её тесты, а не историю, артефакты, секреты или документы всего News. Исходный News-коммит записываем в CHANGELOG первого релиза. Минимальные новые файлы: README на английском, LICENSE после выбора, CHANGELOG, AGENTS.md с командами/границами, CONTRIBUTING и CI. README содержит компилируемые примеры text и structured JSON без настоящих ключей.</p>
+</section>
+
+<section><h2>4. Порядок работ и PR</h2>
+<div class="scroll"><table><thead><tr><th>Шаг</th><th>Исполнитель и изменение</th><th>Условие перехода</th></tr></thead><tbody>
+<tr><td>Подготовка</td><td>Terra 6.1: повторно проверить Git, PR #45, существование и доступ к целевому репозиторию. Не перезаписывать уже существующий репозиторий. Зафиксировать выбранные лицензию и видимость. Сохранить несвязанные изменения.</td><td>Одобрен план и публикационные параметры. Если #45 открыт, подготовка библиотеки допустима от его проверенного HEAD; News PR ожидает включения #45 в main либо отдельно одобренного порядка интеграции.</td></tr>
+<tr><td>Библиотека</td><td>Terra 6.1, последовательное владение новым репозиторием: перенести go-ai в корень, поменять module/import path, добавить документацию и CI. После разрешения создания репозитория — минимальная default branch для bootstrap и один содержательный PR с кодом и тестами.</td><td>Независимое review реального diff и успешный CI, без реальных API-вызовов. Нельзя выдавать начальную bootstrap-ветку за готовый релиз.</td></tr>
+<tr><td>Версия</td><td>После отдельного разрешения merge библиотеки и публикации тега: зафиксировать проверенный коммит как v0.1.0. Проверить, что версия скачивается обычными средствами Go и что её checksum совпадает с коммитом/релизным содержимым.</td><td>Модуль доступен из чистого внешнего потребителя без локального replace. До этого News можно проверять локально с временной подстановкой, но финальная приёмка и merge с такой подстановкой запрещены.</td></tr>
+<tr><td>News</td><td>Terra 6.1, новая codex/-ветка от актуального main с #45: переключить все импорты и оба go.mod на github.com/Dzarlax-AI/go-ai v0.1.0, обновить go.sum, убрать два replace и копию go-ai/. Обновить Docker, Makefile, CI и README.</td><td>Один PR в News с ссылкой на PR и тег библиотеки; чистый fetch версии, проверки всех трёх AI-путей, review и CI. Никакого merge News или публикации образов без разрешения.</td></tr>
+</tbody></table></div>
+<p><strong>Итого: два связанных содержательных PR, по одному на репозиторий.</strong> Один PR не может содержать изменения двух репозиториев. Это не разделение библиотечного API на несколько несвязанных переделок. Существующий #45 в эти два PR не входит и не расширяется выносом без отдельного решения.</p>
+<p>Реализация на <code>gpt-6.1-terra</code>, high: библиотека и News последовательно, чтобы один исполнитель контролировал смену import path и версии. Отдельное review проверяет реальный diff, контракты, CI и отсутствие локального подменённого модуля; замечания возвращаются Terra. Делегирование до одобрения плана не запускаем.</p>
+</section>
+
+<section><h2>5. Затрагиваемые файлы News</h2><ul>
+<li><code>go-domain/analysis/{types,gemini,gemini_test}.go</code>, <code>go-domain/airuntime/{provider,provider_test,server,digest,article_callback,runtime_test,breaker}.go</code> и <code>go-editorial/editorial/{gemini,provider_test}.go</code>: смена импортов без изменения поведения.</li>
+<li><code>go-domain/go.mod</code>, <code>go-domain/go.sum</code>, <code>go-editorial/go.mod</code> и новый при необходимости <code>go-editorial/go.sum</code>: точная версия, валидные checksum, tidy. Проверить весь граф модулей на прежний path.</li>
+<li><code>docker/Dockerfile</code>: удалить COPY go-ai; доменная сборка получает библиотеку через go mod download. Не менять runtime image, secrets или production-пины.</li>
+<li><code>Makefile</code>: убрать локальный модуль из GO_MODULES. CI News сохраняет интеграционные проверки библиотеки через domain/editorial; самостоятельные go-ai-tests, needs и устаревшие path filters удаляются согласованно. CI самой библиотеки переезжает в новый репозиторий.</li>
+<li><code>README.md</code>: внешняя ссылка и фиксированная версия, описание границы. Документацию сборки проверить поиском на устаревшие инструкции. Исторические планы и evidence не переписывать ради отсутствия старых строк.</li>
+</ul><p>Изменений схемы БД, env, настроек провайдеров, HTTP-контрактов News, контейнерного состава и deployment-конфигурации не требуется.</p></section>
+
+<section><h2>6. Проверки и критерии приёмки</h2>
+<p>Ниже запланированные проверки, а не выполненные результаты. Все provider-тесты используют изолированные HTTP fixtures; реальных ключей и платных запросов нет.</p>
+<ul>
+<li>В новом модуле: <code>go test -race -count=1 ./...</code>, <code>go vet ./...</code>, <code>go mod verify</code>; компиляция примеров, cancel/timeout, JSON schema, безопасные ошибки, omission/usage и отсутствие автоматических повторов. Проверить заявленный минимум Go 1.25 и текущий News toolchain; синтетические тесты на Linux и macOS ARM64, Linux ARM64 compile gate.</li>
+<li>Внешний одноразовый consumer вне обоих checkout: <code>GOWORK=off go get github.com/Dzarlax-AI/go-ai@v0.1.0</code>, <code>go mod verify</code>, компиляция и fake-provider smoke. Через <code>go list -m -json</code> подтвердить Version=v0.1.0, отсутствие Replace и правильный Path. Отдельный небольшой GOMODCACHE позволяет обнаружить зависимость от прежнего локального кэша; удалить его после проверки.</li>
+<li>В News: <code>make test</code>, <code>make vet</code>, <code>go mod verify</code> в изменённых модулях и затронутые race-тесты. DB-тесты только с выделенным локальным PostgreSQL и явными test DSN. Не считать пропущенные DB-тесты пройденными.</li>
+<li>Сохранить существующие admission/retry snapshot, settings conflict/reset, usage/cost, article/text/digest и no-duplicate-delivery проверки. Три пути должны использовать новый внешний модуль с прежними результатами.</li>
+<li>GitHub CI News: Linux fixture acceptance с PostgreSQL 16 и 17, восемь источников и обработанная статья; существующий Linux ARM64 build gate. Build без публикации. До локальной Docker-сборки оценить свободное место; тяжёлые образы проверять штатным CI, не занимая диск Mac дубликатами.</li>
+<li>Поиск по активным исходникам и сборке: нет прежнего module path, локального replace go-ai, COPY go-ai или закоммиченного go.work/vendor с подменой. Не удалять остальные легитимные локальные replace News.</li>
+<li>Проверить diff на секреты, внутренние артефакты, абсолютные пути и скопированные News-данные. Новый модуль не импортирует News/Health/Assistant. README и examples соответствуют реальному API.</li>
+</ul>
+</section>
+
+<section><h2>7. Риски, откат и уборка</h2>
+<p>Главный риск — недоступная версия в CI/Docker: News PR нельзя считать готовым до успешного скачивания опубликованного тега без sibling checkout. Для выбранного публичного репозитория оставляем штатную проверку checksum, не отключаем GOSUMDB.</p>
+<p>Второй риск — выпадение CI при удалении job/path filters: проверить needs и фактический запуск всех интеграционных gates. Третий — скрытое изменение поведения при переносе: сохранить существующие тесты и отдельно сравнить diff к исходному go-ai из #45.</p>
+<p>До merge News откат — закрыть/исправить PR; работающая установка не меняется. После разрешённого merge возможен отдельный revert News на прежнюю реализацию из #45; released тег библиотеки не удалять и не перемещать, исправления выпускать новой версией. Production rollback и деплой не входят в этап.</p>
+<p>Удалять только созданные этим этапом временные consumer, cache, fixtures, тестовые процессы и сборочные файлы после проверок. Не удалять общий пользовательский Go/Docker cache, чужие контейнеры, старые бэкапы или несвязанные файлы. Оставить компактные логи и версии проверенных коммитов; не создавать объёмные копии репозиториев для архива.</p>
+</section>
+
+<section><h2>8. Решения и границы одобрения</h2>
+<ul>
+<li>Видимость и лицензия подтверждены пользователем: public + MIT. Повторное согласование этих параметров не требуется.</li>
+<li>Подтвердить описанный порядок двух PR и создание Dzarlax-AI/go-ai с минимальным bootstrap. Создание репозитория, перенос в него исходников и PR выполняются только после такого одобрения.</li>
+<li>Отдельно требуется разрешение на merge #45, merge go-ai и публикацию v0.1.0: они являются зависимостями финальной News-проверки, не скрытыми побочными действиями подготовки PR.</li>
+<li>Текущий запрос разрешает подготовку плана. После его одобрения — реализация на Terra 6.1 и PR/review в согласованных границах. Merge News, Docker publication и выкат остаются за границей этого этапа.</li>
+</ul>
+<p class="status">План и создание публичного репозитория под MIT одобрены. Дополнительно пользователь выбрал draft News PR поверх #45; merge #45 не разрешён. Merge библиотеки и публикация тега остаются отдельным шагом после review.</p>
+</section>
+<section><h2>9. Фактический результат и ограничения</h2><p>Создан публичный <a href="https://github.com/Dzarlax-AI/go-ai">Dzarlax-AI/go-ai</a>, постоянный локальный checkout отделён от News. <a href="https://github.com/Dzarlax-AI/go-ai/pull/1">PR go-ai #1</a> содержит модуль MIT, документацию, синтетические примеры и CI. Локальные race-тесты, vet и module verify прошли на macOS ARM64 с Go 1.26.4; Linux ARM64 — только компиляция пакетов и тестов. Независимое review сравнило исходники с News HEAD 7921d3e после замены module path, расхождений поведения и блокирующих замечаний не нашло. Удалённые CI-проверки оцениваются отдельно.</p><p>News подготовлен с require v0.1.0 без replace и локальной копии. До публикации тега domain/editorial проверены только с временными альтернативными modfile, указывающими на извлечённый модуль: race, vet и provisional verify прошли; эти подстановки не входят в коммит. Остальные модульные тесты и vet прошли, кроме двух schedulerbridge-тестов go-tools, которым не передавался TEST_DATABASE_URL. Это отсутствие DB-fixture, а не успешная DB-приёмка. Новые checksum не выдумывались.</p><p>Финальные download/tidy/checksum, тесты с опубликованной версией и PostgreSQL 16/17, Docker и CI News ещё не пройдены. News PR остаётся draft и зависит от #45 и выпуска библиотеки. Production, Health, Assistant, браузер и Readeck не менялись. Реальных AI-вызовов не было.</p></section></main></body></html>

@@ -8,7 +8,7 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
-	ai "github.com/Dzarlax-AI/evening-news/go-ai"
+	ai "github.com/Dzarlax-AI/go-ai"
 	"net/http"
 	"regexp"
 	"strconv"
