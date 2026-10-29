@@ -39,7 +39,7 @@ func choices(s string) map[string]bool {
 }
 
 var stages = choices("admission readiness discovery websocket events create_context create_target attach_target configure navigate dom cleanup parse validation")
-var reasons = choices("context_timeout context_cancelled event_overflow ownership_loss unsupported client_disconnected malformed_detach owned_detach target_crashed protocol_error transport_error operation_failed navigation_failed evaluation_failed navigation_dns navigation_connection navigation_tls navigation_aborted navigation_other browser_busy resource_limit sqlstate timeout canceled transaction_closed connection_closed other lease_mismatch policy_denied unavailable")
+var reasons = choices("context_timeout context_cancelled event_overflow ownership_loss unsupported client_disconnected malformed_detach owned_detach target_crashed protocol_error transport_error operation_failed navigation_failed evaluation_failed navigation_dns navigation_connection navigation_tls navigation_aborted navigation_http navigation_proxy navigation_redirect navigation_empty_response navigation_other browser_busy resource_limit sqlstate timeout canceled transaction_closed connection_closed other lease_mismatch policy_denied unavailable")
 var codes = choices("cancelled deadline_exceeded event_overflow invalid_input native_browser_busy native_browser_policy_denied parse_failed public_url_denied resource_limit transport_failed unavailable unsupported_selector response_too_large page_monitor_unavailable invalid_runner_response other")
 var hexID = regexp.MustCompile(`^[a-fA-F0-9]{12,64}$`)
 var tokenID = regexp.MustCompile(`^[a-f0-9]{64}$`)

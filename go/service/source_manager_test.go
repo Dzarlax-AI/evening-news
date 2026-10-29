@@ -597,3 +597,14 @@ func TestSourceBatchOverridesShortServerWriteTimeout(t *testing.T) {
 		t.Fatalf("response = %d %s", response.StatusCode, payload)
 	}
 }
+
+func TestSafePageMonitorNavigationReasons(t *testing.T) {
+	for _, reason := range []string{"navigation_http", "navigation_proxy", "navigation_redirect", "navigation_empty_response"} {
+		if !safePageMonitorNativeReason(reason) {
+			t.Errorf("missing reason %q", reason)
+		}
+	}
+	if safePageMonitorNativeReason("ERR_PROXY_CONNECTION_FAILED SECRET_CANARY") {
+		t.Fatal("accepted arbitrary browser text")
+	}
+}

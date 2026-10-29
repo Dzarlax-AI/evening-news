@@ -451,7 +451,7 @@ func safePageMonitorNativeReason(value string) bool {
 	case "context_timeout", "context_cancelled", "event_overflow", "ownership_loss", "unsupported", "browser_busy", "resource_limit",
 		"client_disconnected", "malformed_detach", "owned_detach", "target_crashed", "protocol_error",
 		"transport_error", "operation_failed", "navigation_failed", "evaluation_failed", "navigation_dns",
-		"navigation_connection", "navigation_tls", "navigation_aborted", "navigation_other":
+		"navigation_connection", "navigation_tls", "navigation_aborted", "navigation_http", "navigation_proxy", "navigation_redirect", "navigation_empty_response", "navigation_other":
 		return true
 	default:
 		return false

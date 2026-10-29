@@ -1011,3 +1011,47 @@ func receiptForJob(job store.Job, info store.LeaseInfo, state string, deadline t
 		AttemptGeneration: job.AttemptGeneration, DeadlineAt: deadline,
 	}, state)
 }
+
+type slowHeartbeatStore struct {
+	fakeQueueStore
+	entered chan struct{}
+	release chan struct{}
+}
+
+func (s *slowHeartbeatStore) HeartbeatWithFailure(_ context.Context, notify func()) error {
+	notify()
+	close(s.entered)
+	<-s.release
+	return store.ErrLeaseLost
+}
+
+func TestHeartbeatLoopCancelsRunBeforeCleanupCompletes(t *testing.T) {
+	queue := &slowHeartbeatStore{entered: make(chan struct{}), release: make(chan struct{})}
+	worker := &Worker{config: config.Config{HeartbeatInterval: time.Millisecond, RequestTimeout: time.Second}, store: queue, logger: slog.New(slog.NewTextHandler(io.Discard, nil))}
+	runCtx, cancelRun := context.WithCancel(context.Background())
+	defer cancelRun()
+	lost := make(chan struct{})
+	done := make(chan struct{})
+	go func() { worker.heartbeatLoop(context.Background(), cancelRun, lost); close(done) }()
+	select {
+	case <-queue.entered:
+	case <-time.After(time.Second):
+		t.Fatal("heartbeat did not enter cleanup")
+	}
+	select {
+	case <-runCtx.Done():
+	default:
+		t.Fatal("run not canceled before cleanup")
+	}
+	select {
+	case <-lost:
+	default:
+		t.Fatal("lease loss not signaled before cleanup")
+	}
+	close(queue.release)
+	select {
+	case <-done:
+	case <-time.After(time.Second):
+		t.Fatal("heartbeat loop did not finish")
+	}
+}
