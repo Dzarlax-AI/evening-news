@@ -36,8 +36,8 @@ input::placeholder { color: #a19b91; }
 .field-hint { display: block; margin-top: 6px; color: var(--text-secondary); font: 400 11px/1.6 var(--font); }
 .form-section { border-top: 1px solid var(--border); padding-top: 22px; margin-top: 24px; }
 .field-grid { display: grid; grid-template-columns: repeat(2,minmax(0,1fr)); gap: 16px; }
-button { min-height: 40px; padding: 9px 15px; border: 1px solid #d9d5ce; border-radius: 6px; background: white; color: var(--text); font: 500 12px/1.5 var(--font); cursor: pointer; }
-button:hover:not(:disabled) { background: #f7f5f1; border-color: #bdb7ad; }
+button:not(.lang-btn) { min-height: 40px; padding: 9px 15px; border: 1px solid #d9d5ce; border-radius: 6px; background: white; color: var(--text); font: 500 12px/1.5 var(--font); cursor: pointer; }
+button:not(.lang-btn):hover:not(:disabled) { background: #f7f5f1; border-color: #bdb7ad; }
 button.button-primary { background: var(--accent); border-color: var(--accent); color: #fff; }
 button.button-primary:hover:not(:disabled) { background: #343434; }
 .button-primary span { margin-left: 10px; }

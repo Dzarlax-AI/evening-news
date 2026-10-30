@@ -85,22 +85,31 @@ interface Window {
   document.addEventListener('DOMContentLoaded', () => {
     const host = document.querySelector<HTMLElement>('[data-language-switch]');
     if (!host) return;
-    const select = document.createElement('select');
-    select.setAttribute('aria-label', locale === 'ru' ? 'Язык интерфейса' : 'Jezik interfejsa');
-    select.style.cssText = 'font:inherit;color:inherit;background:var(--surface,transparent);border:1px solid currentColor;border-radius:4px;padding:.2rem';
-    for (const [value, label] of [['ru','Русский'], ['sr-Latn','Srpski']]) { const option = document.createElement('option'); option.value=value; option.textContent=label; select.append(option); }
-    select.value=locale;
-    select.addEventListener('change', () => {
-      if (dirty && !confirm(locale === 'ru' ? 'Есть несохранённые изменения. Сменить язык?' : 'Imate nesačuvane izmene. Promeniti jezik?')) { select.value=locale; return; }
-      let url = new URL(location.href);
-      if (host.dataset.editionSwitch === 'true') {
-        const target = select.value === 'ru' ? host.dataset.localeRu : host.dataset.localeSr;
-        if (!target) { alert(locale === 'ru' ? 'Выпуск на выбранном языке недоступен.' : 'Izdanje na izabranom jeziku nije dostupno.'); select.value=locale; return; }
-        url = new URL(target, location.href);
-      } else { url.searchParams.set('locale', select.value); }
-      document.cookie = 'news_locale=' + encodeURIComponent(select.value) + '; Path=/; SameSite=Lax; Max-Age=31536000' + (location.protocol === 'https:' ? '; Secure' : '');
-      location.assign(url.toString());
-    });
-    host.append(select);
+    host.classList.add('lang-switcher');
+    host.setAttribute('role', 'group');
+    host.setAttribute('aria-label', locale === 'ru' ? 'Язык интерфейса' : 'Jezik interfejsa');
+    for (const [value, label, accessibleLabel] of [['ru', 'RU', 'Русский'], ['sr-Latn', 'SR', 'Srpski (latinica)']]) {
+      const button = document.createElement('button');
+      button.type = 'button';
+      button.value = value;
+      button.className = 'lang-btn' + (value === locale ? ' active' : '');
+      button.textContent = label;
+      button.setAttribute('lang', value);
+      button.setAttribute('aria-label', accessibleLabel);
+      button.setAttribute('aria-pressed', String(value === locale));
+      button.addEventListener('click', () => {
+        if (value === locale) return;
+        if (dirty && !confirm(locale === 'ru' ? 'Есть несохранённые изменения. Сменить язык?' : 'Imate nesačuvane izmene. Promeniti jezik?')) return;
+        let url = new URL(location.href);
+        if (host.dataset.editionSwitch === 'true') {
+          const target = value === 'ru' ? host.dataset.localeRu : host.dataset.localeSr;
+          if (!target) { alert(locale === 'ru' ? 'Выпуск на выбранном языке недоступен.' : 'Izdanje na izabranom jeziku nije dostupno.'); return; }
+          url = new URL(target, location.href);
+        } else { url.searchParams.set('locale', value); }
+        document.cookie = 'news_locale=' + encodeURIComponent(value) + '; Path=/; SameSite=Lax; Max-Age=31536000' + (location.protocol === 'https:' ? '; Secure' : '');
+        location.assign(url.toString());
+      });
+      host.append(button);
+    }
   });
 })();

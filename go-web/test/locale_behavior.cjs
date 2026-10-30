@@ -5,14 +5,14 @@ const path = require('node:path');
 
 (async () => {
   const listeners = {};
-  let selection, confirmed = 0, navigated = '';
-  const host = {dataset:{}, append(el){selection=el;}};
+  const buttons=[]; let confirmed = 0, navigated = '';
+  const host = {dataset:{}, classList:{add(){}}, setAttribute(){}, append(el){buttons.push(el);}};
   class Element { constructor(editable=false){this.editable=editable;} matches(){return this.editable;} closest(){return null;} }
   const document = {
     documentElement:{lang:'sr-Latn'}, cookie:'',
     addEventListener(name, fn){(listeners[name] ||= []).push(fn);},
     querySelector(){return host;},
-    createElement(tag){return {tag, style:{}, children:[], events:{}, setAttribute(){}, append(child){this.children.push(child);}, addEventListener(name,fn){this.events[name]=fn;}};},
+    createElement(tag){return {tag, style:{}, children:[], events:{}, setAttribute(name,value){(this.attrs ||= {})[name]=value;}, append(child){this.children.push(child);}, addEventListener(name,fn){this.events[name]=fn;}};},
   };
   const location = {href:'https://example.test/admin/settings?tab=telegram', origin:'https://example.test', protocol:'https:', assign(url){navigated=url;}};
   let payload = {detail:'Mapping was saved but private category cache invalidation failed; do not retry automatically',code:'cache_invalidation_failed',user_value:'Исходный пользовательский текст'};
@@ -33,20 +33,24 @@ const path = require('node:path');
   assert.doesNotMatch(window.presentError(new Error('raw network error')),/raw network error/);
   for(const fn of listeners.DOMContentLoaded) fn();
   for(const fn of listeners.input) fn({target:new Element(true)});
-  selection.value='ru';selection.events.change();
+  assert.deepEqual(buttons.map(b=>b.textContent),['RU','SR']);
+  assert.equal(buttons[1].className,'lang-btn active');
+  assert.equal(buttons[1].attrs['aria-pressed'],'true');
+  buttons[1].events.click();assert.equal(confirmed,0);
+  buttons[0].events.click();
   assert.equal(confirmed,1);assert.equal(navigated,'');assert.equal(document.cookie,'');
-  let pairedSelection, pairedNavigation = '', missingAlerts = 0;
+  const pairedButtons=[]; let pairedNavigation = '', missingAlerts = 0;
   const pairedListeners = {};
-  const pairedHost = {dataset:{editionSwitch:'true',localeRu:'/digest/2026-10-26?edition=ru-id&locale=ru',localeSr:'/digest/2026-10-26?edition=sr-id&locale=sr-Latn'},append(el){pairedSelection=el;}};
+  const pairedHost = {dataset:{editionSwitch:'true',localeRu:'/digest/2026-10-26?edition=ru-id&locale=ru',localeSr:'/digest/2026-10-26?edition=sr-id&locale=sr-Latn'},classList:{add(){}},setAttribute(){},append(el){pairedButtons.push(el);}};
   const pairedDocument = {...document, cookie:'', documentElement:{lang:'ru'}, querySelector(){return pairedHost;},addEventListener(name,fn){(pairedListeners[name] ||= []).push(fn);}};
   const pairedLocation = {href:'https://example.test/digest/2026-10-26?edition=ru-id',origin:'https://example.test',protocol:'https:',assign(url){pairedNavigation=url;}};
   const pairedWindow = {location:pairedLocation,fetch:window.fetch};
   const pairedContext = vm.createContext({window:pairedWindow,document:pairedDocument,location:pairedLocation,Element,Request,Response,URL,console,confirm:()=>true,alert:()=>{missingAlerts++;}});
   vm.runInContext(fs.readFileSync(path.join(__dirname,'../../web/static/js/locale.js'),'utf8'),pairedContext);
   for (const fn of pairedListeners.DOMContentLoaded) fn();
-  pairedSelection.value='sr-Latn';pairedSelection.events.change();
+  pairedButtons[1].events.click();
   assert.equal(pairedNavigation,'https://example.test/digest/2026-10-26?edition=sr-id&locale=sr-Latn');
   assert.match(pairedDocument.cookie,/news_locale=sr-Latn/);
-  pairedNavigation='';pairedDocument.cookie='';pairedHost.dataset.localeSr='';pairedSelection.value='sr-Latn';pairedSelection.events.change();
+  pairedNavigation='';pairedDocument.cookie='';pairedHost.dataset.localeSr='';pairedButtons[1].events.click();
   assert.equal(missingAlerts,1);assert.equal(pairedNavigation,'');assert.equal(pairedDocument.cookie,'');
 })().catch(error=>{console.error(error);process.exit(1);});
