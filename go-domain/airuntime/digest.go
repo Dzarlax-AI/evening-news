@@ -73,7 +73,7 @@ func validDigest(v digestInput) (time.Time, bool) {
 		return deadline, false
 	}
 	switch v.Operation {
-	case "summary_status", "summaries_generate", "digest_prepare", "digest_publish":
+	case "summary_status", "summaries_generate", "digest_prepare", "digest_publish", "serbian_digest_retry":
 	default:
 		return deadline, false
 	}
@@ -103,7 +103,12 @@ func validDigest(v digestInput) (time.Time, bool) {
 	if decoder.Decode(&payload) != nil || payload == nil {
 		return deadline, false
 	}
-	if v.Kind == "summaries_generate" {
+	if v.Kind == "serbian_digest_retry" {
+		id, ok := payload["russian_edition_id"].(string)
+		if v.Operation != "serbian_digest_retry" || len(payload) != 1 || !ok || !uuidPattern.MatchString(id) {
+			return deadline, false
+		}
+	} else if v.Kind == "summaries_generate" {
 		if v.Operation != "summaries_generate" || len(payload) != 0 {
 			return deadline, false
 		}
@@ -240,7 +245,7 @@ func (s *Server) runDigest(key string, receipt *digestReceipt, deadline time.Tim
 	if err != nil {
 		receipt.state = "failed"
 		receipt.code = digestErrorCode(err)
-		if v.Operation == "digest_publish" {
+		if v.Operation == "digest_publish" || v.Operation == "serbian_digest_retry" {
 			receipt.code = "external_outcome_unknown"
 		}
 	} else {

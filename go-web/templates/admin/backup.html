@@ -328,10 +328,10 @@ async function createBackup() {
             showOpStatus('success', 'Резервная копия создана.');
             await loadBackups();
         } else {
-            showOpStatus('error', result.message || result.error_code || `Задание завершилось: ${result.status || 'ошибка'}`);
+            showOpStatus('error', window.presentMessage(result.message, result.error_code) || `Задание завершилось: ${result.status || 'ошибка'}`);
         }
     } catch (error) {
-        showOpStatus('error', error.message);
+        showOpStatus('error', window.presentError(error));
     }
 }
 
@@ -409,10 +409,10 @@ async function performRestore() {
             showOpStatus('success', 'Восстановление запущено. Перезагрузка через 10с...');
             setTimeout(() => window.location.reload(), 10000);
         } else {
-            showOpStatus('error', result.detail || result.message || 'Ошибка восстановления');
+            showOpStatus('error', window.presentMessage(result.detail || result.message, result.error_code) || 'Ошибка восстановления');
         }
     } catch (error) {
-        showOpStatus('error', error.message);
+        showOpStatus('error', window.presentError(error));
     }
 }
 
@@ -444,10 +444,10 @@ async function saveSchedule() {
             showOpStatus('success', 'Настройки сохранены');
             setTimeout(hideOpStatus, 3000);
         } else {
-            showOpStatus('error', result.detail || result.message || 'Ошибка сохранения');
+            showOpStatus('error', window.presentMessage(result.detail || result.message, result.error_code) || 'Ошибка сохранения');
         }
     } catch (error) {
-        showOpStatus('error', error.message);
+        showOpStatus('error', window.presentError(error));
     }
 }
 
@@ -535,10 +535,10 @@ async function restoreFromUploadedBackup(filename) {
         if (result.success) {
             showOpStatus('success', `Восстановление из ${filename} запущено`);
         } else {
-            showOpStatus('error', result.message || 'Ошибка восстановления');
+            showOpStatus('error', window.presentMessage(result.message, result.error_code) || 'Ошибка восстановления');
         }
     } catch (error) {
-        showOpStatus('error', error.message);
+        showOpStatus('error', window.presentError(error));
     }
 }
 

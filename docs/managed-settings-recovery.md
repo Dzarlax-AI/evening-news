@@ -19,7 +19,7 @@ Articles, editions, prior Telegram delivery receipts, jobs, execution runs, logs
 
 ## Preconditions and trust boundary
 
-Use the exact reviewed application revision that produced the copy. The recipe currently supports schema revision 016 with schema `news`; the scheduler uses `scheduler_service`. An upgrade is a separate step after recovery acceptance.
+Use the exact reviewed application revision that produced the copy. The recipe currently exports schema revision 018 and accepts settings exports from revisions 016 and 018 with schema `news`; the scheduler uses `scheduler_service`. Migration 019 adds runtime retry metadata only; it does not change this settings export format. An upgrade is a separate step after recovery acceptance.
 
 Tools: Bash, Docker Compose v2 or newer, `psql` matching the server major (16 or 17), `jq`, SHA-256 tooling, tar and [age](https://github.com/FiloSottile/age). Verify tool versions and available space before maintenance. Do not install tools or restart infrastructure as an implicit part of backup. The recipe has no dependency on a new always-running service.
 
@@ -86,7 +86,7 @@ PGSERVICE=scheduler_source psql -XqAt -v ON_ERROR_STOP=1 \
 }
 # Reject missing identity, empty admin, unknown format or oversized output.
 test "$(wc -c < "$NEWS_STAGE/settings.json")" -le 16777216
-jq -e '.format == "news-settings-v1" and .schema_version == 16 and
+jq -e '.format == "news-settings-v1" and (.schema_version == 16 or .schema_version == 18) and
   (.identity.installation_id | test("^[a-f0-9]{32}$")) and
   (.managed_admin | length == 1)' "$NEWS_STAGE/settings.json" >/dev/null
 
@@ -126,7 +126,7 @@ roles.json
 RESTORE.md
 ```
 
-Create `manifest.json` with format `settings-recovery-v1`, the source installation ID, profile `adopted-native-external`, schema revision 16, UTC time, source revision/image digests, and the exact byte size/SHA-256 of every other entry. The manifest itself must not contain the archive's own digest. Include it inside the encrypted payload. Read checksums locally into the manifest; never print the files to create a report. Refuse unknown/missing entries and an unexpected identity before encryption.
+Create `manifest.json` with format `settings-recovery-v1`, the source installation ID, profile `adopted-native-external`, schema revision matching `settings.json` (18 for a current export), UTC time, source revision/image digests, and the exact byte size/SHA-256 of every other entry. The manifest itself must not contain the archive's own digest. Include it inside the encrypted payload. Read checksums locally into the manifest; never print the files to create a report. Refuse unknown/missing entries and an unexpected identity before encryption.
 
 ```bash
 # Use an explicit allowlist, not tar of an entire deployment directory.

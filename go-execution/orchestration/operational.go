@@ -17,6 +17,7 @@ type OperationalSettings struct {
 	NewestDate        string `json:"newest_date"`
 	ProcessingEnabled bool   `json:"processing_enabled"`
 	DeliveryEnabled   bool   `json:"delivery_enabled"`
+	SerbianEnabled    bool   `json:"serbian_enabled"`
 }
 
 type JobOperationalConfig struct {
@@ -24,6 +25,7 @@ type JobOperationalConfig struct {
 	AttemptGeneration int64               `json:"attempt_generation"`
 	PinnedAt          time.Time           `json:"pinned_at"`
 	Settings          OperationalSettings `json:"settings"`
+	Telegram          *TelegramSettings   `json:"telegram,omitempty"`
 }
 
 type JobConfigPreparer func(context.Context, execution.ExecutionContext) (JobOperationalConfig, error)
@@ -38,4 +40,12 @@ func (s OperationalSettings) validate() error {
 		}
 	}
 	return nil
+}
+
+type TelegramSettings struct {
+	Revision               int64  `json:"revision"`
+	ChatID                 string `json:"chat_id"`
+	ServiceChatID          string `json:"service_chat_id"`
+	SerbianChatID          string `json:"serbian_chat_id"`
+	SerbianDeliveryEnabled bool   `json:"serbian_delivery_enabled"`
 }

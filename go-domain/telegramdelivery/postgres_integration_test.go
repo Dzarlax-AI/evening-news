@@ -92,6 +92,7 @@ func TestReceiptAndFencePostgres(t *testing.T) {
  CREATE TABLE ai_usage_tracking(id serial primary key,domain text,analysis_type text,tokens_used integer,credits_cost numeric(10,4),analysis_result json,created_at timestamp);
  CREATE TABLE digest_usage_fixture (model text not null);
  CREATE TABLE IF NOT EXISTS editorial_digest_editions(id uuid primary key,edition_date date,locale text,policy_version text,snapshot_hash text,snapshot jsonb,edition jsonb,rendered jsonb,provider_usage jsonb,job_id uuid,attempt_generation int,created_at timestamp default timezone('UTC',now()),unique(job_id,attempt_generation,locale));
+ CREATE TABLE editorial_serbian_retry(russian_edition_id uuid primary key,publication_pinned boolean default false,publication_attempted boolean default false,destination text,delivery_enabled boolean default false);
  CREATE TABLE IF NOT EXISTS digest_delivery_intents(id uuid primary key,edition_id uuid,destination_hash char(64),purpose text,render_hash char(64),job_id uuid,attempt_generation int,domain_instance_id uuid,state text,parts_sent int,rich_message bool,unique(edition_id,destination_hash,purpose));
  CREATE TABLE IF NOT EXISTS digest_delivery_parts(intent_id uuid,method text,part_index int,payload_hash char(64),job_id uuid,attempt_generation int,domain_instance_id uuid,state text,message_id bigint,status_code int,retry_after_seconds double precision,updated_at timestamp default now(),primary key(intent_id,method,part_index))`
 	if _, err = pool.Exec(ctx, ddl); err != nil {

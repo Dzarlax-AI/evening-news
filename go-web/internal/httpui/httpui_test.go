@@ -410,3 +410,180 @@ func TestPublicResponsesMatchPythonDataServiceGolden(t *testing.T) {
 		}
 	}
 }
+
+func TestSerbianDigestSelectionAndNoRussianFallback(t *testing.T) {
+	base := &fakeReader{digest: repositories.DigestPage{Summaries: []repositories.DigestSummary{{Category: "Архив", Text: "Русский архив"}}}}
+	reader := &fakeEditorialReader{fakeReader: base, edition: &repositories.EditorialDigestEdition{
+		ID: "8c93bb34-383d-449c-9e85-28aa9121a4fe", Date: "2026-10-26", Locale: "sr-Latn",
+		Edition:  repositories.EditorialDigestContent{Locale: "sr-Latn", Stories: []repositories.EditorialDigestStory{{ID: "main", Kind: "main", Title: "Važna vest", PrimaryArticleID: "1"}}},
+		Snapshot: repositories.EditorialDigestSnapshot{Articles: []repositories.EditorialDigestArticle{{ID: "1", CategoryName: "Srbija"}}},
+	}}
+	mux := http.NewServeMux()
+	testHandler(reader).Register(mux)
+	w := request(mux, "GET", "/digest/2026-10-26?locale=sr-Latn&edition="+reader.edition.ID)
+	if w.Code != http.StatusOK || reader.requestedLocale != "sr-Latn" || !strings.Contains(w.Body.String(), `lang="sr-Latn"`) || !strings.Contains(w.Body.String(), "Važna vest") || !strings.Contains(w.Body.String(), `/article/1?locale=sr-Latn`) {
+		t.Fatalf("Serbian edition status=%d body=%s", w.Code, w.Body.String())
+	}
+	reader.edition = nil
+	w = request(mux, "GET", "/digest/2026-10-26?locale=sr-Latn")
+	if w.Code != http.StatusNotFound || base.digestCalls != 0 || strings.Contains(w.Body.String(), "Русский архив") {
+		t.Fatalf("missing Serbian edition fell back: status=%d calls=%d", w.Code, base.digestCalls)
+	}
+}
+
+func TestUntranslatedPublicRoutesFailClosed(t *testing.T) {
+	mux := http.NewServeMux()
+	testHandler(&fakeReader{article: map[string]any{"title": "Русский текст"}}).Register(mux)
+	for _, path := range []string{"/?locale=sr-Latn", "/article/1?locale=sr-Latn", "/api/public/feed?locale=sr-Latn", "/search?locale=sr-Latn"} {
+		w := request(mux, "GET", path)
+		if w.Code != http.StatusServiceUnavailable || strings.Contains(w.Body.String(), "Русский текст") {
+			t.Errorf("%s status=%d body=%s", path, w.Code, w.Body.String())
+		}
+	}
+	if w := request(mux, "GET", "/?locale=unknown"); w.Code != http.StatusNotFound {
+		t.Fatalf("unknown locale status=%d", w.Code)
+	}
+}
+
+type missingLocalizedReader struct {
+	*fakeReader
+	localizedCalls int
+}
+
+func (*missingLocalizedReader) SupportsPublicLocale(locale string) bool { return locale == "sr-Latn" }
+func (f *missingLocalizedReader) Article(_ context.Context, _ int64, _ bool) (map[string]any, error) {
+	f.localizedCalls++
+	if f.localizedCalls == 1 {
+		return nil, nil
+	}
+	return map[string]any{"title": "Исходный заголовок", "is_advertisement": false}, nil
+}
+func TestSerbianMissingArticleLinksToRussianWithoutRenderingItsText(t *testing.T) {
+	reader := &missingLocalizedReader{fakeReader: &fakeReader{}}
+	mux := http.NewServeMux()
+	testHandler(reader).Register(mux)
+	w := request(mux, "GET", "/article/1?locale=sr-Latn")
+	if w.Code != http.StatusNotFound || !strings.Contains(w.Body.String(), "Prevod nije dostupan") || !strings.Contains(w.Body.String(), `href="/article/1?locale=ru"`) || strings.Contains(w.Body.String(), "Исходный заголовок") {
+		t.Fatalf("status=%d body=%s", w.Code, w.Body.String())
+	}
+}
+
+func TestLocalePreferenceQueryPrecedenceAndNoGetMutation(t *testing.T) {
+	for _, tc := range []struct {
+		path, cookie, want string
+		valid              bool
+	}{
+		{"/", "", "ru", true}, {"/", "sr-Latn", "ru", true}, {"/admin/", "sr-Latn", "sr-Latn", true}, {"/article/1", "sr-Latn", "ru", true}, {"/digest/2026-10-26?edition=8c93bb34-383d-449c-9e85-28aa9121a4fe", "sr-Latn", "ru", true}, {"/?locale=ru", "sr-Latn", "ru", true},
+		{"/?locale=sr-Latn", "ru", "sr-Latn", true}, {"/?locale=bad", "ru", "", false}, {"/?locale=ru&locale=ru", "", "", false}, {"/admin/", "bad", "", false},
+	} {
+		r := httptest.NewRequest("GET", tc.path, nil)
+		if tc.cookie != "" {
+			r.AddCookie(&http.Cookie{Name: "news_locale", Value: tc.cookie})
+		}
+		got, valid := requestLocale(r)
+		if got != tc.want || valid != tc.valid {
+			t.Errorf("%s cookie=%q got=%q valid=%v", tc.path, tc.cookie, got, valid)
+		}
+	}
+	mux := http.NewServeMux()
+	testHandler(&fakeReader{}).Register(mux)
+	w := request(mux, "GET", "/?locale=ru")
+	if len(w.Result().Cookies()) != 0 {
+		t.Fatal("public GET set a cookie")
+	}
+}
+
+type localizedFakeReader struct{ *fakeReader }
+
+func (*localizedFakeReader) SupportsPublicLocale(locale string) bool { return locale == "sr-Latn" }
+func TestSerbianPublicTemplateCopyAndLocalePropagation(t *testing.T) {
+	mux := http.NewServeMux()
+	testHandler(&localizedFakeReader{&fakeReader{}}).Register(mux)
+	for _, path := range []string{"/?locale=sr-Latn", "/search?q=test&locale=sr-Latn"} {
+		w := request(mux, "GET", path)
+		if w.Code != 200 || !strings.Contains(w.Body.String(), `lang="sr-Latn"`) || !strings.Contains(w.Body.String(), "/static/js/locale.js") {
+			t.Fatalf("%s status=%d", path, w.Code)
+		}
+		if strings.ContainsAny(w.Body.String(), "АБВГДЕЖЗИЙКЛМНОПРСТУФХЦЧШЩЪЫЬЭЮЯабвгдежзийклмнопрстуфхцчшщъыьэюяЁё") {
+			t.Errorf("%s contains untranslated Cyrillic in source UI", path)
+		}
+	}
+}
+
+type pairedEditorialReader struct {
+	*fakeEditorialReader
+	paired string
+}
+
+func (f *pairedEditorialReader) EditorialDigestCounterpart(_ context.Context, _ time.Time, _ string, _, _ string) (string, error) {
+	return f.paired, nil
+}
+func TestPinnedDigestSwitchUsesOnlyPairedEdition(t *testing.T) {
+	const ruID = "8c93bb34-383d-449c-9e85-28aa9121a4fe"
+	const srID = "42a8bb34-383d-449c-9e85-28aa9121a4fe"
+	reader := &pairedEditorialReader{fakeEditorialReader: &fakeEditorialReader{fakeReader: &fakeReader{}, edition: &repositories.EditorialDigestEdition{ID: ruID, Date: "2026-10-26", Locale: "ru", Edition: repositories.EditorialDigestContent{Locale: "ru"}}}, paired: srID}
+	mux := http.NewServeMux()
+	testHandler(reader).Register(mux)
+	w := request(mux, "GET", "/digest/2026-10-26?edition="+ruID+"&filter=all")
+	if w.Code != 200 || !strings.Contains(w.Body.String(), `data-locale-sr="/digest/2026-10-26?edition=`+srID+`&amp;filter=all&amp;locale=sr-Latn"`) {
+		t.Fatalf("paired switch status=%d body=%s", w.Code, w.Body.String())
+	}
+	reader.paired = ""
+	w = request(mux, "GET", "/digest/2026-10-26?edition="+ruID)
+	if !strings.Contains(w.Body.String(), `data-locale-sr=""`) {
+		t.Fatal("missing pair selected another edition")
+	}
+}
+
+func TestLegacyPublicFeedsValidateLocale(t *testing.T) {
+	mux := http.NewServeMux()
+	testHandler(&localizedFakeReader{&fakeReader{}}).Register(mux)
+	for _, path := range []string{"/api/v1/feed", "/api/v1/feed.rss"} {
+		for _, suffix := range []string{"?locale=bad", "?locale=ru&locale=ru"} {
+			if w := request(mux, "GET", path+suffix); w.Code != http.StatusNotFound {
+				t.Errorf("%s%s: %d", path, suffix, w.Code)
+			}
+		}
+		if w := request(mux, "GET", path+"?locale=sr-Latn"); w.Code != http.StatusOK {
+			t.Errorf("%s Serbian: %d", path, w.Code)
+		}
+	}
+	sr := request(mux, "GET", "/api/v1/feed.rss?locale=sr-Latn")
+	if !strings.Contains(sr.Body.String(), "<language>sr-Latn</language>") || !strings.Contains(sr.Body.String(), "/?locale=sr-Latn") {
+		t.Fatalf("Serbian RSS channel: %s", sr.Body.String())
+	}
+	ru := request(mux, "GET", "/api/v1/feed.rss")
+	if !strings.Contains(ru.Body.String(), "Aggregated news feed") || strings.Contains(ru.Body.String(), "<language>") {
+		t.Fatalf("Russian default RSS changed: %s", ru.Body.String())
+	}
+	noLocale := http.NewServeMux()
+	testHandler(&fakeReader{}).Register(noLocale)
+	if w := request(noLocale, "GET", "/api/v1/feed?locale=sr-Latn"); w.Code != http.StatusServiceUnavailable {
+		t.Fatalf("legacy reader must fail closed: %d", w.Code)
+	}
+}
+
+func TestSerbianRSSUsesConfiguredPublicOrigin(t *testing.T) {
+	reader := &localizedFakeReader{&fakeReader{}}
+	for _, tc := range []struct {
+		base, want string
+		status     int
+	}{
+		{"https://news.example.test/", "https://news.example.test/?locale=sr-Latn", http.StatusOK},
+		{"http://localhost:8000", "http://localhost:8000/?locale=sr-Latn", http.StatusOK},
+		{"https://user:secret@example.test", "", http.StatusServiceUnavailable},
+		{"https://example.test/?secret=value", "", http.StatusServiceUnavailable},
+		{"javascript:alert(1)", "", http.StatusServiceUnavailable},
+	} {
+		mux := http.NewServeMux()
+		New(Config{Reader: reader, SiteBaseURL: tc.base}).Register(mux)
+		w := request(mux, "GET", "/api/v1/feed.rss?locale=sr-Latn")
+		if w.Code != tc.status || (tc.want != "" && !strings.Contains(w.Body.String(), "<link>"+tc.want+"</link>")) || strings.Contains(w.Body.String(), "secret") {
+			t.Errorf("base %q status=%d body=%s", tc.base, w.Code, w.Body.String())
+		}
+		ru := request(mux, "GET", "/api/v1/feed.rss")
+		if ru.Code != http.StatusOK || !strings.Contains(ru.Body.String(), "<link>http://localhost:8000</link>") {
+			t.Errorf("Russian RSS contract changed: status=%d", ru.Code)
+		}
+	}
+}

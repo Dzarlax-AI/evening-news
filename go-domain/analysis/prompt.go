@@ -5,6 +5,11 @@ import (
 )
 
 func buildPrompt(r Request) string {
+	if r.Version == 2 && len(r.Locales) == 1 && r.Locales[0] == "sr-Latn" {
+		return `Translate the saved Russian news headline and summary into Serbian Latin. Preserve facts and meaning; do not add information. Return only JSON with a "localizations" object containing "sr-Latn" with non-empty "title" and "summary" strings.
+Headline: ` + r.Title + `
+Summary: ` + r.Content
+	}
 	categories := make([]string, 0, len(r.Categories))
 	names := make([]string, 0, len(r.Categories))
 	for _, c := range r.Categories {
@@ -57,7 +62,7 @@ Source Text instead. The Original Source Text is the reliable source of informat
 		localExample = `
 - Local news: "categories": ["` + r.ConfiguredLocalCategory + `"], "category_confidences": [0.95] — NOT ["` + r.ConfiguredLocalCategory + `", "Business"]`
 	}
-	return `Analyze this article and provide complete analysis in JSON format.
+	prompt := `Analyze this article and provide complete analysis in JSON format.
 
 🇷🇺 ВАЖНО: ВСЕ результаты анализа должны быть на РУССКОМ языке!
 
@@ -169,6 +174,12 @@ EXAMPLES:
 - Promotional post: "categories": ["Marketing"], "category_confidences": [0.9], "is_advertisement": true
 
 Answer ONLY with valid JSON, no additional text.`
+	if r.Version == 2 {
+		prompt = strings.Replace(prompt, "🇷🇺 ВАЖНО: ВСЕ результаты анализа должны быть на РУССКОМ языке!", "Produce Russian and Serbian Latin localized headlines and summaries from the same evidence.", 1)
+		prompt += `
+LOCALIZATIONS: In addition to shared categorization and advertisement detection, return a "localizations" object with "ru" and "sr-Latn" keys. Each value is an object containing "title" and "summary" strings. Write sr-Latn in Serbian Latin script. The existing top-level optimized_title and summary must match the Russian localization. Do not translate category IDs.`
+	}
+	return prompt
 }
 
 func sourceContext(rawURL string) string {

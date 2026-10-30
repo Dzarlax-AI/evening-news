@@ -32,7 +32,7 @@ func Analyze(ctx context.Context, r Request, config ProviderConfig) (map[string]
 	if err := validateRequest(r); err != nil {
 		return nil, nil, err
 	}
-	if strings.TrimSpace(r.Content) == "" || len([]rune(strings.TrimSpace(r.Content))) < 30 {
+	if strings.TrimSpace(r.Content) == "" || (len([]rune(strings.TrimSpace(r.Content))) < 30 && !(r.Version == 2 && len(r.Locales) == 1 && r.Locales[0] == "sr-Latn")) {
 		if scientificTitleFallback(r.Title, r.URL) && len([]rune(strings.TrimSpace(r.Title))) > 20 {
 			r.Content = r.Title
 		} else {
@@ -84,9 +84,21 @@ func analysisSchema() map[string]any {
 	}
 }
 
+func localizationSchema() map[string]any {
+	return map[string]any{"type": "object", "properties": map[string]any{"title": map[string]any{"type": "string"}, "summary": map[string]any{"type": "string"}}}
+}
+
 // analyzeWithProvider keeps domain validation separate from transport.
 func analyzeWithProvider(ctx context.Context, r Request, cfg ProviderConfig) (map[string]any, *Usage, error) {
-	schema, err := json.Marshal(analysisSchema())
+	schemaDef := analysisSchema()
+	if r.Version == 2 {
+		schemaDef["required"] = []string{"categories", "is_advertisement"}
+		if len(r.Locales) == 1 {
+			schemaDef["required"] = []string{}
+		}
+		schemaDef["properties"].(map[string]any)["localizations"] = map[string]any{"type": "object", "properties": map[string]any{"ru": localizationSchema(), "sr-Latn": localizationSchema()}}
+	}
+	schema, err := json.Marshal(schemaDef)
 	if err != nil {
 		return nil, nil, errCode(CodeProviderConfiguration)
 	}
@@ -114,7 +126,12 @@ func analyzeWithProvider(ctx context.Context, r Request, cfg ProviderConfig) (ma
 		return *p
 	}
 	u := &Usage{RequestedModel: cfg.Model, Model: response.Model, Provider: response.Provider, ProfileRevision: cfg.Revision, Normalized: &response.Usage, PromptTokens: value(response.Usage.InputTokens), CompletionTokens: value(response.Usage.OutputTokens), CachedTokens: value(response.Usage.CachedInputTokens), TotalTokens: value(response.Usage.TotalTokens)}
-	return validateAnalysisResult(parsed, r), u, nil
+	result := validateAnalysisResult(parsed, r)
+	if r.Version == 2 {
+		result["localization_prompt_version"] = "article-v2"
+		result["localization_model"] = cfg.Model
+	}
+	return result, u, nil
 }
 
 var structuredJSONCodeBlock = regexp.MustCompile("(?s)```(json)?\\s*\\n?(.*?)\\n?```")

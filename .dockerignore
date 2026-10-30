@@ -18,3 +18,5 @@ data
 logs
 exports
 *.tar.gz
+
+/web/static/js/locale.js

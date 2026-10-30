@@ -67,6 +67,11 @@ jobs:
       - uses: actions/setup-node@v4
         with:
           node-version: '22'
+      - name: Build TypeScript browser assets
+        run: |
+          npm --prefix web ci --ignore-scripts --no-audit --no-fund
+          npm --prefix web run typecheck
+          npm --prefix web run build
       - name: Verify admin digest dates against UTC near local midnight
         working-directory: go-web
         run: TZ=Pacific/Kiritimati node --test test/summaries_date.test.cjs

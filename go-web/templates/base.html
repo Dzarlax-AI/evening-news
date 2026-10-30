@@ -1,13 +1,15 @@
 {{define "base"}}<!doctype html>
-<html lang="ru"><head>
+<html lang="{{if eq .Locale "sr-Latn"}}sr-Latn{{else}}ru{{end}}"><head>
 <meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1">
 <title>{{.Title}} — Evening News</title>
+{{if .Canonical}}<link rel="canonical" href="{{.Canonical}}">{{end}}{{if .AlternateRU}}<link rel="alternate" hreflang="ru" href="{{.AlternateRU}}"><link rel="alternate" hreflang="sr-Latn" href="{{.AlternateSR}}">{{end}}
 <link href="/static/css/dzarlax.css" rel="stylesheet"><link href="/static/css/main.css" rel="stylesheet">
-<script src="/static/js/main.js"></script>
+<script src="/static/js/locale.js"></script>
+<script src="/static/js/main.js?locale={{.Locale}}"></script>
 <script>(function(){var s=localStorage.getItem('theme');if(s==='dark'||(!s&&window.matchMedia('(prefers-color-scheme: dark)').matches))document.documentElement.setAttribute('dark-mode','')})();</script>
 {{block "extra-head" .}}{{end}}
 </head><body>
-<nav class="navbar"><div class="nav-container"><div class="nav-brand"><a href="/">Evening News</a></div><div class="nav-menu"><a href="/" class="nav-hide-mobile">Новости</a><a href="/search">Поиск</a><button class="theme-toggle" onclick="toggleTheme()" title="Переключить тему"><span class="theme-icon">☀️</span></button></div></div></nav>
+<nav class="navbar"><div class="nav-container"><div class="nav-brand"><a href="/">Evening News</a></div><div class="nav-menu"><a href="/{{if eq .Locale "sr-Latn"}}?locale=sr-Latn{{end}}" class="nav-hide-mobile">{{if eq .Locale "sr-Latn"}}Vesti{{else}}Новости{{end}}</a><a href="/search{{if eq .Locale "sr-Latn"}}?locale=sr-Latn{{end}}">{{if eq .Locale "sr-Latn"}}Pretraga{{else}}Поиск{{end}}</a><span data-language-switch{{if .DigestSwitch}} data-edition-switch="true" data-locale-ru="{{.SwitchRU}}" data-locale-sr="{{.SwitchSR}}"{{end}}></span><button class="theme-toggle" onclick="toggleTheme()" title="{{if eq .Locale "sr-Latn"}}Promeni temu{{else}}Переключить тему{{end}}"><span class="theme-icon">☀️</span></button></div></div></nav>
 <main class="main-content">{{template "content" .}}</main>
 <footer class="footer"><div class="footer-content"><p>&copy; 2025 Evening News</p></div></footer>
 <script>function toggleTheme(){var d=document.documentElement;if(d.hasAttribute('dark-mode')){d.removeAttribute('dark-mode');localStorage.setItem('theme','light')}else{d.setAttribute('dark-mode','');localStorage.setItem('theme','dark')}updateThemeIcon()}function updateThemeIcon(){var dark=document.documentElement.hasAttribute('dark-mode');document.querySelectorAll('.theme-icon').forEach(function(el){el.textContent=dark?'🌙':'☀️'})}document.addEventListener('DOMContentLoaded',updateThemeIcon);</script>

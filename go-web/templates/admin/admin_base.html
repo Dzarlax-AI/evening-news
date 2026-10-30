@@ -1,6 +1,6 @@
 {{define "admin-base"}}
 <!DOCTYPE html>
-<html lang="ru">
+<html lang="{{.Locale}}">
 <head>
     <meta charset="UTF-8">
     <meta name="viewport" content="width=device-width, initial-scale=1.0">
@@ -9,7 +9,8 @@
     <link href="/static/css/main.css" rel="stylesheet">
     <link href="/static/css/admin.css" rel="stylesheet">
     <script src="/static/js/admin-csrf.js"></script>
-    <script src="/static/js/main.js" defer></script>
+    <script src="/static/js/locale.js"></script>
+    <script src="/static/js/main.js?locale={{.Locale}}" defer></script>
     {{template "admin-extra-css" .}}
 </head>
 <body class="admin-body">
@@ -56,7 +57,7 @@
             </a>
         </nav>
 
-        <div class="sidenav-bottom">
+        <div class="sidenav-bottom"><span data-language-switch></span>
             <a href="/" target="_blank" class="sidenav-link muted">
                 <span class="nav-icon">↗</span>
                 <span>На сайт</span>

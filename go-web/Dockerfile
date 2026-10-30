@@ -1,5 +1,14 @@
+FROM node:22.15.1-alpine AS web-assets
+WORKDIR /src/web
+COPY web/package.json web/package-lock.json web/tsconfig.json ./
+RUN npm ci --ignore-scripts --no-audit --no-fund
+COPY web/static/ts/ ./static/ts/
+RUN npm run build
+
 FROM golang:1.25.6-alpine AS build
-WORKDIR /src
+WORKDIR /src/go-web
+COPY go-tools/go.mod go-tools/go.sum /src/go-tools/
+COPY go-tools/runtimeconfig/ /src/go-tools/runtimeconfig/
 COPY go-web/go.mod go-web/go.sum ./
 RUN go mod download && go mod verify
 COPY go-web/ ./
@@ -17,6 +26,7 @@ COPY --from=build /out/news-web /news-web
 COPY go-web/templates/ ./templates/
 COPY go-web/contracts/ ./contracts/
 COPY web/static/ /app/web/static/
+COPY --from=web-assets /src/web/static/js/locale.js /app/web/static/js/locale.js
 USER 65532:65532
 EXPOSE 8000
 ENTRYPOINT ["/news-web"]

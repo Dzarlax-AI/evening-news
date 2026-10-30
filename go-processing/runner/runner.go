@@ -59,6 +59,7 @@ type OperationalSnapshot struct {
 	NewestDate        string
 	ProcessingEnabled bool
 	DeliveryEnabled   bool
+	SerbianEnabled    bool
 }
 
 type OperationalSnapshotReader func(context.Context, string, int64) (OperationalSnapshot, error)
@@ -226,7 +227,7 @@ func Run(ctx context.Context, c Config, onReady func()) error {
 			if err != nil {
 				return processing.OperationalSnapshot{}, err
 			}
-			return processing.OperationalSnapshot{Revision: v.Revision, PinnedAt: v.PinnedAt, LimitsEnabled: v.LimitsEnabled, MaxArticles: v.MaxArticles, PerSource: v.PerSource, Days: v.Days, NewestDate: v.NewestDate, ProcessingEnabled: v.ProcessingEnabled, DeliveryEnabled: v.DeliveryEnabled}, nil
+			return processing.OperationalSnapshot{Revision: v.Revision, PinnedAt: v.PinnedAt, LimitsEnabled: v.LimitsEnabled, MaxArticles: v.MaxArticles, PerSource: v.PerSource, Days: v.Days, NewestDate: v.NewestDate, ProcessingEnabled: v.ProcessingEnabled, DeliveryEnabled: v.DeliveryEnabled, SerbianEnabled: v.SerbianEnabled}, nil
 		}
 	}
 	h := processing.NewHandlerWithContext(ctx, db, p, processing.Config{Token: c.Token})

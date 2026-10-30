@@ -2,36 +2,36 @@
 {{define "content"}}
 <div class="editorial-page digest-page">
   <div class="editorial-shell">
-    <a class="editorial-back" href="/">← К ленте</a>
+    <a class="editorial-back" href="/{{if eq .Locale "sr-Latn"}}?locale=sr-Latn{{end}}">← {{if eq $.Locale "sr-Latn"}}Na vesti{{else}}К ленте{{end}}</a>
     {{if .Editorial}}
     <header class="editorial-masthead">
-      <p class="editorial-eyebrow">Вечерний обзор · {{.Editorial.DateLabel}}</p>
-      <h1>Главное за день</h1>
-      <p class="editorial-deck">Ключевые события и коротко о том, что ещё произошло.</p>
-      <div class="editorial-stats" aria-label="Состав выпуска">
+      <p class="editorial-eyebrow">{{if eq $.Locale "sr-Latn"}}Večernji pregled{{else}}Вечерний обзор{{end}} · {{.Editorial.DateLabel}}</p>
+      <h1>{{if eq $.Locale "sr-Latn"}}Najvažnije danas{{else}}Главное за день{{end}}</h1>
+      <p class="editorial-deck">{{if eq $.Locale "sr-Latn"}}Ključni događaji i kratak pregled ostalih vesti.{{else}}Ключевые события и коротко о том, что ещё произошло.{{end}}</p>
+      <div class="editorial-stats" aria-label="{{if eq $.Locale "sr-Latn"}}Sadržaj izdanja{{else}}Состав выпуска{{end}}">
         <span>{{.Editorial.MainLabel}}</span>
         <span>{{.Editorial.BriefLabel}}</span>
         <span>{{.Editorial.ArticleLabel}}</span>
       </div>
-      <a class="editorial-permalink" href="{{.Editorial.IssueURL}}">Ссылка на этот выпуск</a>
+      <a class="editorial-permalink" href="{{.Editorial.IssueURL}}">{{if eq $.Locale "sr-Latn"}}Link do ovog izdanja{{else}}Ссылка на этот выпуск{{end}}</a>
     </header>
     <div class="editorial-layout">
       <div class="editorial-content">
         {{if .Editorial.Main}}
         <section class="editorial-section editorial-main-stories" id="main" aria-labelledby="main-heading">
-          <div class="editorial-section-heading"><p class="editorial-section-label">01</p><h2 id="main-heading">Главное</h2></div>
+          <div class="editorial-section-heading"><p class="editorial-section-label">01</p><h2 id="main-heading">{{if eq $.Locale "sr-Latn"}}Glavne priče{{else}}Главное{{end}}</h2></div>
           {{range .Editorial.Main}}
           <article class="editorial-story editorial-story-main">
             <h3><a href="{{.ArticleURL}}">{{.Title}}</a></h3>
             {{if .Summary}}<p class="editorial-story-summary">{{.Summary}}</p>{{end}}
-            {{if .Sources}}<p class="editorial-sources"><span>По материалам:</span> {{range $i,$source:=.Sources}}{{if $i}}<span aria-hidden="true"> · </span>{{end}}<a href="{{$source.URL}}" target="_blank" rel="noopener noreferrer">{{$source.Name}}</a>{{end}}</p>{{end}}
+            {{if .Sources}}<p class="editorial-sources"><span>{{if eq $.Locale "sr-Latn"}}Prema izvorima:{{else}}По материалам:{{end}}</span> {{range $i,$source:=.Sources}}{{if $i}}<span aria-hidden="true"> · </span>{{end}}<a href="{{$source.URL}}" target="_blank" rel="noopener noreferrer">{{$source.Name}}</a>{{end}}</p>{{end}}
           </article>
           {{end}}
         </section>
         {{end}}
         {{if .Editorial.BriefGroups}}
         <section class="editorial-section editorial-briefs" id="briefs" aria-labelledby="briefs-heading">
-          <div class="editorial-section-heading"><p class="editorial-section-label">02</p><h2 id="briefs-heading">Ещё коротко</h2></div>
+          <div class="editorial-section-heading"><p class="editorial-section-label">02</p><h2 id="briefs-heading">{{if eq $.Locale "sr-Latn"}}Ukratko{{else}}Ещё коротко{{end}}</h2></div>
           {{range .Editorial.BriefGroups}}
           <section class="editorial-brief-group" id="{{.ID}}" aria-labelledby="heading-{{.ID}}">
             <h3 id="heading-{{.ID}}">{{.Name}}</h3>
@@ -39,7 +39,7 @@
               {{range .Stories}}<li class="editorial-brief">
                 <h4><a href="{{.ArticleURL}}">{{.Title}}</a></h4>
                 {{if .Summary}}<p>{{.Summary}}</p>{{end}}
-                {{if .Sources}}<p class="editorial-sources"><span>Источник:</span> {{range $i,$source:=.Sources}}{{if $i}}<span aria-hidden="true"> · </span>{{end}}<a href="{{$source.URL}}" target="_blank" rel="noopener noreferrer">{{$source.Name}}</a>{{end}}</p>{{end}}
+                {{if .Sources}}<p class="editorial-sources"><span>{{if eq $.Locale "sr-Latn"}}Izvor:{{else}}Источник:{{end}}</span> {{range $i,$source:=.Sources}}{{if $i}}<span aria-hidden="true"> · </span>{{end}}<a href="{{$source.URL}}" target="_blank" rel="noopener noreferrer">{{$source.Name}}</a>{{end}}</p>{{end}}
               </li>{{end}}
             </ul>
           </section>
@@ -47,10 +47,10 @@
         </section>
         {{end}}
       </div>
-      <aside class="editorial-contents" aria-label="Содержание выпуска">
-        <p class="editorial-contents-title">В этом выпуске</p>
-        {{if .Editorial.Main}}<a href="#main">Главное <span>{{.Editorial.MainCount}}</span></a>{{end}}
-        {{if .Editorial.BriefGroups}}<a href="#briefs">Ещё коротко <span>{{.Editorial.BriefCount}}</span></a>{{range .Editorial.BriefGroups}}<a class="editorial-contents-sub" href="#{{.ID}}">{{.Name}}</a>{{end}}{{end}}
+      <aside class="editorial-contents" aria-label="{{if eq $.Locale "sr-Latn"}}Sadržaj izdanja{{else}}Содержание выпуска{{end}}">
+        <p class="editorial-contents-title">{{if eq $.Locale "sr-Latn"}}U ovom izdanju{{else}}В этом выпуске{{end}}</p>
+        {{if .Editorial.Main}}<a href="#main">{{if eq $.Locale "sr-Latn"}}Glavne priče{{else}}Главное{{end}} <span>{{.Editorial.MainCount}}</span></a>{{end}}
+        {{if .Editorial.BriefGroups}}<a href="#briefs">{{if eq $.Locale "sr-Latn"}}Ukratko{{else}}Ещё коротко{{end}} <span>{{.Editorial.BriefCount}}</span></a>{{range .Editorial.BriefGroups}}<a class="editorial-contents-sub" href="#{{.ID}}">{{.Name}}</a>{{end}}{{end}}
       </aside>
     </div>
     {{else}}

@@ -44,16 +44,18 @@ type SourceUpdate struct {
 	UpdateInterval *int    `json:"update_interval"`
 }
 type CategoryCreate struct {
-	Name        string  `json:"name"`
-	DisplayName string  `json:"display_name"`
-	Description *string `json:"description"`
-	Color       *string `json:"color"`
+	SerbianDisplayName *string `json:"serbian_display_name"`
+	Name               string  `json:"name"`
+	DisplayName        string  `json:"display_name"`
+	Description        *string `json:"description"`
+	Color              *string `json:"color"`
 }
 type CategoryUpdate struct {
-	DisplayName string  `json:"display_name"`
-	Color       *string `json:"color"`
-	Description *string `json:"description"`
-	IsLocal     *bool   `json:"is_local"`
+	SerbianDisplayName *string `json:"serbian_display_name"`
+	DisplayName        string  `json:"display_name"`
+	Color              *string `json:"color"`
+	Description        *string `json:"description"`
+	IsLocal            *bool   `json:"is_local"`
 }
 type MappingRequest struct {
 	AICategory          string   `json:"ai_category"`

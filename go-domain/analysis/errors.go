@@ -56,9 +56,22 @@ func RetryableTransport(err error) bool {
 }
 
 func validateRequest(r Request) error {
-	if r.Version != 1 || r.MaxTextChars < 1 || r.MaxTextChars > maxGeminiRequest ||
+	if (r.Version != 1 && r.Version != 2) || r.MaxTextChars < 1 || r.MaxTextChars > maxGeminiRequest ||
 		r.Model == "" || len(r.Model) > 128 || len(r.Endpoint) > 2048 ||
 		len(r.URL) > 8192 || !validHTTPURL(r.URL) {
+		return errCode(CodeInvalidInput)
+	}
+	if r.Version == 1 && len(r.Locales) != 0 {
+		return errCode(CodeInvalidInput)
+	}
+	seen := map[string]bool{}
+	for _, locale := range r.Locales {
+		if (locale != "ru" && locale != "sr-Latn") || seen[locale] {
+			return errCode(CodeInvalidInput)
+		}
+		seen[locale] = true
+	}
+	if r.Version == 2 && (!seen["sr-Latn"] || len(seen) > 2) {
 		return errCode(CodeInvalidInput)
 	}
 	if len([]rune(r.Title)) > r.MaxTextChars || len([]rune(r.Content)) > r.MaxTextChars ||

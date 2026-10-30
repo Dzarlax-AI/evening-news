@@ -3,7 +3,7 @@ COMPOSE = docker compose --project-directory . -f deploy/compose/development.yml
 MANAGED_COMPOSE = docker compose -f docker-compose.managed.yml
 GO_MODULES = go go-web go-background go-worker go-scheduler go-ingestion go-processing go-execution go-editorial go-domain go-tools
 
-.PHONY: help dev stop logs build migrate test vet managed-prepare managed-up managed-token managed-logs managed-stop
+.PHONY: help dev stop logs build migrate test vet managed-prepare managed-up managed-token managed-logs managed-stop frontend-build
 
 help: ## Show available commands
 	@awk 'BEGIN {FS = ":.*##"} /^[a-zA-Z_-]+:.*##/ {printf "  %-12s %s\n", $$1, $$2}' $(MAKEFILE_LIST)
@@ -23,7 +23,11 @@ build: ## Build the three core candidate images locally
 migrate: ## Run the explicit one-shot migration against the configured local database
 	$(COMPOSE) run --rm migrate
 
-test: ## Run Go tests (database integration tests require an isolated test DSN)
+frontend-build: ## Install the pinned compiler and build browser assets
+	npm --prefix web ci --ignore-scripts --no-audit --no-fund
+	npm --prefix web run build
+
+test: frontend-build ## Run Go tests (database integration tests require an isolated test DSN)
 	@set -e; for module in $(GO_MODULES); do echo "Testing $$module"; (cd "$$module" && go test ./...); done
 
 vet: ## Run Go static checks

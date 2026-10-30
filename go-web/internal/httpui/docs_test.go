@@ -1,6 +1,7 @@
 package httpui
 
 import (
+	"bytes"
 	"context"
 	"encoding/json"
 	"net/http"
@@ -254,5 +255,33 @@ func TestCheckedInOpenAPIPreservesBaselineAndAddsAISettings(t *testing.T) {
 		if strings.Contains(string(contractBytes), disallowed) {
 			t.Fatalf("OpenAPI contract contains a test credential marker: %s", disallowed)
 		}
+	}
+}
+
+func TestDocumentationShellLocalesAndFrozenData(t *testing.T) {
+	mux := http.NewServeMux()
+	if err := RegisterDocs(mux, "../../contracts/openapi.json"); err != nil {
+		t.Fatal(err)
+	}
+	for _, path := range []string{"/docs", "/redoc", "/docs/oauth2-redirect"} {
+		ru := request(mux, "GET", path)
+		sr := request(mux, "GET", path+"?locale=sr-Latn")
+		if ru.Code != 200 || !strings.Contains(ru.Body.String(), `lang="ru"`) || sr.Code != 200 || !strings.Contains(sr.Body.String(), `lang="sr-Latn"`) {
+			t.Fatalf("%s locales: ru=%d sr=%d", path, ru.Code, sr.Code)
+		}
+		if path != "/docs/oauth2-redirect" && (!strings.Contains(ru.Body.String(), "Операции") || !strings.Contains(sr.Body.String(), "Operacije") || ru.Header().Get("ETag") == sr.Header().Get("ETag")) {
+			t.Fatalf("%s localized shell or cache mismatch", path)
+		}
+		if w := request(mux, "GET", path+"?locale=unknown"); w.Code != http.StatusNotFound {
+			t.Fatalf("%s accepted unknown locale", path)
+		}
+	}
+	raw := request(mux, "GET", "/openapi.json")
+	fixture, err := os.ReadFile("../../contracts/openapi.json")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !bytes.Equal(raw.Body.Bytes(), fixture) {
+		t.Fatal("frozen API contract bytes changed")
 	}
 }

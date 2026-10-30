@@ -136,6 +136,9 @@ func analysisFingerprint(input map[string]any) (string, error) {
 	if value, ok := input["original_context"]; ok {
 		ident["original_context"] = value
 	}
+	if value, ok := input["locales"]; ok {
+		ident["locales"] = value
+	}
 	wire, err := json.Marshal(ident)
 	if err != nil {
 		return "", err

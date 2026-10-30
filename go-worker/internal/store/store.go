@@ -434,6 +434,15 @@ func (s *Store) Claim(ctx context.Context, maxAttempts int64) (Job, error) {
 	if !errors.Is(err, pgx.ErrNoRows) {
 		return Job{}, errors.New("active job check failed")
 	}
+	var retryAdmissionAvailable bool
+	if err = tx.QueryRow(ctx, `SELECT to_regprocedure('enqueue_serbian_digest_retry()') IS NOT NULL`).Scan(&retryAdmissionAvailable); err != nil {
+		return Job{}, errors.New("retry admission unavailable")
+	}
+	if retryAdmissionAvailable {
+		if _, err = tx.Exec(ctx, `SELECT enqueue_serbian_digest_retry()`); err != nil {
+			return Job{}, errors.New("retry admission failed")
+		}
+	}
 	job, err := scanJob(tx.QueryRow(ctx, `SELECT id::text,kind,payload,result,queue_position,state,owner_generation,
 		attempt_generation,created_at,started_at,finished_at,error_code,schedule_key,schedule_revision
 		FROM background_jobs WHERE state='queued' OR (state='interrupted' AND attempt_generation < $1)

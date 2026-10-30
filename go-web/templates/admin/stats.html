@@ -1060,7 +1060,7 @@ function updateTopSources(data) {
         container.innerHTML = data.top_sources.map(source => `
             <li class="insight-item">
                 <span class="insight-label">${source.name}</span>
-                <span class="insight-value">${source.articles} статей</span>
+                <span class="insight-value">${source.articles} ${document.documentElement.lang === 'sr-Latn' ? window.serbianCountForm(source.articles, 'članak', 'članka', 'članaka') : 'статей'}</span>
             </li>
         `).join('');
     } else {
@@ -1118,7 +1118,7 @@ async function loadAIUsageStats() {
             byTypeContainer.innerHTML = data.by_type.map(item => `
                 <li class="insight-item">
                     <span class="insight-label">${formatAnalysisType(item.type)}</span>
-                    <span class="insight-value">${formatNumber(item.tokens)} токенов</span>
+                    <span class="insight-value">${formatNumber(item.tokens)} ${document.documentElement.lang === 'sr-Latn' ? window.serbianCountForm(item.tokens, 'token', 'tokena', 'tokena') : 'токенов'}</span>
                 </li>
             `).join('');
         } else {
@@ -1136,7 +1136,7 @@ async function loadAIUsageStats() {
             topDomainsContainer.innerHTML = data.top_domains.slice(0, 5).map(item => `
                 <li class="insight-item">
                     <span class="insight-label">${item.domain}</span>
-                    <span class="insight-value">${formatNumber(item.tokens)} токенов</span>
+                    <span class="insight-value">${formatNumber(item.tokens)} ${document.documentElement.lang === 'sr-Latn' ? window.serbianCountForm(item.tokens, 'token', 'tokena', 'tokena') : 'токенов'}</span>
                 </li>
             `).join('');
         } else {

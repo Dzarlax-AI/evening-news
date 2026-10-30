@@ -5,6 +5,7 @@ import "time"
 const (
 	EditionVersion = "1"
 	RussianLocale  = "ru"
+	SerbianLocale  = "sr-Latn"
 	MaxMainStories = 5
 	MaxStoryText   = 2000
 	MaxEvidence    = 500
@@ -40,6 +41,7 @@ type Evidence struct {
 	ArticleID string `json:"article_id"`
 	Quote     string `json:"quote"`
 	Basis     string `json:"basis,omitempty"`
+	Locale    string `json:"locale,omitempty"`
 }
 
 type Story struct {

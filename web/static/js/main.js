@@ -9,7 +9,8 @@ async function readApiResponse(response) {
     const body = await response.text();
     if (!body) return {};
     try {
-        return JSON.parse(body);
+        const data = JSON.parse(body);
+        return data;
     } catch (_) {
         const message = `Server returned a non-JSON response (HTTP ${response.status}).`;
         if (response.ok) throw new Error(message);

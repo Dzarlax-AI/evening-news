@@ -22,7 +22,7 @@ var (
 )
 
 func ValidateSnapshot(s Snapshot, locale string) (string, error) {
-	if locale != RussianLocale {
+	if locale != RussianLocale && locale != SerbianLocale {
 		return "", fmt.Errorf("%w: unsupported locale", ErrInvalidInput)
 	}
 	if _, err := time.Parse("2006-01-02", s.Date); err != nil || len(s.Date) != 10 {
@@ -74,7 +74,7 @@ func ValidateEdition(s Snapshot, locale string, e Edition) error {
 	if err != nil {
 		return err
 	}
-	if e.Version != EditionVersion || e.Locale != RussianLocale || e.Locale != locale || e.Date != s.Date || !e.CutoffUTC.Equal(s.CutoffUTC) || e.SiteBaseURL != strings.TrimRight(s.SiteBaseURL, "/") || e.EditionURL != s.EditionURL || e.SourceSnapshotHash != snapshotHash {
+	if e.Version != EditionVersion || e.Locale != locale || e.Date != s.Date || !e.CutoffUTC.Equal(s.CutoffUTC) || e.SiteBaseURL != strings.TrimRight(s.SiteBaseURL, "/") || e.EditionURL != s.EditionURL || e.SourceSnapshotHash != snapshotHash {
 		return fmt.Errorf("%w: edition metadata does not match snapshot", ErrInvalidEdition)
 	}
 	if len(e.Stories) > len(s.Articles) {
@@ -87,6 +87,9 @@ func ValidateEdition(s Snapshot, locale string, e Edition) error {
 	assigned := make(map[string]bool, len(articles))
 	mainCount := 0
 	for i, story := range e.Stories {
+		if locale == SerbianLocale && !SerbianLatinProse(story.Title+"\n"+story.Summary) {
+			return fmt.Errorf("%w: Serbian Latin prose required", ErrInvalidEdition)
+		}
 		if story.Kind == "main" {
 			mainCount++
 		} else if story.Kind != "brief" {
@@ -122,6 +125,12 @@ func ValidateEdition(s Snapshot, locale string, e Edition) error {
 			return fmt.Errorf("%w: missing or excessive evidence", ErrInvalidEdition)
 		}
 		for _, ev := range story.Evidence {
+			if locale == SerbianLocale && ev.Locale != SerbianLocale {
+				return fmt.Errorf("%w: missing evidence locale", ErrInvalidEdition)
+			}
+			if ev.Locale != "" && ev.Locale != locale {
+				return fmt.Errorf("%w: wrong evidence locale", ErrInvalidEdition)
+			}
 			a, ok := articles[ev.ArticleID]
 			if !ok || !contains(story.ArticleIDs, ev.ArticleID) || strings.TrimSpace(ev.Quote) == "" || utf8.RuneCountInString(ev.Quote) > MaxEvidence {
 				return fmt.Errorf("%w: invalid evidence reference", ErrInvalidEdition)

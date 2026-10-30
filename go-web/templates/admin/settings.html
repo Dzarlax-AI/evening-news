@@ -29,6 +29,7 @@
                 </div>
                 <div class="settings-form-group"><label for="ops-newest-date">Не новее даты (необязательно)</label><input class="settings-input" id="ops-newest-date" type="date"></div>
                 <div class="settings-form-group"><label><input type="checkbox" id="ops-processing-enabled"> Обрабатывать статьи</label></div>
+                <div class="settings-form-group"><label><input type="checkbox" id="ops-serbian-enabled"> Создавать переводы на сербский</label></div>
                 <div class="settings-form-group"><label><input type="checkbox" id="ops-delivery-enabled"> Отправлять дайджесты</label></div>
                 <div style="display:flex;gap:10px;margin-top:16px;">
                     <button class="btn btn--primary" type="submit">Сохранить</button>
@@ -72,6 +73,8 @@
                 <input type="text" id="tg-service-chat-id" placeholder="Из .env (если пусто — используется основной)" class="settings-input">
                 <small>Сюда отправляются ошибки и системные алерты</small>
             </div>
+            {{if .Managed}}<div class="settings-form-group"><label for="tg-serbian-chat-id">Канал сербского дайджеста</label><input type="text" id="tg-serbian-chat-id" class="settings-input"></div>
+            <div class="settings-form-group"><label><input type="checkbox" id="tg-serbian-delivery-enabled"> Отправлять сербский дайджест</label></div>{{end}}
             <div style="display:flex;gap:10px;margin-top:16px;">
                 <button class="btn btn--primary" onclick="tgSaveSettings()">Сохранить</button>
                 {{if not .Managed}}<button class="btn btn--secondary" onclick="tgResetToEnv()">Сбросить (использовать .env)</button>{{end}}
@@ -314,6 +317,7 @@ function operationalFill(value) {
     document.getElementById('ops-newest-date').value = value.newest_date || '';
     document.getElementById('ops-processing-enabled').checked = value.processing_enabled;
     document.getElementById('ops-delivery-enabled').checked = value.delivery_enabled;
+    document.getElementById('ops-serbian-enabled').checked = value.serbian_enabled;
     document.getElementById('operational-fields').disabled = false;
 }
 async function operationalLoad() {
@@ -323,7 +327,7 @@ async function operationalLoad() {
         if (!response.ok) throw new Error('Не удалось загрузить рабочие настройки.');
         operationalFill(await window.readApiResponse(response));
         operationalStatus('Настройки загружены.');
-    } catch (error) { operationalSettings = null; operationalStatus(error.message); }
+    } catch (error) { operationalSettings = null; operationalStatus(window.presentError(error)); }
 }
 async function operationalSave(event) {
     event.preventDefault(); if (!operationalSettings) return;
@@ -336,6 +340,7 @@ async function operationalSave(event) {
         days: Number(document.getElementById('ops-days').value),
         newest_date: document.getElementById('ops-newest-date').value,
         processing_enabled: document.getElementById('ops-processing-enabled').checked,
+        serbian_enabled: document.getElementById('ops-serbian-enabled').checked,
         delivery_enabled: document.getElementById('ops-delivery-enabled').checked
     };
     try {
@@ -344,7 +349,7 @@ async function operationalSave(event) {
         if (response.status === 422) throw new Error('Проверьте диапазоны значений и дату.');
         if (!response.ok) throw new Error('Не удалось сохранить рабочие настройки.');
         operationalFill(await window.readApiResponse(response)); operationalStatus('Сохранено. Новые настройки применяются к следующему заданию.');
-    } catch (error) { operationalStatus(error.message); fields.disabled = false; }
+    } catch (error) { operationalStatus(window.presentError(error)); fields.disabled = false; }
 }
 
 let aiSettings = null;
@@ -362,7 +367,7 @@ async function aiLoad() {
             for (const purpose of ['article', 'digest', 'text']) document.getElementById('ai-' + provider + '-' + purpose).value = d.profiles[provider].models[purpose];
         }
         aiMessage(d.source === 'env' ? 'Используются настройки окружения.' : 'Используются сохранённые настройки.'); fields.disabled = false;
-    } catch (e) { aiSettings = null; aiMessage(e.message); document.getElementById('ai-retry').hidden = false; }
+    } catch (e) { aiSettings = null; aiMessage(window.presentError(e)); document.getElementById('ai-retry').hidden = false; }
 }
 async function aiSave(event, reset) {
     if (event) event.preventDefault(); if (!aiSettings) return;
@@ -384,7 +389,7 @@ async function aiSave(event, reset) {
         document.getElementById('ai-provider').value = d.active_provider;
         for (const name of ['gemini','openai']) for (const purpose of ['article','digest','text']) document.getElementById('ai-' + name + '-' + purpose).value = d.profiles[name].models[purpose];
         aiMessage(d.source === 'env' ? 'Настройки сброшены к окружению.' : 'Настройки сохранены.');
-    } catch(e) { aiMessage(e.message); } finally { fields.disabled = false; }
+    } catch(e) { aiMessage(window.presentError(e)); } finally { fields.disabled = false; }
 }
 
 // ============================================================
@@ -394,7 +399,7 @@ let managedTelegram = null;
 const managedSettings = {{.Managed}};
 async function tgLoadSettings() {
     if (managedSettings) {
-        try { const [settings, credential] = await Promise.all([fetch('/api/v1/configuration/telegram').then(window.readApiResponse), fetch('/api/v1/credentials/telegram').then(window.readApiResponse)]); managedTelegram=settings; document.getElementById('tg-chat-id').value=settings.chat_id; document.getElementById('tg-service-chat-id').value=settings.service_chat_id; document.getElementById('tg-status-body').textContent=credential.configured ? 'Токен сохранён.' : 'Токен не задан.'; document.getElementById('tg-connection-status').textContent=credential.configured ? 'Токен настроен' : 'Токен не задан'; } catch(e) { document.getElementById('tg-status-body').textContent='Не удалось загрузить настройки.'; } return;
+        try { const [settings, credential] = await Promise.all([fetch('/api/v1/configuration/telegram').then(window.readApiResponse), fetch('/api/v1/credentials/telegram').then(window.readApiResponse)]); managedTelegram=settings; document.getElementById('tg-chat-id').value=settings.chat_id; document.getElementById('tg-service-chat-id').value=settings.service_chat_id; document.getElementById('tg-serbian-chat-id').value=settings.serbian_chat_id || ''; document.getElementById('tg-serbian-delivery-enabled').checked=settings.serbian_delivery_enabled; document.getElementById('tg-status-body').textContent=credential.configured ? 'Токен сохранён.' : 'Токен не задан.'; document.getElementById('tg-connection-status').textContent=credential.configured ? 'Токен настроен' : 'Токен не задан'; } catch(e) { document.getElementById('tg-status-body').textContent='Не удалось загрузить настройки.'; } return;
     }
     try {
         const r = await fetch('/api/v1/telegram/settings');
@@ -404,7 +409,7 @@ async function tgLoadSettings() {
         tgPrefillForm(d);
     } catch (e) {
         document.getElementById('tg-status-body').innerHTML =
-            `<div class="settings-result err">Ошибка: ${e.message}</div>`;
+            `<div class="settings-result err">Ошибка: ${window.presentError(e)}</div>`;
         const badge = document.getElementById('tg-connection-status');
         badge.textContent = 'Ошибка';
         badge.className = 'tg-status-badge tg-status-error';
@@ -436,7 +441,7 @@ function tgPrefillForm(d) {
 async function tgSaveSettings() {
     if (managedSettings) {
         if (!managedTelegram) { tgShowResult('tg-save-result', false, 'Сначала загрузите настройки.'); return; }
-        try { const r=await fetch('/api/v1/configuration/telegram',{method:'PUT',headers:{'Content-Type':'application/json'},body:JSON.stringify({expected_revision:managedTelegram.revision,chat_id:document.getElementById('tg-chat-id').value.trim(),service_chat_id:document.getElementById('tg-service-chat-id').value.trim()})}); if(r.status===409){await tgLoadSettings();tgShowResult('tg-save-result',false,'Настройки изменились и были обновлены. Повторите сохранение.');return;} if(!r.ok)throw Error('Не удалось сохранить настройки.');managedTelegram=await window.readApiResponse(r);tgShowResult('tg-save-result',true,'Сохранено'); }catch(e){tgShowResult('tg-save-result',false,e.message);} return;
+        try { const r=await fetch('/api/v1/configuration/telegram',{method:'PUT',headers:{'Content-Type':'application/json'},body:JSON.stringify({expected_revision:managedTelegram.revision,chat_id:document.getElementById('tg-chat-id').value.trim(),service_chat_id:document.getElementById('tg-service-chat-id').value.trim(),serbian_chat_id:document.getElementById('tg-serbian-chat-id').value.trim(),serbian_delivery_enabled:document.getElementById('tg-serbian-delivery-enabled').checked})}); if(r.status===409){await tgLoadSettings();tgShowResult('tg-save-result',false,'Настройки изменились и были обновлены. Повторите сохранение.');return;} if(!r.ok)throw Error('Не удалось сохранить настройки.');managedTelegram=await window.readApiResponse(r);tgShowResult('tg-save-result',true,'Сохранено'); }catch(e){tgShowResult('tg-save-result',false,window.presentError(e));} return;
     }
     try {
         const r = await fetch('/api/v1/telegram/settings', {
@@ -448,9 +453,9 @@ async function tgSaveSettings() {
         });
         const d = await window.readApiResponse(r);
         if (!r.ok) throw new Error(d.detail || 'Ошибка');
-        tgShowResult('tg-save-result', true, d.message || 'Сохранено');
+        tgShowResult('tg-save-result', true, window.presentMessage(d.message, d.error_code, true) || 'Сохранено');
         await tgLoadSettings();
-    } catch (e) { tgShowResult('tg-save-result', false, e.message); }
+    } catch (e) { tgShowResult('tg-save-result', false, window.presentError(e)); }
 }
 
 async function tgResetToEnv() {
@@ -464,8 +469,8 @@ async function tgTestConnection() {
     try {
         const r = await fetch('/api/v1/telegram/test', {method:'POST'});
         const d = await window.readApiResponse(r);
-        tgShowResult('tg-action-result', d.success, d.message || (d.success ? 'Дайджест отправлен.' : `Задание завершилось: ${d.status || 'ошибка'}`));
-    } catch (e) { tgShowResult('tg-action-result', false, e.message); }
+        tgShowResult('tg-action-result', d.success, window.presentMessage(d.message, d.error_code, d.success) || (d.success ? 'Дайджест отправлен.' : `Задание завершилось: ${d.status || 'ошибка'}`));
+    } catch (e) { tgShowResult('tg-action-result', false, window.presentError(e)); }
 }
 
 async function tgSendDigest() {
@@ -476,8 +481,8 @@ async function tgSendDigest() {
         const d = await window.resolveBackgroundResponse(r, data, job => {
             tgShowResult('tg-action-result', true, job.status === 'queued' ? 'Дайджест принят в очередь.' : job.status === 'interrupted' ? 'Дайджест ожидает восстановления обработчиком...' : 'Дайджест отправляется...');
         });
-        tgShowResult('tg-action-result', d.success, d.message);
-    } catch (e) { tgShowResult('tg-action-result', false, e.message); }
+        tgShowResult('tg-action-result', d.success, window.presentMessage(d.message, d.error_code, d.success));
+    } catch (e) { tgShowResult('tg-action-result', false, window.presentError(e)); }
 }
 
 function tgShowResult(id, ok, msg) {
@@ -512,7 +517,7 @@ async function schLoadAll() {
         schRender();
     } catch (e) {
         document.getElementById('sch-container').innerHTML =
-            `<div class="settings-result err">Ошибка загрузки: ${e.message}</div>`;
+            `<div class="settings-result err">Ошибка загрузки: ${window.presentError(e)}</div>`;
     }
 }
 
@@ -601,7 +606,7 @@ async function schSave(name) {
         });
         if (!r.ok) throw new Error((await window.readApiResponse(r)).detail || 'Ошибка');
         await schLoadAll();
-    } catch (e) { alert('Ошибка: ' + e.message); }
+    } catch (e) { alert('Ошибка: ' + window.presentError(e)); }
 }
 
 async function schToggle(name, enabled) {
@@ -610,7 +615,7 @@ async function schToggle(name, enabled) {
             method:'PUT', headers:{'Content-Type':'application/json'}, body:JSON.stringify({enabled})
         });
         if (!r.ok) throw new Error((await window.readApiResponse(r)).detail || 'Ошибка');
-    } catch (e) { alert('Ошибка: ' + e.message); await schLoadAll(); }
+    } catch (e) { alert('Ошибка: ' + window.presentError(e)); await schLoadAll(); }
 }
 
 async function schDelete(name) {
@@ -619,7 +624,7 @@ async function schDelete(name) {
         const r = await fetch('/api/v1/schedule/settings/' + name, {method:'DELETE'});
         if (!r.ok) throw new Error((await window.readApiResponse(r)).detail || 'Ошибка');
         await schLoadAll();
-    } catch (e) { alert('Ошибка: ' + e.message); }
+    } catch (e) { alert('Ошибка: ' + window.presentError(e)); }
 }
 
 function schShowCreateModal() { document.getElementById('sch-create-modal').style.display = 'flex'; }
@@ -655,7 +660,7 @@ async function schCreateSchedule() {
         if (!r.ok) throw new Error((await window.readApiResponse(r)).detail || 'Ошибка');
         schCloseCreateModal();
         await schLoadAll();
-    } catch (e) { alert('Ошибка: ' + e.message); }
+    } catch (e) { alert('Ошибка: ' + window.presentError(e)); }
 }
 </script>
 {{end}}

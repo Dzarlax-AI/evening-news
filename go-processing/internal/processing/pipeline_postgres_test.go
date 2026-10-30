@@ -1521,3 +1521,68 @@ func TestSelectedRunGETSanitizesLegacyErrorsAndStaysBounded(t *testing.T) {
 		t.Fatal("full GET run response exposed a stored legacy error")
 	}
 }
+
+func TestPostgresLocalizationRetryDoesNotConsumeArticleAttempt(t *testing.T) {
+	pg := newPipelinePG(t, false)
+	ctx := context.Background()
+	pg.seedArticle(t, 91)
+	f := pg.newRun(t, 91)
+	_, err := pg.admin.Exec(ctx, `CREATE TABLE `+pg.schema+`.article_localizations(article_id bigint,locale text,title text,summary text,input_fingerprint text,prompt_version text,model text,status text,attempts integer,next_retry_at timestamp,last_error text,updated_at timestamp DEFAULT now(),PRIMARY KEY(article_id,locale)); UPDATE `+pg.schema+`.articles SET title='Русский заголовок',summary='Русский текст',summary_processed=true,category_processed=true,ad_processed=true,processing_attempts=1,processing_state='completed',processed=true WHERE id=91; INSERT INTO `+pg.schema+`.article_localizations VALUES(91,'sr-Latn','','','aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa','article-v2','test','retry_wait',1,now()-interval '1 minute','invalid_localization',now())`)
+	if err != nil {
+		t.Fatal(err)
+	}
+	a, fp, found, err := pg.db.ClaimLocalizationRetry(ctx, f, 3, time.Minute)
+	if err != nil || !found {
+		t.Fatalf("claim retry: found=%v error=%v", found, err)
+	}
+	if err = pg.db.SaveLocalizationRetry(ctx, f, a, fp, "Naslov", "Sažetak", "article-v2", "test", true, 3); err != nil {
+		t.Fatal(err)
+	}
+	var attempts, localeAttempts int
+	var title, summary, status string
+	err = pg.admin.QueryRow(ctx, `SELECT a.processing_attempts,a.title,a.summary,l.attempts,l.status FROM `+pg.schema+`.articles a JOIN `+pg.schema+`.article_localizations l ON l.article_id=a.id WHERE a.id=91`).Scan(&attempts, &title, &summary, &localeAttempts, &status)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if attempts != 1 || title != "Русский заголовок" || summary != "Русский текст" || localeAttempts != 2 || status != "completed" {
+		t.Fatal("retry changed the article or failed to persist locale")
+	}
+}
+
+func TestPostgresBilingualPersistenceAndStaleFence(t *testing.T) {
+	pg := newPipelinePG(t, false)
+	ctx := context.Background()
+	pg.seedArticle(t, 92)
+	f := pg.newRun(t, 92)
+	_, err := pg.admin.Exec(ctx, `CREATE TABLE `+pg.schema+`.article_localizations(article_id bigint,locale text,title text,summary text,input_fingerprint text,prompt_version text,model text,status text,attempts integer,next_retry_at timestamp,last_error text,updated_at timestamp DEFAULT now(),PRIMARY KEY(article_id,locale)); UPDATE `+pg.schema+`.articles SET category_processed=true,ad_processed=true WHERE id=92`)
+	if err != nil {
+		t.Fatal(err)
+	}
+	rows, err := pg.db.SelectDue(ctx, f, 1, 0, []int64{92}, nil, nil, 3)
+	if err != nil || len(rows) != 1 {
+		t.Fatal("select fixture")
+	}
+	a := rows[0]
+	attempt, fp, token, err := pg.db.ClaimArticle(ctx, f, a, false, time.Minute, time.Minute)
+	if err != nil {
+		t.Fatal(err)
+	}
+	data := map[string]any{"analysis_version": 2, "localizations": map[string]any{"ru": map[string]any{"title": "Русский заголовок", "summary": "Русский текст"}, "sr-Latn": map[string]any{"title": "", "summary": ""}}, "categories": []any{"Tech"}, "is_advertisement": false}
+	out := AnalyzeOutcome(data, false, true, true)
+	err = pg.db.SaveOutcome(ctx, f, a, attempt, token, fp, store.Persisted{State: "completed", Fields: out.Fields, Attempts: attempt, Processed: true})
+	if err != nil {
+		t.Fatal(err)
+	}
+	var title, summary, ruStatus, srStatus string
+	var articleAttempts int
+	err = pg.admin.QueryRow(ctx, `SELECT a.title,a.summary,a.processing_attempts,ru.status,sr.status FROM `+pg.schema+`.articles a JOIN `+pg.schema+`.article_localizations ru ON ru.article_id=a.id AND ru.locale='ru' JOIN `+pg.schema+`.article_localizations sr ON sr.article_id=a.id AND sr.locale='sr-Latn' WHERE a.id=92`).Scan(&title, &summary, &articleAttempts, &ruStatus, &srStatus)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if title != "Русский заголовок" || summary != "Русский текст" || articleAttempts != 1 || ruStatus != "completed" || srStatus != "retry_wait" {
+		t.Fatal("unexpected locale projection or state")
+	}
+	if err = pg.db.SaveOutcome(ctx, f, a, attempt, token, fp, store.Persisted{State: "completed", Fields: out.Fields, Attempts: attempt, Processed: true}); err == nil {
+		t.Fatal("stale claim accepted")
+	}
+}

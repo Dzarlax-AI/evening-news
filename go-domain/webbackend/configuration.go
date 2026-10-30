@@ -36,9 +36,11 @@ func (s *Server) telegramConfiguration(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	var in struct {
-		ExpectedRevision *int64  `json:"expected_revision"`
-		ChatID           *string `json:"chat_id"`
-		ServiceChatID    *string `json:"service_chat_id"`
+		ExpectedRevision       *int64  `json:"expected_revision"`
+		ChatID                 *string `json:"chat_id"`
+		ServiceChatID          *string `json:"service_chat_id"`
+		SerbianChatID          *string `json:"serbian_chat_id"`
+		SerbianDeliveryEnabled *bool   `json:"serbian_delivery_enabled"`
 	}
 	d := json.NewDecoder(http.MaxBytesReader(w, r.Body, 4096))
 	d.DisallowUnknownFields()
@@ -46,7 +48,21 @@ func (s *Server) telegramConfiguration(w http.ResponseWriter, r *http.Request) {
 		reject(w, 422, "Invalid settings request")
 		return
 	}
-	v, err := store.UpdateTelegram(r.Context(), appsettings.TelegramUpdate{ExpectedRevision: *in.ExpectedRevision, ChatID: *in.ChatID, ServiceChatID: *in.ServiceChatID})
+
+	if in.SerbianChatID == nil || in.SerbianDeliveryEnabled == nil {
+		current, err := store.Telegram(r.Context())
+		if err != nil {
+			reject(w, 503, "Settings unavailable")
+			return
+		}
+		if in.SerbianChatID == nil {
+			in.SerbianChatID = &current.SerbianChatID
+		}
+		if in.SerbianDeliveryEnabled == nil {
+			in.SerbianDeliveryEnabled = &current.SerbianDeliveryEnabled
+		}
+	}
+	v, err := store.UpdateTelegram(r.Context(), appsettings.TelegramUpdate{ExpectedRevision: *in.ExpectedRevision, ChatID: *in.ChatID, ServiceChatID: *in.ServiceChatID, SerbianChatID: *in.SerbianChatID, SerbianDeliveryEnabled: *in.SerbianDeliveryEnabled})
 	switch {
 	case errors.Is(err, appsettings.ErrInvalid):
 		reject(w, 422, "Invalid settings request")
@@ -79,6 +95,7 @@ func (s *Server) operationalConfiguration(w http.ResponseWriter, r *http.Request
 		NewestDate        *string `json:"newest_date"`
 		ProcessingEnabled *bool   `json:"processing_enabled"`
 		DeliveryEnabled   *bool   `json:"delivery_enabled"`
+		SerbianEnabled    *bool   `json:"serbian_enabled"`
 	}
 	d := json.NewDecoder(http.MaxBytesReader(w, r.Body, 4096))
 	d.DisallowUnknownFields()
@@ -86,7 +103,16 @@ func (s *Server) operationalConfiguration(w http.ResponseWriter, r *http.Request
 		reject(w, 422, "Invalid settings request")
 		return
 	}
-	v, err := store.UpdateOperational(r.Context(), appsettings.OperationalUpdate{ExpectedRevision: *in.ExpectedRevision, LimitsEnabled: *in.LimitsEnabled, MaxArticles: *in.MaxArticles, PerSource: *in.PerSource, Days: *in.Days, NewestDate: *in.NewestDate, ProcessingEnabled: *in.ProcessingEnabled, DeliveryEnabled: *in.DeliveryEnabled})
+
+	if in.SerbianEnabled == nil {
+		current, err := store.Operational(r.Context())
+		if err != nil {
+			reject(w, 503, "Settings unavailable")
+			return
+		}
+		in.SerbianEnabled = &current.SerbianEnabled
+	}
+	v, err := store.UpdateOperational(r.Context(), appsettings.OperationalUpdate{ExpectedRevision: *in.ExpectedRevision, LimitsEnabled: *in.LimitsEnabled, MaxArticles: *in.MaxArticles, PerSource: *in.PerSource, Days: *in.Days, NewestDate: *in.NewestDate, ProcessingEnabled: *in.ProcessingEnabled, DeliveryEnabled: *in.DeliveryEnabled, SerbianEnabled: *in.SerbianEnabled})
 	switch {
 	case errors.Is(err, appsettings.ErrInvalid):
 		reject(w, 422, "Invalid settings request")

@@ -62,7 +62,7 @@ func run() error {
 		authService.UseManaged(auth.NewManagedStore(db.Pool(), cfg.InstallationID))
 	}
 	started := time.Now().UTC()
-	ui := httpui.New(httpui.Config{Reader: db, PublicAdmin: func(r *http.Request) bool { _, ok := authService.PublicAdmin(r); return ok }, TemplatesDir: "templates", StaticDir: "../web/static", StartedAt: started, Version: "2.0.0"})
+	ui := httpui.New(httpui.Config{Reader: db, PublicAdmin: func(r *http.Request) bool { _, ok := authService.PublicAdmin(r); return ok }, TemplatesDir: "templates", StaticDir: "../web/static", StartedAt: started, Version: "2.0.0", SiteBaseURL: cfg.SiteBaseURL})
 	mux := http.NewServeMux()
 	if err := httpui.RegisterDocs(mux, "contracts/openapi.json"); err != nil {
 		return err

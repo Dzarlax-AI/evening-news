@@ -219,6 +219,10 @@ func (g *gate) run() (resultErr error) {
 	if _, e := g.docker([]byte(roleSQL), "exec", "-T", "postgres", "psql", "-v", "ON_ERROR_STOP=1", "-U", "gate_user", "-d", "gate_db"); e != nil {
 		return errors.New("background role provisioning failed")
 	}
+	privileges, e := g.docker(nil, "exec", "-T", "postgres", "psql", "-U", "gate_user", "-d", "gate_db", "-qAtc", `SELECT (has_function_privilege('fixture_worker_runtime','public.enqueue_serbian_digest_retry()','EXECUTE') AND NOT has_table_privilege('fixture_worker_runtime','public.editorial_serbian_retry','SELECT') AND NOT has_table_privilege('fixture_worker_runtime','public.editorial_serbian_retry','INSERT') AND NOT has_table_privilege('fixture_worker_runtime','public.articles','SELECT'))::text`)
+	if e != nil || privileges != "true" {
+		return errors.New("worker retry admission privileges invalid")
+	}
 	if _, e := g.docker(nil, "exec", "-T", "postgres", "createdb", "-U", "gate_user", "-O", "fixture_scheduler_runtime", "gate_scheduler"); e != nil {
 		return errors.New("scheduler database creation failed")
 	}
@@ -1338,6 +1342,7 @@ GRANT CONNECT ON DATABASE gate_db TO fixture_worker_runtime, fixture_execution_r
 GRANT USAGE ON SCHEMA public TO fixture_worker_runtime, fixture_execution_runtime;
 GRANT SELECT,INSERT,UPDATE,DELETE ON TABLE public.background_jobs, public.background_worker_status, public.background_job_executions TO fixture_worker_runtime;
 GRANT USAGE,SELECT,UPDATE ON SEQUENCE public.background_jobs_queue_position_seq TO fixture_worker_runtime;
+GRANT EXECUTE ON FUNCTION public.enqueue_serbian_digest_retry() TO fixture_worker_runtime;
 GRANT SELECT,UPDATE ON TABLE public.background_jobs,public.background_worker_status TO fixture_execution_runtime;
 GRANT SELECT,INSERT,UPDATE ON TABLE public.background_job_executions TO fixture_execution_runtime;
 GRANT SELECT,UPDATE ON TABLE public.schedule_settings,public.articles TO fixture_execution_runtime;`

@@ -1,0 +1,12 @@
+{
+  "compilerOptions": {
+    "target": "ES2020",
+    "module": "none",
+    "lib": ["ES2020", "DOM"],
+    "strict": true,
+    "noEmitOnError": true,
+    "rootDir": "static/ts",
+    "outDir": "static/js"
+  },
+  "include": ["static/ts/locale.ts"]
+}

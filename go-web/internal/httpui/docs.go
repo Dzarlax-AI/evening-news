@@ -2,8 +2,10 @@ package httpui
 
 import (
 	"bytes"
+	"crypto/sha256"
 	"encoding/json"
 	"errors"
+	"fmt"
 	"html/template"
 	"net/http"
 	"os"
@@ -24,9 +26,10 @@ type apiDocument struct {
 }
 
 type docsPage struct {
-	Title, Version, Description string
-	Operations                  []docsOperation
-	Schemas                     []docsSchema
+	Title, Version, Description                                                         string
+	Locale, VersionLabel, OperationsLabel, SchemasLabel, DetailsLabel, DataSchemasLabel string
+	Operations                                                                          []docsOperation
+	Schemas                                                                             []docsSchema
 }
 type docsOperation struct {
 	Path, Method, Summary, OperationID string
@@ -35,7 +38,7 @@ type docsOperation struct {
 type docsSchema struct{ Name, Definition string }
 
 var docsTemplate = template.Must(template.New("docs").Parse(`<!doctype html>
-<html lang="en"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width, initial-scale=1">
+<html lang="{{.Locale}}"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width, initial-scale=1">
 <title>{{.Title}} API</title><style>
 :root{color-scheme:light dark;--bg:#fcfaf7;--fg:#18181b;--muted:#666;--line:#dedbd6;--accent:#285c78;--panel:#fff}
 @media(prefers-color-scheme:dark){:root{--bg:#171717;--fg:#eee;--muted:#aaa;--line:#444;--accent:#9bcbe1;--panel:#222}}
@@ -46,12 +49,10 @@ h1,h2,h3{font-family:Georgia,serif;line-height:1.2}h1{font-size:2.2rem;margin:0 
 .route{font-size:1.05rem;overflow-wrap:anywhere}.method{display:inline-block;min-width:4.6em;margin-right:10px;padding:2px 7px;border-radius:4px;background:var(--accent);color:var(--bg);font:bold .75rem/1.6 system-ui;text-align:center}
 details{margin-top:12px}summary{cursor:pointer;color:var(--accent)}pre{white-space:pre-wrap;overflow-wrap:anywhere;background:var(--bg);border:1px solid var(--line);border-radius:5px;padding:12px;font-size:.84rem}
 @media(max-width:600px){main{padding:20px 14px 48px}h1{font-size:1.8rem}}
-</style></head><body><main><header><h1>{{.Title}} API</h1><p class="meta">Version {{.Version}}</p><p>{{.Description}}</p><nav class="actions"><a href="#operations">Operations</a><a href="#schemas">Schemas</a><a href="/openapi.json">OpenAPI JSON</a></nav></header>
-<section id="operations"><h2>Operations</h2>{{range .Operations}}<article class="operation"><div class="route"><span class="method">{{.Method}}</span><code>{{.Path}}</code></div><p>{{if .Summary}}{{.Summary}}{{else}}<span class="muted">{{.OperationID}}</span>{{end}}</p><details><summary>Request and response details</summary><pre>{{.Details}}</pre></details></article>{{end}}</section>
-<section id="schemas"><h2>Data schemas</h2>{{range .Schemas}}<details class="operation"><summary><code>{{.Name}}</code></summary><pre>{{.Definition}}</pre></details>{{end}}</section>
+</style><script src="/static/js/locale.js"></script></head><body><main><header><h1>{{.Title}} API</h1><p class="meta">{{.VersionLabel}} {{.Version}}</p><p lang="en">{{.Description}}</p><nav class="actions"><a href="#operations">{{.OperationsLabel}}</a><a href="#schemas">{{.SchemasLabel}}</a><a href="/openapi.json">OpenAPI JSON</a><span data-language-switch></span></nav></header>
+<section id="operations"><h2>{{.OperationsLabel}}</h2>{{range .Operations}}<article class="operation"><div class="route"><span class="method">{{.Method}}</span><code>{{.Path}}</code></div><p lang="en">{{if .Summary}}{{.Summary}}{{else}}<span class="muted">{{.OperationID}}</span>{{end}}</p><details><summary>{{$.DetailsLabel}}</summary><pre>{{.Details}}</pre></details></article>{{end}}</section>
+<section id="schemas"><h2>{{.DataSchemasLabel}}</h2>{{range .Schemas}}<details class="operation"><summary><code>{{.Name}}</code></summary><pre>{{.Definition}}</pre></details>{{end}}</section>
 </main></body></html>`))
-
-const oauthRedirectHTML = `<!doctype html><html lang="en"><head><meta charset="utf-8"><title>Authorization response</title></head><body><p>Authorization response received. You can close this window.</p></body></html>`
 
 // RegisterDocs serves the checked-in, frozen API contract and an offline HTML
 // reference. It uses no remote assets, OAuth providers, or test credentials.
@@ -114,19 +115,63 @@ func RegisterDocs(mux *http.ServeMux, specPath string) error {
 		w.WriteHeader(http.StatusOK)
 		_, _ = w.Write(data)
 	})
-	servePage := func(w http.ResponseWriter, _ *http.Request) {
-		w.Header().Set("Content-Type", "text/html; charset=utf-8")
-		w.Header().Set("Cache-Control", "public, max-age=300")
-		if err := docsTemplate.Execute(w, page); err != nil {
+	// Render each locale once; the checked-in API contract itself remains unchanged.
+	variants := make(map[string][]byte, 2)
+	for _, locale := range []string{"ru", "sr-Latn"} {
+		localized := page
+		localized.Locale = locale
+		if locale == "ru" {
+			localized.VersionLabel = "Версия"
+			localized.OperationsLabel = "Операции"
+			localized.SchemasLabel = "Схемы"
+			localized.DetailsLabel = "Параметры запроса и ответа"
+			localized.DataSchemasLabel = "Схемы данных"
+		} else {
+			localized.VersionLabel = "Verzija"
+			localized.OperationsLabel = "Operacije"
+			localized.SchemasLabel = "Šeme"
+			localized.DetailsLabel = "Detalji zahteva i odgovora"
+			localized.DataSchemasLabel = "Šeme podataka"
+		}
+		var rendered bytes.Buffer
+		if err := docsTemplate.Execute(&rendered, localized); err != nil {
+			return errors.New("API reference cannot be rendered")
+		}
+		variants[locale] = rendered.Bytes()
+	}
+	servePage := func(w http.ResponseWriter, r *http.Request) {
+		locale, valid := requestLocale(r)
+		if !valid {
+			http.NotFound(w, r)
 			return
 		}
+		body := variants[locale]
+		sum := sha256.Sum256(body)
+		tag := fmt.Sprintf("\"%x\"", sum)
+		w.Header().Set("Content-Type", "text/html; charset=utf-8")
+		w.Header().Set("Cache-Control", "public, max-age=300")
+		w.Header().Set("ETag", tag)
+		if r.Header.Get("If-None-Match") == tag {
+			w.WriteHeader(http.StatusNotModified)
+			return
+		}
+		_, _ = w.Write(body)
 	}
 	mux.HandleFunc("GET /docs", servePage)
 	mux.HandleFunc("GET /redoc", servePage)
-	mux.HandleFunc("GET /docs/oauth2-redirect", func(w http.ResponseWriter, _ *http.Request) {
+	mux.HandleFunc("GET /docs/oauth2-redirect", func(w http.ResponseWriter, r *http.Request) {
+		locale, valid := requestLocale(r)
+		if !valid {
+			http.NotFound(w, r)
+			return
+		}
+		title, message := "Ответ авторизации", "Ответ авторизации получен. Это окно можно закрыть."
+		if locale == "sr-Latn" {
+			title, message = "Odgovor autorizacije", "Odgovor autorizacije je primljen. Možete zatvoriti ovaj prozor."
+		}
 		w.Header().Set("Content-Type", "text/html; charset=utf-8")
-		w.WriteHeader(http.StatusOK)
-		_, _ = w.Write([]byte(oauthRedirectHTML))
+		w.Header().Set("Cache-Control", "no-store")
+		_, _ = fmt.Fprintf(w, `<!doctype html><html lang="%s"><head><meta charset="utf-8"><title>%s</title></head><body><p>%s</p></body></html>`, locale, title, message)
 	})
 	return nil
 }

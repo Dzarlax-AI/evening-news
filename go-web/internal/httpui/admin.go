@@ -27,7 +27,15 @@ func RegisterAdmin(mux *http.ServeMux, service *auth.Service, renderer adminTemp
 func (h *AdminHandler) Register(mux *http.ServeMux) {
 	mux.Handle("GET /admin/", http.NotFoundHandler())
 	mux.HandleFunc("GET /admin", func(w http.ResponseWriter, r *http.Request) {
-		http.Redirect(w, r, "/admin/", http.StatusTemporaryRedirect)
+		if _, valid := requestLocale(r); !valid {
+			http.NotFound(w, r)
+			return
+		}
+		target := "/admin/"
+		if r.URL.RawQuery != "" {
+			target += "?" + r.URL.RawQuery
+		}
+		http.Redirect(w, r, target, http.StatusTemporaryRedirect)
 	})
 	mux.HandleFunc("GET /admin/{$}", h.page("dashboard.html", "Evening News v2 - Admin", "dashboard"))
 	mux.HandleFunc("GET /admin/sources", h.page("sources.html", "Источники - Evening News v2", "sources"))
@@ -47,12 +55,19 @@ func (h *AdminHandler) page(templateName, title, activeMenu string) http.Handler
 			writeAdminAuthError(w, err)
 			return
 		}
+		locale, valid := requestLocale(r)
+		if !valid {
+			http.NotFound(w, r)
+			return
+		}
+		w.Header().Add("Vary", "Cookie")
+
 		if h.renderer == nil {
 			http.Error(w, "page unavailable", http.StatusInternalServerError)
 			return
 		}
 		buffer := httptest.NewRecorder()
-		data := map[string]any{"Title": title, "ActiveMenu": activeMenu, "AdminUser": principal.Username, "Managed": h.auth.Managed()}
+		data := map[string]any{"Title": translateUISource(title, locale), "ActiveMenu": activeMenu, "AdminUser": principal.Username, "Managed": h.auth.Managed()}
 		if err := h.renderer.RenderTemplate(buffer, r, "admin/"+templateName, data); err != nil {
 			http.Error(w, "page unavailable", http.StatusInternalServerError)
 			return
@@ -80,7 +95,15 @@ func (h *AdminHandler) redirectSettings(w http.ResponseWriter, r *http.Request) 
 		writeAdminAuthError(w, err)
 		return
 	}
-	http.Redirect(w, r, "/admin/settings", http.StatusFound)
+	if _, valid := requestLocale(r); !valid {
+		http.NotFound(w, r)
+		return
+	}
+	target := "/admin/settings"
+	if r.URL.RawQuery != "" {
+		target += "?" + r.URL.RawQuery
+	}
+	http.Redirect(w, r, target, http.StatusFound)
 }
 
 func (h *AdminHandler) adminPagePrincipal(r *http.Request) (auth.Principal, error) {

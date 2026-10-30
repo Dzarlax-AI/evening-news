@@ -28,6 +28,7 @@ type Operational struct {
 	NewestDate        string `json:"newest_date"`
 	ProcessingEnabled bool   `json:"processing_enabled"`
 	DeliveryEnabled   bool   `json:"delivery_enabled"`
+	SerbianEnabled    bool   `json:"serbian_enabled"`
 }
 
 type OperationalUpdate struct {
@@ -39,6 +40,7 @@ type OperationalUpdate struct {
 	NewestDate        string `json:"newest_date"`
 	ProcessingEnabled bool   `json:"processing_enabled"`
 	DeliveryEnabled   bool   `json:"delivery_enabled"`
+	SerbianEnabled    bool   `json:"serbian_enabled"`
 }
 
 type JobOperational struct {
@@ -46,6 +48,7 @@ type JobOperational struct {
 	AttemptGeneration int64       `json:"attempt_generation"`
 	PinnedAt          time.Time   `json:"pinned_at"`
 	Settings          Operational `json:"settings"`
+	Telegram          *Telegram   `json:"telegram,omitempty"`
 }
 
 func defaultOperational() Operational {
@@ -87,7 +90,7 @@ func (s Store) Operational(ctx context.Context) (Operational, error) {
 }
 
 func (s Store) UpdateOperational(ctx context.Context, in OperationalUpdate) (Operational, error) {
-	v := Operational{Revision: in.ExpectedRevision, LimitsEnabled: in.LimitsEnabled, MaxArticles: in.MaxArticles, PerSource: in.PerSource, Days: in.Days, NewestDate: strings.TrimSpace(in.NewestDate), ProcessingEnabled: in.ProcessingEnabled, DeliveryEnabled: in.DeliveryEnabled}
+	v := Operational{Revision: in.ExpectedRevision, LimitsEnabled: in.LimitsEnabled, MaxArticles: in.MaxArticles, PerSource: in.PerSource, Days: in.Days, NewestDate: strings.TrimSpace(in.NewestDate), ProcessingEnabled: in.ProcessingEnabled, DeliveryEnabled: in.DeliveryEnabled, SerbianEnabled: in.SerbianEnabled}
 	if in.ExpectedRevision < 0 || v.validate() != nil {
 		return Operational{}, ErrInvalid
 	}
@@ -114,7 +117,7 @@ func (s Store) UpdateOperational(ctx context.Context, in OperationalUpdate) (Ope
 		{"operational_limits_enabled", v.LimitsEnabled}, {"operational_max_articles", v.MaxArticles},
 		{"operational_per_source", v.PerSource}, {"operational_days", v.Days},
 		{"operational_newest_date", v.NewestDate}, {"operational_processing_enabled", v.ProcessingEnabled},
-		{"operational_delivery_enabled", v.DeliveryEnabled},
+		{"operational_delivery_enabled", v.DeliveryEnabled}, {"operational_serbian_enabled", v.SerbianEnabled},
 	}
 	for _, pair := range pairs {
 		encoded, marshalErr := json.Marshal(pair[1])
@@ -185,7 +188,14 @@ func (s Store) PinOperational(ctx context.Context, jobID string, attempt int64) 
 	if err != nil {
 		return JobOperational{}, err
 	}
-	pinned := JobOperational{JobID: jobID, AttemptGeneration: attempt, PinnedAt: time.Now().UTC(), Settings: settings}
+	if _, err = tx.Exec(ctx, `SELECT pg_advisory_xact_lock_shared(1649258121,728439)`); err != nil {
+		return JobOperational{}, err
+	}
+	telegram, err := telegramInTx(ctx, tx)
+	if err != nil {
+		return JobOperational{}, err
+	}
+	pinned := JobOperational{JobID: jobID, AttemptGeneration: attempt, PinnedAt: time.Now().UTC(), Settings: settings, Telegram: &telegram}
 	data, err := json.Marshal(pinned)
 	if err != nil {
 		return JobOperational{}, err
@@ -227,7 +237,7 @@ func operationalInTx(ctx context.Context, tx pgx.Tx) (Operational, error) {
 	// snapshot while remaining independent from the worker's lease transaction.
 	rows, err := tx.Query(ctx, `SELECT key,value #>> '{}' FROM settings WHERE key = ANY($1)`, []string{
 		"operational_limits_enabled", "operational_max_articles", "operational_per_source", "operational_days",
-		"operational_newest_date", "operational_processing_enabled", "operational_delivery_enabled",
+		"operational_newest_date", "operational_processing_enabled", "operational_delivery_enabled", "operational_serbian_enabled",
 	})
 	if err != nil {
 		return Operational{}, err
@@ -239,7 +249,9 @@ func operationalInTx(ctx context.Context, tx pgx.Tx) (Operational, error) {
 		if err := rows.Scan(&key, &value); err != nil {
 			return Operational{}, err
 		}
-		seen++
+		if key != "operational_serbian_enabled" {
+			seen++
+		}
 		switch key {
 		case "operational_limits_enabled":
 			if v.LimitsEnabled, err = strconv.ParseBool(value); err != nil {
@@ -261,6 +273,10 @@ func operationalInTx(ctx context.Context, tx pgx.Tx) (Operational, error) {
 			v.NewestDate = value
 		case "operational_processing_enabled":
 			if v.ProcessingEnabled, err = strconv.ParseBool(value); err != nil {
+				return Operational{}, ErrInvalid
+			}
+		case "operational_serbian_enabled":
+			if v.SerbianEnabled, err = strconv.ParseBool(value); err != nil {
 				return Operational{}, ErrInvalid
 			}
 		case "operational_delivery_enabled":

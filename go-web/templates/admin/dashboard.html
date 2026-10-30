@@ -206,13 +206,13 @@
     position: absolute;
     top: 0;
     left: 0;
-    right: auto;     /* переопределяем right из main.css */
+    right: auto;     /* Override the main stylesheet position. */
     width: 3px;
     height: 100%;
     background: var(--primary-color);
     transition: width 0.3s ease;
     border-radius: 0 2px 2px 0;
-    transform: none; /* убираем transform из main.css */
+    transform: none; /* Disable the main stylesheet transform. */
 }
 
 .stat-card:hover {
@@ -885,7 +885,7 @@ async function loadDashboardData() {
             document.getElementById('performance-time').textContent =
                 (response.avg_processing_time / 1000).toFixed(1);
             document.getElementById('performance-details').textContent =
-                `${response.articles_per_hour || 0} статей/час`;
+                `${response.articles_per_hour || 0} ${document.documentElement.lang === 'sr-Latn' ? window.serbianCountForm(response.articles_per_hour || 0, 'članak', 'članka', 'članaka') + ' na sat' : 'статей/час'}`;
         }
 
         // Update last sync info
@@ -1053,14 +1053,14 @@ async function runManualSync() {
 
             showNotification('Обработка новостей запущена', 'success');
         } else {
-            throw new Error(response.message || 'Ошибка запуска обработки');
+            throw new Error(window.presentMessage(response.message, response.error_code) || 'Ошибка запуска обработки');
         }
 
     } catch (error) {
         console.error('Error starting sync:', error);
-        messageEl.textContent = error.message || 'Ошибка запуска синхронизации';
+        messageEl.textContent = window.presentError(error) || 'Ошибка запуска синхронизации';
         statusDiv.style.display = 'none';
-        showNotification(error.message || 'Ошибка запуска синхронизации', 'error');
+        showNotification(window.presentError(error) || 'Ошибка запуска синхронизации', 'error');
     } finally {
         button.classList.remove('btn--loading');
         button.disabled = false;
@@ -1089,7 +1089,7 @@ async function sendTelegramDigest() {
 
     } catch (error) {
         console.error('Error sending telegram digest:', error);
-        showNotification(error.message || 'Ошибка отправки в Telegram', 'error');
+        showNotification(window.presentError(error) || 'Ошибка отправки в Telegram', 'error');
     } finally {
         button.classList.remove('btn--loading');
         button.disabled = false;
@@ -1119,7 +1119,7 @@ async function generateSummaries() {
 
     } catch (error) {
         console.error('Error generating summaries:', error);
-        showNotification(error.message || 'Ошибка создания сводок', 'error');
+        showNotification(window.presentError(error) || 'Ошибка создания сводок', 'error');
     } finally {
         button.classList.remove('btn--loading');
         button.disabled = false;

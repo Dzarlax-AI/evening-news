@@ -641,7 +641,7 @@
 
         } catch (error) {
             console.error('Error adding source:', error);
-            NewsAggregator.showNotification('Ошибка добавления источника: ' + error.message, 'error');
+            NewsAggregator.showNotification('Ошибка добавления источника: ' + window.presentError(error), 'error');
         } finally {
             submitButton.classList.remove('btn--loading');
             submitButton.disabled = false;
@@ -655,7 +655,7 @@
             });
 
             if (response.success) {
-                NewsAggregator.showNotification(response.message, 'success');
+                NewsAggregator.showNotification(window.presentMessage(response.message, response.error_code, true), 'success');
                 loadSourcesData();
                 loadSourcesStats();
             } else {
@@ -737,7 +737,7 @@
 
         } catch (error) {
             console.error('Error updating source:', error);
-            NewsAggregator.showNotification('Ошибка обновления источника: ' + error.message, 'error');
+            NewsAggregator.showNotification('Ошибка обновления источника: ' + window.presentError(error), 'error');
         } finally {
             submitButton.classList.remove('btn--loading');
             submitButton.disabled = false;
@@ -788,7 +788,7 @@
 
         } catch (error) {
             console.error('Error deleting source:', error);
-            NewsAggregator.showNotification('Ошибка удаления источника: ' + (error.detail || error.message), 'error');
+            NewsAggregator.showNotification('Ошибка удаления источника: ' + window.presentError(error), 'error');
         } finally {
             deleteBtn.classList.remove('btn--loading');
             deleteBtn.disabled = false;

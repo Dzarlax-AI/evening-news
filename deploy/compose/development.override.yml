@@ -7,7 +7,12 @@ services:
       DEVELOPMENT: "true"
     volumes:
       - ./go-web/templates:/app/go-web/templates:ro
-      - ./web/static:/app/web/static:ro
+      # Keep the compiled locale.js from the image while live-mounting editable assets.
+      - ./web/static/css:/app/web/static/css:ro
+      - ./web/static/js/admin-csrf.js:/app/web/static/js/admin-csrf.js:ro
+      - ./web/static/js/chart.min.js:/app/web/static/js/chart.min.js:ro
+      - ./web/static/js/main.js:/app/web/static/js/main.js:ro
+      - ./web/static/js/onboarding.js:/app/web/static/js/onboarding.js:ro
 
   executor:
     environment:

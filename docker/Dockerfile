@@ -2,6 +2,14 @@
 # extractor and browser Dockerfiles outside this graph.
 ARG GO_BUILD_IMAGE=golang:1.25.6-alpine
 ARG GO_DOMAIN_BUILD_IMAGE=golang:1.26.10-alpine
+ARG NODE_BUILD_IMAGE=node:22.15.1-alpine
+
+FROM --platform=$BUILDPLATFORM ${NODE_BUILD_IMAGE} AS web-assets
+WORKDIR /src/web
+COPY web/package.json web/package-lock.json web/tsconfig.json ./
+RUN npm ci --ignore-scripts --no-audit --no-fund
+COPY web/static/ts/ ./static/ts/
+RUN npm run build
 
 FROM --platform=$BUILDPLATFORM ${GO_BUILD_IMAGE} AS go-web-build
 WORKDIR /src/go-web
@@ -69,6 +77,7 @@ COPY --from=go-web-build /out/news-web /news-web
 COPY go-web/templates/ ./templates/
 COPY go-web/contracts/ ./contracts/
 COPY web/static/ /app/web/static/
+COPY --from=web-assets /src/web/static/js/locale.js /app/web/static/js/locale.js
 USER 65532:65532
 EXPOSE 8000
 ENTRYPOINT ["/news-web"]

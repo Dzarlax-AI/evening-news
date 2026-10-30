@@ -17,7 +17,7 @@ BEGIN
  IF (SELECT count(*) FROM recovery_runtime)<>1 OR (SELECT payload->>'service' FROM recovery_runtime) IS DISTINCT FROM 'background' OR (SELECT payload->>'version' FROM recovery_runtime) IS DISTINCT FROM '1' OR (SELECT payload->>'installation_id' FROM recovery_runtime) IS DISTINCT FROM (SELECT installation FROM recovery_guard) THEN RAISE EXCEPTION 'recovery runtime manifest rejected'; END IF;
  IF (SELECT count(*) FROM recovery_input) <> 1 THEN RAISE EXCEPTION 'recovery document rejected'; END IF;
  SELECT payload INTO d FROM recovery_input;
- IF d->>'format' IS DISTINCT FROM 'news-settings-v1' OR d->>'schema_version' IS DISTINCT FROM '16' OR d#>>'{identity,installation_id}' IS DISTINCT FROM (SELECT installation FROM recovery_guard) OR (d#>>'{identity,installation_id}') !~ '^[a-f0-9]{32}$' THEN RAISE EXCEPTION 'recovery identity/version rejected'; END IF;
+ IF d->>'format' IS DISTINCT FROM 'news-settings-v1' OR COALESCE(d->>'schema_version','') NOT IN ('16','18') OR d#>>'{identity,installation_id}' IS DISTINCT FROM (SELECT installation FROM recovery_guard) OR (d#>>'{identity,installation_id}') !~ '^[a-f0-9]{32}$' THEN RAISE EXCEPTION 'recovery identity/version rejected'; END IF;
  IF EXISTS(SELECT 1 FROM news.installation_state) OR EXISTS(SELECT 1 FROM news.sources) OR EXISTS(SELECT 1 FROM news.articles) OR EXISTS(SELECT 1 FROM news.background_jobs) OR EXISTS(SELECT 1 FROM news.editorial_digest_editions) OR EXISTS(SELECT 1 FROM news.integration_credentials) OR EXISTS(SELECT 1 FROM news.managed_admin) OR EXISTS(SELECT 1 FROM news.setup_tokens) OR EXISTS(SELECT 1 FROM news.source_collection_state) THEN RAISE EXCEPTION 'recovery requires empty target'; END IF;
  -- All non-configuration histories must also be empty, even if their parent
  -- articles/jobs have already been removed from an old target.
@@ -27,8 +27,9 @@ BEGIN
  END LOOP;
  IF EXISTS(SELECT 1 FROM pg_stat_activity WHERE datname=current_database() AND pid<>pg_backend_pid()) THEN RAISE EXCEPTION 'recovery target has connected clients'; END IF;
  FOREACH k IN ARRAY ARRAY['sources','categories','category_mapping','extraction_patterns','schedule_settings','settings','managed_admin','integration_credentials'] LOOP IF jsonb_typeof(d->k) IS DISTINCT FROM 'array' THEN RAISE EXCEPTION 'recovery section rejected'; END IF; END LOOP;
- IF EXISTS(SELECT 1 FROM jsonb_object_keys(d) AS sections(section_name) WHERE section_name NOT IN ('format','schema_version','identity','sources','categories','category_mapping','extraction_patterns','schedule_settings','settings','managed_admin','integration_credentials')) THEN RAISE EXCEPTION 'unknown recovery section'; END IF;
- IF EXISTS(SELECT 1 FROM jsonb_array_elements(d->'settings') x WHERE x->>'key' NOT IN ('ai_settings','ai_settings_revision','ai_model_prices','telegram_chat_id','telegram_service_chat_id','telegram_settings_revision','operational_settings_revision','operational_limits_enabled','operational_max_articles','operational_per_source','operational_days','operational_newest_date','operational_processing_enabled','operational_delivery_enabled')) THEN RAISE EXCEPTION 'unknown setting'; END IF;
+ IF EXISTS(SELECT 1 FROM jsonb_object_keys(d) AS sections(section_name) WHERE section_name NOT IN ('format','schema_version','identity','sources','categories','category_localizations','category_mapping','extraction_patterns','schedule_settings','settings','managed_admin','integration_credentials')) THEN RAISE EXCEPTION 'unknown recovery section'; END IF;
+ IF EXISTS(SELECT 1 FROM jsonb_array_elements(d->'settings') x WHERE x->>'key' NOT IN ('ai_settings','ai_settings_revision','ai_model_prices','telegram_chat_id','telegram_service_chat_id','telegram_settings_revision','telegram_serbian_chat_id','telegram_serbian_delivery_enabled','operational_settings_revision','operational_limits_enabled','operational_max_articles','operational_per_source','operational_days','operational_newest_date','operational_processing_enabled','operational_delivery_enabled','operational_serbian_enabled')) THEN RAISE EXCEPTION 'unknown setting'; END IF;
+ IF d ? 'category_localizations' AND jsonb_typeof(d->'category_localizations') IS DISTINCT FROM 'array' THEN RAISE EXCEPTION 'localized categories rejected'; END IF;
  IF jsonb_array_length(d->'managed_admin')<>1 OR EXISTS(SELECT 1 FROM jsonb_array_elements(d->'sources') x WHERE x->>'source_type' NOT IN ('rss','telegram','custom')) THEN RAISE EXCEPTION 'recovery configuration rejected'; END IF;
 END $guard$;
 -- These configuration rows are bootstrap seeds in a newly migrated target.
@@ -40,6 +41,7 @@ DELETE FROM news.schedule_settings;
 DELETE FROM news.settings;
 INSERT INTO news.sources(id,name,source_type,url,enabled,fetch_interval,config) SELECT id,name,source_type,url,enabled,fetch_interval,config FROM jsonb_populate_recordset(NULL::news.sources,(SELECT payload->'sources' FROM recovery_input));
 INSERT INTO news.categories(id,name,display_name,description,color,is_local) SELECT id,name,display_name,description,color,is_local FROM jsonb_populate_recordset(NULL::news.categories,(SELECT payload->'categories' FROM recovery_input));
+INSERT INTO news.category_localizations(category_id,locale,display_name) SELECT category_id,locale,display_name FROM jsonb_populate_recordset(NULL::news.category_localizations,(SELECT COALESCE(payload->'category_localizations','[]'::jsonb) FROM recovery_input));
 INSERT INTO news.category_mapping(id,ai_category,fixed_category,confidence_threshold,description,created_by,is_active) SELECT id,ai_category,fixed_category,confidence_threshold,description,created_by,is_active FROM jsonb_populate_recordset(NULL::news.category_mapping,(SELECT payload->'category_mapping' FROM recovery_input));
 INSERT INTO news.extraction_patterns(id,domain,selector_pattern,extraction_strategy,discovered_by,is_stable,success_count,failure_count) SELECT id,domain,selector_pattern,extraction_strategy,discovered_by,is_stable,success_count,failure_count FROM jsonb_populate_recordset(NULL::news.extraction_patterns,(SELECT payload->'extraction_patterns' FROM recovery_input));
 INSERT INTO news.schedule_settings(id,task_name,enabled,schedule_type,hour,minute,weekdays,timezone,task_config) SELECT id,task_name,enabled,schedule_type,hour,minute,weekdays,timezone,task_config FROM jsonb_populate_recordset(NULL::news.schedule_settings,(SELECT payload->'schedule_settings' FROM recovery_input));
@@ -59,7 +61,8 @@ SELECT key,value FROM recovery_runtime CROSS JOIN LATERAL (VALUES
  ('operational_days',to_jsonb(COALESCE(NULLIF(trim(payload#>>'{values,NEWS_LIMIT_DAYS}'),''),'1')::integer)),
  ('operational_newest_date',to_jsonb(COALESCE(trim(payload#>>'{values,NEWS_LIMIT_NEWEST_DATE}'),''))),
  ('operational_processing_enabled','true'::jsonb),
- ('operational_delivery_enabled','false'::jsonb)
+ ('operational_delivery_enabled','false'::jsonb),
+ ('operational_serbian_enabled','false'::jsonb)
 ) AS effective(key,value) ON CONFLICT(key) DO NOTHING;
 DO $operational$
 DECLARE maximum integer; per_source integer; days integer; newest text; b text;
@@ -70,11 +73,11 @@ BEGIN
  SELECT value#>>'{}' INTO newest FROM news.settings WHERE key='operational_newest_date';
  IF maximum IS NULL OR per_source IS NULL OR days IS NULL OR newest IS NULL OR maximum NOT BETWEEN 1 AND 100000 OR per_source NOT BETWEEN 1 AND 100000 OR days NOT BETWEEN 0 AND 36500 THEN RAISE EXCEPTION 'invalid recovered operational limits'; END IF;
  IF newest<>'' AND (newest !~ '^[0-9]{4}-[0-9]{2}-[0-9]{2}$' OR (newest::date)::text<>newest) THEN RAISE EXCEPTION 'invalid recovered operational date'; END IF;
- FOR b IN SELECT value#>>'{}' FROM news.settings WHERE key IN ('operational_limits_enabled','operational_processing_enabled','operational_delivery_enabled') LOOP
+ FOR b IN SELECT value#>>'{}' FROM news.settings WHERE key IN ('operational_limits_enabled','operational_processing_enabled','operational_delivery_enabled','operational_serbian_enabled','telegram_serbian_delivery_enabled') LOOP
   IF b IS NULL OR b NOT IN ('true','false','True','False','TRUE','FALSE','1','0','t','f','T','F') THEN RAISE EXCEPTION 'invalid recovered operational switch'; END IF;
  END LOOP;
 END $operational$;
-INSERT INTO news.settings(key,value) VALUES('operational_delivery_enabled','false'::jsonb) ON CONFLICT(key) DO UPDATE SET value=excluded.value;
+INSERT INTO news.settings(key,value) VALUES('operational_delivery_enabled','false'::jsonb),('telegram_serbian_delivery_enabled','false'::jsonb) ON CONFLICT(key) DO UPDATE SET value=excluded.value;
 INSERT INTO news.settings(key,value) VALUES('operational_settings_revision','1'::jsonb) ON CONFLICT(key) DO UPDATE SET value=to_jsonb((news.settings.value#>>'{}')::bigint+1);
 UPDATE news.sources SET last_fetch=NULL,last_success=NULL,last_error=NULL,error_count=0;
 UPDATE news.schedule_settings SET next_run=NULL,is_running=false,last_run=NULL,last_finished_at=NULL,last_success_at=NULL,last_status=NULL,last_error=NULL,last_duration_seconds=NULL;
