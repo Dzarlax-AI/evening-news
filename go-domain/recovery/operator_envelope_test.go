@@ -301,3 +301,39 @@ printf '%s' "$NEWS_PARTIAL" > "$NEWS_TEST_ROOT/partial-path"
 		}
 	}
 }
+
+// A failing psql must preserve its exit status without exposing diagnostic values.
+func TestOperatorDiagnosticHandling(t *testing.T) {
+	guide, err := os.ReadFile("../../docs/managed-settings-recovery.md")
+	if err != nil {
+		t.Fatal("operator guide unavailable")
+	}
+	blocks := strings.Split(string(guide), "```bash\n")
+	if len(blocks) != 4 {
+		t.Fatal("operator code blocks changed")
+	}
+	for _, stage := range []string{"settings", "schedule", "import"} {
+		root := t.TempDir()
+		setup := `NEWS_PSQL_COUNT=0
+restore_original_availability() { :; }
+jq() { printf '{}'; }
+psql() { NEWS_PSQL_COUNT=$((NEWS_PSQL_COUNT+1)); if [ "$NEWS_FAILURE_STAGE" = schedule ] && [ "$NEWS_PSQL_COUNT" = 1 ]; then printf '{}'; return 0; fi; printf private_sql_diagnostic >&2; return 3; }
+`
+		block := strings.Split(blocks[1], "```")[0]
+		label := "Settings export failed"
+		if stage == "schedule" {
+			label = "Schedule export failed"
+		}
+		if stage == "import" {
+			block = strings.Split(blocks[3], "```")[0]
+			label = "Settings import failed"
+		}
+		cmd := exec.Command("bash", "-c", setup+block)
+		cmd.Env = append(os.Environ(), "NEWS_FAILURE_STAGE="+stage, "NEWS_REPO="+root, "NEWS_CLEAR="+root, "NEWS_TARGET_DB=news_restore_fixture")
+		out, e := cmd.CombinedOutput()
+		exit, ok := e.(*exec.ExitError)
+		if !ok || exit.ExitCode() != 3 || bytes.Contains(out, []byte("private_sql_diagnostic")) || !bytes.Contains(out, []byte(label)) {
+			t.Fatal("operator SQL failure handling exposed diagnostics or changed status")
+		}
+	}
+}

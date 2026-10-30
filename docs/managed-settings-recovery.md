@@ -77,9 +77,13 @@ chmod 700 "$NEWS_STAGE"
 # Perform the reviewed quiescence/drain steps here, then capture below.
 
 PGSERVICE=news_source psql -XqAt -v ON_ERROR_STOP=1 \
-  -f "$NEWS_REPO/deploy/recovery/export-settings.sql" > "$NEWS_STAGE/settings.json"
+  -f "$NEWS_REPO/deploy/recovery/export-settings.sql" > "$NEWS_STAGE/settings.json" 2>/dev/null || {
+  NEWS_SQL_STATUS=$?; echo 'Settings export failed' >&2; exit "$NEWS_SQL_STATUS"
+}
 PGSERVICE=scheduler_source psql -XqAt -v ON_ERROR_STOP=1 \
-  -f "$NEWS_REPO/deploy/recovery/export-schedules.sql" > "$NEWS_STAGE/schedules.json"
+  -f "$NEWS_REPO/deploy/recovery/export-schedules.sql" > "$NEWS_STAGE/schedules.json" 2>/dev/null || {
+  NEWS_SQL_STATUS=$?; echo 'Schedule export failed' >&2; exit "$NEWS_SQL_STATUS"
+}
 # Reject missing identity, empty admin, unknown format or oversized output.
 test "$(wc -c < "$NEWS_STAGE/settings.json")" -le 16777216
 jq -e '.format == "news-settings-v1" and .schema_version == 16 and
@@ -174,7 +178,10 @@ chmod 600 background-input.json
 PGSERVICE=news_target psql -XqAt -v ON_ERROR_STOP=1 \
   -v target_database="$NEWS_TARGET_DB" \
   -v installation_id="$(jq -r .identity.installation_id settings.json)" \
-  -f "$NEWS_REPO/deploy/recovery/import-settings.sql"
+  -f "$NEWS_REPO/deploy/recovery/import-settings.sql" 2>/dev/null || {
+  NEWS_SQL_STATUS=$?; echo 'Settings import failed; target remains inactive' >&2
+  exit "$NEWS_SQL_STATUS"
+}
 ```
 
 The recipe materializes all seven operational settings before assigning a revision. Saved fields win; missing fields use the matching background manifest’s NEWS_LIMIT_* values, then the application/adoption defaults (limits off, 50 total, 50 per source, one day, no date cutoff, processing on). A partial old set is repaired only in the fresh target, never written back to the source. The complete set is range/date/type validated; invalid input rolls back the transaction. Delivery is always forced off and the operational revision advances.
