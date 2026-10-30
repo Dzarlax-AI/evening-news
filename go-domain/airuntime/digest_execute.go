@@ -68,11 +68,72 @@ func (s *Server) executeDigest(ctx context.Context, v digestInput, f authority.F
 		var n int
 		var e error
 		if pinned != nil && pinned.Settings.SerbianEnabled {
+			policy := &digestworkflow.SerbianRetryPolicy{}
+			var payload struct {
+				SendTelegram *bool `json:"send_telegram"`
+			}
+			_ = json.Unmarshal(v.Payload, &payload)
+			publish := v.Kind == "telegram_digest" || (v.Kind == "news_digest" && (payload.SendTelegram == nil || *payload.SendTelegram))
+			policy.PublicationPinned = publish
+			if publish && pinned.Settings.DeliveryEnabled && pinned.Telegram != nil && pinned.Telegram.SerbianDeliveryEnabled && appsettings.ValidateTelegram(appsettings.TelegramUpdate{ChatID: pinned.Telegram.ChatID, ServiceChatID: pinned.Telegram.ServiceChatID, SerbianChatID: pinned.Telegram.SerbianChatID, SerbianDeliveryEnabled: true}) == nil {
+				policy.DeliveryEnabled, policy.Destination = true, pinned.Telegram.SerbianChatID
+			}
+			wf.RetryPolicy = policy
 			n, e = wf.GenerateLocalized(ctx, v.Envelope.JobID, v.Envelope.Attempt, v.OperationID, time.Now())
 		} else {
 			n, e = wf.Generate(ctx, v.Envelope.JobID, v.Envelope.Attempt, v.OperationID, time.Now())
 		}
 		return map[string]any{"summaries_generated": n}, e
+	case "serbian_digest_retry":
+		var payload struct {
+			RussianEditionID string `json:"russian_edition_id"`
+		}
+		if json.Unmarshal(v.Payload, &payload) != nil || !uuidPattern.MatchString(payload.RussianEditionID) {
+			return nil, digestworkflow.ErrInvalid
+		}
+		tx, err := s.db.Begin(ctx)
+		if err != nil {
+			return nil, err
+		}
+		defer tx.Rollback(ctx)
+		if err = f.Validate(ctx, tx); err != nil {
+			return nil, err
+		}
+		var date time.Time
+		var destination *string
+		var deliveryEnabled bool
+		err = tx.QueryRow(ctx, `SELECT e.edition_date,r.destination,(r.delivery_enabled AND r.publication_attempted) FROM editorial_serbian_retry r JOIN editorial_digest_editions e ON e.id=r.russian_edition_id AND e.locale='ru' WHERE r.russian_edition_id=$1::uuid AND r.last_job_id=$2::uuid`, payload.RussianEditionID, v.Envelope.JobID).Scan(&date, &destination, &deliveryEnabled)
+		if err != nil {
+			return nil, digestworkflow.ErrInvalid
+		}
+		if err = tx.Commit(ctx); err != nil {
+			return nil, err
+		}
+		if _, err = wf.RetrySerbian(ctx, v.Envelope.JobID, v.Envelope.Attempt, v.OperationID, date, payload.RussianEditionID); err != nil {
+			return nil, err
+		}
+		if !deliveryEnabled {
+			return map[string]any{"status": "success", "parts_sent": 0}, nil
+		}
+		if destination == nil || *destination == "" {
+			return nil, digestworkflow.ErrDestination
+		}
+		sr, err := wf.PrepareSerbian(ctx, identity, date, payload.RussianEditionID, *destination)
+		if errors.Is(err, digestworkflow.ErrNotReady) {
+			return map[string]any{"status": "success", "parts_sent": 0}, nil
+		}
+		if err != nil {
+			return nil, err
+		}
+		published, err := s.publishPrepared(ctx, v, f, sr)
+		if err != nil {
+			return nil, err
+		}
+		status := "success"
+		if ok, _ := published["success"].(bool); !ok {
+			status = "warning"
+		}
+		return map[string]any{"status": status, "success": published["success"], "parts_sent": published["parts_sent"]}, nil
 	case "digest_prepare":
 
 		destinations := map[string]string{}
@@ -98,11 +159,21 @@ func (s *Server) executeDigest(ctx context.Context, v digestInput, f authority.F
 		if e != nil {
 			return nil, e
 		}
+		policy := digestworkflow.SerbianRetryPolicy{PublicationPinned: true}
+		if pinned != nil && pinned.Settings.DeliveryEnabled && pinned.Settings.SerbianEnabled && pinned.Telegram != nil && pinned.Telegram.SerbianDeliveryEnabled && appsettings.ValidateTelegram(appsettings.TelegramUpdate{ChatID: pinned.Telegram.ChatID, ServiceChatID: pinned.Telegram.ServiceChatID, SerbianChatID: pinned.Telegram.SerbianChatID, SerbianDeliveryEnabled: true}) == nil {
+			policy.DeliveryEnabled, policy.Destination = true, pinned.Telegram.SerbianChatID
+		}
+		if err := wf.BindSerbianPublication(ctx, prepared.EditionID, policy); err != nil {
+			return nil, err
+		}
 
 		if pinned != nil && !pinned.Settings.DeliveryEnabled {
 			return map[string]any{"success": false, "status": "delivery_disabled", "parts_sent": 0}, nil
 		}
 		result, russianErr := s.publishPrepared(ctx, v, f, prepared)
+		if err := wf.MarkRussianPublicationAttempted(ctx, prepared.EditionID); err != nil {
+			return nil, err
+		}
 		if result == nil {
 			result = map[string]any{}
 		}

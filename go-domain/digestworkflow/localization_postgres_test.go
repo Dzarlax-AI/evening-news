@@ -106,7 +106,7 @@ func TestLocalizedEditionPartialFrozenRetryAndFreshJob(t *testing.T) {
 		raw, _ := json.Marshal(output)
 		return ai.Response{Status: ai.Complete, Text: string(raw), Model: "fixture", Provider: "fixture"}, nil
 	})
-	wf := Workflow{Pool: pool, Fence: localeTestFence{}, SiteBase: "https://news.fixture", Provider: editorial.ProviderConfig{Provider: provider, Model: "fixture"}}
+	wf := Workflow{Pool: pool, Fence: localeTestFence{}, SiteBase: "https://news.fixture", Provider: editorial.ProviderConfig{Provider: provider, Model: "fixture"}, RetryPolicy: &SerbianRetryPolicy{}}
 	job := "10000000-0000-4000-8000-000000000001"
 	op := "20000000-0000-4000-8000-000000000001"
 	n, err := wf.GenerateLocalized(ctx, job, 1, op, cutoff)
@@ -118,19 +118,87 @@ func TestLocalizedEditionPartialFrozenRetryAndFreshJob(t *testing.T) {
 	if err = pool.QueryRow(ctx, `SELECT id::text,snapshot_hash FROM editorial_digest_editions WHERE locale='ru'`).Scan(&ruID, &hash); err != nil {
 		t.Fatal(err)
 	}
+	if err = wf.BindSerbianPublication(ctx, ruID, SerbianRetryPolicy{DeliveryEnabled: true, Destination: "synthetic-sr-channel", PublicationPinned: true}); err != nil {
+		t.Fatal(err)
+	}
+	if err = wf.BindSerbianPublication(ctx, ruID, SerbianRetryPolicy{DeliveryEnabled: true, Destination: "other-channel", PublicationPinned: true}); err != nil {
+		t.Fatal(err)
+	}
+	if err = wf.MarkRussianPublicationAttempted(ctx, ruID); err != nil {
+		t.Fatal(err)
+	}
+	legacyID := "30000000-0000-4000-8000-000000000003"
+	if err = wf.BindSerbianPublication(ctx, legacyID, SerbianRetryPolicy{DeliveryEnabled: true, Destination: "synthetic-sr-channel"}); err != nil {
+		t.Fatal(err)
+	}
+	var legacyExists bool
+	if err = pool.QueryRow(ctx, `SELECT EXISTS(SELECT 1 FROM editorial_serbian_retry WHERE russian_edition_id=$1)`, legacyID).Scan(&legacyExists); err != nil || legacyExists {
+		t.Fatal("legacy edition was backfilled")
+	}
+	disabledID := "40000000-0000-4000-8000-000000000004"
+	if _, err = pool.Exec(ctx, `INSERT INTO editorial_serbian_retry(russian_edition_id) VALUES($1)`, disabledID); err != nil {
+		t.Fatal(err)
+	}
+	if err = wf.BindSerbianPublication(ctx, disabledID, SerbianRetryPolicy{}); err != nil {
+		t.Fatal(err)
+	}
+	if err = wf.BindSerbianPublication(ctx, disabledID, SerbianRetryPolicy{DeliveryEnabled: true, Destination: "synthetic-sr-channel"}); err != nil {
+		t.Fatal(err)
+	}
+	var disabled bool
+	if err = pool.QueryRow(ctx, `SELECT delivery_enabled FROM editorial_serbian_retry WHERE russian_edition_id=$1`, disabledID).Scan(&disabled); err != nil || disabled {
+		t.Fatal("disabled first publication was changed")
+	}
+	if _, err = pool.Exec(ctx, `UPDATE editorial_serbian_retry SET next_dispatch_at=now()-interval '1 second' WHERE russian_edition_id=$1`, ruID); err != nil {
+		t.Fatal(err)
+	}
+	var admitted bool
+	if err = pool.QueryRow(ctx, `SELECT enqueue_serbian_digest_retry()`).Scan(&admitted); err != nil || !admitted {
+		t.Fatalf("retry admission: %v %v", admitted, err)
+	}
+	var retryKind, retryID, destination string
+	var enabled bool
+	if err = pool.QueryRow(ctx, `SELECT j.kind,j.payload->>'russian_edition_id',r.destination,r.delivery_enabled FROM editorial_serbian_retry r JOIN background_jobs j ON j.id=r.last_job_id WHERE r.russian_edition_id=$1`, ruID).Scan(&retryKind, &retryID, &destination, &enabled); err != nil || retryKind != "serbian_digest_retry" || retryID != ruID || destination != "synthetic-sr-channel" || !enabled {
+		t.Fatal("retry identity or pinned policy changed")
+	}
+	if err = pool.QueryRow(ctx, `SELECT enqueue_serbian_digest_retry()`).Scan(&admitted); err != nil || admitted {
+		t.Fatal("duplicate retry admitted")
+	}
+	if _, err = pool.Exec(ctx, `UPDATE editorial_serbian_retry SET destination='changed' WHERE russian_edition_id=$1`, ruID); err == nil {
+		t.Fatal("pinned destination was mutable")
+	}
+	if _, err = pool.Exec(ctx, `UPDATE background_jobs SET state='delivery_unknown' WHERE id=(SELECT last_job_id FROM editorial_serbian_retry WHERE russian_edition_id=$1); UPDATE editorial_serbian_retry SET next_dispatch_at=now()-interval '1 second' WHERE russian_edition_id=$1`, pgx.QueryExecModeSimpleProtocol, ruID); err != nil {
+		t.Fatal(err)
+	}
+	if err = pool.QueryRow(ctx, `SELECT enqueue_serbian_digest_retry()`).Scan(&admitted); err != nil || admitted {
+		t.Fatal("unknown delivery was requeued")
+	}
 	if err = pool.QueryRow(ctx, `SELECT count(*) FROM editorial_digest_editions WHERE locale='sr-Latn'`).Scan(&srCount); err != nil || srCount != 0 {
 		t.Fatal("invalid SR persisted")
 	}
 	if _, err = pool.Exec(ctx, `UPDATE article_localizations SET summary='PROMENJENI TEKST' WHERE article_id=90001; UPDATE editorial_locale_inputs SET next_attempt_at=now() WHERE russian_edition_id=$1`, pgx.QueryExecModeSimpleProtocol, ruID); err != nil {
 		t.Fatal(err)
 	}
-	n, err = wf.RetrySerbian(ctx, job, 1, op, cutoff, ruID)
+	// A durable retry may run after midnight; the exact edition ID remains authoritative.
+	n, err = wf.RetrySerbian(ctx, job, 1, op, cutoff.Add(24*time.Hour), ruID)
 	if err != nil || n != 1 || calls != 2 {
 		t.Fatalf("retry %d calls=%d err=%v", n, calls, err)
 	}
 	var ready bool
 	if ready, err = wf.hasSerbian(ctx, serbianEditionID(ruID)); err != nil || !ready {
 		t.Fatalf("SR not ready: %v", err)
+	}
+	if _, err = pool.Exec(ctx, `UPDATE background_jobs SET state='failed' WHERE id=(SELECT last_job_id FROM editorial_serbian_retry WHERE russian_edition_id=$1); UPDATE editorial_serbian_retry SET next_dispatch_at=now()-interval '1 second' WHERE russian_edition_id=$1`, pgx.QueryExecModeSimpleProtocol, ruID); err != nil {
+		t.Fatal(err)
+	}
+	if err = pool.QueryRow(ctx, `SELECT enqueue_serbian_digest_retry()`).Scan(&admitted); err != nil || !admitted {
+		t.Fatal("ready edition with no delivery receipt was not requeued")
+	}
+	if _, err = pool.Exec(ctx, `UPDATE background_jobs SET state='failed' WHERE id=(SELECT last_job_id FROM editorial_serbian_retry WHERE russian_edition_id=$1); UPDATE editorial_serbian_retry SET next_dispatch_at=now()-interval '1 second' WHERE russian_edition_id=$1; INSERT INTO digest_delivery_intents(id,edition_id,destination_hash,purpose,render_hash,job_id,attempt_generation,domain_instance_id,state,parts_sent,rich_message) VALUES(gen_random_uuid(),$2,repeat('a',64),'ru_digest',repeat('b',64),$3,1,$3,'completed',1,true)`, pgx.QueryExecModeSimpleProtocol, ruID, serbianEditionID(ruID), job); err != nil {
+		t.Fatal(err)
+	}
+	if err = pool.QueryRow(ctx, `SELECT enqueue_serbian_digest_retry()`).Scan(&admitted); err != nil || admitted {
+		t.Fatal("completed delivery was requeued")
 	}
 	var after string
 	if err = pool.QueryRow(ctx, `SELECT snapshot_hash FROM editorial_digest_editions WHERE id=$1`, ruID).Scan(&after); err != nil || after != hash {

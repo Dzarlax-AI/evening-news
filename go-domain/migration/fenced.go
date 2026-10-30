@@ -98,6 +98,19 @@ func localizationMigration() migration {
 //go:embed sql/018.sql
 var editorialLocalizationSQL string
 
+//go:embed sql/019.sql
+var serbianDigestRetrySQL string
+
+func serbianDigestRetryMigration() migration {
+	return migration{ID: "019_serbian_digest_retry", Description: "Add durable Serbian digest retries", Needed: func(ctx context.Context, tx pgx.Tx) (bool, error) {
+		var exists bool
+		err := tx.QueryRow(ctx, `SELECT to_regclass(current_schema() || '.editorial_serbian_retry') IS NOT NULL`).Scan(&exists)
+		return !exists, err
+	}, Apply: func(ctx context.Context, tx pgx.Tx) (map[string]any, error) {
+		return map[string]any{"serbian_digest_retry": true}, schemaSQL(ctx, tx, serbianDigestRetrySQL)
+	}}
+}
+
 func editorialLocalizationMigration() migration {
 	return migration{ID: "018_editorial_localizations", Description: "Add localized immutable editorial inputs and editions", Needed: func(ctx context.Context, tx pgx.Tx) (bool, error) {
 		var exists bool

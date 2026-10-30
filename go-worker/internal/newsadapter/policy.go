@@ -13,7 +13,7 @@ type Adapter struct{}
 
 func (Adapter) KnownKind(kind string) bool {
 	switch kind {
-	case "news_processing", "news_digest", "telegram_digest", "backup", "reprocess_failed", "article_reprocess", "summaries_generate", "source_test":
+	case "news_processing", "news_digest", "telegram_digest", "backup", "reprocess_failed", "article_reprocess", "summaries_generate", "source_test", "serbian_digest_retry":
 		return true
 	default:
 		return false
@@ -21,7 +21,7 @@ func (Adapter) KnownKind(kind string) bool {
 }
 
 func (Adapter) MayDeliver(kind string, raw json.RawMessage) bool {
-	if kind == "telegram_digest" {
+	if kind == "telegram_digest" || kind == "serbian_digest_retry" {
 		return true
 	}
 	if kind != "news_digest" {

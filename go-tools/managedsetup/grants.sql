@@ -198,3 +198,6 @@ GRANT SELECT ON news.category_localizations TO news_processing_runtime;
 GRANT INSERT, UPDATE, DELETE ON news.category_localizations TO news_web_runtime;
 
 GRANT SELECT, INSERT, UPDATE ON news.editorial_locale_inputs TO news_domain_runtime;
+GRANT SELECT, INSERT ON news.editorial_serbian_retry TO news_domain_runtime;
+GRANT UPDATE (publication_pinned, publication_attempted, delivery_enabled, destination) ON news.editorial_serbian_retry TO news_domain_runtime;
+GRANT EXECUTE ON FUNCTION news.enqueue_serbian_digest_retry() TO news_worker_runtime;

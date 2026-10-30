@@ -121,16 +121,16 @@ func TestBootstrapAndRerun(t *testing.T) {
 		id, _ := item["id"].(string)
 		migrationIDs[id] = true
 	}
-	for _, id := range []string{"009_background_jobs", "010_scheduled_job_metadata", "012_article_ingestion", "013_article_processing", "014_editorial_digest", "015_digest_delivery", "016_managed_configuration", "017_localizations", "018_editorial_localizations"} {
+	for _, id := range []string{"009_background_jobs", "010_scheduled_job_metadata", "012_article_ingestion", "013_article_processing", "014_editorial_digest", "015_digest_delivery", "016_managed_configuration", "017_localizations", "018_editorial_localizations", "019_serbian_digest_retry"} {
 		if !migrationIDs[id] {
 			t.Fatalf("required migration %s did not run", id)
 		}
 	}
 	if migrationIDs["006_feed_performance_optimization"] {
-		if len(migrationIDs) != 10 {
+		if len(migrationIDs) != 11 {
 			t.Fatalf("unexpected migration set: %+v", first.MigrationsRun)
 		}
-	} else if len(migrationIDs) != 9 {
+	} else if len(migrationIDs) != 10 {
 		// A sibling schema can disappear after the legacy global index lookup.
 		// Verify the migration set without racing that sibling's test cleanup.
 		t.Fatalf("unexpected migration set after legacy 006 skip: %+v", first.MigrationsRun)

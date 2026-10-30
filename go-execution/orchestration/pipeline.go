@@ -153,6 +153,11 @@ func (p *Pipeline) Execute(ctx context.Context, f execution.ExecutionContext, ki
 		}
 	case "summaries_generate":
 		result, err = call("summaries_generate", "summaries_generate", map[string]any{})
+	case "serbian_digest_retry":
+		result, err = call("serbian_digest_retry", "serbian_digest_retry", map[string]any{})
+		if err != nil {
+			err = digestStageError{stage: "publish", deliveryMayStart: true}
+		}
 	case "backup":
 		result, err = call("backup", "backup", map[string]any{})
 	case "source_test":

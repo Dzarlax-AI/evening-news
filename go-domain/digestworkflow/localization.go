@@ -115,7 +115,7 @@ func (w Workflow) loadRussian(ctx context.Context, date, job string, attempt int
 	if err = w.Fence.Validate(ctx, tx); err != nil {
 		return id, snapshot, edition, err
 	}
-	err = tx.QueryRow(ctx, `SELECT id::text,snapshot,edition FROM editorial_digest_editions WHERE edition_date=$1::date AND locale='ru' AND (($2<>'' AND id=NULLIF($2,'')::uuid) OR ($2='' AND job_id=NULLIF($3,'')::uuid AND attempt_generation=$4)) ORDER BY created_at DESC,id DESC LIMIT 1`, date, expectedID, job, attempt).Scan(&id, &snapshotRaw, &editionRaw)
+	err = tx.QueryRow(ctx, `SELECT id::text,snapshot,edition FROM editorial_digest_editions WHERE locale='ru' AND (($2<>'' AND id=NULLIF($2,'')::uuid) OR ($2='' AND edition_date=$1::date AND job_id=NULLIF($3,'')::uuid AND attempt_generation=$4)) ORDER BY created_at DESC,id DESC LIMIT 1`, date, expectedID, job, attempt).Scan(&id, &snapshotRaw, &editionRaw)
 	if err != nil {
 		return id, snapshot, edition, err
 	}
@@ -144,6 +144,12 @@ func (w Workflow) freezeInputs(ctx context.Context, id string, ru editorial.Snap
 	_, err = tx.Exec(ctx, `INSERT INTO editorial_locale_inputs(russian_edition_id,russian_snapshot,serbian_snapshot,last_error) VALUES($1,$2::jsonb,$3::jsonb,CASE WHEN $3::jsonb IS NULL THEN 'serbian_summaries_missing' ELSE NULL END) ON CONFLICT(russian_edition_id) DO NOTHING`, id, ruRaw, srRaw)
 	if err != nil {
 		return ru, sr, err
+	}
+	if w.RetryPolicy != nil {
+		_, err = tx.Exec(ctx, `INSERT INTO editorial_serbian_retry(russian_edition_id,destination,delivery_enabled,publication_pinned) VALUES($1,NULLIF($2,''),$3,$4) ON CONFLICT DO NOTHING`, id, w.RetryPolicy.Destination, w.RetryPolicy.DeliveryEnabled, w.RetryPolicy.PublicationPinned)
+		if err != nil {
+			return ru, sr, err
+		}
 	}
 	if sr != nil {
 		_, err = tx.Exec(ctx, `UPDATE editorial_locale_inputs SET serbian_snapshot=$2::jsonb,last_error=NULL WHERE russian_edition_id=$1 AND serbian_snapshot IS NULL`, id, srRaw)
@@ -247,6 +253,39 @@ func (w Workflow) RetrySerbian(ctx context.Context, job string, attempt int, ope
 		return 0, nil
 	}
 	return w.generateLocalized(ctx, job, attempt, operation, cutoff, russianID)
+}
+
+// BindSerbianPublication fixes delivery policy at the first actual publication.
+// An absent row denotes a legacy edition and is deliberately not backfilled.
+func (w Workflow) BindSerbianPublication(ctx context.Context, russianID string, policy SerbianRetryPolicy) error {
+	tx, err := w.Pool.Begin(ctx)
+	if err != nil {
+		return err
+	}
+	defer tx.Rollback(ctx)
+	if err = w.Fence.Validate(ctx, tx); err != nil {
+		return err
+	}
+	_, err = tx.Exec(ctx, `UPDATE editorial_serbian_retry SET publication_pinned=true,destination=NULLIF($2,''),delivery_enabled=$3 WHERE russian_edition_id=$1 AND NOT publication_pinned`, russianID, policy.Destination, policy.DeliveryEnabled)
+	if err != nil {
+		return err
+	}
+	return tx.Commit(ctx)
+}
+
+func (w Workflow) MarkRussianPublicationAttempted(ctx context.Context, russianID string) error {
+	tx, err := w.Pool.Begin(ctx)
+	if err != nil {
+		return err
+	}
+	defer tx.Rollback(ctx)
+	if err = w.Fence.Validate(ctx, tx); err != nil {
+		return err
+	}
+	if _, err = tx.Exec(ctx, `UPDATE editorial_serbian_retry SET publication_attempted=true WHERE russian_edition_id=$1 AND publication_pinned`, russianID); err != nil {
+		return err
+	}
+	return tx.Commit(ctx)
 }
 func (w Workflow) generateLocalized(ctx context.Context, job string, attempt int, operation string, cutoff time.Time, expectedID string) (int, error) {
 	id, ru, plan, err := w.loadRussian(ctx, cutoff.UTC().Format("2006-01-02"), job, attempt, expectedID)

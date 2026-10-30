@@ -131,14 +131,15 @@ func TestParseEnvelopeRejectsMalformedInputs(t *testing.T) {
 
 func TestValidateStoredPayloadAllKinds(t *testing.T) {
 	valid := map[string]string{
-		"news_processing":    `{}`,
-		"news_digest":        `{}`,
-		"telegram_digest":    `{}`,
-		"backup":             `{}`,
-		"reprocess_failed":   `{}`,
-		"article_reprocess":  `{"article_ids":[8,3]}`,
-		"summaries_generate": `{}`,
-		"source_test":        `{"source_id":4}`,
+		"news_processing":      `{}`,
+		"news_digest":          `{}`,
+		"telegram_digest":      `{}`,
+		"backup":               `{}`,
+		"reprocess_failed":     `{}`,
+		"article_reprocess":    `{"article_ids":[8,3]}`,
+		"summaries_generate":   `{}`,
+		"source_test":          `{"source_id":4}`,
+		"serbian_digest_retry": `{"russian_edition_id":"10000000-0000-4000-8000-000000000001"}`,
 	}
 	for kind, raw := range valid {
 		got, err := validatePayload(kind, json.RawMessage(raw))
@@ -151,14 +152,15 @@ func TestValidateStoredPayloadAllKinds(t *testing.T) {
 		}
 	}
 	bad := map[string]string{
-		"news_processing":    `{"surprise":1}`,
-		"news_digest":        `{"schedule_id":3}`,
-		"telegram_digest":    `{"timeout_seconds":0}`,
-		"backup":             `{"timeout_seconds":true}`,
-		"reprocess_failed":   `{"limit":101}`,
-		"article_reprocess":  `{"article_ids":[2,2]}`,
-		"summaries_generate": `{"anything":false}`,
-		"source_test":        `{}`,
+		"news_processing":      `{"surprise":1}`,
+		"news_digest":          `{"schedule_id":3}`,
+		"telegram_digest":      `{"timeout_seconds":0}`,
+		"backup":               `{"timeout_seconds":true}`,
+		"reprocess_failed":     `{"limit":101}`,
+		"article_reprocess":    `{"article_ids":[2,2]}`,
+		"summaries_generate":   `{"anything":false}`,
+		"source_test":          `{}`,
+		"serbian_digest_retry": `{"russian_edition_id":"10000000-0000-4000-8000-000000000001","destination":"untrusted"}`,
 	}
 	for kind, raw := range bad {
 		if _, err := validatePayload(kind, json.RawMessage(raw)); err == nil {

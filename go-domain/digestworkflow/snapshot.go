@@ -33,6 +33,14 @@ type Workflow struct {
 	RecordUsage     func(context.Context, pgx.Tx, editorial.ProviderUsage) error
 	PriceUsage      func(editorial.ProviderUsage) *float64
 	SiteBase        string
+	RetryPolicy     *SerbianRetryPolicy
+}
+
+// SerbianRetryPolicy is fixed with the original edition, not the retry job.
+type SerbianRetryPolicy struct {
+	DeliveryEnabled   bool
+	Destination       string
+	PublicationPinned bool
 }
 
 var categories = map[string]string{"serbia": "Сербия", "tech": "Технологии", "technology": "Технологии", "ai": "Искусственный интеллект", "politics": "Политика", "business": "Бизнес", "media": "Медиа", "science": "Наука", "health": "Здоровье", "world": "Мир", "culture": "Культура", "other": "Другое"}

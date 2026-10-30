@@ -223,6 +223,8 @@ func domainResult(op string, input json.RawMessage) any {
 		return map[string]any{"summaries_count": 0}
 	case "summaries_generate":
 		return map[string]any{"summaries_generated": 3}
+	case "serbian_digest_retry":
+		return map[string]any{"status": "success", "parts_sent": 1}
 	case "digest_prepare":
 		return map[string]any{"prepared_token": "50000000-0000-4000-8000-000000000005"}
 	case "digest_publish":
@@ -301,6 +303,7 @@ func TestPipelineAllJobKindsAndOrdering(t *testing.T) {
 		{"news_digest", `{"run_processing":false}`, []string{"summary_status", "summaries_generate", "digest_prepare", "digest_publish"}},
 		{"telegram_digest", `{}`, []string{"summary_status", "summaries_generate", "digest_prepare", "digest_publish"}},
 		{"summaries_generate", `{}`, []string{"summaries_generate"}},
+		{"serbian_digest_retry", `{"russian_edition_id":"10000000-0000-4000-8000-000000000001"}`, []string{"serbian_digest_retry"}},
 		{"backup", `{}`, []string{"backup"}},
 		{"reprocess_failed", `{"limit":20,"dry_run":true}`, []string{"processing"}},
 		{"article_reprocess", `{"article_ids":[2,1],"force":true,"reextract_media":true}`, []string{"media_refresh", "media_refresh", "processing"}},
