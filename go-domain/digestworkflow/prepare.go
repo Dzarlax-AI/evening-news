@@ -23,12 +23,15 @@ type Identity struct {
 	Deadline                time.Time
 }
 type Prepared struct {
-	Identity  Identity
-	EditionID string
-	Edition   editorial.Edition
-	Rendered  editorial.Rendered
-	claimed   bool
-	size      int
+	Identity          Identity
+	EditionID         string
+	Edition           editorial.Edition
+	Destination       string
+	DestinationPinned bool
+	Secondary         *Prepared
+	Rendered          editorial.Rendered
+	claimed           bool
+	size              int
 }
 type PreparedCache struct {
 	mu      sync.Mutex
@@ -109,42 +112,87 @@ func (w Workflow) Count(ctx context.Context, date time.Time) (int, error) {
 	}
 	return n, nil
 }
-func (w Workflow) Prepare(ctx context.Context, cache *PreparedCache, id Identity, now time.Time) (string, error) {
+func (w Workflow) loadPrepared(ctx context.Context, id Identity, now time.Time, locale, expectedID string) (Prepared, error) {
 	tx, err := w.Pool.Begin(ctx)
 	if err != nil {
-		return "", err
+		return Prepared{}, err
 	}
 	defer tx.Rollback(ctx)
 	if err = w.Fence.Validate(ctx, tx); err != nil {
-		return "", err
+		return Prepared{}, err
 	}
 	var editionID string
 	var snapshotRaw, editionRaw, renderedRaw []byte
-	err = tx.QueryRow(ctx, `SELECT id::text,snapshot,edition,rendered FROM editorial_digest_editions WHERE edition_date=$1::date AND locale='ru' ORDER BY created_at DESC,id DESC LIMIT 1`, now.UTC().Format("2006-01-02")).Scan(&editionID, &snapshotRaw, &editionRaw, &renderedRaw)
+	err = tx.QueryRow(ctx, `SELECT id::text,snapshot,edition,rendered FROM editorial_digest_editions WHERE edition_date=$1::date AND locale=$2 AND ($3='' OR id=NULLIF($3,'')::uuid) ORDER BY created_at DESC,id DESC LIMIT 1`, now.UTC().Format("2006-01-02"), locale, expectedID).Scan(&editionID, &snapshotRaw, &editionRaw, &renderedRaw)
 	if errors.Is(err, pgx.ErrNoRows) {
-		return "", ErrNotReady
+		return Prepared{}, ErrNotReady
 	}
 	if err != nil {
-		return "", err
+		return Prepared{}, err
 	}
 	if err = tx.Commit(ctx); err != nil {
-		return "", err
+		return Prepared{}, err
 	}
 	var edition editorial.Edition
 	var snapshot editorial.Snapshot
 	var rendered editorial.Rendered
-	if json.Unmarshal(snapshotRaw, &snapshot) != nil || json.Unmarshal(editionRaw, &edition) != nil || json.Unmarshal(renderedRaw, &rendered) != nil || edition.Locale != "ru" || edition.EditionURL == "" || rendered.RichHTML == "" || len(rendered.PlainParts) == 0 {
-		return "", ErrInvalid
+	if json.Unmarshal(snapshotRaw, &snapshot) != nil || json.Unmarshal(editionRaw, &edition) != nil || json.Unmarshal(renderedRaw, &rendered) != nil || edition.Locale != locale || edition.EditionURL == "" || rendered.RichHTML == "" || len(rendered.PlainParts) == 0 {
+		return Prepared{}, ErrInvalid
 	}
-	if editorial.ValidateEdition(snapshot, "ru", edition) != nil {
-		return "", ErrInvalid
+	if editorial.ValidateEdition(snapshot, locale, edition) != nil {
+		return Prepared{}, ErrInvalid
 	}
-	expected, err := editorial.Render(snapshot, "ru", edition)
+	expected, err := editorial.Render(snapshot, locale, edition)
 	if err != nil || !reflect.DeepEqual(expected, rendered) {
-		return "", ErrInvalid
+		return Prepared{}, ErrInvalid
 	}
-	return cache.add(Prepared{Identity: id, EditionID: editionID, Edition: edition, Rendered: rendered})
+	return Prepared{Identity: id, EditionID: editionID, Edition: edition, Rendered: rendered}, nil
+}
+
+func (w Workflow) Prepare(ctx context.Context, cache *PreparedCache, id Identity, now time.Time) (string, error) {
+	p, err := w.loadPrepared(ctx, id, now, "ru", "")
+	if err != nil {
+		return "", err
+	}
+	return cache.add(p)
+}
+
+// PrepareLocalized binds each ready locale to its paired edition and pinned destination.
+func (w Workflow) PrepareLocalized(ctx context.Context, cache *PreparedCache, id Identity, now time.Time, destinations map[string]string) (string, error) {
+	p, err := w.loadPrepared(ctx, id, now, "ru", "")
+	if err != nil {
+		return "", err
+	}
+	p.Destination = destinations["ru"]
+	_, p.DestinationPinned = destinations["ru"]
+	if destination := destinations["sr-Latn"]; destination != "" {
+		sr, err := w.loadPrepared(ctx, id, now, "sr-Latn", serbianEditionID(p.EditionID))
+		if err == nil {
+			if !editorial.SameEditorialPlan(p.Edition, sr.Edition) {
+				return "", ErrInvalid
+			}
+			sr.Destination = destination
+			sr.DestinationPinned = true
+			p.Secondary = &sr
+		} else if !errors.Is(err, ErrNotReady) {
+			return "", err
+		}
+	}
+	return cache.add(p)
 }
 
 // NewUUID creates a canonical opaque identifier for a persisted intent.
 func NewUUID() (string, error) { return randomUUID() }
+
+func (w Workflow) PrepareSerbian(ctx context.Context, id Identity, now time.Time, russianID, destination string) (Prepared, error) {
+	if destination == "" {
+		return Prepared{}, ErrDestination
+	}
+	sr, err := w.loadPrepared(ctx, id, now, "sr-Latn", serbianEditionID(russianID))
+	if err != nil {
+		return Prepared{}, err
+	}
+	sr.Destination = destination
+	sr.DestinationPinned = true
+	return sr, nil
+}

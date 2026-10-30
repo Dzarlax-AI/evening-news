@@ -64,3 +64,15 @@ Run `make test` and `make vet` for the News modules, or use focused `go test ./.
 - Standalone component deployment profiles and manual development configuration remain separate from the managed default; changing their topology requires its own review.
 
 The [retirement ledger](RETIREMENT.md) records the historical porting decisions. It is retained as evidence rather than a list of still-pending implementation tasks.
+
+## Russian and Serbian localization
+
+- Article partial-result validation, atomic Russian projection, malformed shared responses and preservation of completed stages: processing/analysis localization tests.
+- Bounded Serbian-only retries, claim/source fencing and unchanged extraction/article attempts: isolated PostgreSQL processing tests; race checks cover processing/store.
+- Shared bilingual Gemini/OpenAI editorial transport, immutable composition, locale evidence and Serbian-only retries: editorial localization/provider tests.
+- Additive migrations, restricted grants, frozen snapshots, source revision invalidation and paired editions: migration and digestworkflow PostgreSQL tests.
+- Pinned Telegram destinations, unknown-delivery receipt protection and disabled Serbian delivery after synthetic settings recovery: appsettings, delivery and recovery tests.
+- Full routed UI catalog inventory, placeholders, rendered JS syntax, safe error presentation, query/cookie priorities, dirty controls, unavailable/paired editions and locale-aware feed/search/API/RSS: go-web tests plus the Node locale behavior fixture.
+- Local Playwright smoke acceptance exercised public read paths, managed login/setup, seven admin pages, unsaved changes, mobile/dark mode and keyboard focus using synthetic data.
+
+These tests do not establish live Serbian generation quality, real provider token cost, production proxy/Access behavior or actual Telegram delivery. Those operations require separate authorization.

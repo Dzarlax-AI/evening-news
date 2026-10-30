@@ -6,6 +6,7 @@ import (
 	"fmt"
 	"net/url"
 	"os"
+	"reflect"
 	"strings"
 	"sync"
 	"testing"
@@ -100,10 +101,19 @@ func TestOperationalPostgresCASAndImmutableAttemptSnapshot(t *testing.T) {
 		t.Fatalf("CAS race successes=%d conflicts=%d winner=%+v", successes, conflicts, winner)
 	}
 
+	if _, err := store.UpdateTelegram(ctx, TelegramUpdate{ChatID: "@ru", SerbianChatID: "@sr", SerbianDeliveryEnabled: true}); err != nil {
+		t.Fatal(err)
+	}
 	jobID := "20000000-0000-4000-8000-000000000002"
 	pinned, err := store.PinOperational(ctx, jobID, 1)
 	if err != nil || pinned.Settings.Revision != 1 || pinned.Settings.MaxArticles != winner.MaxArticles {
 		t.Fatalf("pin initial snapshot=%+v err=%v", pinned, err)
+	}
+	if pinned.Telegram == nil || pinned.Telegram.ChatID != "@ru" || pinned.Telegram.SerbianChatID != "@sr" {
+		t.Fatal("Telegram destinations not pinned")
+	}
+	if _, err := store.UpdateTelegram(ctx, TelegramUpdate{ExpectedRevision: 1, ChatID: "@changed-ru", SerbianChatID: "@changed-sr", SerbianDeliveryEnabled: true}); err != nil {
+		t.Fatal(err)
 	}
 	changed := operationalUpdate(1, winner.MaxArticles+10)
 	updated, err := store.UpdateOperational(ctx, changed)
@@ -111,11 +121,11 @@ func TestOperationalPostgresCASAndImmutableAttemptSnapshot(t *testing.T) {
 		t.Fatalf("change settings after pin: value=%+v err=%v", updated, err)
 	}
 	repinned, err := store.PinOperational(ctx, jobID, 1)
-	if err != nil || repinned != pinned {
+	if err != nil || !reflect.DeepEqual(repinned, pinned) {
 		t.Fatalf("repin changed an immutable attempt snapshot: first=%+v second=%+v err=%v", pinned, repinned, err)
 	}
 	readBack, err := store.JobOperational(ctx, jobID, 1)
-	if err != nil || readBack != pinned {
+	if err != nil || !reflect.DeepEqual(readBack, pinned) {
 		t.Fatalf("read pinned snapshot=%+v err=%v", readBack, err)
 	}
 	if _, err := store.JobOperational(ctx, "50000000-0000-4000-8000-000000000005", 1); !errors.Is(err, pgx.ErrNoRows) {

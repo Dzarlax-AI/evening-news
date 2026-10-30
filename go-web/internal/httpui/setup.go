@@ -5,6 +5,8 @@ import (
 	"errors"
 	"io"
 	"net/http"
+	"os"
+	"strings"
 
 	"github.com/Dzarlax-AI/evening-news/go-web/internal/auth"
 	"github.com/jackc/pgx/v5"
@@ -13,6 +15,9 @@ import (
 
 func RegisterSetup(mux *http.ServeMux, service *auth.Service, pool *pgxpool.Pool, installationID string) {
 	mux.HandleFunc("GET /setup", func(w http.ResponseWriter, r *http.Request) {
+		if !validSetupLocale(w, r) {
+			return
+		}
 		var configured bool
 		err := pool.QueryRow(r.Context(), `SELECT EXISTS(SELECT 1 FROM managed_admin WHERE id=1)`).Scan(&configured)
 		if err != nil {
@@ -21,16 +26,23 @@ func RegisterSetup(mux *http.ServeMux, service *auth.Service, pool *pgxpool.Pool
 		}
 		if configured {
 			if _, err = service.AdminPage(r); err != nil {
-				http.Redirect(w, r, "/login", http.StatusSeeOther)
+				target := "/login"
+				if r.URL.RawQuery != "" {
+					target += "?" + r.URL.RawQuery
+				}
+				http.Redirect(w, r, target, http.StatusSeeOther)
 				return
 			}
 		}
 		w.Header().Set("Cache-Control", "no-store")
-		http.ServeFile(w, r, "templates/admin/setup.html")
+		serveLocalizedSetup(w, r, "templates/admin/setup.html")
 	})
 	mux.HandleFunc("GET /login", func(w http.ResponseWriter, r *http.Request) {
+		if !validSetupLocale(w, r) {
+			return
+		}
 		w.Header().Set("Cache-Control", "no-store")
-		http.ServeFile(w, r, "templates/admin/login.html")
+		serveLocalizedSetup(w, r, "templates/admin/login.html")
 	})
 	handler := func(w http.ResponseWriter, r *http.Request) {
 		if r.Method == http.MethodGet {
@@ -79,4 +91,28 @@ func validSetupStep(step string) bool {
 	default:
 		return false
 	}
+}
+
+func validSetupLocale(w http.ResponseWriter, r *http.Request) bool {
+	_, valid := requestLocale(r)
+	if !valid {
+		http.NotFound(w, r)
+		return false
+	}
+	w.Header().Add("Vary", "Cookie")
+	return true
+}
+
+func serveLocalizedSetup(w http.ResponseWriter, r *http.Request, path string) {
+	locale, _ := requestLocale(r)
+	b, err := os.ReadFile(path)
+	if err != nil {
+		http.NotFound(w, r)
+		return
+	}
+	source := translateUISource(string(b), locale)
+	source = strings.Replace(source, `lang="ru"`, `lang="`+locale+`"`, 1)
+	source = strings.Replace(source, `<script src="/static/js/onboarding.js" defer></script>`, `<script src="/static/js/onboarding.js?locale=`+locale+`" defer></script>`, 1)
+	w.Header().Set("Content-Type", "text/html; charset=utf-8")
+	_, _ = w.Write([]byte(source))
 }

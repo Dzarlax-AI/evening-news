@@ -5,6 +5,7 @@ import ai "github.com/Dzarlax-AI/go-ai"
 // Request is the bounded, versioned stdin contract for one article analysis.
 type Request struct {
 	Version                 int                `json:"version"`
+	Locales                 []string           `json:"locales,omitempty"`
 	Title                   string             `json:"title"`
 	Content                 string             `json:"content"`
 	URL                     string             `json:"url"`

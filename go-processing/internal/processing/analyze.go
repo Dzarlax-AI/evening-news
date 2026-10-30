@@ -130,9 +130,45 @@ func AnalyzeOutcome(analysis map[string]any, summaryDone, categoryDone, adDone b
 		}
 		return Outcome{State: state, Fields: fields, Error: e, RetryAfterSeconds: analysis["_retry_after_seconds"]}
 	}
+	if analysis["analysis_version"] == float64(2) || analysis["analysis_version"] == 2 {
+		if len(NormalizeCategories(analysis)) == 0 {
+			return Outcome{State: StateRetryWait, Fields: fields, Error: "missing_categories"}
+		}
+		if _, ok := analysis["is_advertisement"].(bool); !ok {
+			return Outcome{State: StateRetryWait, Fields: fields, Error: "missing_ad_classification"}
+		}
+		localizations, _ := analysis["localizations"].(map[string]any)
+		validated := map[string]any{}
+		for _, locale := range []string{"ru", "sr-Latn"} {
+			raw, _ := localizations[locale].(map[string]any)
+			title, _ := raw["title"].(string)
+			summary, _ := raw["summary"].(string)
+			title, summary = strings.TrimSpace(title), strings.TrimSpace(summary)
+			valid := title != "" && utf8.RuneCountInString(title) <= 200 && summary != "" && !IsChallengeText(title) && !IsChallengeText(summary)
+			if locale == "sr-Latn" {
+				valid = valid && serbianLatinProse(title+"\n"+summary)
+			}
+			if locale != "ru" || !summaryDone {
+				validated[locale] = map[string]any{"title": title, "summary": summary, "valid": valid}
+			}
+			if locale == "ru" {
+				if valid {
+					analysis["optimized_title"], analysis["summary"] = title, summary
+					if !summaryDone {
+						fields["title"], fields["summary"], fields["summary_processed"] = title, summary, true
+					}
+				} else {
+					analysis["optimized_title"], analysis["summary"] = nil, nil
+				}
+			}
+		}
+		fields["localizations"] = validated
+		fields["localization_prompt_version"] = analysis["localization_prompt_version"]
+		fields["localization_model"] = analysis["localization_model"]
+	}
 	summary, _ := analysis["summary"].(string)
 	summary = strings.TrimSpace(summary)
-	if title, ok := analysis["optimized_title"].(string); ok {
+	if title, ok := analysis["optimized_title"].(string); ok && (!summaryDone || analysis["analysis_version"] == nil) {
 		title = strings.TrimSpace(title)
 		if title != "" && utf8.RuneCountInString(title) <= 200 && !IsChallengeText(title) {
 			fields["title"] = title

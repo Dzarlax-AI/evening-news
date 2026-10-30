@@ -3,12 +3,15 @@ package httpui
 import (
 	"bytes"
 	"context"
+	"crypto/sha256"
 	"encoding/json"
 	"encoding/xml"
 	"errors"
 	"fmt"
 	"html/template"
 	"net/http"
+	"net/http/httptest"
+	"net/url"
 	"os"
 	"path/filepath"
 	"strconv"
@@ -30,6 +33,7 @@ type Config struct {
 	StaticDir    string
 	StartedAt    time.Time
 	Version      string
+	SiteBaseURL  string
 }
 
 type Handler struct {
@@ -45,6 +49,9 @@ func New(cfg Config) *Handler {
 	if cfg.StaticDir == "" {
 		cfg.StaticDir = "../web/static"
 	}
+	if cfg.SiteBaseURL == "" {
+		cfg.SiteBaseURL = "http://localhost:8000"
+	}
 	if cfg.Version == "" {
 		cfg.Version = "2.0.0"
 	}
@@ -57,26 +64,87 @@ func New(cfg Config) *Handler {
 // Register installs only public routes. Auth endpoints are registered by the
 // auth component; management routes belong to their own components.
 func (h *Handler) Register(mux *http.ServeMux) {
-	mux.HandleFunc("GET /", h.root)
-	mux.HandleFunc("GET /list", h.listPage)
-	mux.HandleFunc("GET /search", h.searchPage)
+	mux.HandleFunc("GET /", h.localizedPublicAPI(h.root))
+	mux.HandleFunc("GET /list", h.localizedPublicAPI(h.listPage))
+	mux.HandleFunc("GET /search", h.localizedPublicAPI(h.searchPage))
 	mux.HandleFunc("GET /digest/{date}", h.digestPage)
-	mux.HandleFunc("GET /article/{articleID}", h.articlePage)
+	mux.HandleFunc("GET /article/{articleID}", h.localizedPublicAPI(h.articlePage))
 	for _, path := range []string{"/news", "/feed", "/cards"} {
 		mux.HandleFunc("GET "+path, func(w http.ResponseWriter, r *http.Request) { http.Redirect(w, r, "/", http.StatusMovedPermanently) })
 	}
 	mux.HandleFunc("GET /health", h.health)
 	mux.HandleFunc("GET /health/app", h.healthApp)
-	mux.HandleFunc("GET /api/public/feed", h.publicFeed)
-	mux.HandleFunc("GET /api/public/article/{articleID}", h.publicArticle)
-	mux.HandleFunc("GET /api/public/categories/config", h.categoriesConfig)
-	mux.HandleFunc("GET /api/public/categories", h.categories)
-	mux.HandleFunc("GET /api/public/sources", h.sources)
-	mux.HandleFunc("GET /api/public/search", h.search)
+	mux.HandleFunc("GET /api/public/feed", h.localizedPublicAPI(h.publicFeed))
+	mux.HandleFunc("GET /api/public/article/{articleID}", h.localizedPublicAPI(h.publicArticle))
+	mux.HandleFunc("GET /api/public/categories/config", h.localizedPublicAPI(h.categoriesConfig))
+	mux.HandleFunc("GET /api/public/categories", h.localizedPublicAPI(h.categories))
+	mux.HandleFunc("GET /api/public/sources", h.localizedPublicAPI(h.sources))
+	mux.HandleFunc("GET /api/public/search", h.localizedPublicAPI(h.search))
 	mux.HandleFunc("GET /api/v1/", h.apiRoot)
-	mux.HandleFunc("GET /api/v1/feed", h.apiFeed)
-	mux.HandleFunc("GET /api/v1/feed.rss", h.rss)
+	mux.HandleFunc("GET /api/v1/feed", h.localizedPublicAPI(h.apiFeed))
+	mux.HandleFunc("GET /api/v1/feed.rss", h.localizedPublicAPI(h.rss))
 	mux.Handle("GET /static/", h.static())
+}
+
+// requestLocale gives an explicit query precedence over a saved preference.
+// Reading a preference never changes state; the language control writes it.
+func requestLocale(r *http.Request) (string, bool) {
+	values, supplied := r.URL.Query()["locale"]
+	if supplied {
+		if len(values) != 1 || (values[0] != "ru" && values[0] != "sr-Latn") {
+			return "", false
+		}
+		return values[0], true
+	}
+	// Public permalinks stay Russian unless their URL explicitly says otherwise.
+	if !(strings.HasPrefix(r.URL.Path, "/admin") || r.URL.Path == "/login" || r.URL.Path == "/setup") {
+		return "ru", true
+	}
+	cookie, err := r.Cookie("news_locale")
+	if err == nil {
+		if cookie.Value != "ru" && cookie.Value != "sr-Latn" {
+			return "", false
+		}
+		return cookie.Value, true
+	}
+	return "ru", true
+}
+
+func (h *Handler) localizedPublicAPI(next http.HandlerFunc) http.HandlerFunc {
+	return func(w http.ResponseWriter, r *http.Request) {
+		locale, valid := requestLocale(r)
+		if !valid {
+			http.NotFound(w, r)
+			return
+		}
+		w.Header().Add("Vary", "Cookie")
+		if locale == "sr-Latn" {
+			reader, ok := h.cfg.Reader.(repositories.LocalizedPublicReader)
+			if !ok || !reader.SupportsPublicLocale(locale) {
+				http.Error(w, "Srpski prikaz trenutno nije dostupan.", http.StatusServiceUnavailable)
+				return
+			}
+			r = r.WithContext(repositories.WithPublicLocale(r.Context(), locale))
+		}
+		next(w, r)
+	}
+}
+
+// Pages stay unavailable in Serbian until their template and scripts are localized.
+func (h *Handler) russianOnlyUntilLocalized(next http.HandlerFunc) http.HandlerFunc {
+	return func(w http.ResponseWriter, r *http.Request) {
+		locale, valid := requestLocale(r)
+		if !valid {
+			http.NotFound(w, r)
+			return
+		}
+		w.Header().Add("Vary", "Cookie")
+		if locale == "sr-Latn" {
+			http.Error(w, "Srpski prikaz trenutno nije dostupan.", http.StatusServiceUnavailable)
+			return
+		}
+		next(w, r)
+	}
 }
 
 func (h *Handler) publicFeed(w http.ResponseWriter, r *http.Request) {
@@ -313,6 +381,7 @@ type rssChannel struct {
 	Description   string    `xml:"description"`
 	Generator     string    `xml:"generator"`
 	LastBuildDate string    `xml:"lastBuildDate"`
+	Language      string    `xml:"language,omitempty"`
 	Items         []rssItem `xml:"item"`
 }
 type rssItem struct {
@@ -341,6 +410,17 @@ func (h *Handler) rss(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	doc := rssDocument{Version: "2.0", Channel: rssChannel{Title: "Evening News v2", Link: "http://localhost:8000", Description: "Aggregated news feed", Generator: "Evening News v2.0", LastBuildDate: time.Now().UTC().Format("Mon, 02 Jan 2006 15:04:05 GMT")}}
+	if locale, _ := requestLocale(r); locale == "sr-Latn" {
+		doc.Channel.Title = "Evening News — vesti na srpskom"
+		doc.Channel.Description = "Objedinjene vesti na srpskom jeziku"
+		link, err := serbianRSSChannelLink(h.cfg.SiteBaseURL)
+		if err != nil {
+			writeProblem(w, http.StatusServiceUnavailable, "Public data unavailable")
+			return
+		}
+		doc.Channel.Link = link
+		doc.Channel.Language = "sr-Latn"
+	}
 	for _, a := range articles {
 		title := ""
 		if a.Title != nil {
@@ -366,6 +446,14 @@ func (h *Handler) rss(w http.ResponseWriter, r *http.Request) {
 	_, _ = w.Write(append([]byte(xml.Header), body...))
 }
 
+func serbianRSSChannelLink(base string) (string, error) {
+	u, err := url.Parse(base)
+	if err != nil || (u.Scheme != "https" && u.Scheme != "http") || u.Hostname() == "" || u.User != nil || u.RawQuery != "" || u.Fragment != "" || u.Opaque != "" || (u.Path != "" && u.Path != "/") {
+		return "", errors.New("invalid public site origin")
+	}
+	return (&url.URL{Scheme: u.Scheme, Host: u.Host, Path: "/", RawQuery: "locale=sr-Latn"}).String(), nil
+}
+
 func cleanPublicText(s string) string {
 	s = strings.ReplaceAll(s, "&amp;", "&")
 	s = strings.ReplaceAll(s, "&lt;", "<")
@@ -384,15 +472,24 @@ func (h *Handler) listPage(w http.ResponseWriter, r *http.Request) {
 	h.feedPage(w, r, "Лента новостей", "public/list.html")
 }
 func (h *Handler) searchPage(w http.ResponseWriter, r *http.Request) {
-	fragments, err := h.pageFragments()
+	locale, _ := requestLocale(r)
+	fragments, err := h.pageFragments(locale)
 	if err != nil {
 		http.Error(w, "page unavailable", http.StatusInternalServerError)
 		return
 	}
-	h.renderPage(w, r, "public/search.html", map[string]any{"Title": "Поиск новостей", "Page": "search", "FeedFragments": fragments})
+	title := "Поиск новостей"
+	if locale == "sr-Latn" {
+		title = "Pretraga vesti"
+	}
+	h.renderPage(w, r, "public/search.html", map[string]any{"Title": title, "Page": "search", "FeedFragments": fragments})
 }
 func (h *Handler) feedPage(w http.ResponseWriter, r *http.Request, title, name string) {
-	content, err := h.pageFragments()
+	locale, _ := requestLocale(r)
+	if locale == "sr-Latn" {
+		title = "Vesti"
+	}
+	content, err := h.pageFragments(locale)
 	if err != nil {
 		http.Error(w, "page unavailable", 500)
 		return
@@ -402,70 +499,101 @@ func (h *Handler) feedPage(w http.ResponseWriter, r *http.Request, title, name s
 func (h *Handler) digestPage(w http.ResponseWriter, r *http.Request) {
 	date, err := time.Parse("2006-01-02", r.PathValue("date"))
 	if err != nil {
-		writeProblem(w, 404, "Digest not found")
+		writePublicPageProblem(w, r, 404, "Digest not found")
 		return
 	}
 	query := r.URL.Query()
-	localeValues, localeSupplied := query["locale"]
-	locale := "ru"
-	if localeSupplied {
-		if len(localeValues) != 1 || localeValues[0] != "ru" {
-			writeProblem(w, http.StatusNotFound, "Digest not found")
-			return
-		}
-		locale = localeValues[0]
-	}
-	if locale != "ru" {
-		writeProblem(w, http.StatusNotFound, "Digest not found")
+	locale, valid := requestLocale(r)
+	if !valid {
+		writePublicPageProblem(w, r, http.StatusNotFound, "Digest not found")
 		return
 	}
+	w.Header().Add("Vary", "Cookie")
 	editionValues, editionSupplied := query["edition"]
 	editionID := ""
 	if editionSupplied {
 		if len(editionValues) != 1 || !validUUID(editionValues[0]) {
-			writeProblem(w, http.StatusNotFound, "Digest not found")
+			writePublicPageProblem(w, r, http.StatusNotFound, "Digest not found")
 			return
 		}
 		editionID = editionValues[0]
 	}
 	if h.cfg.Reader == nil {
-		writeProblem(w, http.StatusServiceUnavailable, "Public data unavailable")
+		writePublicPageProblem(w, r, http.StatusServiceUnavailable, "Public data unavailable")
 		return
 	}
 	ctx, cancel := context.WithTimeout(r.Context(), 30*time.Second)
 	defer cancel()
 	editorial, supportsEditions := h.cfg.Reader.(repositories.EditorialDigestReader)
-	if editionID != "" && !supportsEditions {
-		writeProblem(w, http.StatusNotFound, "Digest not found")
+	if (editionID != "" || locale != "ru") && !supportsEditions {
+		writePublicPageProblem(w, r, http.StatusNotFound, "Digest not found")
 		return
 	}
 	if supportsEditions {
 		edition, readErr := editorial.EditorialDigest(ctx, date, editionID, locale)
 		if readErr != nil {
-			writeProblem(w, http.StatusServiceUnavailable, "Public data unavailable")
+			writePublicPageProblem(w, r, http.StatusServiceUnavailable, "Public data unavailable")
 			return
 		}
 		if editionID != "" && edition == nil {
-			writeProblem(w, http.StatusNotFound, "Digest not found")
+			writePublicPageProblem(w, r, http.StatusNotFound, "Digest not found")
 			return
 		}
 		if edition != nil {
-			if edition.Date != date.Format("2006-01-02") || edition.Locale != locale || edition.Edition.Locale != locale {
-				writeProblem(w, http.StatusNotFound, "Digest not found")
+			if edition.Date != date.Format("2006-01-02") || edition.Locale != locale || edition.Edition.Locale != locale || (editionID != "" && edition.ID != editionID) {
+				writePublicPageProblem(w, r, http.StatusNotFound, "Digest not found")
 				return
 			}
 			view := buildEditorialDigestView(date, edition)
-			h.renderPage(w, r, "public/digest.html", map[string]any{"Title": "Главное за " + date.Format("02.01.2006"), "Page": "digest", "Editorial": view})
+			switches := map[string]string{locale: edition.ID}
+			target := "sr-Latn"
+			if locale == "sr-Latn" {
+				target = "ru"
+			}
+			if paired, ok := h.cfg.Reader.(repositories.EditorialDigestCounterpartReader); ok {
+				id, pairErr := paired.EditorialDigestCounterpart(ctx, date, edition.ID, locale, target)
+				if pairErr != nil {
+					writePublicPageProblem(w, r, http.StatusServiceUnavailable, "Public data unavailable")
+					return
+				}
+				if validUUID(id) {
+					switches[target] = id
+				}
+			}
+			switchURL := func(language string) string {
+				id := switches[language]
+				if id == "" {
+					return ""
+				}
+				q := r.URL.Query()
+				q.Set("locale", language)
+				q.Set("edition", id)
+				return r.URL.Path + "?" + q.Encode()
+			}
+			title := "Главное за " + date.Format("02.01.2006")
+			if locale == "sr-Latn" {
+				title = "Najvažnije za " + date.Format("02.01.2006")
+			}
+			data := map[string]any{"Title": title, "Page": "digest", "Locale": locale, "Editorial": view, "DigestSwitch": true, "SwitchRU": switchURL("ru"), "SwitchSR": switchURL("sr-Latn")}
+			if switches["ru"] != "" && switches["sr-Latn"] != "" {
+				data["AlternateRU"] = switchURL("ru")
+				data["AlternateSR"] = switchURL("sr-Latn")
+			}
+			h.renderPage(w, r, "public/digest.html", data)
 			return
 		}
 	}
+	if locale != "ru" {
+		writePublicPageProblem(w, r, http.StatusNotFound, "Digest not found")
+		return
+	}
 	page, err := h.cfg.Reader.Digest(ctx, date)
 	if err != nil {
-		writeProblem(w, http.StatusServiceUnavailable, "Public data unavailable")
+		writePublicPageProblem(w, r, http.StatusServiceUnavailable, "Public data unavailable")
 		return
 	}
 	if len(page.Summaries) == 0 && len(page.Categories) == 0 {
-		writeProblem(w, 404, "Digest not found")
+		writePublicPageProblem(w, r, 404, "Digest not found")
 		return
 	}
 	page.Date = date
@@ -475,29 +603,62 @@ func (h *Handler) digestPage(w http.ResponseWriter, r *http.Request) {
 func (h *Handler) articlePage(w http.ResponseWriter, r *http.Request) {
 	id, err := strconv.ParseInt(r.PathValue("articleID"), 10, 64)
 	if err != nil || id < 1 {
-		writeProblem(w, http.StatusNotFound, "Article not found")
+		writePublicPageProblem(w, r, http.StatusNotFound, "Article not found")
 		return
 	}
 	if h.cfg.Reader == nil {
-		writeProblem(w, http.StatusServiceUnavailable, "Public data unavailable")
+		writePublicPageProblem(w, r, http.StatusServiceUnavailable, "Public data unavailable")
 		return
 	}
 	ctx, cancel := context.WithTimeout(r.Context(), 5*time.Second)
 	defer cancel()
 	article, err := h.cfg.Reader.Article(ctx, id, false)
 	if err != nil {
-		writeProblem(w, http.StatusServiceUnavailable, "Public data unavailable")
+		writePublicPageProblem(w, r, http.StatusServiceUnavailable, "Public data unavailable")
 		return
 	}
+	locale, _ := requestLocale(r)
+	if article == nil && locale == "sr-Latn" {
+		original, readErr := h.cfg.Reader.Article(repositories.WithPublicLocale(ctx, "ru"), id, false)
+		if readErr != nil {
+			writePublicPageProblem(w, r, http.StatusServiceUnavailable, "Public data unavailable")
+			return
+		}
+		if original != nil && original["is_advertisement"] != true {
+			buffer := httptest.NewRecorder()
+			h.renderPage(buffer, r, "public/translation_missing.html", map[string]any{"Title": "Prevod nije dostupan", "Page": "article", "Locale": "sr-Latn", "ArticleID": id})
+			w.Header().Set("Content-Type", "text/html; charset=utf-8")
+			w.WriteHeader(http.StatusNotFound)
+			_, _ = w.Write(buffer.Body.Bytes())
+			return
+		}
+	}
 	if article == nil || article["is_advertisement"] == true {
-		writeProblem(w, http.StatusNotFound, "Article not found")
+		writePublicPageProblem(w, r, http.StatusNotFound, "Article not found")
 		return
 	}
 	view := buildArticleView(id, article)
 	if view.Title == "" {
 		view.Title = "Статья"
 	}
-	h.renderPage(w, r, "public/article.html", map[string]any{"Title": view.Title, "Page": "article", "Article": view})
+	h.renderPage(w, r, "public/article.html", map[string]any{"Title": view.Title, "Page": "article", "Locale": locale, "Article": view})
+}
+
+func writePublicPageProblem(w http.ResponseWriter, r *http.Request, status int, detail string) {
+	locale, _ := requestLocale(r)
+	if locale != "sr-Latn" {
+		writeProblem(w, status, detail)
+		return
+	}
+	message := "Podaci trenutno nisu dostupni."
+	if status == http.StatusNotFound {
+		if detail == "Digest not found" {
+			message = "Izdanje nije pronađeno."
+		} else {
+			message = "Članak nije pronađen."
+		}
+	}
+	http.Error(w, message, status)
 }
 
 // RenderTemplate is shared with the admin page component. Dynamic values pass
@@ -516,7 +677,41 @@ func (h *Handler) renderPageErr(w http.ResponseWriter, r *http.Request, name str
 		return errors.New("invalid template name")
 	}
 	adminPage := strings.HasPrefix(name, "admin/") && name != "admin/admin_base.html"
-	t, err := h.loadTemplate(name, adminPage)
+	locale, valid := requestLocale(r)
+	if !valid {
+		return errors.New("invalid locale")
+	}
+	if values, ok := data.(map[string]any); ok {
+		copy := make(map[string]any, len(values)+1)
+		for k, v := range values {
+			copy[k] = v
+		}
+		copy["Locale"] = locale
+		query := r.URL.Query()
+		query.Del("locale")
+		canonicalQuery := query.Encode()
+		if locale == "sr-Latn" {
+			query.Set("locale", "sr-Latn")
+			canonicalQuery = query.Encode()
+		}
+		canonical := r.URL.EscapedPath()
+		if canonicalQuery != "" {
+			canonical += "?" + canonicalQuery
+		}
+		copy["Canonical"] = canonical
+		if r.URL.Path == "/" || r.URL.Path == "/list" || r.URL.Path == "/search" {
+			query.Del("locale")
+			ru := r.URL.EscapedPath()
+			if q := query.Encode(); q != "" {
+				ru += "?" + q
+			}
+			copy["AlternateRU"] = ru
+			query.Set("locale", "sr-Latn")
+			copy["AlternateSR"] = r.URL.EscapedPath() + "?" + query.Encode()
+		}
+		data = copy
+	}
+	t, err := h.loadTemplate(name, adminPage, locale)
 	if err != nil {
 		return err
 	}
@@ -532,12 +727,23 @@ func (h *Handler) renderPageErr(w http.ResponseWriter, r *http.Request, name str
 		return fmt.Errorf("render template: %w", err)
 	}
 	w.Header().Set("Content-Type", "text/html; charset=utf-8")
+	if !adminPage && !strings.HasPrefix(name, "admin/") {
+		sum := sha256.Sum256(rendered.Bytes())
+		tag := fmt.Sprintf("\"%x\"", sum)
+		w.Header().Set("ETag", tag)
+		w.Header().Set("Cache-Control", "private, no-cache")
+		w.Header().Add("Vary", "Cookie")
+		if r.Header.Get("If-None-Match") == tag {
+			w.WriteHeader(http.StatusNotModified)
+			return nil
+		}
+	}
 	_, err = w.Write(rendered.Bytes())
 	return err
 }
 
-func (h *Handler) loadTemplate(name string, adminPage bool) (*template.Template, error) {
-	key := name
+func (h *Handler) loadTemplate(name string, adminPage bool, locale string) (*template.Template, error) {
+	key := name + "|" + locale
 	h.templateMu.RLock()
 	t := h.templates[key]
 	h.templateMu.RUnlock()
@@ -571,9 +777,15 @@ func (h *Handler) loadTemplate(name string, adminPage bool) (*template.Template,
 		}
 		return n
 	}}
-	parsed, err := template.New(filepath.Base(name)).Funcs(funcs).ParseFiles(paths...)
-	if err != nil {
-		return nil, fmt.Errorf("parse template: %w", err)
+	parsed := template.New(filepath.Base(name)).Funcs(funcs)
+	for _, file := range paths {
+		source, readErr := os.ReadFile(file)
+		if readErr != nil {
+			return nil, readErr
+		}
+		if _, parseErr := parsed.Parse(translateUISource(string(source), locale)); parseErr != nil {
+			return nil, fmt.Errorf("parse template: %w", parseErr)
+		}
 	}
 	h.templates[key] = parsed
 	return parsed, nil
@@ -581,7 +793,7 @@ func (h *Handler) loadTemplate(name string, adminPage bool) (*template.Template,
 
 type PageFragments struct{ Sidebar, Filters, Core, Modal, ListStyles, SearchStyles template.HTML }
 
-func (h *Handler) pageFragments() (PageFragments, error) {
+func (h *Handler) pageFragments(locale string) (PageFragments, error) {
 	files := []string{"public/fragments/unified_sidebar.html", "public/fragments/filters_toolbar.html", "public/fragments/feed_core.html", "public/fragments/article_modal.html", "public/fragments/list_styles.html", "public/fragments/search_styles.html"}
 	out := PageFragments{}
 	targets := []*template.HTML{&out.Sidebar, &out.Filters, &out.Core, &out.Modal, &out.ListStyles, &out.SearchStyles}
@@ -590,7 +802,7 @@ func (h *Handler) pageFragments() (PageFragments, error) {
 		if err != nil {
 			return PageFragments{}, err
 		}
-		*targets[i] = template.HTML(b)
+		*targets[i] = template.HTML(translateUISource(string(b), locale))
 	}
 	return out, nil
 }
@@ -617,6 +829,24 @@ func (h *Handler) static() http.Handler {
 		if err != nil || info.IsDir() {
 			http.NotFound(w, r)
 			return
+		}
+		if clean == "js/main.js" || clean == "js/onboarding.js" {
+			locale, valid := requestLocale(r)
+			if !valid {
+				http.NotFound(w, r)
+				return
+			}
+			w.Header().Add("Vary", "Cookie")
+			if locale == "sr-Latn" {
+				b, readErr := os.ReadFile(real)
+				if readErr != nil {
+					http.NotFound(w, r)
+					return
+				}
+				w.Header().Set("Content-Type", "text/javascript; charset=utf-8")
+				http.ServeContent(w, r, info.Name(), info.ModTime(), strings.NewReader(translateUISource(string(b), locale)))
+				return
+			}
 		}
 		http.ServeFile(w, r, real)
 	})

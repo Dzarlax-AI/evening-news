@@ -897,7 +897,7 @@ async function createSchedule() {
 
     } catch (error) {
         console.error('Error creating schedule:', error);
-        alert(`Ошибка: ${error.message}`);
+        alert(`Ошибка: ${window.presentError(error)}`);
 
         const submitBtn = document.querySelector('.btn-submit');
         submitBtn.disabled = false;

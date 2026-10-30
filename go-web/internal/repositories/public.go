@@ -6,6 +6,18 @@ import (
 	"time"
 )
 
+// WithPublicLocale sets the read locale without changing the legacy reader interface.
+type publicLocaleKey struct{}
+
+func WithPublicLocale(ctx context.Context, locale string) context.Context {
+	return context.WithValue(ctx, publicLocaleKey{}, locale)
+}
+
+func isSerbian(ctx context.Context) bool { return ctx.Value(publicLocaleKey{}) == "sr-Latn" }
+
+// LocalizedPublicReader indicates that locale context is honored for public reads.
+type LocalizedPublicReader interface{ SupportsPublicLocale(string) bool }
+
 // PublicReader is the read-only query boundary used by public HTTP handlers.
 // It deliberately excludes commands such as article reprocessing.
 type PublicReader interface {
@@ -82,6 +94,12 @@ type EditorialDigestReader interface {
 	EditorialDigest(context.Context, time.Time, string, string) (*EditorialDigestEdition, error)
 }
 
+// EditorialDigestCounterpartReader resolves a paired edition from the same
+// generation identity. An empty result means the counterpart is unavailable.
+type EditorialDigestCounterpartReader interface {
+	EditorialDigestCounterpart(context.Context, time.Time, string, string, string) (string, error)
+}
+
 type EditorialDigestEdition struct {
 	ID           string                  `json:"id"`
 	Date         string                  `json:"date"`
@@ -130,6 +148,7 @@ type EditorialDigestStory struct {
 }
 
 type EditorialDigestEvidence struct {
+	Locale    string `json:"locale,omitempty"`
 	ArticleID string `json:"article_id"`
 	Quote     string `json:"quote"`
 	Basis     string `json:"basis,omitempty"`

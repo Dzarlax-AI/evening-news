@@ -178,7 +178,7 @@ func (r *ManagementRepository) DeleteSource(ctx context.Context, id int64, purge
 }
 
 func (r *ManagementRepository) Categories(ctx context.Context) (map[string]any, error) {
-	rows, err := r.pool.Query(ctx, `SELECT c.id,c.name,c.display_name,c.description,c.color,c.is_local,count(ac.article_id) FROM categories c LEFT JOIN article_categories ac ON ac.category_id=c.id GROUP BY c.id ORDER BY count(ac.article_id) DESC`)
+	rows, err := r.pool.Query(ctx, `SELECT c.id,c.name,c.display_name,c.description,c.color,c.is_local,count(ac.article_id),(SELECT cl.display_name FROM category_localizations cl WHERE cl.category_id=c.id AND cl.locale='sr-Latn') FROM categories c LEFT JOIN article_categories ac ON ac.category_id=c.id GROUP BY c.id ORDER BY count(ac.article_id) DESC`)
 	if err != nil {
 		return nil, err
 	}
@@ -187,14 +187,14 @@ func (r *ManagementRepository) Categories(ctx context.Context) (map[string]any, 
 	for rows.Next() {
 		var id int64
 		var name, display, color string
-		var description *string
+		var description, serbian *string
 		var local bool
 		var count int64
-		if err = rows.Scan(&id, &name, &display, &description, &color, &local, &count); err != nil {
+		if err = rows.Scan(&id, &name, &display, &description, &color, &local, &count, &serbian); err != nil {
 			rows.Close()
 			return nil, err
 		}
-		cats = append(cats, map[string]any{"id": id, "category": name, "display_name": display, "description": description, "color": color, "is_local": local, "count": count})
+		cats = append(cats, map[string]any{"id": id, "category": name, "display_name": display, "serbian_display_name": serbian, "description": description, "color": color, "is_local": local, "count": count})
 		total += count
 	}
 	if err = rows.Err(); err != nil {
@@ -211,20 +211,40 @@ func (r *ManagementRepository) Categories(ctx context.Context) (map[string]any, 
 	}
 	return map[string]any{"categories": cats, "total_articles": total, "advertisements": ads}, nil
 }
+func setSerbianCategory(ctx context.Context, tx pgx.Tx, id int64, name *string) error {
+	if name == nil {
+		return nil
+	}
+	value := strings.TrimSpace(*name)
+	if value == "" {
+		_, err := tx.Exec(ctx, `DELETE FROM category_localizations WHERE category_id=$1 AND locale='sr-Latn'`, id)
+		return err
+	}
+	_, err := tx.Exec(ctx, `INSERT INTO category_localizations(category_id,locale,display_name) VALUES($1,'sr-Latn',$2) ON CONFLICT(category_id,locale) DO UPDATE SET display_name=EXCLUDED.display_name`, id, value)
+	return err
+}
 func (r *ManagementRepository) CreateCategory(ctx context.Context, in management.CategoryCreate) (map[string]any, error) {
+	tx, err := r.pool.Begin(ctx)
+	if err != nil {
+		return nil, err
+	}
+	defer tx.Rollback(ctx)
 	var id int64
 	var created *time.Time
-	var desc, color any
-	desc = in.Description
-	color = *in.Color
-	err := r.pool.QueryRow(ctx, `INSERT INTO categories(name,display_name,description,color,created_at) VALUES($1,$2,$3,$4,timezone('UTC',now())) RETURNING id,created_at`, in.Name, in.DisplayName, desc, color).Scan(&id, &created)
+	err = tx.QueryRow(ctx, `INSERT INTO categories(name,display_name,description,color,created_at) VALUES($1,$2,$3,$4,timezone('UTC',now())) RETURNING id,created_at`, in.Name, in.DisplayName, in.Description, *in.Color).Scan(&id, &created)
 	if pgConflict(err) {
 		return nil, &management.APIError{Status: 400, Detail: "Category already exists"}
 	}
 	if err != nil {
 		return nil, err
 	}
-	return map[string]any{"id": id, "name": in.Name, "display_name": in.DisplayName, "description": in.Description, "color": color, "created_at": isoNaive(created)}, nil
+	if err = setSerbianCategory(ctx, tx, id, in.SerbianDisplayName); err != nil {
+		return nil, err
+	}
+	if err = tx.Commit(ctx); err != nil {
+		return nil, err
+	}
+	return map[string]any{"id": id, "name": in.Name, "display_name": in.DisplayName, "serbian_display_name": in.SerbianDisplayName, "description": in.Description, "color": *in.Color, "created_at": isoNaive(created)}, nil
 }
 func (r *ManagementRepository) UpdateCategory(ctx context.Context, id int64, in management.CategoryUpdate) (map[string]any, error) {
 	tx, err := r.pool.Begin(ctx)
@@ -251,6 +271,9 @@ func (r *ManagementRepository) UpdateCategory(ctx context.Context, id int64, in 
 		return nil, &management.APIError{Status: 404, Detail: "Category not found"}
 	}
 	if err != nil {
+		return nil, err
+	}
+	if err = setSerbianCategory(ctx, tx, id, in.SerbianDisplayName); err != nil {
 		return nil, err
 	}
 	if err = tx.Commit(ctx); err != nil {

@@ -52,6 +52,7 @@ func TestPostgresManagementSourceCategoryArticleAndSummaryContracts(t *testing.T
 	ddl := []string{
 		`CREATE TABLE sources(id serial PRIMARY KEY,name varchar(255) NOT NULL,source_type varchar(50) NOT NULL,url text NOT NULL,enabled boolean DEFAULT true,config jsonb DEFAULT '{}'::jsonb,fetch_interval integer DEFAULT 1800,last_fetch timestamp,last_success timestamp,last_error text,error_count integer,created_at timestamp,updated_at timestamp)`,
 		`CREATE TABLE categories(id serial PRIMARY KEY,name varchar(50) NOT NULL UNIQUE,display_name varchar(100) NOT NULL,description text,color varchar(7) DEFAULT '#6c757d',is_local boolean NOT NULL DEFAULT false,created_at timestamp)`,
+		`CREATE TABLE category_localizations(category_id integer NOT NULL REFERENCES categories(id) ON DELETE CASCADE, locale text NOT NULL, display_name text NOT NULL, PRIMARY KEY(category_id,locale))`,
 		`CREATE TABLE articles(id serial PRIMARY KEY,source_id integer REFERENCES sources(id) ON DELETE CASCADE,title text NOT NULL,url text NOT NULL UNIQUE,content text,summary text,image_url text,media_files jsonb DEFAULT '[]'::jsonb,published_at timestamp,fetched_at timestamp DEFAULT timezone('UTC',now()),processed boolean DEFAULT false,summary_processed boolean DEFAULT false,category_processed boolean DEFAULT false,processing_state varchar(20) NOT NULL DEFAULT 'pending',processing_attempts integer NOT NULL DEFAULT 0,next_attempt_at timestamp,last_processing_error text,is_advertisement boolean DEFAULT false,ad_confidence double precision DEFAULT 0,ad_type varchar(50),ad_reasoning text,ad_markers jsonb DEFAULT '[]'::jsonb,ad_processed boolean DEFAULT false)`,
 		`CREATE TABLE article_categories(id serial PRIMARY KEY,article_id integer NOT NULL REFERENCES articles(id) ON DELETE CASCADE,category_id integer NOT NULL REFERENCES categories(id) ON DELETE CASCADE,confidence double precision DEFAULT 1,ai_category varchar(100),created_at timestamp DEFAULT timezone('UTC',now()),UNIQUE(article_id,category_id))`,
 		`CREATE TABLE category_mapping(id serial PRIMARY KEY,ai_category varchar(100) NOT NULL UNIQUE,fixed_category varchar(50) NOT NULL,confidence_threshold double precision,description text,created_by varchar(100) DEFAULT 'system',usage_count integer DEFAULT 0,last_used timestamp,is_active boolean DEFAULT true,created_at timestamp,updated_at timestamp)`,
@@ -100,7 +101,7 @@ func TestPostgresManagementSourceCategoryArticleAndSummaryContracts(t *testing.T
 	if err != nil || toggled["is_active"] != true {
 		t.Fatalf("source toggle: %#v %v", toggled, err)
 	}
-	catA, err := r.CreateCategory(ctx, management.CategoryCreate{Name: "Tech", DisplayName: "Technology", Color: ptrString("#123456")})
+	catA, err := r.CreateCategory(ctx, management.CategoryCreate{Name: "Tech", DisplayName: "Technology", Color: ptrString("#123456"), SerbianDisplayName: ptrString("Tehnologija")})
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -108,6 +109,29 @@ func TestPostgresManagementSourceCategoryArticleAndSummaryContracts(t *testing.T
 	var categoryCreated bool
 	if err = pool.QueryRow(ctx, `SELECT created_at IS NOT NULL FROM categories WHERE id=$1`, catAID).Scan(&categoryCreated); err != nil || !categoryCreated {
 		t.Fatalf("category ORM created_at default was not persisted: ok=%v err=%v", categoryCreated, err)
+	}
+	var srName string
+	if err := pool.QueryRow(ctx, `SELECT display_name FROM category_localizations WHERE category_id=$1 AND locale='sr-Latn'`, catAID).Scan(&srName); err != nil || srName != "Tehnologija" {
+		t.Fatalf("Serbian category creation: %q %v", srName, err)
+	}
+	if _, err := r.UpdateCategory(ctx, catAID, management.CategoryUpdate{DisplayName: "Technology"}); err != nil {
+		t.Fatal(err)
+	}
+	if err := pool.QueryRow(ctx, `SELECT display_name FROM category_localizations WHERE category_id=$1 AND locale='sr-Latn'`, catAID).Scan(&srName); err != nil || srName != "Tehnologija" {
+		t.Fatalf("omitted Serbian label changed: %q %v", srName, err)
+	}
+	if _, err := r.UpdateCategory(ctx, catAID, management.CategoryUpdate{DisplayName: "Technology", SerbianDisplayName: ptrString("Tehnika")}); err != nil {
+		t.Fatal(err)
+	}
+	if err := pool.QueryRow(ctx, `SELECT display_name FROM category_localizations WHERE category_id=$1 AND locale='sr-Latn'`, catAID).Scan(&srName); err != nil || srName != "Tehnika" {
+		t.Fatalf("updated Serbian label: %q %v", srName, err)
+	}
+	if _, err := r.UpdateCategory(ctx, catAID, management.CategoryUpdate{DisplayName: "Technology", SerbianDisplayName: ptrString("")}); err != nil {
+		t.Fatal(err)
+	}
+	var labelCount int
+	if err := pool.QueryRow(ctx, `SELECT count(*) FROM category_localizations WHERE category_id=$1`, catAID).Scan(&labelCount); err != nil || labelCount != 0 {
+		t.Fatalf("deleted Serbian label: %d %v", labelCount, err)
 	}
 	catB, err := r.CreateCategory(ctx, management.CategoryCreate{Name: "Business", DisplayName: "Business", Color: ptrString("#654321")})
 	if err != nil {

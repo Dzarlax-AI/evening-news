@@ -493,6 +493,28 @@ func (s *Store) SaveOutcome(ctx context.Context, f Fence, a Article, attempt int
 	if _, err = tx.Exec(ctx, `UPDATE articles SET `+strings.Join(sets, ",")+` WHERE id=$1`, args...); err != nil {
 		return errors.New("article update failed")
 	}
+	if locales, ok := fields["localizations"].(map[string]any); ok {
+		prompt, _ := fields["localization_prompt_version"].(string)
+		model, _ := fields["localization_model"].(string)
+		for _, locale := range []string{"ru", "sr-Latn"} {
+			rawEntry, exists := locales[locale]
+			if !exists {
+				continue
+			}
+			entry, _ := rawEntry.(map[string]any)
+			title, _ := entry["title"].(string)
+			summary, _ := entry["summary"].(string)
+			valid, _ := entry["valid"].(bool)
+			status, lastError := "completed", any(nil)
+			if !valid {
+				status, lastError = "retry_wait", "invalid_localization"
+			}
+			_, err = tx.Exec(ctx, `INSERT INTO article_localizations(article_id,locale,title,summary,input_fingerprint,prompt_version,model,status,attempts,next_retry_at,last_error) VALUES($1,$2,$3,$4,$5,$6,$7,$8,1,CASE WHEN $8='retry_wait' THEN (CURRENT_TIMESTAMP AT TIME ZONE 'UTC') + INTERVAL '30 minutes' ELSE NULL END,$9) ON CONFLICT(article_id,locale) DO UPDATE SET title=EXCLUDED.title,summary=EXCLUDED.summary,input_fingerprint=EXCLUDED.input_fingerprint,prompt_version=EXCLUDED.prompt_version,model=EXCLUDED.model,status=EXCLUDED.status,attempts=CASE WHEN article_localizations.input_fingerprint=EXCLUDED.input_fingerprint THEN article_localizations.attempts+1 ELSE 1 END,next_retry_at=EXCLUDED.next_retry_at,last_error=EXCLUDED.last_error,updated_at=(CURRENT_TIMESTAMP AT TIME ZONE 'UTC') WHERE EXCLUDED.status='completed' OR article_localizations.status<>'completed' OR article_localizations.input_fingerprint<>EXCLUDED.input_fingerprint`, a.ID, locale, title, summary, inputFP, prompt, model, status, lastError)
+			if err != nil {
+				return errors.New("localization update failed")
+			}
+		}
+	}
 	if cats, ok := fields["categories"].([]Category); ok {
 		if _, err = tx.Exec(ctx, `DELETE FROM article_categories WHERE article_id=$1`, a.ID); err != nil {
 			return errors.New("category replacement failed")

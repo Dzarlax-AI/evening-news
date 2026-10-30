@@ -18,6 +18,10 @@ import (
 // Postgres is the bounded-pool read adapter for the public site.
 type Postgres struct{ pool *pgxpool.Pool }
 
+func (*Postgres) SupportsPublicLocale(locale string) bool {
+	return locale == "ru" || locale == "sr-Latn"
+}
+
 // Pool exposes the shared bounded connection pool to command and scheduler adapters.
 func (p *Postgres) Pool() *pgxpool.Pool { return p.pool }
 
@@ -57,6 +61,17 @@ const articleProjection = `a.id,a.source_id,a.title,a.summary,a.content,a.url,a.
  COALESCE((SELECT jsonb_agg(jsonb_build_object('name',c.name,'display_name',c.display_name,'confidence',ac.confidence,'color',c.color) ORDER BY ac.id) FROM article_categories ac JOIN categories c ON c.id=ac.category_id WHERE ac.article_id=a.id),'[]'::jsonb),
  COALESCE((SELECT jsonb_agg(jsonb_build_object('ai_category',COALESCE(ac.ai_category,'Other'),'confidence',COALESCE(NULLIF(ac.confidence,0),1.0)) ORDER BY ac.id) FROM article_categories ac JOIN categories c ON c.id=ac.category_id WHERE ac.article_id=a.id),'[]'::jsonb)`
 
+const serbianReady = `EXISTS (SELECT 1 FROM article_localizations l WHERE l.article_id=a.id AND l.locale='sr-Latn' AND l.status='completed' AND NULLIF(btrim(l.title),'') IS NOT NULL AND NULLIF(btrim(l.summary),'') IS NOT NULL)`
+
+func localizedProjection(ctx context.Context) string {
+	if !isSerbian(ctx) {
+		return articleProjection
+	}
+	projection := strings.Replace(articleProjection, "a.id,a.source_id,a.title,a.summary,a.content", `a.id,a.source_id,(SELECT l.title FROM article_localizations l WHERE l.article_id=a.id AND l.locale='sr-Latn' AND l.status='completed'),(SELECT l.summary FROM article_localizations l WHERE l.article_id=a.id AND l.locale='sr-Latn' AND l.status='completed'),a.content`, 1)
+	projection = strings.ReplaceAll(projection, "c.display_name", `COALESCE((SELECT cl.display_name FROM category_localizations cl WHERE cl.category_id=c.id AND cl.locale='sr-Latn'),'Ostale teme')`)
+	return strings.Replace(projection, "'Other'", "'Ostale teme'", 1)
+}
+
 func published(includeAds bool) string {
 	if includeAds {
 		return `(a.processing_state='completed' OR (a.processing_state='rejected' AND a.ad_processed IS TRUE AND a.is_advertisement IS TRUE))`
@@ -66,6 +81,9 @@ func published(includeAds bool) string {
 
 func (p *Postgres) Feed(ctx context.Context, q FeedQuery) (FeedResponse, error) {
 	where := []string{published(q.Category == "advertisements" || !q.HideAds)}
+	if isSerbian(ctx) {
+		where = append(where, serbianReady)
+	}
 	args := []any{}
 	add := func(expr string, val any) {
 		args = append(args, val)
@@ -106,7 +124,7 @@ func (p *Postgres) Feed(ctx context.Context, q FeedQuery) (FeedResponse, error) 
 		}
 	}
 	args = append(args, q.Limit, q.Offset)
-	sql := `SELECT ` + articleProjection + ` FROM articles a LEFT JOIN sources s ON s.id=a.source_id WHERE ` + strings.Join(where, " AND ") + fmt.Sprintf(` ORDER BY a.published_at DESC OFFSET $%d LIMIT $%d`, len(args), len(args)-1)
+	sql := `SELECT ` + localizedProjection(ctx) + ` FROM articles a LEFT JOIN sources s ON s.id=a.source_id WHERE ` + strings.Join(where, " AND ") + fmt.Sprintf(` ORDER BY a.published_at DESC OFFSET $%d LIMIT $%d`, len(args), len(args)-1)
 	rows, err := p.pool.Query(ctx, sql, args...)
 	if err != nil {
 		return FeedResponse{}, err
@@ -130,10 +148,13 @@ func (p *Postgres) Feed(ctx context.Context, q FeedQuery) (FeedResponse, error) 
 
 func (p *Postgres) Article(ctx context.Context, id int64, includeUnpublished bool) (map[string]any, error) {
 	where := `a.id=$1`
+	if isSerbian(ctx) {
+		where += ` AND ` + serbianReady
+	}
 	if !includeUnpublished {
 		where += ` AND ` + published(true)
 	}
-	row := p.pool.QueryRow(ctx, `SELECT `+articleProjection+` FROM articles a LEFT JOIN sources s ON s.id=a.source_id WHERE `+where, id)
+	row := p.pool.QueryRow(ctx, `SELECT `+localizedProjection(ctx)+` FROM articles a LEFT JOIN sources s ON s.id=a.source_id WHERE `+where, id)
 	item, err := scanArticle(row, true, true)
 	if err == pgx.ErrNoRows {
 		return nil, nil
@@ -330,7 +351,11 @@ var blankLines = regexp.MustCompile(`\n\s*\n`)
 var trailingColon = regexp.MustCompile(`:\s*$`)
 
 func (p *Postgres) CategoriesConfig(ctx context.Context) (map[string]any, error) {
-	rows, err := p.pool.Query(ctx, `SELECT name,display_name,color FROM categories ORDER BY id`)
+	query := `SELECT name,display_name,color FROM categories ORDER BY id`
+	if isSerbian(ctx) {
+		query = `SELECT c.name,COALESCE(cl.display_name,'Ostale teme'),c.color FROM categories c LEFT JOIN category_localizations cl ON cl.category_id=c.id AND cl.locale='sr-Latn' ORDER BY c.id`
+	}
+	rows, err := p.pool.Query(ctx, query)
 	if err != nil {
 		return nil, err
 	}
@@ -353,6 +378,9 @@ func (p *Postgres) CategoriesConfig(ctx context.Context) (map[string]any, error)
 
 func (p *Postgres) Categories(ctx context.Context, q StatsQuery) (map[string]any, error) {
 	conditions, args := statsConditions(q)
+	if isSerbian(ctx) {
+		conditions = append(conditions, serbianReady)
+	}
 	query := `SELECT count(*) FROM articles a WHERE ` + strings.Join(conditions, " AND ")
 	var total int
 	if err := p.pool.QueryRow(ctx, query, args...).Scan(&total); err != nil {
@@ -380,6 +408,9 @@ func (p *Postgres) Categories(ctx context.Context, q StatsQuery) (map[string]any
 }
 func (p *Postgres) Sources(ctx context.Context, q StatsQuery) (map[string]any, error) {
 	conditions, args := statsConditions(q)
+	if isSerbian(ctx) {
+		conditions = append(conditions, serbianReady)
+	}
 	var total int
 	if err := p.pool.QueryRow(ctx, `SELECT count(*) FROM articles a WHERE `+strings.Join(conditions, " AND "), args...).Scan(&total); err != nil {
 		return nil, err
@@ -423,6 +454,9 @@ func (p *Postgres) Search(ctx context.Context, q SearchQuery) (map[string]any, e
 	query := strings.TrimSpace(q.Query)
 	words := strings.Fields(query)
 	conditions := []string{published(!q.HideAds)}
+	if isSerbian(ctx) {
+		conditions = append(conditions, serbianReady)
+	}
 	args := []any{}
 	for _, word := range words {
 		if len([]rune(word)) < 2 {
@@ -431,6 +465,14 @@ func (p *Postgres) Search(ctx context.Context, q SearchQuery) (map[string]any, e
 		args = append(args, "%"+word+"%")
 		n := len(args)
 		conditions = append(conditions, fmt.Sprintf(`(a.title ILIKE $%d OR COALESCE(a.summary,'') ILIKE $%d OR COALESCE(a.content,'') ILIKE $%d)`, n, n, n))
+	}
+	if isSerbian(ctx) {
+		for i, condition := range conditions {
+			condition = strings.ReplaceAll(condition, "a.title ILIKE", "(SELECT l.title FROM article_localizations l WHERE l.article_id=a.id AND l.locale='sr-Latn' AND l.status='completed') ILIKE")
+			condition = strings.ReplaceAll(condition, "COALESCE(a.summary,'') ILIKE", "COALESCE((SELECT l.summary FROM article_localizations l WHERE l.article_id=a.id AND l.locale='sr-Latn' AND l.status='completed'),'') ILIKE")
+			condition = strings.ReplaceAll(condition, " OR COALESCE(a.content,'') ILIKE", " OR '' ILIKE")
+			conditions[i] = condition
+		}
 	}
 	if q.HideAds {
 		conditions = append(conditions, `a.is_advertisement IS NOT TRUE`)
@@ -461,6 +503,9 @@ func (p *Postgres) Search(ctx context.Context, q SearchQuery) (map[string]any, e
 	} else if q.Sort == "title" {
 		order = `a.title`
 	}
+	if isSerbian(ctx) && q.Sort == "title" {
+		order = `(SELECT l.title FROM article_localizations l WHERE l.article_id=a.id AND l.locale='sr-Latn' AND l.status='completed')`
+	}
 	countArgs := append([]any(nil), args...)
 	if q.Sort != "date" && q.Sort != "title" {
 		// Bind the relevance query separately; user input remains data, never SQL.
@@ -468,12 +513,16 @@ func (p *Postgres) Search(ctx context.Context, q SearchQuery) (map[string]any, e
 		rankIndex := len(args)
 		order = fmt.Sprintf(`CASE WHEN a.title ILIKE $%d THEN 3 WHEN COALESCE(a.summary,'') ILIKE $%d THEN 2 ELSE 1 END DESC,a.published_at DESC`, rankIndex, rankIndex)
 	}
+	if isSerbian(ctx) {
+		order = strings.ReplaceAll(order, "a.title", "(SELECT l.title FROM article_localizations l WHERE l.article_id=a.id AND l.locale='sr-Latn' AND l.status='completed')")
+		order = strings.ReplaceAll(order, "a.summary", "(SELECT l.summary FROM article_localizations l WHERE l.article_id=a.id AND l.locale='sr-Latn' AND l.status='completed')")
+	}
 	var total int
 	if err := p.pool.QueryRow(ctx, `SELECT count(*) FROM articles a LEFT JOIN sources s ON s.id=a.source_id WHERE `+where, countArgs...).Scan(&total); err != nil {
 		return nil, err
 	}
 	args = append(args, q.Offset, q.Limit)
-	rows, err := p.pool.Query(ctx, `SELECT `+articleProjection+` FROM articles a LEFT JOIN sources s ON s.id=a.source_id WHERE `+where+` ORDER BY `+order+fmt.Sprintf(` OFFSET $%d LIMIT $%d`, len(args)-1, len(args)), args...)
+	rows, err := p.pool.Query(ctx, `SELECT `+localizedProjection(ctx)+` FROM articles a LEFT JOIN sources s ON s.id=a.source_id WHERE `+where+` ORDER BY `+order+fmt.Sprintf(` OFFSET $%d LIMIT $%d`, len(args)-1, len(args)), args...)
 	if err != nil {
 		return nil, err
 	}
@@ -484,7 +533,11 @@ func (p *Postgres) Search(ctx context.Context, q SearchQuery) (map[string]any, e
 		if e != nil {
 			return nil, e
 		}
-		articles = append(articles, searchArticle(item, query))
+		result := searchArticle(item, query)
+		if isSerbian(ctx) {
+			result["category"] = item["category"]
+		}
+		articles = append(articles, result)
 	}
 	if err := rows.Err(); err != nil {
 		return nil, err
@@ -574,6 +627,9 @@ func nullable(s string) any {
 
 func (p *Postgres) APIFeed(ctx context.Context, q APIFeedQuery) (APIFeedResponse, error) {
 	conditions := []string{published(strings.EqualFold(q.Category, "advertisements"))}
+	if isSerbian(ctx) {
+		conditions = append(conditions, serbianReady)
+	}
 	args := []any{}
 	if q.SinceHours != nil {
 		args = append(args, *q.SinceHours)
@@ -588,7 +644,7 @@ func (p *Postgres) APIFeed(ctx context.Context, q APIFeedQuery) (APIFeedResponse
 		}
 	}
 	args = append(args, q.Offset, q.Limit)
-	rows, err := p.pool.Query(ctx, `SELECT `+articleProjection+` FROM articles a LEFT JOIN sources s ON s.id=a.source_id WHERE `+strings.Join(conditions, " AND ")+fmt.Sprintf(` ORDER BY a.fetched_at DESC OFFSET $%d LIMIT $%d`, len(args)-1, len(args)), args...)
+	rows, err := p.pool.Query(ctx, `SELECT `+localizedProjection(ctx)+` FROM articles a LEFT JOIN sources s ON s.id=a.source_id WHERE `+strings.Join(conditions, " AND ")+fmt.Sprintf(` ORDER BY a.fetched_at DESC OFFSET $%d LIMIT $%d`, len(args)-1, len(args)), args...)
 	if err != nil {
 		return APIFeedResponse{}, err
 	}
@@ -610,7 +666,11 @@ func (p *Postgres) APIFeed(ctx context.Context, q APIFeedQuery) (APIFeedResponse
 		cat = &v
 	}
 	now := pythonISO(time.Now().UTC())
-	return APIFeedResponse{Version: "2.0", Title: "Evening News v2 Feed", UpdatedAt: now, Items: items, Pagination: APIFeedPagination{Limit: q.Limit, Offset: q.Offset, Count: len(items), Category: cat}}, nil
+	title := "Evening News v2 Feed"
+	if isSerbian(ctx) {
+		title = "Evening News v2 — vesti na srpskom"
+	}
+	return APIFeedResponse{Version: "2.0", Title: title, UpdatedAt: now, Items: items, Pagination: APIFeedPagination{Limit: q.Limit, Offset: q.Offset, Count: len(items), Category: cat}}, nil
 }
 func feedItem(m map[string]any) map[string]any {
 	categories := []any{}
@@ -624,7 +684,13 @@ func feedItem(m map[string]any) map[string]any {
 	return map[string]any{"article_id": m["article_id"], "title": m["title"], "summary": m["summary"], "content": m["content"], "image_url": m["image_url"], "media_files": m["media_files"], "url": m["url"], "domain": m["domain"], "category": m["category"], "categories": categories, "ai_categories": m["ai_categories"], "published_at": m["published_at"], "fetched_at": m["fetched_at"], "is_advertisement": m["is_advertisement"], "ad_confidence": m["ad_confidence"], "ad_type": m["ad_type"], "ad_reasoning": m["ad_reasoning"], "source_id": m["source_id"]}
 }
 func (p *Postgres) RSS(ctx context.Context, limit int) ([]RSSArticle, error) {
-	rows, err := p.pool.Query(ctx, `SELECT a.id,a.title,a.url,a.summary,a.published_at FROM articles a WHERE `+published(false)+` AND a.is_advertisement IS FALSE ORDER BY a.published_at DESC LIMIT $1`, limit)
+	projection := `a.id,a.title,a.url,a.summary,a.published_at`
+	condition := published(false)
+	if isSerbian(ctx) {
+		projection = `a.id,(SELECT l.title FROM article_localizations l WHERE l.article_id=a.id AND l.locale='sr-Latn' AND l.status='completed'),a.url,(SELECT l.summary FROM article_localizations l WHERE l.article_id=a.id AND l.locale='sr-Latn' AND l.status='completed'),a.published_at`
+		condition += ` AND ` + serbianReady
+	}
+	rows, err := p.pool.Query(ctx, `SELECT `+projection+` FROM articles a WHERE `+condition+` AND a.is_advertisement IS FALSE ORDER BY a.published_at DESC LIMIT $1`, limit)
 	if err != nil {
 		return nil, err
 	}
@@ -743,6 +809,29 @@ func (p *Postgres) EditorialDigest(ctx context.Context, date time.Time, editionI
 
 // EditorialDigestStatus looks up only ready-edition metadata for the admin
 // reader. It does not consult or mutate legacy daily_summaries rows.
+func (p *Postgres) EditorialDigestCounterpart(ctx context.Context, date time.Time, editionID, locale, target string) (string, error) {
+	rows, err := p.pool.Query(ctx, `SELECT other.id::text FROM editorial_digest_editions base JOIN editorial_digest_editions other ON other.job_id=base.job_id AND other.attempt_generation=base.attempt_generation AND other.edition_date=base.edition_date WHERE base.id=$1::uuid AND base.edition_date=$2 AND base.locale=$3 AND other.locale=$4 AND base.job_id IS NOT NULL AND base.attempt_generation IS NOT NULL ORDER BY other.id LIMIT 2`, editionID, date.Format("2006-01-02"), locale, target)
+	if err != nil {
+		return "", err
+	}
+	defer rows.Close()
+	var ids []string
+	for rows.Next() {
+		var id string
+		if err = rows.Scan(&id); err != nil {
+			return "", err
+		}
+		ids = append(ids, id)
+	}
+	if err = rows.Err(); err != nil {
+		return "", err
+	}
+	if len(ids) != 1 {
+		return "", nil
+	}
+	return ids[0], nil
+}
+
 func (p *Postgres) EditorialDigestStatus(ctx context.Context, date time.Time, locale string) (EditorialDigestStatus, error) {
 	status := EditorialDigestStatus{Date: date.Format("2006-01-02"), Locale: locale}
 	var tableName *string

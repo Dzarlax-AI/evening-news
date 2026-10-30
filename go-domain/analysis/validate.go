@@ -30,7 +30,7 @@ func validateAnalysisResult(raw map[string]any, r Request) map[string]any {
 	if b, ok := raw["is_advertisement"].(bool); ok {
 		isAd = b
 	}
-	return map[string]any{
+	result := map[string]any{
 		"optimized_title":      nullableTrim(raw["optimized_title"]),
 		"summary":              nullableTrim(raw["summary"]),
 		"category":             primary,
@@ -48,6 +48,20 @@ func validateAnalysisResult(raw map[string]any, r Request) map[string]any {
 		"content_quality":      clamp(number(raw["content_quality"], 0.7)),
 		"confidence":           clamp(number(raw["confidence"], 0.8)),
 	}
+	if r.Version == 2 {
+		localizations := map[string]any{}
+		rawLocales, _ := raw["localizations"].(map[string]any)
+		for _, locale := range r.Locales {
+			item, _ := rawLocales[locale].(map[string]any)
+			localizations[locale] = map[string]any{"title": nullableTrim(item["title"]), "summary": nullableTrim(item["summary"])}
+		}
+		result["localizations"] = localizations
+		result["analysis_version"] = 2
+		if ru, ok := localizations["ru"].(map[string]any); ok {
+			result["optimized_title"], result["summary"] = ru["title"], ru["summary"]
+		}
+	}
+	return result
 }
 
 func nullableTrim(v any) any {

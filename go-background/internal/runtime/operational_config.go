@@ -68,7 +68,7 @@ func operationalCallbacks(base, token string) (orchestration.JobConfigPreparer, 
 		if out.JobID != jobID || out.AttemptGeneration != attempt {
 			return processing.OperationalSnapshot{}, errors.New("job operational settings response does not match the attempt")
 		}
-		return processing.OperationalSnapshot{Revision: out.Settings.Revision, PinnedAt: out.PinnedAt, LimitsEnabled: out.Settings.LimitsEnabled, MaxArticles: out.Settings.MaxArticles, PerSource: out.Settings.PerSource, Days: out.Settings.Days, NewestDate: out.Settings.NewestDate, ProcessingEnabled: out.Settings.ProcessingEnabled, DeliveryEnabled: out.Settings.DeliveryEnabled}, nil
+		return processing.OperationalSnapshot{Revision: out.Settings.Revision, PinnedAt: out.PinnedAt, LimitsEnabled: out.Settings.LimitsEnabled, MaxArticles: out.Settings.MaxArticles, PerSource: out.Settings.PerSource, Days: out.Settings.Days, NewestDate: out.Settings.NewestDate, ProcessingEnabled: out.Settings.ProcessingEnabled, DeliveryEnabled: out.Settings.DeliveryEnabled, SerbianEnabled: out.Settings.SerbianEnabled}, nil
 	}
 	return prepare, read
 }

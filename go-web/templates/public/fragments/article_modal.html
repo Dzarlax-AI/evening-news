@@ -50,6 +50,7 @@
 
             <!-- Full Content Spoiler -->
             <div id="modalContentSpoiler" class="modal-content-spoiler" style="display: none;">
+                <h2 id="modalOriginalTextHeading" hidden>Изворный текст</h2>
                 <button class="spoiler-toggle" onclick="toggleContentSpoiler()">
                     <span class="spoiler-icon">▶</span>
                     <span class="spoiler-text">Показать полный текст статьи</span>
@@ -312,6 +313,7 @@ window.openArticleModal = async function(articleId) {
     document.getElementById('modalRefreshBtn').style.display = 'none';
 
     // Reset spoiler state
+    document.getElementById('modalOriginalTextHeading').hidden = true;
     const spoilerToggle = document.querySelector('.spoiler-toggle');
     const spoilerContent = document.getElementById('modalContent');
     if (spoilerToggle) {
@@ -416,6 +418,10 @@ window.openArticleModal = async function(articleId) {
         if (article.content) {
             const contentEl = document.getElementById('modalContent');
             const spoilerEl = document.getElementById('modalContentSpoiler');
+            const isSerbian = document.documentElement.lang === 'sr-Latn';
+            document.getElementById('modalOriginalTextHeading').hidden = !isSerbian;
+            if (isSerbian) contentEl.setAttribute('lang', 'und');
+            else contentEl.removeAttribute('lang');
 
             console.log('DEBUG: Content length:', article.content.length);
             console.log('DEBUG: Content preview:', article.content.substring(0, 100));
@@ -458,7 +464,7 @@ window.openArticleModal = async function(articleId) {
         document.getElementById('modalSummary').innerHTML = `
             <div style="color: #d32f2f; text-align: center;">
                 <p><strong>❌ Ошибка загрузки статьи:</strong></p>
-                <p style="font-size: 0.9rem; margin-top: 10px;">${escapeHtml(error.message)}</p>
+                <p style="font-size: 0.9rem; margin-top: 10px;">${escapeHtml(window.presentError(error))}</p>
             </div>
         `;
     }
@@ -791,11 +797,11 @@ function updateAdminAccessIndicator() {
 
 window.toggleAdminAccess = async function() {
     if (window.adminAccessVerified === true) {
-        window.location.href = '/admin/';
+        window.location.href = window.localizedURL('/admin/');
         return;
     }
     // Not logged in — redirect to admin (Authentik will handle login)
-    window.location.href = '/admin/';
+    window.location.href = window.localizedURL('/admin/');
 };
 
 async function checkAdminAccess() {
@@ -819,7 +825,7 @@ async function checkAdminAccess() {
             }
         }
     } catch (error) {
-        console.log('Admin check failed:', error.message);
+        console.log('Admin check failed:', window.presentError(error));
     }
 }
 
@@ -835,7 +841,7 @@ window.refreshArticle = async function() {
     if (window.adminAccessVerified === false) {
         updateAdminAccessIndicator();
         alert('Обновление статьи доступно только после входа в админ-режим');
-        window.location.href = '/admin/';
+        window.location.href = window.localizedURL('/admin/');
         return;
     }
 
@@ -849,14 +855,14 @@ window.refreshArticle = async function() {
             window.adminAccessVerified = false;
             updateAdminAccessIndicator();
             alert('Админ-сессия не активна. Сначала войдите в админ-режим.');
-            window.location.href = '/admin/';
+            window.location.href = window.localizedURL('/admin/');
             return;
         }
     } catch (error) {
         window.adminAccessVerified = false;
         updateAdminAccessIndicator();
         alert('Не удалось проверить админ-доступ. Сначала войдите в админ-режим.');
-        window.location.href = '/admin/';
+        window.location.href = window.localizedURL('/admin/');
         return;
     }
 
@@ -928,7 +934,7 @@ window.refreshArticle = async function() {
                 shouldRefreshArticle = true;
             } else {
                 refreshBtn.innerHTML = '⚠️ Не завершено';
-                throw new Error(result.message || 'Обработка статьи не завершена.');
+                throw new Error(window.presentMessage(result.message, result.error_code) || 'Обработка статьи не завершена.');
             }
         }
 
@@ -950,7 +956,7 @@ window.refreshArticle = async function() {
         refreshBtn.innerHTML = '❌ Ошибка';
 
         // Show user-friendly error message
-        alert(`Не удалось обновить статью: ${error.message}`);
+        alert(`Не удалось обновить статью: ${window.presentError(error)}`);
 
         // Restore button after delay
         setTimeout(() => {

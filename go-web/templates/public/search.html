@@ -67,7 +67,7 @@
         <div id="searchResults" class="search-results" style="display: none;">
             <div class="results-header">
                 <div class="results-info">
-                    <span id="resultsCount">0</span> результатов для "<span class="results-query" id="resultsQuery"></span>"
+                    <span id="resultsCount">0</span> <span id="resultsNoun">результатов для</span> "<span class="results-query" id="resultsQuery"></span>"
                 </div>
                 <div class="sort-options">
                     <button class="sort-btn active" data-sort="relevance">По релевантности</button>
@@ -179,7 +179,7 @@ async function performSearch() {
     } catch (error) {
         console.error('Search error:', error);
         document.getElementById('loading').style.display = 'none';
-        alert('Ошибка поиска: ' + error.message);
+        alert('Ошибка поиска: ' + window.presentError(error));
     } finally {
         // Reset search button state
         const searchButton = document.getElementById('searchButton');
@@ -202,6 +202,7 @@ function displayResults(data) {
 
     // Update results info
     document.getElementById('resultsCount').textContent = data.pagination.total;
+    if (document.documentElement.lang === 'sr-Latn') document.getElementById('resultsNoun').textContent = window.serbianCountForm(data.pagination.total, 'rezultat za', 'rezultata za', 'rezultata za');
     document.getElementById('resultsQuery').textContent = data.query;
 
     // Generate results HTML

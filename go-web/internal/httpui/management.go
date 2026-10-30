@@ -442,8 +442,8 @@ func (h *managementHandler) editorialDigestStatus(w http.ResponseWriter, r *http
 	}
 	locale := "ru"
 	if localeValues, supplied := query["locale"]; supplied {
-		if len(localeValues) != 1 || localeValues[0] != "ru" {
-			writeInputError(w, "query", "locale", "value_error", "Only the ru locale is supported", nil)
+		if len(localeValues) != 1 || (localeValues[0] != "ru" && localeValues[0] != "sr-Latn") {
+			writeInputError(w, "query", "locale", "value_error", "Unsupported locale", nil)
 			return
 		}
 		locale = localeValues[0]

@@ -76,8 +76,10 @@ let allSummaries = [];
 const catColors = {};
 
 document.addEventListener('DOMContentLoaded', async () => {
-    await loadCategories();
-    await loadSummaries();
+    if (document.documentElement.lang === 'sr-Latn') {
+        document.getElementById('category-filter').hidden = true;
+        document.getElementById('summaries-container').innerHTML = '<a href="/admin/summaries?locale=ru">Otvori arhivu na ruskom</a>';
+    } else { await loadCategories(); await loadSummaries(); }
     await loadEditorialStatus();
 });
 
@@ -106,6 +108,7 @@ async function loadCategories() {
 }
 
 async function loadSummaries(reset = true) {
+    if (document.documentElement.lang === 'sr-Latn') return;
     if (reset) { offset = 0; allSummaries = []; }
     const cat = document.getElementById('category-filter').value;
     const date = document.getElementById('date-filter').value;
@@ -124,7 +127,7 @@ async function loadSummaries(reset = true) {
         offset += items.length;
     } catch(e) {
         document.getElementById('summaries-container').innerHTML =
-            `<div style="text-align:center;padding:3rem;color:var(--error-color);">Ошибка: ${e.message}</div>`;
+            `<div style="text-align:center;padding:3rem;color:var(--error-color);">Ошибка: ${window.presentError(e)}</div>`;
     }
 }
 
@@ -147,7 +150,8 @@ async function loadEditorialStatus(dateOverride = '') {
     link.removeAttribute('href');
 
     try {
-        const response = await fetch(`/api/v1/summaries/editorial-status?date=${encodeURIComponent(date)}&locale=ru`, {credentials: 'same-origin'});
+        const locale = document.documentElement.lang === 'sr-Latn' ? 'sr-Latn' : 'ru';
+        const response = await fetch(`/api/v1/summaries/editorial-status?date=${encodeURIComponent(date)}&locale=${encodeURIComponent(locale)}`, {credentials: 'same-origin'});
         const data = await readApiResponse(response);
         if (!response.ok) throw new Error(data.detail || `HTTP ${response.status}`);
         if (requestID !== editorialStatusRequest) return null;
@@ -156,11 +160,11 @@ async function loadEditorialStatus(dateOverride = '') {
             message.textContent = `Готового редакционного выпуска за ${formatDate(date)} пока нет.`;
             return data;
         }
-        if (data.date !== date || data.locale !== 'ru' || !/^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i.test(data.edition_id || '') || !data.preview_url) {
+        if (data.date !== date || data.locale !== locale || !/^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i.test(data.edition_id || '') || !data.preview_url) {
             throw new Error('Некорректные метаданные готового выпуска');
         }
         section.dataset.state = 'ready';
-        message.textContent = `Готово: ${russianCount(data.main_count || 0, 'главный сюжет', 'главных сюжета', 'главных сюжетов')} · ${russianCount(data.brief_count || 0, 'короткий', 'коротких', 'коротких')} · ${russianCount(data.article_count || 0, 'материал', 'материала', 'материалов')}`;
+        message.textContent = `Готово: ${russianCount(data.main_count || 0, 'главный сюжет', 'главных сюжета', 'главных сюжетов')} · ${document.documentElement.lang === 'sr-Latn' ? `${data.brief_count || 0} ${window.serbianCountForm(data.brief_count || 0, 'kratka vest', 'kratke vesti', 'kratkih vesti')}` : russianCount(data.brief_count || 0, 'короткий', 'коротких', 'коротких')} · ${russianCount(data.article_count || 0, 'материал', 'материала', 'материалов')}`;
         link.href = data.preview_url;
         link.hidden = false;
         return data;
@@ -258,7 +262,7 @@ async function generateDailySummaries() {
         if (!response.success) {
             generationState.dataset.state = 'failed';
             generationState.textContent = 'Генерация не завершилась успешно. Готовый выпуск не подтверждён.';
-            window.NewsAggregator.showNotification(response.message || 'Не удалось завершить генерацию сводок', 'error');
+            window.NewsAggregator.showNotification(window.presentMessage(response.message, response.error_code) || 'Не удалось завершить генерацию сводок', 'error');
             return;
         }
         document.getElementById('date-filter').value = today;
@@ -275,7 +279,7 @@ async function generateDailySummaries() {
     } catch (error) {
         generationState.dataset.state = 'failed';
         generationState.textContent = 'Генерация не завершилась успешно. Готовый выпуск не подтверждён.';
-        window.NewsAggregator.showNotification(error.message || 'Ошибка генерации сводок', 'error');
+        window.NewsAggregator.showNotification(window.presentError(error) || 'Ошибка генерации сводок', 'error');
     } finally {
         button.disabled = false;
     }

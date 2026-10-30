@@ -141,7 +141,7 @@ function performSearch() {
   const query = input.value.trim();
 
   if (query.length >= 2) {
-    window.location.href = `/search?q=${encodeURIComponent(query)}`;
+    window.location.href = window.localizedURL(`/search?q=${encodeURIComponent(query)}`);
   } else {
     showSearchError('Поисковый запрос должен содержать минимум 2 символа');
   }
@@ -237,7 +237,7 @@ function openArticleFromSearch(articleId) {
     window.openArticleModal(articleId);
   } else {
     // Fallback to article page
-    window.location.href = `/article/${articleId}`;
+    window.location.href = window.localizedURL(`/article/${articleId}`);
   }
 }
 
@@ -304,7 +304,7 @@ document.addEventListener('DOMContentLoaded', function() {
         e.preventDefault();
         const query = e.target.value.trim();
         if (query.length >= 2) {
-          window.location.href = `/search?q=${encodeURIComponent(query)}`;
+          window.location.href = window.localizedURL(`/search?q=${encodeURIComponent(query)}`);
         }
       }
     });

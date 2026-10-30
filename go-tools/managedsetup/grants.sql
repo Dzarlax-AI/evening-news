@@ -190,3 +190,11 @@ GRANT SELECT ON SEQUENCE news.sources_id_seq, news.categories_id_seq,
  news.category_mapping_id_seq, news.daily_summaries_id_seq, news.domain_stability_id_seq,
  news.schedule_settings_id_seq, news.articles_id_seq, news.article_categories_id_seq,
  news.background_jobs_queue_position_seq TO news_domain_runtime;
+
+-- Locale data uses the same ownership boundary as articles and categories.
+GRANT SELECT ON news.article_localizations, news.category_localizations TO news_web_runtime, news_domain_runtime;
+GRANT SELECT, INSERT, UPDATE ON news.article_localizations TO news_processing_runtime;
+GRANT SELECT ON news.category_localizations TO news_processing_runtime;
+GRANT INSERT, UPDATE, DELETE ON news.category_localizations TO news_web_runtime;
+
+GRANT SELECT, INSERT, UPDATE ON news.editorial_locale_inputs TO news_domain_runtime;

@@ -4,6 +4,8 @@ import (
 	"encoding/base64"
 	"net/http"
 	"net/http/httptest"
+	"os/exec"
+	"regexp"
 	"strings"
 	"testing"
 
@@ -234,6 +236,48 @@ func TestManagedRecoveryPageHasNoMutationControls(t *testing.T) {
 	for _, forbidden := range []string{"createBackup()", "showUploadModal()", "restore-modal", "schedule-enabled", "backups-list", "/api/v1/backup"} {
 		if strings.Contains(body, forbidden) {
 			t.Fatalf("managed guidance exposes mutation UI: %s", forbidden)
+		}
+	}
+}
+
+func TestSerbianAdminPagesRenderLocalizedCopy(t *testing.T) {
+	mux := adminMux(t, adminTestService())
+	for _, path := range []string{"/admin/", "/admin/sources", "/admin/summaries", "/admin/stats", "/admin/backup", "/admin/categories", "/admin/settings"} {
+		req := httptest.NewRequest(http.MethodGet, path+"?locale=sr-Latn", nil)
+		req.Header.Set("Authorization", adminBasicHeader())
+		w := httptest.NewRecorder()
+		mux.ServeHTTP(w, req)
+		if w.Code != http.StatusOK || !strings.Contains(w.Body.String(), `lang="sr-Latn"`) {
+			t.Fatalf("%s status=%d", path, w.Code)
+		}
+		if strings.ContainsAny(w.Body.String(), "АБВГДЕЖЗИЙКЛМНОПРСТУФХЦЧШЩЪЫЬЭЮЯабвгдежзийклмнопрстуфхцчшщъыьэюяЁё") {
+			t.Errorf("untranslated Cyrillic in %s", path)
+		}
+	}
+}
+
+func TestSerbianAdminInlineScriptsParse(t *testing.T) {
+	node, err := exec.LookPath("node")
+	if err != nil {
+		t.Skip("node is unavailable")
+	}
+	scripts := regexp.MustCompile(`(?s)<script(?:\s[^>]*)?>(.*?)</script>`)
+	mux := adminMux(t, adminTestService())
+	for _, path := range []string{"/admin/", "/admin/sources", "/admin/summaries", "/admin/stats", "/admin/backup", "/admin/categories", "/admin/settings"} {
+		req := httptest.NewRequest(http.MethodGet, path+"?locale=sr-Latn", nil)
+		req.Header.Set("Authorization", adminBasicHeader())
+		w := httptest.NewRecorder()
+		mux.ServeHTTP(w, req)
+		for i, match := range scripts.FindAllStringSubmatch(w.Body.String(), -1) {
+			if strings.TrimSpace(match[1]) == "" {
+				continue
+			}
+			cmd := exec.Command(node, "--check")
+			cmd.Stdin = strings.NewReader(match[1])
+			out, err := cmd.CombinedOutput()
+			if err != nil {
+				t.Errorf("%s script %d: %s", path, i, out)
+			}
 		}
 	}
 }

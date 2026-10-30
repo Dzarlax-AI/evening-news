@@ -11,10 +11,10 @@ Originally written in Python, the application now runs on Go.
 - RSS/Atom, public Telegram channel, and CSS-based Page Monitor sources.
 - Full-text extraction with HTTP and optional native Cloak browser support.
 - Duplicate detection, content filtering, AI summaries, and categorization.
-- Russian digests with main stories followed by short items grouped by category.
+- Russian and optional Serbian Latin articles and digests, with a shared editorial composition and separate delivery channels.
 - Telegram delivery and permanent digest pages on the website.
 - A searchable public reader with category/source filters, dark mode, and mobile layouts.
-- An admin interface for providers, credentials, sources, categories, schedules, and processing limits.
+- Russian/Serbian public, admin, login, and setup interfaces for providers, credentials, sources, categories, schedules, and processing limits.
 
 ## How a story becomes a digest
 
@@ -24,7 +24,7 @@ Originally written in Python, the application now runs on Go.
 4. Build an editorial edition from the saved summaries, selecting main stories and grouping short items.
 5. Validate the edition, add links in code, save it, and deliver it to Telegram.
 
-Headlines link to the article on this site. Source labels link to the original publication. Stored editions retain their article snapshot and delivery receipts. See [editorial digest contracts](docs/editorial-digests.md) and [digest delivery](docs/go-digest-delivery.md).
+Headlines link to the article on this site. Website source labels link to the original publication; Telegram displays source names as plain text. Stored editions retain their article snapshot and delivery receipts. See [editorial digest contracts](docs/editorial-digests.md) and [digest delivery](docs/go-digest-delivery.md).
 
 ## Architecture
 
@@ -95,12 +95,16 @@ For a fresh managed installation, `.env` can be empty. Its only optional input i
 Configure everyday application settings through the web interface:
 
 - **AI:** Gemini/OpenAI credentials, active provider, and models for articles, digests, and auxiliary text.
-- **Telegram:** bot token, digest channel, and service notification channel.
+- **Telegram:** one protected bot token, Russian digest and service channels, and an optional separate Serbian digest channel.
 - **Sources and categories:** feeds, channel/page settings, categories, and mappings.
 - **Schedules:** collection and digest timing.
-- **Processing:** article limits, publication age/date filters, and processing/delivery switches.
+- **Processing:** article limits, publication age/date filters, processing/delivery switches, and opt-in Serbian generation.
 
 Saved provider and Telegram credentials are encrypted in PostgreSQL and are never returned by the settings API. Operational settings apply to new jobs; running jobs keep their configuration snapshot.
+
+The interface language selector supports `ru` and `sr-Latn`. Russian public URLs remain valid; Serbian reader links carry `?locale=sr-Latn`. A missing Serbian translation has an explicit unavailable state. Changing the interface language does not enable generation or change publication channels.
+
+Enable Serbian generation in processing settings and configure a distinct Serbian channel in Telegram settings. Existing articles are not automatically backfilled. Failed Serbian text is retried independently from completed Russian text, and editorial retries keep the original composition and saved input versions. Settings recovery preserves the Serbian destination but disables delivery until it is explicitly enabled again. See [localization contracts](docs/localization.md).
 
 Infrastructure settings remain operator-managed: database connections, networks, browser endpoints, proxy trust, resource limits, concurrency, and technical timeouts. Managed services read private per-role files through `NEWS_RUNTIME_FILE`. These files, encryption keys, and database volumes must be preserved together for recovery.
 

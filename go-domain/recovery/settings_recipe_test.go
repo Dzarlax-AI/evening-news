@@ -104,11 +104,12 @@ func TestSettingsRecoveryRecipes(t *testing.T) {
 	if err != nil {
 		t.Fatal("fixture identity seed failed")
 	}
-	_, err = src.Exec(ctx, `INSERT INTO managed_admin(id,username,password_hash) VALUES(1,'fixture-admin','synthetic-password-hash'); INSERT INTO settings(key,value) VALUES('ai_settings_revision','3'),('operational_delivery_enabled','true'),('operational_processing_enabled','true'),('telegram_chat_id','"synthetic-chat"'),('managed_job_config:retired','{"content":"must-not-be-exported"}');`)
+	_, err = src.Exec(ctx, `INSERT INTO managed_admin(id,username,password_hash) VALUES(1,'fixture-admin','synthetic-password-hash'); INSERT INTO settings(key,value) VALUES('ai_settings_revision','3'),('operational_delivery_enabled','true'),('operational_processing_enabled','true'),('telegram_chat_id','"synthetic-chat"'),('telegram_serbian_chat_id','"synthetic-sr"'),('telegram_serbian_delivery_enabled','true'),('operational_serbian_enabled','true'),('managed_job_config:retired','{"content":"must-not-be-exported"}');`)
 	if err != nil {
 		t.Fatal("fixture settings seed failed")
 	}
 	_, err = src.Exec(ctx, `INSERT INTO categories(name,display_name,color) VALUES('Fixture','Fixture category','#123456');
+ INSERT INTO category_localizations(category_id,locale,display_name) SELECT id,'sr-Latn','Probna kategorija' FROM categories WHERE name='Fixture';
  INSERT INTO category_mapping(ai_category,fixed_category,created_by,usage_count) VALUES('Fixture input','Fixture','fixture',19);
  INSERT INTO extraction_patterns(domain,selector_pattern,extraction_strategy,discovered_by,success_count) VALUES('fixture.invalid','article','css','manual',9),('fixture.invalid','aside','css','ai',12);
  INSERT INTO integration_credentials(provider,revision) VALUES('openai',4);
@@ -180,14 +181,14 @@ func TestSettingsRecoveryRecipes(t *testing.T) {
 	if e != nil || json.Unmarshal(restored, &restoredDocument) != nil {
 		t.Fatal("recovered export failed")
 	}
-	for _, section := range []string{"identity", "sources", "categories", "category_mapping", "extraction_patterns", "schedule_settings", "managed_admin", "integration_credentials"} {
+	for _, section := range []string{"identity", "sources", "categories", "category_localizations", "category_mapping", "extraction_patterns", "schedule_settings", "managed_admin", "integration_credentials"} {
 		if !reflect.DeepEqual(document[section], restoredDocument[section]) {
 			t.Fatalf("recovered %s differs", section)
 		}
 	}
 	for _, row := range document["settings"].([]any) {
 		item := row.(map[string]any)
-		if strings.HasPrefix(item["key"].(string), "operational_") {
+		if strings.HasPrefix(item["key"].(string), "operational_") || item["key"] == "telegram_serbian_delivery_enabled" {
 			continue
 		}
 		found := false
@@ -218,6 +219,10 @@ func TestSettingsRecoveryRecipes(t *testing.T) {
 	op, err := (appsettings.Store{Pool: dst}).Operational(ctx)
 	if err != nil || op.DeliveryEnabled || op.MaxArticles != 17 || op.PerSource != 8 {
 		t.Fatal("delivery must remain disabled")
+	}
+	telegram, err := (appsettings.Store{Pool: dst}).Telegram(ctx)
+	if err != nil || telegram.SerbianDeliveryEnabled || telegram.SerbianChatID != "synthetic-sr" {
+		t.Fatal("Serbian destination not preserved disabled after recovery")
 	}
 	clear, _, err := (&credentialstore.Store{Pool: dst, Key: key, KeyID: "fixture-key", InstallationID: installation}).Resolve(ctx, "gemini")
 	if err != nil || string(clear) != "synthetic-key-no-provider-call" {

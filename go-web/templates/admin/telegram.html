@@ -247,7 +247,7 @@ async function loadSettings() {
         prefillForm(d);
     } catch (e) {
         document.getElementById('status-body').innerHTML =
-            `<div class="result-msg result-err">Ошибка загрузки: ${e.message}</div>`;
+            `<div class="result-msg result-err">Ошибка загрузки: ${window.presentError(e)}</div>`;
     }
 }
 
@@ -314,7 +314,7 @@ async function saveSettings() {
         showResult('save-result', true, d.message || 'Сохранено');
         await loadSettings();
     } catch (e) {
-        showResult('save-result', false, `Ошибка: ${e.message}`);
+        showResult('save-result', false, `Ошибка: ${window.presentError(e)}`);
     } finally {
         setBtn('save', false, 'Сохранить');
     }
@@ -335,7 +335,7 @@ async function testConnection() {
         if (!r.ok) throw new Error(d.detail || JSON.stringify(d));
         showResult('action-result', d.success, d.message || (d.success ? 'Дайджест отправлен.' : `Задание завершилось: ${d.status || 'ошибка'}`));
     } catch (e) {
-        showResult('action-result', false, `Ошибка: ${e.message}`);
+        showResult('action-result', false, `Ошибка: ${window.presentError(e)}`);
     } finally {
         setActionBtn(0, false, 'Отправить тест');
     }
@@ -352,7 +352,7 @@ async function sendDigest() {
         });
         showResult('action-result', d.success, d.message);
     } catch (e) {
-        showResult('action-result', false, `Ошибка: ${e.message}`);
+        showResult('action-result', false, `Ошибка: ${window.presentError(e)}`);
     } finally {
         setActionBtn(1, false, 'Отправить дайджест');
     }

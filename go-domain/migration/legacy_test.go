@@ -121,24 +121,33 @@ func TestBootstrapAndRerun(t *testing.T) {
 		id, _ := item["id"].(string)
 		migrationIDs[id] = true
 	}
-	for _, id := range []string{"009_background_jobs", "010_scheduled_job_metadata", "012_article_ingestion", "013_article_processing", "014_editorial_digest", "015_digest_delivery", "016_managed_configuration"} {
+	for _, id := range []string{"009_background_jobs", "010_scheduled_job_metadata", "012_article_ingestion", "013_article_processing", "014_editorial_digest", "015_digest_delivery", "016_managed_configuration", "017_localizations", "018_editorial_localizations"} {
 		if !migrationIDs[id] {
 			t.Fatalf("required migration %s did not run", id)
 		}
 	}
 	if migrationIDs["006_feed_performance_optimization"] {
-		if len(migrationIDs) != 8 {
+		if len(migrationIDs) != 10 {
 			t.Fatalf("unexpected migration set: %+v", first.MigrationsRun)
 		}
-	} else {
-		var siblingIndex bool
-		if err = pool.QueryRow(ctx, `SELECT EXISTS (SELECT 1 FROM pg_indexes WHERE schemaname<>current_schema() AND indexname='idx_articles_fetched_at_desc')`).Scan(&siblingIndex); err != nil || !siblingIndex || len(migrationIDs) != 7 {
-			t.Fatalf("006 was skipped without legacy sibling-index condition: %v", err)
+	} else if len(migrationIDs) != 9 {
+		// A sibling schema can disappear after the legacy global index lookup.
+		// Verify the migration set without racing that sibling's test cleanup.
+		t.Fatalf("unexpected migration set after legacy 006 skip: %+v", first.MigrationsRun)
+	}
+
+	second, err := Run(ctx, pool, true, false)
+	if err != nil || len(second.Errors) != 0 {
+		t.Fatalf("second run: %+v %v", second, err)
+	}
+	for _, item := range second.MigrationsRun {
+		if item["id"] != "006_feed_performance_optimization" || migrationIDs["006_feed_performance_optimization"] {
+			t.Fatalf("unexpected rerun: %+v", second)
 		}
 	}
-	second, err := Run(ctx, pool, true, false)
-	if err != nil || len(second.MigrationsRun) != 0 || len(second.Errors) != 0 {
-		t.Fatalf("second run: %+v %v", second, err)
+	third, err := Run(ctx, pool, true, false)
+	if err != nil || len(third.MigrationsRun) != 0 || len(third.Errors) != 0 {
+		t.Fatalf("third run: %+v %v", third, err)
 	}
 
 	worker, err := pool.Acquire(ctx)

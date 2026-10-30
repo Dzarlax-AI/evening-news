@@ -38,6 +38,7 @@ type OperationalSnapshot struct {
 	NewestDate        string
 	ProcessingEnabled bool
 	DeliveryEnabled   bool
+	SerbianEnabled    bool
 }
 type jobPayload struct {
 	ArticleIDs     []int64 `json:"article_ids"`
@@ -193,7 +194,7 @@ func (p *Processor) Run(ctx context.Context, f store.Fence) (map[string]any, err
 				}
 				defer func() { <-sem }()
 				preserveStages := payload.PreserveStages || kind == "article_reprocess"
-				out, _, e := p.processOne(batchCtx, f, a, force, preserveStages)
+				out, _, e := p.processOne(batchCtx, f, a, force, preserveStages, operational != nil && operational.SerbianEnabled)
 				mu.Lock()
 				if e != nil {
 					if firstErr == nil {
@@ -246,6 +247,45 @@ func (p *Processor) Run(ctx context.Context, f store.Fence) (map[string]any, err
 		}
 		if len(batch) < remaining {
 			break
+		}
+	}
+	if operational != nil && operational.SerbianEnabled && kind != "article_reprocess" && kind != "reprocess_failed" {
+		budget := batchSize
+		if cycleLimit > 0 {
+			budget = min(budget, max(0, cycleLimit-selectedCount))
+		}
+		for i := 0; i < budget; i++ {
+			delay := max(p.timeout()+60*time.Second, 30*time.Minute)
+			a, fp, found, err := p.DB.ClaimLocalizationRetry(ctx, f, p.maxAttempts(), delay)
+			if err != nil {
+				return nil, withPhase("localization_claim", err)
+			}
+			if !found {
+				break
+			}
+			input := map[string]any{"title": a.Title, "content": a.Summary, "url": a.URL, "locales": []string{"sr-Latn"}}
+			workCtx, cancel := context.WithTimeout(ctx, p.timeout())
+			result, callErr := p.AI.Call(workCtx, f, a, a.ProcessingAttempts, fp, "analyze", input)
+			cancel()
+			if callErr != nil && isFatal(callErr) {
+				return nil, withPhase("localization_retry", callErr)
+			}
+			var title, summary, prompt, model string
+			valid := false
+			if callErr == nil && result["_processing_error"] == nil && (result["analysis_version"] == float64(2) || result["analysis_version"] == 2) {
+				locales, _ := result["localizations"].(map[string]any)
+				sr, _ := locales["sr-Latn"].(map[string]any)
+				title, _ = sr["title"].(string)
+				summary, _ = sr["summary"].(string)
+				title = strings.TrimSpace(title)
+				summary = strings.TrimSpace(summary)
+				valid = title != "" && utf8.RuneCountInString(title) <= 200 && summary != "" && !IsChallengeText(title) && !IsChallengeText(summary) && serbianLatinProse(title+"\n"+summary)
+				prompt, _ = result["localization_prompt_version"].(string)
+				model, _ = result["localization_model"].(string)
+			}
+			if err = p.DB.SaveLocalizationRetry(ctx, f, a, fp, title, summary, prompt, model, valid, p.maxAttempts()); err != nil {
+				return nil, withPhase("localization_outcome", err)
+			}
 		}
 	}
 	outcomes := outcomeSample
@@ -326,7 +366,7 @@ func uniqueSortedIDs(ids []int64) []int64 {
 	return unique
 }
 
-func (p *Processor) processOne(ctx context.Context, f store.Fence, a store.Article, force, preserve bool) (Outcome, int, error) {
+func (p *Processor) processOne(ctx context.Context, f store.Fence, a store.Article, force, preserve, bilingual bool) (Outcome, int, error) {
 	retryDelay := p.RetryLater
 	if a.ProcessingAttempts == 0 {
 		retryDelay = p.RetryInitial
@@ -526,6 +566,9 @@ func (p *Processor) processOne(ctx context.Context, f store.Fence, a store.Artic
 		}
 	}
 	input := map[string]any{"title": a.Title, "content": content, "url": a.URL}
+	if bilingual {
+		input["locales"] = []string{"ru", "sr-Latn"}
+	}
 	if ordinaryFreshAccepted && strings.TrimSpace(mediaContent) != "" {
 		input["original_context"] = mediaContent
 	} else if forceExtract && a.SourceType == "telegram" && len([]rune(strings.TrimSpace(mediaContent))) >= 30 && EnforceTextLimit(mediaContent, p.textLimit()) == nil {
@@ -555,8 +598,11 @@ func (p *Processor) processOne(ctx context.Context, f store.Fence, a store.Artic
 		}
 		return p.finish(ctx, f, a, attempt, fp, Outcome{State: StateRetryWait, Fields: fields, Error: errorCode(err)})
 	}
-	if ordinaryFreshAccepted && shouldFallbackSummary(analysis) {
+	if !bilingual && ordinaryFreshAccepted && shouldFallbackSummary(analysis) {
 		fallbackInput := map[string]any{"title": a.Title, "content": content, "url": a.URL}
+		if bilingual {
+			fallbackInput["locales"] = []string{"ru", "sr-Latn"}
+		}
 		fallbackFP := InputFingerprint(fallbackInput)
 		if err = p.DB.UpdateItemFingerprint(workCtx, f, a.ID, attempt, a.ClaimToken, fallbackFP); err != nil {
 			if attemptTimedOut(workCtx, ctx) {
@@ -592,6 +638,7 @@ func (p *Processor) processOne(ctx context.Context, f store.Fence, a store.Artic
 	if analysis == nil {
 		analysis = map[string]any{}
 	}
+	analysis = requireBilingualResult(analysis, bilingual)
 	out := AnalyzeOutcome(analysis, summaryDone, categoryDone, adDone)
 	for k, v := range fields {
 		out.Fields[k] = v
@@ -717,6 +764,13 @@ func parseDate(raw string) *time.Time {
 
 func isSummarySourceType(sourceType string) bool {
 	return sourceType == "rss" || sourceType == "custom" || sourceType == "telegram"
+}
+
+func requireBilingualResult(analysis map[string]any, enabled bool) map[string]any {
+	if enabled && analysis["analysis_version"] != float64(2) && analysis["analysis_version"] != 2 && analysis["_processing_error"] == nil {
+		return map[string]any{"_processing_error": "invalid_bilingual_result"}
+	}
+	return analysis
 }
 
 func shouldFallbackSummary(analysis map[string]any) bool {

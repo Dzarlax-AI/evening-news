@@ -56,6 +56,8 @@ func TestPostgresPublicReaderMultiCategoryAndReadPaths(t *testing.T) {
 		`CREATE TABLE ` + schema + `.categories(id bigint PRIMARY KEY,name text NOT NULL,display_name text NOT NULL,color text NOT NULL)`,
 		`CREATE TABLE ` + schema + `.articles(id bigint PRIMARY KEY,source_id bigint,title text NOT NULL,summary text,content text,url text NOT NULL,image_url text,media_files jsonb,published_at timestamp,fetched_at timestamp,is_advertisement boolean,ad_confidence real,ad_type text,ad_reasoning text,ad_markers jsonb,processing_state text,ad_processed boolean)`,
 		`CREATE TABLE ` + schema + `.article_categories(id bigint PRIMARY KEY,article_id bigint NOT NULL,category_id bigint NOT NULL,confidence real,ai_category text)`,
+		`CREATE TABLE ` + schema + `.article_localizations(article_id bigint,locale text,title text,summary text,status text)`,
+		`CREATE TABLE ` + schema + `.category_localizations(category_id bigint,locale text,display_name text)`,
 		`CREATE TABLE ` + schema + `.daily_summaries(id bigint PRIMARY KEY,date date NOT NULL,category text NOT NULL,summary_text text NOT NULL,articles_count integer NOT NULL)`,
 		`CREATE TABLE ` + schema + `.editorial_digest_editions(id uuid PRIMARY KEY,edition_date date NOT NULL,locale varchar(16) NOT NULL,policy_version varchar(32),snapshot_hash varchar(64),snapshot jsonb NOT NULL,edition jsonb NOT NULL,rendered jsonb NOT NULL,provider_usage jsonb NOT NULL DEFAULT '{}'::jsonb,job_id uuid,attempt_generation integer,created_at timestamp NOT NULL DEFAULT timezone('UTC',now()))`,
 	}
@@ -90,11 +92,72 @@ func TestPostgresPublicReaderMultiCategoryAndReadPaths(t *testing.T) {
 	}
 	defer pool.Close()
 	reader := &Postgres{pool: pool}
+	if _, err := pool.Exec(ctx, `INSERT INTO article_localizations VALUES (42,'sr-Latn','Probni naslov','Kratak pregled','completed'); INSERT INTO category_localizations VALUES (1,'sr-Latn','Tehnologija')`); err != nil {
+		t.Fatal(err)
+	}
+	sr := WithPublicLocale(ctx, "sr-Latn")
+	localized, err := reader.Feed(sr, FeedQuery{Limit: 20, HideAds: true})
+	if err != nil || len(localized.Articles) != 1 || localized.Articles[0]["title"] != "Probni naslov" {
+		t.Fatalf("Serbian feed = %#v, %v", localized, err)
+	}
+	results, err := reader.Search(sr, SearchQuery{Query: "Probni", Limit: 20, HideAds: true})
+	if err != nil || results["results_count"] != 1 {
+		t.Fatalf("Serbian search = %#v, %v", results, err)
+	}
+	results, err = reader.Search(sr, SearchQuery{Query: "Тестовый", Limit: 20, HideAds: true})
+	if err != nil || results["results_count"] != 0 {
+		t.Fatalf("Russian search matched Serbian index = %#v, %v", results, err)
+	}
+	localizedAPIFeed, err := reader.APIFeed(sr, APIFeedQuery{Limit: 20})
+	if err != nil || len(localizedAPIFeed.Items) != 1 || stringValue(localizedAPIFeed.Items[0]["title"]) != "Probni naslov" {
+		t.Fatalf("Serbian API feed: %#v, %v", localizedAPIFeed, err)
+	}
+	localizedRSSArticles, err := reader.RSS(sr, 20)
+	if err != nil || len(localizedRSSArticles) != 1 || localizedRSSArticles[0].Title == nil || *localizedRSSArticles[0].Title != "Probni naslov" || localizedRSSArticles[0].Summary == nil || *localizedRSSArticles[0].Summary != "Kratak pregled" {
+		t.Fatalf("Serbian RSS: %#v, %v", localizedRSSArticles, err)
+	}
+	if _, err := pool.Exec(ctx, `UPDATE article_localizations SET status='retry_wait' WHERE article_id=42`); err != nil {
+		t.Fatal(err)
+	}
+	localized, err = reader.Feed(sr, FeedQuery{Limit: 20, HideAds: true})
+	if err != nil || len(localized.Articles) != 0 {
+		t.Fatalf("unready article included = %#v, %v", localized, err)
+	}
+	localizedAPIFeed, err = reader.APIFeed(sr, APIFeedQuery{Limit: 20})
+	if err != nil || len(localizedAPIFeed.Items) != 0 {
+		t.Fatalf("unready API feed: %#v, %v", localizedAPIFeed, err)
+	}
+	localizedRSSArticles, err = reader.RSS(sr, 20)
+	if err != nil || len(localizedRSSArticles) != 0 {
+		t.Fatalf("unready RSS: %#v, %v", localizedRSSArticles, err)
+	}
+	if _, err := pool.Exec(ctx, `UPDATE article_localizations SET status='completed' WHERE article_id=42`); err != nil {
+		t.Fatal(err)
+	}
 	snapshot := json.RawMessage(`{"date":"2026-10-26","cutoff_utc":"2026-10-26T09:00:00Z","site_base_url":"https://example.test","edition_url":"https://example.test/digest/2026-10-26","articles":[{"id":"42","title":"Frozen snapshot title","summary":"Frozen source summary","content":"Frozen source body","source_name":"Frozen source","url":"https://snapshot.example/story/42","category_id":"1","category_name":"Технологии"}]}`)
 	editionJSON := json.RawMessage(`{"version":"1","locale":"ru","date":"2026-10-26","cutoff_utc":"2026-10-26T09:00:00Z","site_base_url":"https://example.test","edition_url":"https://example.test/digest/2026-10-26","source_snapshot_hash":"snapshot-hash","content_hash":"content-hash","stories":[{"id":"main-1","kind":"main","title":"Frozen editorial headline","summary":"Frozen editorial summary","primary_article_id":"42","article_ids":["42"],"evidence":[]}],"excluded":[]}`)
 	const editionID = "8c93bb34-383d-449c-9e85-28aa9121a4fe"
 	if _, err = pool.Exec(ctx, `INSERT INTO editorial_digest_editions(id,edition_date,locale,snapshot_hash,snapshot,edition,rendered) VALUES($1,'2026-10-26','ru','snapshot-hash',$2,$3,'{}')`, editionID, snapshot, editionJSON); err != nil {
 		t.Fatal(err)
+	}
+	const pairID = "42a8bb34-383d-449c-9e85-28aa9121a4fe"
+	const pairJob = "d490bb34-383d-449c-9e85-28aa9121a4fe"
+	if _, err = pool.Exec(ctx, `UPDATE editorial_digest_editions SET job_id=$2,attempt_generation=1 WHERE id=$1`, editionID, pairJob); err != nil {
+		t.Fatal(err)
+	}
+	if _, err = pool.Exec(ctx, `INSERT INTO editorial_digest_editions(id,edition_date,locale,snapshot_hash,snapshot,edition,rendered,job_id,attempt_generation) VALUES($1,'2026-10-26','sr-Latn','snapshot-hash',$2,$3,'{}',$4,1)`, pairID, snapshot, editionJSON, pairJob); err != nil {
+		t.Fatal(err)
+	}
+	pair, err := reader.EditorialDigestCounterpart(ctx, time.Date(2026, 10, 26, 0, 0, 0, 0, time.UTC), editionID, "ru", "sr-Latn")
+	if err != nil || pair != pairID {
+		t.Fatalf("paired edition %q %v", pair, err)
+	}
+	if _, err = pool.Exec(ctx, `INSERT INTO editorial_digest_editions(id,edition_date,locale,snapshot_hash,snapshot,edition,rendered,job_id,attempt_generation) VALUES('52a8bb34-383d-449c-9e85-28aa9121a4fe','2026-10-26','sr-Latn','snapshot-hash',$1,$2,'{}',$3,1)`, snapshot, editionJSON, pairJob); err != nil {
+		t.Fatal(err)
+	}
+	pair, err = reader.EditorialDigestCounterpart(ctx, time.Date(2026, 10, 26, 0, 0, 0, 0, time.UTC), editionID, "ru", "sr-Latn")
+	if err != nil || pair != "" {
+		t.Fatalf("ambiguous pairing should fail closed: %q %v", pair, err)
 	}
 	feed, err := reader.Feed(ctx, FeedQuery{Limit: 20, HideAds: true})
 	if err != nil {

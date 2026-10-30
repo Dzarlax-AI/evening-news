@@ -15,6 +15,7 @@
     <form id="add-category-form" class="cat-add-form">
         <input type="text" id="new-cat-name" placeholder="Системное имя (EN)" class="cat-input" required>
         <input type="text" id="new-cat-display" placeholder="Отображаемое имя" class="cat-input" required>
+        <input type="text" id="new-cat-serbian" placeholder="Название на сербском" class="cat-input">
         <input type="color" id="new-cat-color" value="#6c757d" class="cat-color-input">
         <button type="submit" class="btn btn--primary">Добавить</button>
     </form>
@@ -56,6 +57,7 @@
                 <label>Отображаемое имя</label>
                 <input type="text" id="edit-display" class="cat-input" required>
             </div>
+            <div class="cat-form-group"><label for="edit-serbian">Название на сербском</label><input type="text" id="edit-serbian" class="cat-input"></div>
             <div class="cat-form-group">
                 <label>Цвет</label>
                 <input type="color" id="edit-color" class="cat-color-input" style="width:100%;height:40px;">
@@ -119,7 +121,7 @@ async function loadCategories() {
         renderTable();
     } catch (e) {
         document.getElementById('categories-tbody').innerHTML =
-            `<tr><td colspan="5" style="text-align:center;padding:2rem;color:var(--error-color);">Ошибка: ${e.message}</td></tr>`;
+            `<tr><td colspan="5" style="text-align:center;padding:2rem;color:var(--error-color);">Ошибка: ${window.presentError(e)}</td></tr>`;
     }
 }
 
@@ -157,15 +159,16 @@ document.getElementById('add-category-form').addEventListener('submit', async (e
     try {
         const r = await fetch('/api/v1/categories/', {
             method: 'POST', headers: {'Content-Type': 'application/json'},
-            body: JSON.stringify({name, display_name: display, color})
+            body: JSON.stringify({name, display_name: display, serbian_display_name: document.getElementById('new-cat-serbian').value.trim(), color})
         });
         if (!r.ok) throw new Error((await r.json()).detail || 'Ошибка');
         document.getElementById('new-cat-name').value = '';
         document.getElementById('new-cat-display').value = '';
+        document.getElementById('new-cat-serbian').value = '';
         document.getElementById('add-section').style.display = 'none';
         showAlert('Категория добавлена');
         await loadCategories();
-    } catch (e) { showAlert(e.message, 'error'); }
+    } catch (e) { showAlert(window.presentError(e), 'error'); }
 });
 
 // Edit modal
@@ -173,6 +176,7 @@ function openEditModal(id, name, display, color, desc, isLocal) {
     document.getElementById('edit-id').value = id;
     document.getElementById('edit-name').value = name;
     document.getElementById('edit-display').value = display;
+    document.getElementById('edit-serbian').value = (categories.find(c => c.id === id) || {}).serbian_display_name || '';
     document.getElementById('edit-color').value = color;
     document.getElementById('edit-desc').value = desc;
     document.getElementById('edit-is-local').checked = !!isLocal;
@@ -189,6 +193,7 @@ document.getElementById('edit-form').addEventListener('submit', async (e) => {
             method: 'PUT', headers: {'Content-Type': 'application/json'},
             body: JSON.stringify({
                 display_name: document.getElementById('edit-display').value.trim(),
+                serbian_display_name: document.getElementById('edit-serbian').value.trim(),
                 color: document.getElementById('edit-color').value,
                 description: document.getElementById('edit-desc').value.trim(),
                 is_local: document.getElementById('edit-is-local').checked
@@ -198,7 +203,7 @@ document.getElementById('edit-form').addEventListener('submit', async (e) => {
         closeEditModal();
         showAlert('Категория обновлена');
         await loadCategories();
-    } catch (e) { showAlert(e.message, 'error'); }
+    } catch (e) { showAlert(window.presentError(e), 'error'); }
 });
 
 // Helpers

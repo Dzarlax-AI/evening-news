@@ -80,6 +80,9 @@ type ArticleView struct {
 
 func buildEditorialDigestView(date time.Time, edition *repositories.EditorialDigestEdition) EditorialDigestView {
 	view := EditorialDigestView{DateLabel: russianDateLabel(date), EditionID: edition.ID}
+	if edition.Locale == "sr-Latn" {
+		view.DateLabel = date.Format("02.01.2006.")
+	}
 	view.IssueURL = fmt.Sprintf("/digest/%s?locale=%s&edition=%s", date.Format("2006-01-02"), url.QueryEscape(edition.Locale), url.QueryEscape(edition.ID))
 	articles := make(map[string]repositories.EditorialDigestArticle, len(edition.Snapshot.Articles))
 	for _, article := range edition.Snapshot.Articles {
@@ -135,6 +138,9 @@ func buildEditorialDigestView(date time.Time, edition *repositories.EditorialDig
 		name := story.Category
 		if name == "" {
 			name = "Другие темы"
+			if edition.Locale == "sr-Latn" {
+				name = "Ostale teme"
+			}
 		}
 		groupIndex, exists := groupsByName[name]
 		if !exists {
@@ -154,6 +160,19 @@ func buildEditorialDigestView(date time.Time, edition *repositories.EditorialDig
 	view.MainLabel = russianCount(view.MainCount, "главный сюжет", "главных сюжета", "главных сюжетов")
 	view.BriefLabel = russianCount(view.BriefCount, "короткая новость", "короткие новости", "коротких новостей")
 	view.ArticleLabel = russianCount(view.ArticleCount, "материал", "материала", "материалов")
+	if edition.Locale == "sr-Latn" {
+		view.MainLabel = fmt.Sprintf("Glavne priče: %d", view.MainCount)
+		view.BriefLabel = fmt.Sprintf("Kratke vesti: %d", view.BriefCount)
+		view.ArticleLabel = fmt.Sprintf("Članci: %d", view.ArticleCount)
+		for i := range view.Main {
+			view.Main[i].ArticleURL += "?locale=sr-Latn"
+		}
+		for i := range view.BriefGroups {
+			for j := range view.BriefGroups[i].Stories {
+				view.BriefGroups[i].Stories[j].ArticleURL += "?locale=sr-Latn"
+			}
+		}
+	}
 	return view
 }
 

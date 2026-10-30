@@ -20,6 +20,9 @@ var editorialSQL string
 //go:embed sql/015.sql
 var deliverySQL string
 
+//go:embed sql/017.sql
+var localizationSQL string
+
 //go:embed sql/016.sql
 var managedConfigurationSQL string
 
@@ -79,5 +82,28 @@ func managedConfigurationMigration() migration {
 		return count != 4, err
 	}, Apply: func(ctx context.Context, tx pgx.Tx) (map[string]any, error) {
 		return map[string]any{"tables_created_or_confirmed": []string{"installation_state", "managed_admin", "setup_tokens", "integration_credentials"}}, schemaSQL(ctx, tx, managedConfigurationSQL)
+	}}
+}
+
+func localizationMigration() migration {
+	return migration{ID: "017_localizations", Description: "Add article and category localization storage", Needed: func(ctx context.Context, tx pgx.Tx) (bool, error) {
+		var count int
+		err := tx.QueryRow(ctx, `SELECT count(*) FROM information_schema.tables WHERE table_schema=current_schema() AND table_name=ANY($1)`, []string{"article_localizations", "category_localizations"}).Scan(&count)
+		return count != 2, err
+	}, Apply: func(ctx context.Context, tx pgx.Tx) (map[string]any, error) {
+		return map[string]any{"tables_created_or_confirmed": []string{"article_localizations", "category_localizations"}}, schemaSQL(ctx, tx, localizationSQL)
+	}}
+}
+
+//go:embed sql/018.sql
+var editorialLocalizationSQL string
+
+func editorialLocalizationMigration() migration {
+	return migration{ID: "018_editorial_localizations", Description: "Add localized immutable editorial inputs and editions", Needed: func(ctx context.Context, tx pgx.Tx) (bool, error) {
+		var exists bool
+		err := tx.QueryRow(ctx, `SELECT to_regclass(current_schema() || '.editorial_locale_inputs') IS NOT NULL`).Scan(&exists)
+		return !exists, err
+	}, Apply: func(ctx context.Context, tx pgx.Tx) (map[string]any, error) {
+		return map[string]any{"localized_editions": true}, schemaSQL(ctx, tx, editorialLocalizationSQL)
 	}}
 }

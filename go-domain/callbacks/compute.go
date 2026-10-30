@@ -144,9 +144,15 @@ func URLHostname(raw string) (string, bool) {
 func (c *ArticleCompute) Validate(op string, raw json.RawMessage) error {
 	switch op {
 	case "analyze":
-		m, e := object(raw, []string{"title", "content", "url"}, []string{"original_context"})
+		m, e := object(raw, []string{"title", "content", "url"}, []string{"original_context", "locales"})
 		if e != nil {
 			return e
+		}
+		if rawLocales, ok := m["locales"]; ok {
+			var locales []string
+			if json.Unmarshal(rawLocales, &locales) != nil || !(len(locales) == 1 && locales[0] == "sr-Latn") && !(len(locales) == 2 && ((locales[0] == "ru" && locales[1] == "sr-Latn") || (locales[1] == "ru" && locales[0] == "sr-Latn"))) {
+				return invalidInput
+			}
 		}
 		max := c.MaxTextChars
 		if max <= 0 {
@@ -260,15 +266,16 @@ func (c *ArticleCompute) Run(ctx context.Context, r Request, f authority.Fence) 
 			return nil, errors.New("analysis runtime unavailable")
 		}
 		var v struct {
-			Title    string  `json:"title"`
-			Content  string  `json:"content"`
-			URL      string  `json:"url"`
-			Original *string `json:"original_context"`
+			Title    string   `json:"title"`
+			Content  string   `json:"content"`
+			URL      string   `json:"url"`
+			Original *string  `json:"original_context"`
+			Locales  []string `json:"locales"`
 		}
 		if json.Unmarshal(r.Input, &v) != nil {
 			return nil, invalidInput
 		}
-		return c.Runtime.AnalyzeCallback(ctx, airuntime.ArticleInput{Title: v.Title, Content: v.Content, URL: v.URL, OriginalContext: v.Original, MaxTextChars: c.MaxTextChars})
+		return c.Runtime.AnalyzeCallback(ctx, airuntime.ArticleInput{Title: v.Title, Content: v.Content, URL: v.URL, OriginalContext: v.Original, Locales: v.Locales, MaxTextChars: c.MaxTextChars})
 	case "extraction_context":
 		if c.Learning == nil {
 			return nil, ErrNotImplemented
