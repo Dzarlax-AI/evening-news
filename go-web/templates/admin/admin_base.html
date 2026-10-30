@@ -46,6 +46,10 @@
                 <span class="nav-icon">📈</span>
                 <span>Статистика</span>
             </a>
+            <a href="/admin/backup" class="sidenav-link {{if eq .ActiveMenu "backup"}}active{{end}}">
+                <span class="nav-icon">💾</span>
+                <span>{{if .Managed}}Справка по бэкапу{{else}}Резервные копии{{end}}</span>
+            </a>
             <a href="/admin/settings" class="sidenav-link {{if eq .ActiveMenu "settings"}}active{{end}}">
                 <span class="nav-icon">&#9881;&#65039;</span>
                 <span>Настройки</span>
