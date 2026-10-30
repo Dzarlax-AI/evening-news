@@ -197,6 +197,8 @@ body.admin-body {
 
 @media (max-width: 900px) {
     .admin-sidenav { width: 52px; }
+    .sidenav-bottom .lang-switcher { flex-direction: column; align-items: stretch; }
+    .sidenav-bottom .lang-btn { padding-inline: 4px; }
     .sidenav-brand .brand-text,
     .sidenav-link span:not(.nav-icon),
     .sidenav-label,

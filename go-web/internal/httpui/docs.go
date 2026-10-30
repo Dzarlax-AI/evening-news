@@ -39,7 +39,7 @@ type docsSchema struct{ Name, Definition string }
 
 var docsTemplate = template.Must(template.New("docs").Parse(`<!doctype html>
 <html lang="{{.Locale}}"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width, initial-scale=1">
-<title>{{.Title}} API</title><style>
+<title>{{.Title}} API</title><link rel="stylesheet" href="/static/css/dzarlax.css"><style>
 :root{color-scheme:light dark;--bg:#fcfaf7;--fg:#18181b;--muted:#666;--line:#dedbd6;--accent:#285c78;--panel:#fff}
 @media(prefers-color-scheme:dark){:root{--bg:#171717;--fg:#eee;--muted:#aaa;--line:#444;--accent:#9bcbe1;--panel:#222}}
 *{box-sizing:border-box}body{margin:0;background:var(--bg);color:var(--fg);font:16px/1.5 system-ui,sans-serif}

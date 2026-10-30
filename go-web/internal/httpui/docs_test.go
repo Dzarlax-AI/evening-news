@@ -269,6 +269,9 @@ func TestDocumentationShellLocalesAndFrozenData(t *testing.T) {
 		if ru.Code != 200 || !strings.Contains(ru.Body.String(), `lang="ru"`) || sr.Code != 200 || !strings.Contains(sr.Body.String(), `lang="sr-Latn"`) {
 			t.Fatalf("%s locales: ru=%d sr=%d", path, ru.Code, sr.Code)
 		}
+		if path != "/docs/oauth2-redirect" && !strings.Contains(sr.Body.String(), `href="/static/css/dzarlax.css"`) {
+			t.Fatal("language switcher design-system styles missing")
+		}
 		if path != "/docs/oauth2-redirect" && (!strings.Contains(ru.Body.String(), "Операции") || !strings.Contains(sr.Body.String(), "Operacije") || ru.Header().Get("ETag") == sr.Header().Get("ETag")) {
 			t.Fatalf("%s localized shell or cache mismatch", path)
 		}
