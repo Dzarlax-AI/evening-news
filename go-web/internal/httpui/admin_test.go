@@ -216,3 +216,21 @@ func TestCSRFOriginParserRejectsMalformedOriginAndAllowsAbsentOrigin(t *testing.
 		}
 	}
 }
+
+func TestManagedRecoveryPageHasNoMutationControls(t *testing.T) {
+	renderer := New(Config{TemplatesDir: "../../templates"})
+	response := httptest.NewRecorder()
+	err := renderer.RenderTemplate(response, httptest.NewRequest("GET", "/admin/backup", nil), "admin/backup.html", map[string]any{"Title": "Резервные Копии", "Managed": true, "AdminUser": "fixture-admin"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	body := response.Body.String()
+	if !strings.Contains(body, "managed-recovery-help") || !strings.Contains(body, "managed-settings-recovery.md") {
+		t.Fatal("managed recovery guidance missing")
+	}
+	for _, forbidden := range []string{"createBackup()", "showUploadModal()", "restore-modal", "schedule-enabled", "backups-list", "/api/v1/backup"} {
+		if strings.Contains(body, forbidden) {
+			t.Fatalf("managed guidance exposes mutation UI: %s", forbidden)
+		}
+	}
+}

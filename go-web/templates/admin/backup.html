@@ -3,6 +3,17 @@
 
 
 {{define "content"}}
+{{if .Managed}}
+<style>.recovery-help{max-width:760px;padding:24px}.recovery-help p{line-height:1.65}.recovery-help a{font-weight:600}</style>
+<section id="managed-recovery-help" class="card recovery-help" aria-labelledby="recovery-heading">
+  <h1 id="recovery-heading">Резервная копия настроек</h1>
+  <p>Копирование и восстановление выполняет оператор установки по инструкции. Здесь не нужно загружать архив или настраивать автобэкап.</p>
+  <p>Копия сохраняет источники, категории, правила, расписания, настройки и защищённые ключи. История статей и отправок не входит: после восстановления новости собираются заново.</p>
+  <p>После восстановления доставка выключена, расписание приостановлено до проверки. Старые выпуски автоматически не отправляются.</p>
+  <a href="https://github.com/Dzarlax-AI/evening-news/blob/main/docs/managed-settings-recovery.md" target="_blank" rel="noopener noreferrer">Инструкция для оператора</a>
+  <p>Существующий API-экспорт данных — частичный архив, а не полная копия настроенной установки.</p>
+</section>
+{{else}}
 <div class="section-header">
     <h1>Резервные копии</h1>
     <div class="backup-toolbar">
@@ -537,6 +548,7 @@ function formatFileSize(bytes) {
     return parseFloat((bytes / Math.pow(k, i)).toFixed(2)) + ' ' + sizes[i];
 }
 </script>
+{{end}}
 {{end}}
 
 {{template "admin-base" .}}

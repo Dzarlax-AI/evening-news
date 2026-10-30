@@ -16,7 +16,7 @@ This ledger describes the HTTP surface of the local Go web service by responsibi
 
 Auth and small public status routes are registered by the auth component: `POST /auth/login`, `GET /auth/me`, `POST /auth/refresh`, `GET /auth/security-status`, `POST /auth/logout`, `GET /auth-status`, and `GET /api/public/admin-check`.
 
-Admin HTML pages are served under `/admin`, including dashboard, sources, summaries, stats, backup, categories, and settings. HTML access accepts configured Basic authentication or trusted ForwardAuth according to the local web configuration. API auth accepts configured Bearer, admin-cookie, or Basic credentials, plus trusted identity where enabled. Cookie-authenticated mutations use the HTTP middleware's origin checks. See the auth package tests for exact challenge, role, cookie, lockout, and cross-site behavior.
+Admin HTML pages are served under `/admin`, including dashboard, sources, summaries, stats, backup, categories, and settings. The managed `/admin/backup` page contains operator guidance and no upload/restore/autobackup controls; manual profiles retain the existing page. The backup API remains a partial application-data export, not the operator settings bundle. HTML access accepts configured Basic authentication or trusted ForwardAuth according to the local web configuration. API auth accepts configured Bearer, admin-cookie, or Basic credentials, plus trusted identity where enabled. Cookie-authenticated mutations use the HTTP middleware's origin checks. See the auth package tests for exact challenge, role, cookie, lockout, and cross-site behavior.
 
 ## Management routes
 

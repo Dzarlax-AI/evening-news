@@ -107,7 +107,7 @@ The command imports settings from the rendered configuration; it does not create
 
 Focused CLI and Compose checks do not establish full-stack acceptance. The managed native-browser gate, including PostgreSQL 16/17 and Linux two-tab/Page Monitor coverage, must pass separately before describing this profile as accepted.
 
-Native-browser managed installations currently fail closed for encrypted local `backup`, `restore` (including staged restore), and `resume`: the archive format does not yet contain the egress manifest and generated Compose override. HTTP-only fresh-install recovery is unchanged. Recovery for adoption/external-database installs is unsupported.
+Native-browser managed installations currently fail closed for encrypted local `backup`, `restore` (including staged restore), and `resume`: the archive format does not yet contain the egress manifest and generated Compose override. HTTP-only fresh-install recovery is unchanged. The generic CLI recovery for adoption/external-database installs remains unsupported; the separate [operator settings-only recovery procedure](managed-settings-recovery.md) covers configuration recovery into a clean target without article history.
 
 The installer has explicit prepare, provisioning, and setup-token commands. For HTTP-only local installs, recovery commands operate on the same installation state and preserve encrypted credentials only when the corresponding private key material is available. Native-browser and adopted-profile limitations are described above. A database dump by itself cannot restore encrypted provider credentials. See the [managed CLI source](../go-domain/cmd/newsctl/main.go) and [recovery implementation](../go-domain/cmd/newsctl/recovery.go) for current command behavior.
 
