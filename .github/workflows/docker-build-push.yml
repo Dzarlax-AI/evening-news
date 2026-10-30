@@ -181,8 +181,9 @@ jobs:
           set -eu
           trap 'rm -f "$RUNNER_TEMP/news-settings-recovery.test" "$RUNNER_TEMP/news-settings-schedules.test"; rm -rf "$RUNNER_TEMP/news-settings-tools"' EXIT
           docker exec "$PG_CONTAINER" createdb -U postgres settings_recovery_fixture
-          docker exec "$PG_CONTAINER" mkdir -p "$GITHUB_WORKSPACE/deploy" "$GITHUB_WORKSPACE/go-domain/recovery" "$GITHUB_WORKSPACE/go-scheduler/internal/api"
+          docker exec "$PG_CONTAINER" mkdir -p "$GITHUB_WORKSPACE/deploy" "$GITHUB_WORKSPACE/go-domain/recovery" "$GITHUB_WORKSPACE/go-scheduler/internal/api" "$GITHUB_WORKSPACE/docs"
           docker cp deploy/recovery "$PG_CONTAINER:$GITHUB_WORKSPACE/deploy/"
+          docker cp docs/managed-settings-recovery.md "$PG_CONTAINER:$GITHUB_WORKSPACE/docs/managed-settings-recovery.md"
           docker cp "$RUNNER_TEMP/news-settings-recovery.test" "$PG_CONTAINER:/tmp/news-settings-recovery.test"
           docker cp "$RUNNER_TEMP/news-settings-schedules.test" "$PG_CONTAINER:/tmp/news-settings-schedules.test"
           docker cp "$RUNNER_TEMP/news-settings-tools/age" "$PG_CONTAINER:/tmp/age"

@@ -45,15 +45,36 @@ With those three writers stopped, configuration changes and key rotation cannot 
 
 ### Capture a private staging directory
 
-Run from a trusted operator shell. `NEWS_REPO` is the checked-out matching source; `NEWS_STACK` is the actual deployment directory. Paths and project names below are operator-selected metadata, not credentials.
+Assemble the capture and encryption blocks into **one reviewed Bash script**, not separate commands in a login shell. `NEWS_REPO` is the matching checkout; `NEWS_STACK` is the deployment directory. Define and test a stack-specific `restore_original_availability` function before any quiescence: it must restore exactly the recorded running processes/control state and verify health as described below. The function is required, not an optional empty callback; its commands depend on the inspected Compose project and authenticated CAS controls. Install the exit trap before performing the backup-window steps, then continue with capture/encryption in the same script. Do not exit between these blocks.
 
 ```bash
 set -euo pipefail
 umask 077
+# Refuse to proceed unless the reviewed original-state recovery is installed.
+declare -F restore_original_availability >/dev/null || { echo 'Missing availability recovery function' >&2; exit 1; }
+NEWS_STAGE=''
+NEWS_PARTIAL=''
+news_backup_exit() {
+  NEWS_EXIT_STATUS=$?
+  trap - EXIT HUP INT TERM
+  set +e
+  restore_original_availability
+  NEWS_RESTORE_STATUS=$?
+  if [ -n "$NEWS_PARTIAL" ]; then rm -f -- "$NEWS_PARTIAL"; fi
+  if [ -n "$NEWS_STAGE" ]; then rm -rf -- "$NEWS_STAGE"; fi
+  if [ "$NEWS_RESTORE_STATUS" -ne 0 ]; then
+    echo 'Original availability recovery failed; follow the recorded recovery procedure' >&2
+    exit 1
+  fi
+  exit "$NEWS_EXIT_STATUS"
+}
+trap news_backup_exit EXIT
+trap 'exit 129' HUP
+trap 'exit 130' INT
+trap 'exit 143' TERM
 NEWS_STAGE=$(mktemp -d)
 chmod 700 "$NEWS_STAGE"
-# Always remove this task-owned cleartext staging directory on success or failure.
-# Before exiting, also restore the previously running processes/control state.
+# Perform the reviewed quiescence/drain steps here, then capture below.
 
 PGSERVICE=news_source psql -XqAt -v ON_ERROR_STOP=1 \
   -f "$NEWS_REPO/deploy/recovery/export-settings.sql" > "$NEWS_STAGE/settings.json"
@@ -115,6 +136,8 @@ age -r "$NEWS_RECIPIENT" "$NEWS_STAGE/payload.tar" > "$NEWS_PARTIAL"
 # An atomic hard link refuses overwrite. Partial and final must share a filesystem.
 ln "$NEWS_PARTIAL" "$NEWS_ARCHIVE"
 rm "$NEWS_PARTIAL"
+NEWS_PARTIAL=''
+# After off-host verification, exit this script; its trap restores availability.
 ```
 
 On encryption failure, remove the owned partial file and publish nothing. Capture the encrypted file checksum, copy it to the approved off-host destination, and compare that checksum. Keep the current verified copy and one previous copy; do not prune the previous copy until a new restoration test succeeds. Decryption and restore validation, not just a checksum or tar listing, establish recoverability. Do not promise secure erasure of staging on SSD; use protected/encrypted temporary storage and remove the owned files afterward.

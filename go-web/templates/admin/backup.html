@@ -8,9 +8,11 @@
 <section id="managed-recovery-help" class="card recovery-help" aria-labelledby="recovery-heading">
   <h1 id="recovery-heading">Резервная копия настроек</h1>
   <p>Копирование и восстановление выполняет оператор установки по инструкции. Здесь не нужно загружать архив или настраивать автобэкап.</p>
-  <p>Копия сохраняет источники, категории, правила, расписания, настройки и защищённые ключи. История статей и отправок не входит: после восстановления новости собираются заново.</p>
-  <p>После восстановления доставка выключена, расписание приостановлено до проверки. Старые выпуски автоматически не отправляются.</p>
-  <a href="https://github.com/Dzarlax-AI/evening-news/blob/main/docs/managed-settings-recovery.md" target="_blank" rel="noopener noreferrer">Инструкция для оператора</a>
+  <p>Выберите инструкцию для своего профиля установки:</p>
+  <p><strong>Adopted-установка с Cloak и внешней PostgreSQL.</strong> Копия сохраняет источники, категории, правила, расписания, настройки и защищённые ключи. История статей и отправок не входит: новости собираются заново. После восстановления доставка выключена, расписание приостановлено до проверки.</p>
+  <a href="https://github.com/Dzarlax-AI/evening-news/blob/main/docs/managed-settings-recovery.md" target="_blank" rel="noopener noreferrer">Инструкция для adopted/Cloak-профиля</a>
+  <p><strong>Свежая HTTP-only managed-установка.</strong> Используйте поддерживаемые команды локального recovery из руководства конфигурации. Операторский settings-only архив — другой формат.</p>
+  <a href="https://github.com/Dzarlax-AI/evening-news/blob/main/docs/configuration.md#fresh-managed-installation" target="_blank" rel="noopener noreferrer">Руководство для HTTP-only профиля</a>
   <p>Существующий API-экспорт данных — частичный архив, а не полная копия настроенной установки.</p>
 </section>
 {{else}}

@@ -225,7 +225,7 @@ func TestManagedRecoveryPageHasNoMutationControls(t *testing.T) {
 		t.Fatal(err)
 	}
 	body := response.Body.String()
-	if !strings.Contains(body, "managed-recovery-help") || !strings.Contains(body, "managed-settings-recovery.md") {
+	if !strings.Contains(body, "managed-recovery-help") || !strings.Contains(body, "managed-settings-recovery.md") || !strings.Contains(body, "configuration.md#fresh-managed-installation") || !strings.Contains(body, "HTTP-only") {
 		t.Fatal("managed recovery guidance missing")
 	}
 	for _, forbidden := range []string{"createBackup()", "showUploadModal()", "restore-modal", "schedule-enabled", "backups-list", "/api/v1/backup"} {

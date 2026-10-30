@@ -22,6 +22,7 @@ import (
 // This is deliberately not a new newsctl command or production archive reader.
 func operatorEnvelopeRoundTrip(t *testing.T, dir string, installation string, key []byte) {
 	t.Helper()
+	operatorCleanupRoundTrip(t)
 	for _, role := range []string{"web", "domain", "extractor", "egress"} {
 		values := map[string]string{"FIXTURE": "synthetic-only"}
 		if role == "domain" {
@@ -252,5 +253,51 @@ func operatorEnvelopeRoundTrip(t *testing.T, dir string, installation string, ke
 	_ = w.Close()
 	if validate(buf.Bytes()) == nil {
 		t.Fatal("mismatched key file hash accepted")
+	}
+}
+
+// Exercise the actual documented exit trap with isolated failure injection.
+func operatorCleanupRoundTrip(t *testing.T) {
+	t.Helper()
+	guide, err := os.ReadFile("../../docs/managed-settings-recovery.md")
+	if err != nil {
+		t.Fatal("operator guide unavailable")
+	}
+	blocks := strings.Split(string(guide), "```bash\n")
+	if len(blocks) < 2 {
+		t.Fatal("operator capture block missing")
+	}
+	prefix := strings.Split(blocks[1], "PGSERVICE=news_source")[0]
+	for _, failure := range []string{"exit 7", `age -r invalid-recipient "$NEWS_STAGE/settings.json" > "$NEWS_PARTIAL"`, `ln "$NEWS_PARTIAL" "$NEWS_TEST_ROOT/existing.age"`} {
+		root := t.TempDir()
+		if os.WriteFile(filepath.Join(root, "existing.age"), []byte("existing archive"), 0600) != nil {
+			t.Fatal("cleanup fixture failed")
+		}
+		script := `restore_original_availability() { printf restored > "$NEWS_TEST_ROOT/restored"; }
+` + prefix + `printf '%s' "$NEWS_STAGE" > "$NEWS_TEST_ROOT/stage-path"
+printf synthetic > "$NEWS_STAGE/settings.json"
+NEWS_PARTIAL=$(mktemp "$NEWS_TEST_ROOT/partial.XXXXXX")
+printf '%s' "$NEWS_PARTIAL" > "$NEWS_TEST_ROOT/partial-path"
+` + failure
+		cmd := exec.Command("bash", "-c", script)
+		cmd.Env = append(os.Environ(), "NEWS_TEST_ROOT="+root)
+		if cmd.Run() == nil {
+			t.Fatal("injected operator failure was accepted")
+		}
+		for _, marker := range []string{"stage-path", "partial-path"} {
+			path, e := os.ReadFile(filepath.Join(root, marker))
+			if e != nil {
+				t.Fatal("cleanup fixture did not reach injection")
+			}
+			if _, e = os.Stat(string(path)); !os.IsNotExist(e) {
+				t.Fatal("operator exit left private staging")
+			}
+		}
+		if b, e := os.ReadFile(filepath.Join(root, "restored")); e != nil || string(b) != "restored" {
+			t.Fatal("operator exit skipped availability recovery")
+		}
+		if b, e := os.ReadFile(filepath.Join(root, "existing.age")); e != nil || string(b) != "existing archive" {
+			t.Fatal("operator exit replaced existing archive")
+		}
 	}
 }
