@@ -91,9 +91,23 @@ func TestLocaleClientBehavior(t *testing.T) {
 	if err != nil {
 		t.Skip("node is unavailable")
 	}
-	cmd := exec.Command(node, "../../test/locale_behavior.cjs")
-	if output, err := cmd.CombinedOutput(); err != nil {
-		t.Fatalf("locale behavior: %v\n%s", err, output)
+	for _, tc := range []struct {
+		name     string
+		args     []string
+		timezone string
+	}{
+		{"locale behavior", []string{"../../test/locale_behavior.cjs"}, ""},
+		{"summaries date", []string{"--test", "../../test/summaries_date.test.cjs"}, "Pacific/Kiritimati"},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			cmd := exec.Command(node, tc.args...)
+			if tc.timezone != "" {
+				cmd.Env = append(os.Environ(), "TZ="+tc.timezone)
+			}
+			if output, err := cmd.CombinedOutput(); err != nil {
+				t.Fatalf("%s: %v\n%s", tc.name, err, output)
+			}
+		})
 	}
 }
 
