@@ -30,15 +30,15 @@ func TestAdminRoutesRenderExistingPagesAndSetCookie(t *testing.T) {
 	service := adminTestService()
 	mux := adminMux(t, service)
 	tests := []struct {
-		path, title, marker, menu string
+		path, title, marker, activeHref string
 	}{
-		{"/admin/", "Evening News v2 - Admin", "Дашборд", "dashboard"},
-		{"/admin/sources", "Источники - Evening News v2", "Источники", "sources"},
-		{"/admin/summaries", "Дневные сводки - Evening News v2", "Сводки", "summaries"},
-		{"/admin/stats", "Статистика - Evening News v2", "stats-header", "stats"},
-		{"/admin/backup", "Резервные Копии", "backups-list", ""},
-		{"/admin/categories", "Категории", "add-category-form", "categories"},
-		{"/admin/settings", "Настройки - Evening News v2", "chat_id", "settings"},
+		{"/admin/", "Evening News v2 - Admin", "Дашборд", "/admin"},
+		{"/admin/sources", "Источники - Evening News v2", "Источники", "/admin/sources"},
+		{"/admin/summaries", "Дневные сводки - Evening News v2", "Сводки", "/admin/summaries"},
+		{"/admin/stats", "Статистика - Evening News v2", "stats-header", "/admin/stats"},
+		{"/admin/backup", "Резервные Копии", "backups-list", "/admin/backup"},
+		{"/admin/categories", "Категории", "add-category-form", "/admin/categories"},
+		{"/admin/settings", "Настройки - Evening News v2", "chat_id", "/admin/settings"},
 	}
 	for _, tc := range tests {
 		t.Run(tc.path, func(t *testing.T) {
@@ -64,8 +64,8 @@ func TestAdminRoutesRenderExistingPagesAndSetCookie(t *testing.T) {
 					t.Fatalf("cookie missing %q: %s", attr, cookie)
 				}
 			}
-			if tc.menu != "" && !strings.Contains(response.Body.String(), `class="sidenav-link active"`) {
-				t.Fatalf("active navigation missing for %s", tc.menu)
+			if !strings.Contains(response.Body.String(), `href="`+tc.activeHref+`" class="sidenav-link active"`) {
+				t.Fatalf("active navigation missing for %s", tc.activeHref)
 			}
 		})
 	}
@@ -220,13 +220,16 @@ func TestCSRFOriginParserRejectsMalformedOriginAndAllowsAbsentOrigin(t *testing.
 func TestManagedRecoveryPageHasNoMutationControls(t *testing.T) {
 	renderer := New(Config{TemplatesDir: "../../templates"})
 	response := httptest.NewRecorder()
-	err := renderer.RenderTemplate(response, httptest.NewRequest("GET", "/admin/backup", nil), "admin/backup.html", map[string]any{"Title": "Резервные Копии", "Managed": true, "AdminUser": "fixture-admin"})
+	err := renderer.RenderTemplate(response, httptest.NewRequest("GET", "/admin/backup", nil), "admin/backup.html", map[string]any{"Title": "Резервные Копии", "Managed": true, "ActiveMenu": "backup", "AdminUser": "fixture-admin"})
 	if err != nil {
 		t.Fatal(err)
 	}
 	body := response.Body.String()
 	if !strings.Contains(body, "managed-recovery-help") || !strings.Contains(body, "managed-settings-recovery.md") || !strings.Contains(body, "configuration.md#fresh-managed-installation") || !strings.Contains(body, "HTTP-only") {
 		t.Fatal("managed recovery guidance missing")
+	}
+	if !strings.Contains(body, `href="/admin/backup" class="sidenav-link active"`) || !strings.Contains(body, "Справка по бэкапу") {
+		t.Fatal("managed backup help navigation missing")
 	}
 	for _, forbidden := range []string{"createBackup()", "showUploadModal()", "restore-modal", "schedule-enabled", "backups-list", "/api/v1/backup"} {
 		if strings.Contains(body, forbidden) {

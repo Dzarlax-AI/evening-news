@@ -33,7 +33,7 @@ func (h *AdminHandler) Register(mux *http.ServeMux) {
 	mux.HandleFunc("GET /admin/sources", h.page("sources.html", "Источники - Evening News v2", "sources"))
 	mux.HandleFunc("GET /admin/summaries", h.page("summaries.html", "Дневные сводки - Evening News v2", "summaries"))
 	mux.HandleFunc("GET /admin/stats", h.page("stats.html", "Статистика Системы", "stats"))
-	mux.HandleFunc("GET /admin/backup", h.page("backup.html", "Резервные Копии", ""))
+	mux.HandleFunc("GET /admin/backup", h.page("backup.html", "Резервные Копии", "backup"))
 	mux.HandleFunc("GET /admin/categories", h.page("categories.html", "Категории", "categories"))
 	mux.HandleFunc("GET /admin/settings", h.page("settings.html", "Настройки - Evening News v2", "settings"))
 	mux.HandleFunc("GET /admin/telegram", h.redirectSettings)
