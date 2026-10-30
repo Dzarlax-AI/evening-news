@@ -2472,7 +2472,7 @@
     "migration": "retain effective value per consuming role; no automatic adoption implied",
     "precedence": "explicit value, then component default; see source locations for validation",
     "sources": [
-      "go-tools/cmd/vertical-fixture-gate/main.go:1367"
+      "go-tools/cmd/vertical-fixture-gate/main.go:1372"
     ],
     "class": "fixture_only",
     "managed_roles": []
