@@ -1,6 +1,0 @@
-requests~=2.31.0
-telegraph
-pandas
-datetime
-beautifulsoup4
-python-dotenv
