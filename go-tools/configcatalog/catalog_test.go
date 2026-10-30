@@ -253,9 +253,9 @@ func TestDeploymentInputsAreCatalogued(t *testing.T) {
 			}
 		}
 	}
-	check("../../.env.legacy.example", assignment)
-	check("../../docker-compose.example.yml", interpolation)
-	checkComposeOutputs(t, "../../docker-compose.example.yml", keys)
+	check("../../deploy/config/development.env.example", assignment)
+	check("../../deploy/compose/development.yml", interpolation)
+	checkComposeOutputs(t, "../../deploy/compose/development.yml", keys)
 	check("../../docker-compose.managed.yml", interpolation)
 	checkComposeOutputs(t, "../../docker-compose.managed.yml", keys)
 	err = filepath.WalkDir("../../deploy", func(path string, d os.DirEntry, err error) error {
@@ -330,7 +330,7 @@ func TestFullExampleCoversProductionNames(t *testing.T) {
 	if err = json.Unmarshal(b, &entries); err != nil {
 		t.Fatal(err)
 	}
-	template, err := os.ReadFile("../../.env.full.example")
+	template, err := os.ReadFile("../../deploy/config/full.env.example")
 	if err != nil {
 		t.Fatal(err)
 	}

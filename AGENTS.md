@@ -67,7 +67,7 @@ The installer provisions local databases, restricted roles, passwords, service t
 
 AI/provider keys and Telegram credentials are encrypted in PostgreSQL and configured through `/setup` and admin settings. Sources, categories, schedules and operational limits are also configured through the UI. Networks, database connectivity, browser integration, proxy trust, resource limits and technical timeouts remain operator settings.
 
-`.env.full.example` is the central advanced name inventory; assignments are commented and are not a recommended configuration. `go-tools/configcatalog/catalog.json` defines ownership, storage, precedence, reload behavior and role allowlists. Keep its source locations valid. `.env.legacy.example` remains the manual development-profile input; optional standalone Compose overlays under `deploy/` are not the default managed topology.
+`deploy/config/full.env.example` is the central advanced name inventory; assignments are commented and are not a recommended configuration. `go-tools/configcatalog/catalog.json` defines ownership, storage, precedence, reload behavior and role allowlists. Keep its source locations valid. `deploy/config/development.env.example` remains the manual development-profile input; optional standalone Compose overlays under `deploy/` are not the default managed topology.
 
 ## Authentication and acceptance
 

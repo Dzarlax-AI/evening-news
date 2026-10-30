@@ -239,7 +239,7 @@
     "precedence": "Compose interpolation source then template default/required rule; inspect actual file",
     "sources": [
       "deploy/news-ingestion/compose.ingestion.yml:7",
-      ".env.full.example:31"
+      "deploy/config/full.env.example:31"
     ],
     "class": "compose_input",
     "managed_roles": []
@@ -275,7 +275,7 @@
     "precedence": "Compose interpolation source then template default/required rule; inspect actual file",
     "sources": [
       "deploy/news-ingestion/compose.ingestion.yml:3",
-      ".env.full.example:35"
+      "deploy/config/full.env.example:35"
     ],
     "class": "compose_input",
     "managed_roles": []
@@ -310,7 +310,7 @@
     "migration": "profile-specific container output; preserve only if its actual consumer requires it",
     "precedence": "explicit Compose environment mapping; its interpolated inputs are separate catalog keys",
     "sources": [
-      "docker-compose.example.yml:99"
+      "deploy/compose/development.yml:99"
     ],
     "class": "compose_output",
     "managed_roles": []
@@ -346,7 +346,7 @@
     "migration": "profile-specific container output; preserve only if its actual consumer requires it",
     "precedence": "explicit Compose environment mapping; its interpolated inputs are separate catalog keys",
     "sources": [
-      "docker-compose.example.yml:100"
+      "deploy/compose/development.yml:100"
     ],
     "class": "compose_output",
     "managed_roles": []
@@ -363,7 +363,7 @@
     "precedence": "Compose interpolation source then template default/required rule; inspect actual file",
     "sources": [
       "deploy/news-processing/compose.processing.yml:8",
-      ".env.full.example:41"
+      "deploy/config/full.env.example:41"
     ],
     "class": "compose_input",
     "managed_roles": []
@@ -399,7 +399,7 @@
     "precedence": "Compose interpolation source then template default/required rule; inspect actual file",
     "sources": [
       "deploy/news-processing/compose.processing.yml:4",
-      ".env.full.example:45"
+      "deploy/config/full.env.example:45"
     ],
     "class": "compose_input",
     "managed_roles": []
@@ -454,7 +454,7 @@
     "migration": "profile-specific container output; preserve only if its actual consumer requires it",
     "precedence": "explicit Compose environment mapping; its interpolated inputs are separate catalog keys",
     "sources": [
-      "docker-compose.example.yml:96"
+      "deploy/compose/development.yml:96"
     ],
     "class": "compose_output",
     "managed_roles": []
@@ -652,7 +652,7 @@
     "migration": "profile-specific container output; preserve only if its actual consumer requires it",
     "precedence": "explicit Compose environment mapping; its interpolated inputs are separate catalog keys",
     "sources": [
-      "docker-compose.example.yml:118"
+      "deploy/compose/development.yml:118"
     ],
     "class": "compose_output",
     "managed_roles": []
@@ -668,7 +668,7 @@
     "migration": "legacy Compose passthrough; no current Go environment reader discovered; do not assume it affects Go runtime",
     "precedence": "Compose interpolation sets a container variable; no current Go reader discovered",
     "sources": [
-      "docker-compose.example.yml:83"
+      "deploy/compose/development.yml:83"
     ],
     "class": "compose_input",
     "managed_roles": []
@@ -817,7 +817,7 @@
     "migration": "retain effective value per consuming role; no automatic adoption implied",
     "precedence": "Compose interpolation source then template default/required rule; inspect actual file",
     "sources": [
-      "docker-compose.example.yml:226"
+      "deploy/compose/development.yml:226"
     ],
     "class": "compose_input",
     "managed_roles": []
@@ -1282,8 +1282,8 @@
     "migration": "Compose maps this role-specific input to DATABASE_URL; preserve distinct database roles",
     "precedence": "Compose interpolation source then template default/required rule; inspect actual file",
     "sources": [
-      "docker-compose.example.yml:56",
-      "docker-compose.example.yml:73"
+      "deploy/compose/development.yml:56",
+      "deploy/compose/development.yml:73"
     ],
     "class": "compose_input",
     "managed_roles": []
@@ -1340,7 +1340,7 @@
     "migration": "profile-specific container output; preserve only if its actual consumer requires it",
     "precedence": "explicit Compose environment mapping; its interpolated inputs are separate catalog keys",
     "sources": [
-      "docker-compose.example.yml:111",
+      "deploy/compose/development.yml:111",
       "deploy/news-extractor/compose.native.yml:13",
       "deploy/news-extractor/compose.rollback.yml:5",
       "deploy/news-extractor/compose.native-canary.yml:6",
@@ -1381,7 +1381,7 @@
     "migration": "profile-specific container output; preserve only if its actual consumer requires it",
     "precedence": "explicit Compose environment mapping; its interpolated inputs are separate catalog keys",
     "sources": [
-      "docker-compose.example.yml:114",
+      "deploy/compose/development.yml:114",
       "deploy/news-extractor/compose.native.yml:17",
       "deploy/news-extractor/compose.rollback.yml:7",
       "deploy/news-extractor/compose.native-canary.yml:8",
@@ -1703,6 +1703,23 @@
     "precedence": "explicit value, then component default; see source locations for validation",
     "sources": [
       "go-tools/cmd/smoke-extractor-service/main.go:21"
+    ],
+    "class": "fixture_only",
+    "managed_roles": []
+  },
+  {
+    "key": "EXTRACTOR_TEST_VERSION",
+    "owner": "isolated extractor fixture and CI",
+    "type": "string",
+    "default": "development",
+    "secret": false,
+    "store": "test/fixture environment only",
+    "reload": "read at Compose render and build",
+    "migration": "fixture image identity; not a production setting",
+    "precedence": "explicit value, otherwise development",
+    "sources": [
+      "deploy/compose/extractor-test.yml:4",
+      "deploy/compose/extractor-test.yml:9"
     ],
     "class": "fixture_only",
     "managed_roles": []
@@ -2109,7 +2126,7 @@
     "migration": "legacy Compose passthrough; no current Go environment reader discovered; do not assume it affects Go runtime",
     "precedence": "Compose interpolation sets a container variable; no current Go reader discovered",
     "sources": [
-      "docker-compose.example.yml:115"
+      "deploy/compose/development.yml:115"
     ],
     "class": "compose_input",
     "managed_roles": []
@@ -2472,7 +2489,7 @@
     "precedence": "Compose interpolation source then template default/required rule; inspect actual file",
     "sources": [
       "deploy/news-ingestion/compose.ingestion.yml:35",
-      ".env.full.example:211"
+      "deploy/config/full.env.example:211"
     ],
     "class": "compose_input",
     "managed_roles": []
@@ -2682,7 +2699,7 @@
     "precedence": "Compose interpolation source then template default/required rule; inspect actual file",
     "sources": [
       "deploy/news-processing/compose.processing.yml:48",
-      ".env.full.example:235"
+      "deploy/config/full.env.example:235"
     ],
     "class": "compose_input",
     "managed_roles": []
@@ -2897,7 +2914,7 @@
     "migration": "profile-specific container output; preserve only if its actual consumer requires it",
     "precedence": "explicit Compose environment mapping; its interpolated inputs are separate catalog keys",
     "sources": [
-      "docker-compose.example.yml:110",
+      "deploy/compose/development.yml:110",
       "deploy/news-extractor/compose.native.yml:19"
     ],
     "class": "compose_output",
@@ -2930,8 +2947,8 @@
     "migration": "profile-specific container output; preserve only if its actual consumer requires it",
     "precedence": "explicit Compose environment mapping; its interpolated inputs are separate catalog keys",
     "sources": [
-      "docker-compose.example.yml:224",
-      "docker-compose.example.yml:259"
+      "deploy/compose/development.yml:224",
+      "deploy/compose/development.yml:259"
     ],
     "class": "compose_output",
     "managed_roles": []
@@ -2947,8 +2964,8 @@
     "migration": "profile-specific container output; preserve only if its actual consumer requires it",
     "precedence": "explicit Compose environment mapping; its interpolated inputs are separate catalog keys",
     "sources": [
-      "docker-compose.example.yml:226",
-      "docker-compose.example.yml:261"
+      "deploy/compose/development.yml:226",
+      "deploy/compose/development.yml:261"
     ],
     "class": "compose_output",
     "managed_roles": []
@@ -2980,8 +2997,8 @@
     "migration": "profile-specific container output; preserve only if its actual consumer requires it",
     "precedence": "explicit Compose environment mapping; its interpolated inputs are separate catalog keys",
     "sources": [
-      "docker-compose.example.yml:225",
-      "docker-compose.example.yml:260"
+      "deploy/compose/development.yml:225",
+      "deploy/compose/development.yml:260"
     ],
     "class": "compose_output",
     "managed_roles": []
@@ -3112,10 +3129,10 @@
     "migration": "retain effective value per consuming role; no automatic adoption implied",
     "precedence": "Compose interpolation source then template default/required rule; inspect actual file",
     "sources": [
-      "docker-compose.example.yml:8",
-      "docker-compose.example.yml:53",
-      "docker-compose.example.yml:71",
-      "docker-compose.example.yml:149"
+      "deploy/compose/development.yml:8",
+      "deploy/compose/development.yml:53",
+      "deploy/compose/development.yml:71",
+      "deploy/compose/development.yml:149"
     ],
     "class": "compose_input",
     "managed_roles": []
@@ -3315,7 +3332,7 @@
     "migration": "retain effective value per consuming role; no automatic adoption implied",
     "precedence": "Compose interpolation source then template default/required rule; inspect actual file",
     "sources": [
-      "docker-compose.example.yml:261"
+      "deploy/compose/development.yml:261"
     ],
     "class": "compose_input",
     "managed_roles": []
@@ -3350,7 +3367,7 @@
     "migration": "profile-specific container output; preserve only if its actual consumer requires it",
     "precedence": "explicit Compose environment mapping; its interpolated inputs are separate catalog keys",
     "sources": [
-      "docker-compose.example.yml:103",
+      "deploy/compose/development.yml:103",
       "deploy/news-scheduler/compose.service-mode.yml:7",
       "deploy/news-scheduler/compose.service-mode.yml:15"
     ],
@@ -3664,7 +3681,7 @@
     "migration": "profile-specific container output; preserve only if its actual consumer requires it",
     "precedence": "explicit Compose environment mapping; its interpolated inputs are separate catalog keys",
     "sources": [
-      "docker-compose.example.yml:108"
+      "deploy/compose/development.yml:108"
     ],
     "class": "compose_output",
     "managed_roles": []
@@ -3756,7 +3773,7 @@
     "migration": "profile-specific container output; preserve only if its actual consumer requires it",
     "precedence": "explicit Compose environment mapping; its interpolated inputs are separate catalog keys",
     "sources": [
-      "docker-compose.example.yml:109",
+      "deploy/compose/development.yml:109",
       "deploy/news-extractor/compose.native.yml:18"
     ],
     "class": "compose_output",
@@ -3927,7 +3944,7 @@
     "migration": "Compose maps this role-specific input to DATABASE_URL; preserve distinct database roles",
     "precedence": "Compose interpolation source then template default/required rule; inspect actual file",
     "sources": [
-      "docker-compose.example.yml:12"
+      "deploy/compose/development.yml:12"
     ],
     "class": "compose_input",
     "managed_roles": []

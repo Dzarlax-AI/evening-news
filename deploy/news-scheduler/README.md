@@ -4,7 +4,7 @@ The standard News installation runs the scheduler inside the Go background proce
 
 ## Configuration reference
 
-Use the root [complete environment inventory](../../.env.full.example) and [configuration catalog](../../go-tools/configcatalog/catalog.json). Separate checked-in env examples have been consolidated into that reference. Create only the private files required by this optional overlay, owned by the Compose operator with mode `0600`:
+Use the root [complete environment inventory](../../deploy/config/full.env.example) and [configuration catalog](../../go-tools/configcatalog/catalog.json). Separate checked-in env examples have been consolidated into that reference. Create only the private files required by this optional overlay, owned by the Compose operator with mode `0600`:
 
 | File | Required configuration |
 | --- | --- |

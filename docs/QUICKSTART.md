@@ -1,13 +1,21 @@
 # Local quick start
 
-The public web is served by `go-web`. The development candidate uses the private Go domain executor and an explicit one-shot Go migration command. Its full image acceptance remains in progress.
+The default installation uses the managed profile. Run these commands from the repository root:
 
-Follow the [README local development instructions](../README.md#local-development) for the complete required environment and local service stack:
-
-```bash
-docker compose -f docker-compose.example.yml -f docker-compose.dev.yml up --build
+```sh
+cp .env.example .env
+make managed-up
+make managed-token
 ```
 
-Compose runs `/usr/local/bin/news-migrate` once before schema consumers start. The web service exposes port 8000. The private executor listens on port 8100 inside the service network and requires its service credentials; do not expose it publicly.
+Open `http://localhost:8000/setup`, claim the first administrator with the one-time token, and configure AI, Telegram, sources and schedules in the interface. Databases and private service configuration are provisioned automatically. See the [README quick start](../README.md#quick-start) and [configuration guide](configuration.md) for HTTPS, browser attachment and recovery requirements.
 
-For the component boundaries, private backend configuration, and local verification commands, see [Web/API components](web-api-components.md). This local setup does not deploy production or configure browser rendering.
+## Manual development profile
+
+For a deliberately hand-configured local stack, follow the database/role preparation in the [local deployment guide](../deploy/news/README.md), using `deploy/config/development.env.example`. The complete advanced name inventory is `deploy/config/full.env.example`. These are separate from the minimal managed `.env`.
+
+```sh
+docker compose --project-directory . -f deploy/compose/development.yml -f deploy/compose/development.override.yml up --build
+```
+
+The explicit project directory preserves build contexts and bind mounts at the repository root. Run the command there; if invoking from another directory, use absolute paths for the project directory, Compose files and env input. This command starts local services and is not a production deployment.

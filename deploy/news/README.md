@@ -74,7 +74,7 @@ for the same canonical key fails closed. Different names remain separate even
 when their current values happen to match; this preserves token aliases and
 service boundaries.
 
-The checked-in [`.env.legacy.example`](../../.env.legacy.example) is for the legacy local Compose profile. It
+The checked-in [`deploy/config/development.env.example`](../../deploy/config/development.env.example) is for the legacy local Compose profile. It
 contains placeholders only and documents separate web, executor, scheduler,
 worker, ingestion, and processing DSNs. Production DSNs and credentials stay
 on the server.
@@ -99,10 +99,10 @@ background service. Their role templates default to schema `news`, so pass
 Start only the two local databases and run the one-shot migration:
 
 ```sh
-cp .env.legacy.example .env
+cp deploy/config/development.env.example .env
 # Replace the development placeholders in .env first.
-docker compose --env-file .env -f docker-compose.example.yml up -d postgres scheduler-postgres
-docker compose --env-file .env -f docker-compose.example.yml run --rm migrate
+docker compose --project-directory . --env-file .env -f deploy/compose/development.yml up -d postgres scheduler-postgres
+docker compose --project-directory . --env-file .env -f deploy/compose/development.yml run --rm migrate
 ```
 
 Copy and run the reviewed, least-privilege local role templates. `\password`
@@ -111,14 +111,14 @@ For the processing callback, `newsuser` is the existing local application
 database role and receives only the template's fence-function `EXECUTE` grant.
 
 ```sh
-docker compose --env-file .env -f docker-compose.example.yml cp \
+docker compose --project-directory . --env-file .env -f deploy/compose/development.yml cp \
   deploy/news-ingestion/provision-runtime-role.sql postgres:/tmp/news-ingestion-role.sql
-docker compose --env-file .env -f docker-compose.example.yml exec -it postgres \
+docker compose --project-directory . --env-file .env -f deploy/compose/development.yml exec -it postgres \
   psql -U newsuser -d newsdb -v news_schema=public -f /tmp/news-ingestion-role.sql
 
-docker compose --env-file .env -f docker-compose.example.yml cp \
+docker compose --project-directory . --env-file .env -f deploy/compose/development.yml cp \
   deploy/news-processing/provision-runtime-role.sql postgres:/tmp/news-processing-role.sql
-docker compose --env-file .env -f docker-compose.example.yml exec -it postgres \
+docker compose --project-directory . --env-file .env -f deploy/compose/development.yml exec -it postgres \
   psql -U newsuser -d newsdb -v news_schema=public \
   -v news_callback_role=newsuser -f /tmp/news-processing-role.sql
 ```
@@ -137,7 +137,7 @@ scheduler database already initializes its `scheduler` login. Then start the
 remaining services:
 
 ```sh
-docker compose --env-file .env -f docker-compose.example.yml up --build -d
+docker compose --project-directory . --env-file .env -f deploy/compose/development.yml up --build -d
 ```
 
 This sequence keeps the background service stopped until migration and role

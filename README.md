@@ -104,7 +104,7 @@ Saved provider and Telegram credentials are encrypted in PostgreSQL and are neve
 
 Infrastructure settings remain operator-managed: database connections, networks, browser endpoints, proxy trust, resource limits, concurrency, and technical timeouts. Managed services read private per-role files through `NEWS_RUNTIME_FILE`. These files, encryption keys, and database volumes must be preserved together for recovery.
 
-See the [configuration guide](docs/configuration.md), [complete environment example](.env.full.example), and [machine-readable configuration catalog](go-tools/configcatalog/catalog.json) for advanced installation and generated configurations. The full example is a reference, not a file to enable wholesale. The alternative `make dev` profile is documented in the [local deployment guide](deploy/news/README.md).
+See the [configuration guide](docs/configuration.md), [complete environment example](deploy/config/full.env.example), and [machine-readable configuration catalog](go-tools/configcatalog/catalog.json) for advanced installation and generated configurations. The full example is a reference, not a file to enable wholesale. The alternative `make dev` profile is documented in the [local deployment guide](deploy/news/README.md).
 
 ## AI providers
 

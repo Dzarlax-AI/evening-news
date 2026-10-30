@@ -12,7 +12,7 @@ on:
       - 'scripts/shadow_x11_client.sh'
       - 'deploy/news-extractor/**'
       - 'docker/Dockerfile.extractor'
-      - 'docker-compose.extractor-test.yml'
+      - 'deploy/compose/extractor-test.yml'
       - '.github/workflows/extractor-service.yml'
   push:
     paths:
@@ -25,7 +25,7 @@ on:
       - 'scripts/shadow_x11_client.sh'
       - 'deploy/news-extractor/**'
       - 'docker/Dockerfile.extractor'
-      - 'docker-compose.extractor-test.yml'
+      - 'deploy/compose/extractor-test.yml'
       - '.github/workflows/extractor-service.yml'
   workflow_dispatch:
     inputs:
@@ -90,7 +90,7 @@ jobs:
           go test -race ./extractorcompare ./extractorsmoke ./cmd/extractor-candidate-metadata
           go vet ./extractorcompare ./extractorsmoke ./cmd/extractor-candidate-metadata
       - name: Build independent image and start isolated service
-        run: docker compose --env-file /dev/null -f docker-compose.extractor-test.yml up -d --build --wait
+        run: docker compose --project-directory . --env-file /dev/null -f deploy/compose/extractor-test.yml up -d --build --wait
       - name: Smoke API through the Go client
         working-directory: go-tools
         run: go run ./cmd/smoke-extractor-service --endpoint http://127.0.0.1:18080 --expected-build "$EXTRACTOR_TEST_VERSION" --corpus ../tests/fixtures/go-parity/manifest.json
@@ -101,7 +101,7 @@ jobs:
         run: |
           set -euo pipefail
           image_ref="evening-news-extractor-test:${EXTRACTOR_TEST_VERSION}"
-          container_id="$(docker compose --env-file /dev/null -f docker-compose.extractor-test.yml ps -q extractor)"
+          container_id="$(docker compose --project-directory . --env-file /dev/null -f deploy/compose/extractor-test.yml ps -q extractor)"
           test -n "$container_id"
           container_image_id="$(docker inspect --format '{{.Image}}' "$container_id")"
           image_id="$(docker image inspect --format '{{.Id}}' "$image_ref")"
@@ -121,10 +121,10 @@ jobs:
           retention-days: 2
       - name: Inspect isolated service on failure
         if: failure()
-        run: docker compose --env-file /dev/null -f docker-compose.extractor-test.yml logs --tail 80
+        run: docker compose --project-directory . --env-file /dev/null -f deploy/compose/extractor-test.yml logs --tail 80
       - name: Remove isolated service
         if: always()
-        run: docker compose --env-file /dev/null -f docker-compose.extractor-test.yml down
+        run: docker compose --project-directory . --env-file /dev/null -f deploy/compose/extractor-test.yml down
 
   publish:
     needs: [verify, native-cloak-concurrency]

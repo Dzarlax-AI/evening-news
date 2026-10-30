@@ -1,5 +1,5 @@
 # Local development commands. Runtime configuration is supplied separately.
-COMPOSE = docker compose -f docker-compose.example.yml -f docker-compose.dev.yml
+COMPOSE = docker compose --project-directory . -f deploy/compose/development.yml -f deploy/compose/development.override.yml
 MANAGED_COMPOSE = docker compose -f docker-compose.managed.yml
 GO_MODULES = go go-web go-background go-worker go-scheduler go-ingestion go-processing go-execution go-editorial go-domain go-tools
 

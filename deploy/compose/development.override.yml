@@ -1,5 +1,5 @@
 # Development overlay. Start the complete local service stack with:
-# docker compose -f docker-compose.example.yml -f docker-compose.dev.yml up --build
+# docker compose --project-directory . -f deploy/compose/development.yml -f deploy/compose/development.override.yml up --build
 services:
   web:
     environment:

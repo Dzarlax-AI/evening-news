@@ -1,6 +1,6 @@
 # Configuration reference
 
-This guide describes the configuration in this source checkout. It does not establish release or deployment readiness; use the instructions that match the version actually running. Fresh local installs use the managed profile and [minimal `.env.example`](../.env.example). The older multi-DSN Compose profile uses [`.env.legacy.example`](../.env.legacy.example) and the [legacy deployment guide](../deploy/news/README.md).
+This guide describes the configuration in this source checkout. It does not establish release or deployment readiness; use the instructions that match the version actually running. Fresh local installs use the managed profile and [minimal `.env.example`](../.env.example). The older multi-DSN Compose profile uses [`deploy/config/development.env.example`](../deploy/config/development.env.example) and the [legacy deployment guide](../deploy/news/README.md).
 
 ## Complete environment catalog
 
@@ -17,7 +17,7 @@ The machine-readable [configuration catalog](../go-tools/configcatalog/catalog.j
 | `sources` | Code, Compose, or deployment-template locations used to verify the entry. |
 | `class`, `managed_roles` | Runtime/deployment classification and role manifests that allow the key. |
 
-The advanced [`.env.full.example`](../.env.full.example) is the central reference for deployable environment names, including optional standalone component profiles, with type and default metadata. Separate per-component env examples have been consolidated into this file. All assignments are commented and blank; they are not recommendations or usable credentials. Do not enable the whole file. Test/fixture switches, operator/CI-only process inputs, and Compose-generated container outputs are excluded because they are not installation inputs; the catalog retains them with a non-deployment classification for audits. In managed mode, secret material and most service settings live in private per-role runtime manifests rather than `.env`.
+The advanced [`deploy/config/full.env.example`](../deploy/config/full.env.example) is the central reference for deployable environment names, including optional standalone component profiles, with type and default metadata. Separate per-component env examples have been consolidated into this file. All assignments are commented and blank; they are not recommendations or usable credentials. Do not enable the whole file. Test/fixture switches, operator/CI-only process inputs, and Compose-generated container outputs are excluded because they are not installation inputs; the catalog retains them with a non-deployment classification for audits. In managed mode, secret material and most service settings live in private per-role runtime manifests rather than `.env`.
 
 ## Fresh managed installation
 
@@ -228,7 +228,7 @@ Managed operational controls are typed PostgreSQL settings, separate from enviro
 
 ## Legacy Compose profile
 
-The legacy [Compose example](../docker-compose.example.yml) and `deploy/` templates are separate configuration profiles. Their inputs remain documented in [`.env.legacy.example`](../.env.legacy.example) and the [legacy deployment guide](../deploy/news/README.md). A Compose input may map to a differently named environment variable inside a container. In particular, each database URL and service token belongs to a specific role or boundary; preserve those distinctions and grants when migrating.
+The legacy [Compose example](../deploy/compose/development.yml) and `deploy/` templates are separate configuration profiles. Their inputs remain documented in [`deploy/config/development.env.example`](../deploy/config/development.env.example) and the [legacy deployment guide](../deploy/news/README.md). A Compose input may map to a differently named environment variable inside a container. In particular, each database URL and service token belongs to a specific role or boundary; preserve those distinctions and grants when migrating.
 
 The scheduler builds `SCHEDULER_TARGET_<ALIAS>_URL` and `SCHEDULER_TARGET_<ALIAS>_TOKEN` from `SCHEDULER_TARGET_ALIASES`: aliases are uppercased and hyphens become underscores. The `news-worker` alias uses `SCHEDULER_TARGET_NEWS_WORKER_URL` and `SCHEDULER_TARGET_NEWS_WORKER_TOKEN`. The token is secret. Targets require HTTPS unless an explicit HTTP override is enabled.
 
