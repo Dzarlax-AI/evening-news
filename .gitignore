@@ -80,3 +80,7 @@ SOURCES_FROM_BACKUPS.md
 # media_cache/ - removed, media caching disabled
 scripts/backup.sh
 scripts/restore.sh
+
+# Generated frontend assets and compiler dependencies
+/web/node_modules/
+/web/static/js/locale.js

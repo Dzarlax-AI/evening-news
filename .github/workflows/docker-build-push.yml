@@ -110,6 +110,15 @@ jobs:
         with:
           go-version-file: ${{ matrix.module }}/go.mod
           cache-dependency-path: ${{ matrix.module }}/go.*
+      - uses: actions/setup-node@v4
+        if: matrix.module == 'go-web'
+        with:
+          node-version: '22'
+      - name: Build TypeScript browser assets
+        if: matrix.module == 'go-web'
+        run: |
+          npm --prefix web ci --ignore-scripts --no-audit --no-fund
+          npm --prefix web run build
       - name: Race tests, vet, and module verification
         working-directory: ${{ matrix.module }}
         env:
