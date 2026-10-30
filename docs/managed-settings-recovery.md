@@ -9,9 +9,9 @@ A usable copy combines current configuration records, encrypted credentials, mat
 The SQL allowlist in [export-settings.sql](../deploy/recovery/export-settings.sql) is authoritative:
 
 - Sources: IDs, name/type/URL, enabled flag, interval and supported configuration fields. Collection offsets/hashes/acknowledgements, last fetch/success/error and error counts are reset. `source_collection_state` is not copied.
-- Categories and category mappings; extraction patterns explicitly marked `manual` or `user`. Automatic learning caches/statistics are disposable.
+- Categories and category mappings; extraction patterns explicitly marked `manual` or `user`, including their success/failure counters needed by the existing eligibility/rate filter. Other automatic learning caches/statistics are disposable.
 - AI provider/model settings, operational settings and Telegram destination settings, with their revisions. Job-specific setting snapshots and unrelated keys are excluded.
-- Installation identity, administrator hash/revision, integration credential envelopes, and the matching domain encryption key/key ID. One-time setup tokens are never restored.
+- Installation identity, administrator hash/revision, integration credential envelopes (including null-envelope deleted-key revisions), and the matching domain encryption key/key ID. One-time setup tokens are never restored.
 - Logical schedules, including calendars/timezones, keys, operations, targets and payloads. Live dispatch/outbox/occurrences, old due instants and leases are excluded.
 - Exact image digests/source revision, schema revision, current Compose, role/grant/search-path metadata, private role manifests and the adopted setup completion marker.
 
@@ -170,15 +170,15 @@ Verify source/category/mapping counts and values, administrator state, AI/provid
 
 ### Recreate schedules without replay
 
-Keep the scheduler's global control **paused**. Start background only while the restored installation remains in maintenance and the delivery flag remains false; verify no work is executing. Recreate the logical resources in `schedules.json` through the existing authenticated scheduler `PUT /v1/schedules/{schedule_key}` API, with `expected_revision: 0` on each new resource. Send only `enabled`, `calendar`, `target_alias`, `operation` and `payload` from the saved definition. Do not send historical revision/due/occurrence fields.
+Keep the scheduler's global control **paused**. Start background only while the restored installation remains in maintenance and the delivery flag remains false; verify no work is executing. Recreate the logical resources in `schedules.json` through the existing authenticated scheduler `PUT /v1/schedules/{schedule_key}` API, with `expected_revision: 0` on each new resource. Send `enabled: false` for every recovered definition and only `calendar`, `target_alias`, `operation` and `payload` from the saved definition. Preserve the original enabled flags in the authenticated archive for activation. Do not send historical revision/due/occurrence fields.
 
-The scheduler validates each resource and computes a new future due instant using its existing calendar/timezone implementation. Check the responses: enabled resources have a future due instant; disabled ones have none. Do not calculate DST calendars in shell or import old occurrences. A conflicting existing schedule is a failed clean-target preflight, not an invitation to overwrite it.
+The scheduler validates each resource. All recovered definitions must remain disabled with no due instant throughout acceptance; global pause alone does not prevent a due instant from becoming overdue. Do not calculate DST calendars in shell or import old occurrences. A conflicting existing schedule is a failed clean-target preflight, not an invitation to overwrite it.
 
 ### Explicit acceptance and release
 
 Before releasing maintenance, verify the real admin route and settings API through the intended HTTPS/Access chain; native `/auth/login` alone is insufficient. Verify healthy services, zero newly executing jobs, empty scheduler outbox and paused control. On the original host, verify unchanged protected browser/Readeck/PostgreSQL/proxy fingerprints.
 
-The operator explicitly releases maintenance and authorizes the first collection with delivery still disabled. Confirm fresh source receipts and content. Only then deliberately enable delivery and resume future schedules according to the owner's intent. There is no automatic resend of an old digest or replay of missed days. If any acceptance step fails, keep the target paused/inactive and the original installation unchanged.
+The operator explicitly releases maintenance and authorizes the first collection with delivery still disabled. Confirm fresh source receipts and content. Only then deliberately enable delivery. Immediately before resuming schedules, enable only the originally enabled definitions through their existing CAS PUT API with current revisions. This recomputes due times from activation time, even after a long acceptance window. Verify every enabled definition is still strictly in the future before releasing global pause; if a due instant passes during preparation, disable/re-enable it and recheck before release. Originally disabled definitions remain disabled. There is no automatic resend of an old digest or replay of missed days. If any acceptance step fails, keep the target paused/inactive and the original installation unchanged.
 
 ## Verification and limits
 

@@ -151,11 +151,11 @@ func operatorEnvelopeRoundTrip(t *testing.T, dir string, installation string, ke
 				InstallationID string `json:"installation_id"`
 			} `json:"identity"`
 			Credentials []struct {
-				Provider   string `json:"provider"`
-				KeyID      string `json:"key_id"`
-				Version    int    `json:"envelope_version"`
-				Nonce      string `json:"nonce"`
-				Ciphertext string `json:"ciphertext"`
+				Provider   string  `json:"provider"`
+				KeyID      *string `json:"key_id"`
+				Version    *int    `json:"envelope_version"`
+				Nonce      *string `json:"nonce"`
+				Ciphertext *string `json:"ciphertext"`
 			} `json:"integration_credentials"`
 		}
 		if json.Unmarshal(files["settings.json"], &settings) != nil || settings.Identity.InstallationID != installation {
@@ -176,15 +176,22 @@ func operatorEnvelopeRoundTrip(t *testing.T, dir string, installation string, ke
 					return fmt.Errorf("credential key missing")
 				}
 				for _, c := range settings.Credentials {
-					nonce, e := hex.DecodeString(strings.TrimPrefix(c.Nonce, `\x`))
+					// A deleted provider key retains its revision with a null envelope.
+					if c.Version == nil && c.KeyID == nil && c.Nonce == nil && c.Ciphertext == nil {
+						continue
+					}
+					if c.Version == nil || c.KeyID == nil || c.Nonce == nil || c.Ciphertext == nil {
+						return fmt.Errorf("partial credential envelope")
+					}
+					nonce, e := hex.DecodeString(strings.TrimPrefix(*c.Nonce, `\x`))
 					if e != nil {
 						return e
 					}
-					cipher, e := hex.DecodeString(strings.TrimPrefix(c.Ciphertext, `\x`))
+					cipher, e := hex.DecodeString(strings.TrimPrefix(*c.Ciphertext, `\x`))
 					if e != nil {
 						return e
 					}
-					if _, e = credentialstore.Open(k, v.Values["NEWS_CREDENTIAL_KEY_ID"], installation, c.Provider, credentialstore.Envelope{Version: c.Version, KeyID: c.KeyID, Nonce: nonce, Ciphertext: cipher}); e != nil {
+					if _, e = credentialstore.Open(k, v.Values["NEWS_CREDENTIAL_KEY_ID"], installation, c.Provider, credentialstore.Envelope{Version: *c.Version, KeyID: *c.KeyID, Nonce: nonce, Ciphertext: cipher}); e != nil {
 						return fmt.Errorf("credential authentication failed")
 					}
 				}

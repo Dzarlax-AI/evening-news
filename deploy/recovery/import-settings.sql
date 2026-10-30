@@ -11,7 +11,7 @@ CREATE TEMP TABLE recovery_runtime(payload jsonb NOT NULL);
 \copy recovery_input FROM 'settings.json' WITH (FORMAT csv, DELIMITER E'\x1f', QUOTE E'\x02', ESCAPE E'\x02')
 \copy recovery_runtime FROM 'background-input.json' WITH (FORMAT csv, DELIMITER E'\x1f', QUOTE E'\x02', ESCAPE E'\x02')
 DO $guard$
-DECLARE d jsonb; k text;
+DECLARE d jsonb; k text; occupied boolean;
 BEGIN
  IF current_database() !~ '^news_restore_[a-z0-9_]+$' OR current_database() <> (SELECT db FROM recovery_guard) THEN RAISE EXCEPTION 'recovery target rejected'; END IF;
  IF (SELECT count(*) FROM recovery_runtime)<>1 OR (SELECT payload->>'service' FROM recovery_runtime) IS DISTINCT FROM 'background' OR (SELECT payload->>'version' FROM recovery_runtime) IS DISTINCT FROM '1' OR (SELECT payload->>'installation_id' FROM recovery_runtime) IS DISTINCT FROM (SELECT installation FROM recovery_guard) THEN RAISE EXCEPTION 'recovery runtime manifest rejected'; END IF;
@@ -19,6 +19,12 @@ BEGIN
  SELECT payload INTO d FROM recovery_input;
  IF d->>'format' IS DISTINCT FROM 'news-settings-v1' OR d->>'schema_version' IS DISTINCT FROM '16' OR d#>>'{identity,installation_id}' IS DISTINCT FROM (SELECT installation FROM recovery_guard) OR (d#>>'{identity,installation_id}') !~ '^[a-f0-9]{32}$' THEN RAISE EXCEPTION 'recovery identity/version rejected'; END IF;
  IF EXISTS(SELECT 1 FROM news.installation_state) OR EXISTS(SELECT 1 FROM news.sources) OR EXISTS(SELECT 1 FROM news.articles) OR EXISTS(SELECT 1 FROM news.background_jobs) OR EXISTS(SELECT 1 FROM news.editorial_digest_editions) OR EXISTS(SELECT 1 FROM news.integration_credentials) OR EXISTS(SELECT 1 FROM news.managed_admin) OR EXISTS(SELECT 1 FROM news.setup_tokens) OR EXISTS(SELECT 1 FROM news.source_collection_state) THEN RAISE EXCEPTION 'recovery requires empty target'; END IF;
+ -- All non-configuration histories must also be empty, even if their parent
+ -- articles/jobs have already been removed from an old target.
+ FOREACH k IN ARRAY ARRAY['daily_summaries','processing_stats','extraction_attempts','ai_usage_tracking','domain_stability','background_job_idempotency_keys','background_job_executions','scheduler_occurrence_receipts','article_ingestion_runs','article_ingestion_source_runs','article_processing_runs','article_processing_items','digest_delivery_intents','digest_delivery_parts'] LOOP
+  EXECUTE format('SELECT EXISTS(SELECT 1 FROM news.%I)',k) INTO occupied;
+  IF occupied THEN RAISE EXCEPTION 'recovery requires empty history'; END IF;
+ END LOOP;
  IF EXISTS(SELECT 1 FROM pg_stat_activity WHERE datname=current_database() AND pid<>pg_backend_pid()) THEN RAISE EXCEPTION 'recovery target has connected clients'; END IF;
  FOREACH k IN ARRAY ARRAY['sources','categories','category_mapping','extraction_patterns','schedule_settings','settings','managed_admin','integration_credentials'] LOOP IF jsonb_typeof(d->k) IS DISTINCT FROM 'array' THEN RAISE EXCEPTION 'recovery section rejected'; END IF; END LOOP;
  IF EXISTS(SELECT 1 FROM jsonb_object_keys(d) AS sections(section_name) WHERE section_name NOT IN ('format','schema_version','identity','sources','categories','category_mapping','extraction_patterns','schedule_settings','settings','managed_admin','integration_credentials')) THEN RAISE EXCEPTION 'unknown recovery section'; END IF;
@@ -35,7 +41,7 @@ DELETE FROM news.settings;
 INSERT INTO news.sources(id,name,source_type,url,enabled,fetch_interval,config) SELECT id,name,source_type,url,enabled,fetch_interval,config FROM jsonb_populate_recordset(NULL::news.sources,(SELECT payload->'sources' FROM recovery_input));
 INSERT INTO news.categories(id,name,display_name,description,color,is_local) SELECT id,name,display_name,description,color,is_local FROM jsonb_populate_recordset(NULL::news.categories,(SELECT payload->'categories' FROM recovery_input));
 INSERT INTO news.category_mapping(id,ai_category,fixed_category,confidence_threshold,description,created_by,is_active) SELECT id,ai_category,fixed_category,confidence_threshold,description,created_by,is_active FROM jsonb_populate_recordset(NULL::news.category_mapping,(SELECT payload->'category_mapping' FROM recovery_input));
-INSERT INTO news.extraction_patterns(id,domain,selector_pattern,extraction_strategy,discovered_by,is_stable) SELECT id,domain,selector_pattern,extraction_strategy,discovered_by,is_stable FROM jsonb_populate_recordset(NULL::news.extraction_patterns,(SELECT payload->'extraction_patterns' FROM recovery_input));
+INSERT INTO news.extraction_patterns(id,domain,selector_pattern,extraction_strategy,discovered_by,is_stable,success_count,failure_count) SELECT id,domain,selector_pattern,extraction_strategy,discovered_by,is_stable,success_count,failure_count FROM jsonb_populate_recordset(NULL::news.extraction_patterns,(SELECT payload->'extraction_patterns' FROM recovery_input));
 INSERT INTO news.schedule_settings(id,task_name,enabled,schedule_type,hour,minute,weekdays,timezone,task_config) SELECT id,task_name,enabled,schedule_type,hour,minute,weekdays,timezone,task_config FROM jsonb_populate_recordset(NULL::news.schedule_settings,(SELECT payload->'schedule_settings' FROM recovery_input));
 INSERT INTO news.settings(key,value) SELECT key,value FROM jsonb_populate_recordset(NULL::news.settings,(SELECT payload->'settings' FROM recovery_input));
 INSERT INTO news.managed_admin(id,username,password_hash,revision) SELECT id,username,password_hash,revision FROM jsonb_populate_recordset(NULL::news.managed_admin,(SELECT payload->'managed_admin' FROM recovery_input));

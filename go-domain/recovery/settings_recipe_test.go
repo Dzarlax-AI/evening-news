@@ -15,7 +15,10 @@ import (
 	"testing"
 
 	"github.com/Dzarlax-AI/evening-news/go-domain/appsettings"
+	"github.com/Dzarlax-AI/evening-news/go-domain/authority"
+	"github.com/Dzarlax-AI/evening-news/go-domain/callbacks"
 	"github.com/Dzarlax-AI/evening-news/go-domain/credentialstore"
+	"github.com/Dzarlax-AI/evening-news/go-domain/learning"
 	"github.com/Dzarlax-AI/evening-news/go-domain/migration"
 	"github.com/jackc/pgx/v5"
 	"github.com/jackc/pgx/v5/pgxpool"
@@ -99,7 +102,7 @@ func TestSettingsRecoveryRecipes(t *testing.T) {
 	}
 	_, err = src.Exec(ctx, `INSERT INTO installation_state(id,installation_id,provisioning_complete,onboarding_completed) VALUES(1,$1,true,true);`, installation)
 	if err != nil {
-		t.Fatalf("fixture identity seed failed: %v", err)
+		t.Fatal("fixture identity seed failed")
 	}
 	_, err = src.Exec(ctx, `INSERT INTO managed_admin(id,username,password_hash) VALUES(1,'fixture-admin','synthetic-password-hash'); INSERT INTO settings(key,value) VALUES('ai_settings_revision','3'),('operational_delivery_enabled','true'),('operational_processing_enabled','true'),('telegram_chat_id','"synthetic-chat"'),('managed_job_config:retired','{"content":"must-not-be-exported"}');`)
 	if err != nil {
@@ -108,6 +111,7 @@ func TestSettingsRecoveryRecipes(t *testing.T) {
 	_, err = src.Exec(ctx, `INSERT INTO categories(name,display_name,color) VALUES('Fixture','Fixture category','#123456');
  INSERT INTO category_mapping(ai_category,fixed_category,created_by,usage_count) VALUES('Fixture input','Fixture','fixture',19);
  INSERT INTO extraction_patterns(domain,selector_pattern,extraction_strategy,discovered_by,success_count) VALUES('fixture.invalid','article','css','manual',9),('fixture.invalid','aside','css','ai',12);
+ INSERT INTO integration_credentials(provider,revision) VALUES('openai',4);
  INSERT INTO settings(key,value) VALUES('ai_settings','{"active_provider":"gemini","profiles":{"gemini":{"models":{"article":"fixture-model","digest":"fixture-model","text":"fixture-model"}},"openai":{"models":{"article":"fixture-a","digest":"fixture-d","text":"fixture-t"}}}}');`)
 	if err != nil {
 		t.Fatal("fixture configuration seed failed")
@@ -152,15 +156,6 @@ func TestSettingsRecoveryRecipes(t *testing.T) {
 		c.Dir = dir
 		c.Env = append(os.Environ(), "PGPASSWORD="+cfg.Password)
 		out, err := c.Output()
-		if err != nil {
-			if e, ok := err.(*exec.ExitError); ok {
-				for _, line := range strings.Split(string(e.Stderr), "\n") {
-					if strings.Contains(line, "ERROR:") {
-						t.Log(strings.TrimSpace(line))
-					}
-				}
-			}
-		}
 		return out, err
 	}
 	data, err := psql(source, "export-settings.sql")
@@ -207,6 +202,11 @@ func TestSettingsRecoveryRecipes(t *testing.T) {
 	}
 	operatorEnvelopeRoundTrip(t, dir, installation, key)
 	dst := connect(target)
+	pattern, patternErr := learning.New(dst).Context(ctx, callbacks.Request{RunID: "fixture", ArticleID: 1, ArticleAttempt: 1, InputFingerprint: "fixture", Input: json.RawMessage(`{"url":"https://fixture.invalid/article"}`)}, authority.Fence{})
+	if patternErr != nil || pattern.Selector == nil || *pattern.Selector != "article" {
+		t.Fatal("recovered manual extraction rule is not selected")
+	}
+
 	var count, sentinel int
 	var paused bool
 	if dst.QueryRow(ctx, `SELECT count(*) FROM sources`).Scan(&count) != nil || count != 8 {
@@ -264,9 +264,11 @@ func TestSettingsRecoveryRecipes(t *testing.T) {
 		maximum    int
 		processing bool
 		invalid    bool
+		history    bool
 	}{
 		{name: "missing_revision_and_settings", maximum: 17, processing: true},
 		{name: "partial_with_revision", settings: []map[string]any{{"key": "operational_settings_revision", "value": 8}, {"key": "operational_max_articles", "value": 23}, {"key": "operational_processing_enabled", "value": false}}, maximum: 23},
+		{name: "old_history", history: true},
 		{name: "invalid_limit", settings: []map[string]any{{"key": "operational_max_articles", "value": 100001}}, invalid: true},
 	} {
 		t.Run(tc.name, func(t *testing.T) {
@@ -288,6 +290,12 @@ func TestSettingsRecoveryRecipes(t *testing.T) {
 			}
 			pool := connect(db)
 			r, e := migration.Run(ctx, pool, true, false)
+			if tc.history {
+				_, e = pool.Exec(ctx, `INSERT INTO daily_summaries(date,category,summary_text,articles_count) VALUES('2026-01-01','Fixture','synthetic-only',1)`)
+				if e != nil {
+					t.Fatal("history fixture failed")
+				}
+			}
 			pool.Close()
 			if e != nil || len(r.Errors) > 0 {
 				t.Fatal("case migrations failed")
@@ -311,7 +319,7 @@ func TestSettingsRecoveryRecipes(t *testing.T) {
 				t.Fatal("case input failed")
 			}
 			_, e = psql(db, "import-settings.sql", "-v", "target_database="+db, "-v", "installation_id="+installation)
-			if tc.invalid {
+			if tc.invalid || tc.history {
 				if e == nil {
 					t.Fatal("invalid operational setting accepted")
 				}

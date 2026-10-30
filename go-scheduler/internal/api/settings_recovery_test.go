@@ -103,6 +103,7 @@ func TestSettingsRecoverySchedulesNoReplay(t *testing.T) {
 	for _, definition := range doc.Schedules {
 		key := definition["schedule_key"].(string)
 		delete(definition, "schedule_key")
+		definition["enabled"] = false
 		definition["expected_revision"] = 0
 		body, _ := json.Marshal(definition)
 		w := request(apis[1], http.MethodPut, "/v1/schedules/"+key, body)
@@ -113,10 +114,7 @@ func TestSettingsRecoverySchedulesNoReplay(t *testing.T) {
 		if json.Unmarshal(w.Body.Bytes(), &s) != nil {
 			t.Fatal("schedule response failed")
 		}
-		if s.Enabled && (s.NextDueAt == nil || !s.NextDueAt.After(time.Now())) {
-			t.Fatal("enabled recovery schedule did not get a future due instant")
-		}
-		if !s.Enabled && s.NextDueAt != nil {
+		if s.Enabled || s.NextDueAt != nil {
 			t.Fatal("disabled recovery schedule has a due instant")
 		}
 		if w = request(apis[1], http.MethodPut, "/v1/schedules/"+key, body); w.Code != 409 {
@@ -131,4 +129,29 @@ func TestSettingsRecoverySchedulesNoReplay(t *testing.T) {
 	if w.Code != 200 || json.Unmarshal(w.Body.Bytes(), &status) != nil || !status.Paused || status.Pending != 0 {
 		t.Fatal("restored scheduler released control or replayed work")
 	}
+	// Simulate acceptance taking two days, past the original daily due instant.
+	// Disabled recovered definitions have no overdue instant to dispatch.
+	activation := time.Now().UTC().Add(48 * time.Hour)
+	control, err := stores[1].GetControl(ctx)
+	if err != nil {
+		t.Fatal("control read failed")
+	}
+	if n, err := stores[1].GenerateDue(ctx, activation, 10, 100); err != nil || n != 0 {
+		t.Fatal("disabled recovery replayed after delayed acceptance")
+	}
+	saved, err := stores[1].GetSchedule(ctx, "news:1")
+	if err != nil {
+		t.Fatal("restored schedule read failed")
+	}
+	activated, _, err := stores[1].PutSchedule(ctx, saved.Key, model.Mutation{ExpectedRevision: saved.Revision, Enabled: true, Calendar: saved.Calendar, Target: saved.Target, Operation: saved.Operation, Payload: saved.Payload}, apis[1].Targets, activation)
+	if err != nil || activated.NextDueAt == nil || !activated.NextDueAt.After(activation) {
+		t.Fatal("activation did not rebase future due")
+	}
+	if _, err = stores[1].SetPaused(ctx, control.Revision, false, activation); err != nil {
+		t.Fatal("release failed")
+	}
+	if n, err := stores[1].GenerateDue(ctx, activation, 10, 100); err != nil || n != 0 {
+		t.Fatal("activation replayed a missed occurrence")
+	}
+
 }
