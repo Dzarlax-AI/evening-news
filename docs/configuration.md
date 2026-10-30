@@ -17,7 +17,7 @@ The machine-readable [configuration catalog](../go-tools/configcatalog/catalog.j
 | `sources` | Code, Compose, or deployment-template locations used to verify the entry. |
 | `class`, `managed_roles` | Runtime/deployment classification and role manifests that allow the key. |
 
-The advanced [`.env.full.example`](../.env.full.example) lists deployable environment names with type and default metadata. All assignments are commented and blank; they are not recommendations or usable credentials. Do not enable the whole file. Test/fixture switches, operator/CI-only process inputs, and Compose-generated container outputs are excluded because they are not installation inputs; the catalog retains them with a non-deployment classification for audits. In managed mode, secret material and most service settings live in private per-role runtime manifests rather than `.env`.
+The advanced [`.env.full.example`](../.env.full.example) is the central reference for deployable environment names, including optional standalone component profiles, with type and default metadata. Separate per-component env examples have been consolidated into this file. All assignments are commented and blank; they are not recommendations or usable credentials. Do not enable the whole file. Test/fixture switches, operator/CI-only process inputs, and Compose-generated container outputs are excluded because they are not installation inputs; the catalog retains them with a non-deployment classification for audits. In managed mode, secret material and most service settings live in private per-role runtime manifests rather than `.env`.
 
 ## Fresh managed installation
 

@@ -239,7 +239,7 @@
     "precedence": "Compose interpolation source then template default/required rule; inspect actual file",
     "sources": [
       "deploy/news-ingestion/compose.ingestion.yml:7",
-      "deploy/news-ingestion/ingestion.env.example:4"
+      ".env.full.example:31"
     ],
     "class": "compose_input",
     "managed_roles": []
@@ -275,7 +275,7 @@
     "precedence": "Compose interpolation source then template default/required rule; inspect actual file",
     "sources": [
       "deploy/news-ingestion/compose.ingestion.yml:3",
-      "deploy/news-ingestion/ingestion.env.example:3"
+      ".env.full.example:35"
     ],
     "class": "compose_input",
     "managed_roles": []
@@ -363,7 +363,7 @@
     "precedence": "Compose interpolation source then template default/required rule; inspect actual file",
     "sources": [
       "deploy/news-processing/compose.processing.yml:8",
-      "deploy/news-processing/processing.env.example:3"
+      ".env.full.example:41"
     ],
     "class": "compose_input",
     "managed_roles": []
@@ -399,7 +399,7 @@
     "precedence": "Compose interpolation source then template default/required rule; inspect actual file",
     "sources": [
       "deploy/news-processing/compose.processing.yml:4",
-      "deploy/news-processing/processing.env.example:2"
+      ".env.full.example:45"
     ],
     "class": "compose_input",
     "managed_roles": []
@@ -2472,7 +2472,7 @@
     "precedence": "Compose interpolation source then template default/required rule; inspect actual file",
     "sources": [
       "deploy/news-ingestion/compose.ingestion.yml:35",
-      "deploy/news-ingestion/ingestion.env.example:11"
+      ".env.full.example:211"
     ],
     "class": "compose_input",
     "managed_roles": []
@@ -2682,7 +2682,7 @@
     "precedence": "Compose interpolation source then template default/required rule; inspect actual file",
     "sources": [
       "deploy/news-processing/compose.processing.yml:48",
-      "deploy/news-processing/processing.env.example:9"
+      ".env.full.example:235"
     ],
     "class": "compose_input",
     "managed_roles": []

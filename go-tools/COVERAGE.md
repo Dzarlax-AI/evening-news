@@ -1,85 +1,66 @@
-# Go tooling migration coverage — work in progress
+# Go tooling and runtime coverage
 
-This is an inventory of ported behavior, not an acceptance certificate. The
-original caller and check inventory is retained in the task evidence as
-`original-contract-inventory.json` and `original-image-gate-checks.json`.
-No Python gate, fixture or workflow is retired by this table alone.
+The News application, operator tools and CI fixtures use Go. The separate browser stack retains four Python launcher/policy/relay files. The archived application Python has been removed; language-independent golden fixtures remain regression inputs.
 
-The four historical `evening_news*.yml` and `summarization.yml` workflows
-invoked `src/evening_news.py`, `src/evening_news_Constructor_KM.py` or
-`src/summarization.py`, with `src/requirements*.txt`. The `src` tree is absent
-from the current repository; only archive documentation mentions those old
-entrypoints. These workflows could not run the current application or exercise
-its behavior and have been retired. Current core workflows remain separately
-tracked below; this does not replace their coverage.
+This document maps implemented checks to behavior. It is not a claim that every failure mode is covered or that every listed test has been rerun on the current documentation revision. Run the relevant checks for each change.
 
-The unreferenced `check_articles.py`, `check_attempts.py` and
-`check_hype_source.py` were one-off source/database inspections; current web
-admin and API views provide the supported inspection path. The unreferenced
-`inspect_scheduler.py` and `reset_scheduler_tasks.py` operated on the retired
-legacy scheduler state; resetting `is_running` cannot recover a durable Go job.
-The unreferenced `production_migration.sh` was a one-time PostgreSQL multi-category procedure
-for an obsolete application and manual schema. These helpers were retired;
-current migrations and recovery still require the tests and gates below.
-The separate unreferenced `migrate_mariadb_to_postgres.py` was a one-time
-legacy database conversion helper. PostgreSQL is the current database; the
-supported schema migration path is `news-migrate`. No current documentation or
-workflow invokes the legacy converter.
+## Verified release baseline
 
-The historical Python benchmark, shadow, soak and supervisor experiments are
-retired. `go-tools/browsercontract` verifies the unchanged shared-browser image
-and Compose contracts, and `go-tools/cloakfixture` owns the isolated native
-Cloak fixture gate. The shared browser retains its four required Python runtime
-files; no repository-wide zero-Python claim is made. Exact-head Linux CI must
-validate the new browser checks before they are accepted.
+The managed-installation release was merged at `7f36cbebc62f78fafb85f84798e144c05744e1bb` in [PR48](https://github.com/Dzarlax-AI/evening-news/pull/48). Its reviewed head passed seven CI workflows, including PostgreSQL 16/17 managed installation/adoption and Linux native-browser acceptance. Published core and extractor images were deployed with the existing native browser topology. The first normal scheduled job succeeded for all eight sources. These are dated release checks, not pending migration gates or a long-term stability guarantee.
 
-| Existing caller or behavior | Go candidate | Evidence and remaining gap |
-| --- | --- | --- |
-| `scripts/prepare_runtime_env.py` | `cmd/prepare-runtime-env`, `runtimeenv` | Independent original-Python three-case and seven-quote golden; CLI file mode, non-overwrite and audit-secret checks. A local synthetic Compose round-trip matched the original render; broader edge-case and Linux CI coverage remains. |
-| `scripts/check_ghcr_tag_absent.py` | `cmd/check-ghcr-tag-absent`, `registryguard` | Fake transport covers all allowed repository scopes, authenticated absence, unauthenticated 404 recheck, redirects and fail-closed errors. The Go workflow is switched; exact-head CI is pending. |
-| `scripts/core_image_release.py` | `cmd/core-image-release`, `corerelease` | Fake runner proves all three images inspected before the first tag or push and rejects a mismatched third image. Immutable tag guard remains a separate mandatory CI step. The Go workflow is switched; exact-head CI is pending. |
-| `scripts/check_core_image_inventory.py` | `cmd/check-core-image-inventory` | Forbids Python, pip and retired helpers; passed on all three candidate images in the PR-only PG16 and PG17 jobs at `cce1736`. The Go release workflow is switched; exact-head CI is pending. |
-| `scripts/compare_extraction_replays.py` | `cmd/compare-extraction-replays`, `replaycheck` | The Go and original Python reports matched on all 72 frozen cases over six cycles; validation tests cover changed fingerprints, missing cycles and content/media mismatches. The Go replay workflow passed at `06f79a0`; current-head CI remains required. |
-| `scripts/compare_extractor_service.py` | `cmd/compare-extractor-service`, `extractorcompare` | Go race tests cover the original matching goldens, request validation, bounded HTTP, failed outcomes and redacted reports. The converted image workflow awaits Linux CI. |
-| `scripts/collect_runtime_incident.py` | `cmd/collect-runtime-incident`, `incidentbundle`, `incidentfilter`, domain subcommand | Offline and fake-runner tests cover redacted bundles, bounded log filtering, cursor failure and live command construction. Live SSH was not invoked; an overlong line now fails the read without advancing its cursor. Image integration awaits CI. |
-| `scripts/scheduler_bridge.py` | `cmd/scheduler-bridge`, `schedulerbridge` | PG16 isolated-schema and fake HTTP race tests cover export, import, rollback inventory, private non-overwriting output, active leases, revision drift and rejected sensitive payloads. Original Python transformation golden matched; PG17 CI remains. |
-| `scripts/smoke_extractor_service.py` | `cmd/smoke-extractor-service`, `extractorsmoke` | Fake transport covers readiness, version, authentication, injection rejection, extracted anchors and private URL denial. The converted image workflow awaits current-head Linux CI. |
-| Consolidated gate image identity checks | `fixturegate` | Snapshots three distinct IDs at one revision and detects tag replacement; no acceptance receipt is issued by this helper. |
-| `tests/fixtures/go-scheduler/fake_services.py` | `cmd/fixture-services` | Used by the candidate image gate for synthetic provider, unknown outcome, 429 and partial delivery scenarios. Coverage of all existing scenarios must be audited. |
-| `tests/fixtures/go-ingestion/gate_origin.py` and `go-source-manager/fixture_origin.py` | `cmd/fixture-origin` | Synthetic UTF-8 and Windows-1251 RSS, Telegram, selector-study Page Monitor, fresh SIGTERM page and request counter. The eight-source job passed on PG16/17 candidate images at `cce1736`; full acceptance remains open. |
-| `tests/fixtures/go-web/seed_sources.py` | `cmd/seed-fixture-sources` | Real fresh PG16 migrations followed by two seed runs returned stable IDs and 4 RSS, 1 Telegram, 3 custom sources. Their ingestion receipts passed on PG16/17 candidate images at `cce1736`. Requires explicit fixture flag and `gate_db`. |
+A subsequent production proxy-only fix was verified on 2026-10-30 in an existing Cloudflare Access browser session: dashboard and operational settings loaded successfully. It changed no Go authentication policy. An automated end-to-end test through that actual Access middleware remains a separate gap.
 
-The file-level caller and test dispositions are recorded in [RETIREMENT.md](RETIREMENT.md).
-PG16 and PG17 image jobs at `06f79a0` passed their implemented pipeline, delivery,
-shutdown and strict restore phases; they intentionally failed at the then-active
-acceptance marker. The current candidate adds the final receipt and web checks;
-its exact-head Linux CI and independent review are still required.
+## Tooling checks
 
-## Runtime behavior map
+Paths below are relative to `go-tools/` unless a repository-root path is explicit.
 
-This map groups behavior rather than equating individual test counts. The
-original inventory identifies 784 Python test functions across application and
-fixture files. The grouped evidence below is paired with the file-level retirement review.
+| Behavior | Implementation and checks |
+| --- | --- |
+| Manual runtime env generation | `cmd/prepare-runtime-env`, `runtimeenv`: original render goldens, quoting, private output, non-overwrite and secret-safe audit |
+| Immutable registry tag guard | `cmd/check-ghcr-tag-absent`, `registryguard`: repository scopes, authenticated absence, redirects and fail-closed errors |
+| Core image publication | `cmd/core-image-release`, `corerelease`: all images inspected before publishing; mismatched revisions rejected |
+| Core runtime inventory | `cmd/check-core-image-inventory`: rejects Python/pip and retired helpers in application images |
+| Extraction replay parity | `cmd/compare-extraction-replays`, `replaycheck`: frozen reports, changed fingerprints, missing cycles and content/media mismatch |
+| Extractor comparison and smoke | `extractorcompare`, `extractorsmoke`: bounded requests, authentication, private URL denial, anchors and safe reports |
+| Incident bundles | `incidentbundle`, `incidentfilter`: bounded/redacted logs, cursor handling and command construction; collecting evidence is not automatic remediation |
+| Schedule export/import | `schedulerbridge`: revision drift, active leases, private output and rollback inventory |
+| Synthetic HTTP/provider services | `cmd/fixture-services`, `cmd/fixture-origin`: RSS encodings, Telegram, CSS Page Monitor, delivery failures, shutdown and counters |
+| Fixture source seeding | `cmd/seed-fixture-sources`: explicit fixture opt-in, isolated DB and repeatable eight-source inventory |
+| Image revision identity | `fixturegate`: separate image IDs, shared revision and replacement detection |
+| Browser contracts and isolation | `browsercontract`, `cloakfixture`: browser image/Compose contracts and isolated native Cloak checks; fixture acceptance does not authorize changing a shared live browser |
+| Configuration inventory | `configcatalog`: code-discovered keys, valid source locations, deployment inputs, full example and managed-role boundaries |
+| Managed setup/adoption | `managedsetup`, `cmd/managed-adoption-gate`, repository-root `go-domain/cmd/newsctl`: installation, native attachment, role boundaries, preservation and supported recovery profiles |
 
-| Behavior | Candidate Go evidence | Remaining review |
-| --- | --- | --- |
-| Private callback authentication, admission, stale claims and migration 013 fence | `go-domain/callbacks/*test.go`, `go-domain/authority/*test.go`, `go-domain/cmd/news-domain/main_test.go` | Full execution-to-callback image path and role boundaries |
-| Selector analysis, source fingerprint changes and cache publication | `go-domain/selectors/*test.go`, `go-domain/learning/*test.go` | Integrated Page Monitor learning passed on PG16/17 candidate images at `cce1736`; full acceptance remains open |
-| Telegram media and source parsing | `go-domain/media/*test.go`, `go/extractor/telegram_*test.go`, `go/service/telegram_test.go` | Original test-by-behavior retirement audit |
-| AI analysis and prompts | `go-domain/airuntime/*test.go`, `go-domain/callbacks/compute_test.go` | Provider-independent full-pipeline acceptance and all original contract cases |
-| Digest generation, persistence and delivery safety | `go-domain/digestworkflow/*test.go`, `go-domain/telegramdelivery/*test.go`, `go-editorial/editorial/*test.go` | PG16/17 image tests passed unknown, partial and 429 cases at `06f79a0`; editorial source review remains separate |
-| Terminal and source alerts | `go-domain/terminalevents/*test.go` | Full runtime event, interruption and network fault paths |
-| Backup, streaming and worker-mode HTTP restrictions | `go-domain/backup/*test.go`, `go-domain/webbackend/backups_test.go`, `go-domain/webbackend/boundary_test.go` | PG16/17 image dump and strict restore passed at `06f79a0`; real TCP cancellation and staging tests passed locally |
-| One-shot schema bootstrap and migrations | `go-domain/migration/*test.go`, `go-domain/cmd/news-migrate` | Fresh and existing PostgreSQL 16/17 parity and privileges |
-| Job execution, worker leasing and background lifecycle | `go-execution/*test.go`, `go-worker/internal/worker/*test.go`, `go-background/internal/runtime/*test.go` | PG16/17 image lease loss, shutdown and recovery phases passed at `06f79a0`; current-head CI remains required |
-| Ingestion and source receipts | `go-ingestion/internal/ingest/*test.go`, `go-ingestion/internal/store/*test.go`, `go/service/*test.go`, `go/extractor/*test.go` | Eight synthetic sources passed the real image pipeline on PG16/17 at `cce1736`; isolated browser coverage remains separate |
-| Browser target isolation | `go/transport/native_browser_test.go` (`TestNativeBrowserConcurrentRendersUseIndependentTargets`), `go-tools/cloakfixture` | Fake CDP checks two simultaneous renders use independent targets. The new isolated Cloak fixture gate is wired into CI; its current-head Linux result is pending. No local live browser run is claimed. |
-| Schedule dispatch, pause, import and replay | `go-scheduler/internal/store/integration_test.go` (`TestPostgresPersistenceAndFencing`), `go-scheduler/internal/dispatch/dispatcher_integration_test.go` (`TestDispatcherMeasuresRetryAndLeaseFromResponseCompletion`), `go-web/internal/schedules/*test.go` | Store test covers durable generation, capacity and lease fencing; dispatcher test covers retry, malformed receipt, unauthorized delivery, fast-alias progress during a blocked slow alias and accepted outbox persistence after reopening on real PG16 and fake HTTP. The candidate gate covers unavailable-web outbox retention, pause/import and due dispatch. |
-| Public and admin routes and authentication | `go-web/internal/httpui/*test.go`, `go-web/internal/auth/*test.go`, `go-web/internal/repositories/*test.go`, `go-domain/webbackend/*test.go` | Payload and role compatibility in the integrated image gate |
+## Runtime behavior checks
 
-The shared-browser entrypoint, policy, launcher, relay, Dockerfile and X11 shim
-remain unchanged as runtime dependencies. The old Python test and experiment
-helpers are retired; Go-owned browser contract and Cloak fixture tests replace
-their current checks. Archives and historical documents are not rewritten to
-change language statistics. The new image and isolated-network checks require
-current-head Linux CI; they have not been run against a live browser locally.
+Paths in this table are relative to the repository root.
+
+| Behavior | Test locations and scope |
+| --- | --- |
+| Callback authentication and ownership fences | `go-domain/callbacks`, `go-domain/authority`, `go-domain/cmd/news-domain` |
+| Selector analysis and learning cache | `go-domain/selectors`, `go-domain/learning` |
+| Telegram parsing and media | `go-domain/media`, `go/extractor`, `go/service` |
+| AI providers, usage and validation | `go-domain/airuntime`, `go-domain/callbacks`; the external go-ai module owns its provider adapter tests |
+| Editorial validation and delivery | `go-editorial/editorial`, `go-domain/digestworkflow`, `go-domain/telegramdelivery`: edition validation, persistence, unknown/partial outcomes and retry behavior |
+| Alerts and terminal events | `go-domain/terminalevents`: terminal/source event contracts and deduplication |
+| Database backups and HTTP restrictions | `go-domain/backup`, `go-domain/webbackend`: streaming, cancellation, worker-mode restrictions and role boundaries |
+| Schema bootstrap | `go-domain/migration`, `go-domain/cmd/news-migrate`: one-shot migration and PostgreSQL parity |
+| Worker heartbeat and lifecycle | `go-worker/internal/worker`, `go-background/internal/runtime`, `go-execution`: leases, generations, shutdown and durable execution |
+| Collection and persistence | `go-ingestion/internal/ingest`, `go-ingestion/internal/store`, `go/service`, `go/extractor`: eight-source fixture pipeline and source receipts |
+| Native browser concurrency | `go/transport/native_browser_test.go`, `go-tools/cloakfixture`: independent targets and isolated real-browser checks |
+| Schedule persistence and dispatch | `go-scheduler/internal/store`, `go-scheduler/internal/dispatch`, `go-web/internal/schedules`: durable outbox, fencing, retries, pause and fixed target aliases |
+| Web/API and authentication | `go-web/internal/httpui`, `go-web/internal/auth`, `go-web/internal/transport`, `go-web/internal/repositories`, `go-domain/webbackend` |
+
+## Running checks
+
+Run `make test` and `make vet` for the News modules, or use focused `go test ./...`, `go test -race ./...`, `go vet ./...` and `go mod verify` inside a module. PostgreSQL integration tests require an explicitly isolated loopback test database. Image and browser fixture workflows have their own isolated infrastructure; unit tests alone do not establish full-stack acceptance.
+
+## Explicit limits
+
+- Native-browser, adopted and external-database installation recovery is not a universal encrypted local backup/restore path. Preserve private keys/manifests and use the reviewed operator procedure described in [configuration](../docs/configuration.md).
+- Real-provider editorial quality requires source review; synthetic provider tests do not establish factual quality or authorize paid calls.
+- The production Cloudflare Access admin/API chain needs its own automated regression coverage. A passing native auth endpoint does not exercise that chain.
+- Historical PostgreSQL COMMIT delays remain an unresolved diagnostic question; passing heartbeat tests or one scheduled run does not establish their cause.
+- Standalone component deployment profiles and manual development configuration remain separate from the managed default; changing their topology requires its own review.
+
+The [retirement ledger](RETIREMENT.md) records the historical porting decisions. It is retained as evidence rather than a list of still-pending implementation tasks.
