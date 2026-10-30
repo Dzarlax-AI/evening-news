@@ -57,7 +57,7 @@ Run `make test` and `make vet` for the News modules, or use focused `go test ./.
 
 ## Explicit limits
 
-- Native-browser, adopted and external-database installation recovery is not a universal encrypted local backup/restore path. Preserve private keys/manifests and use the reviewed operator procedure described in [configuration](../docs/configuration.md).
+- Native-browser, adopted and external-database installations still do not use the generic `newsctl` local backup/restore path. The separate [operator settings recovery](../docs/managed-settings-recovery.md) recipe restores configuration and matching keys into clean targets; it intentionally excludes article/delivery history. Its PostgreSQL 16/17 fixtures are wired into core CI.
 - Real-provider editorial quality requires source review; synthetic provider tests do not establish factual quality or authorize paid calls.
 - The production Cloudflare Access admin/API chain needs its own automated regression coverage. A passing native auth endpoint does not exercise that chain.
 - Historical PostgreSQL COMMIT delays remain an unresolved diagnostic question; passing heartbeat tests or one scheduled run does not establish their cause.

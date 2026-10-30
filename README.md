@@ -126,7 +126,7 @@ Optional operator-supplied model prices enable cost estimates. Missing provider 
 - `/api/v1/`: authenticated management API.
 - `/openapi.json`, `/docs`, `/redoc`: API schema and documentation.
 
-Asynchronous admin commands return a durable job receipt. Offline backup upload, cleanup, and restore operations are disabled in worker mode. Recovery support depends on the installation profile; consult the [configuration guide](docs/configuration.md) before relying on a backup procedure. A database dump alone cannot recover encrypted credentials without the matching private key material.
+Asynchronous admin commands return a durable job receipt. Offline backup upload, cleanup, and restore operations are disabled in worker mode. For managed installations with an external database and native browser, use the [operator settings backup and recovery procedure](docs/managed-settings-recovery.md). It recovers configuration, not article history; the admin page provides guidance instead of restore controls. Other recovery support depends on the installation profile; consult the [configuration guide](docs/configuration.md). A database dump alone cannot recover encrypted credentials without the matching private key material.
 
 ## Development and tests
 
