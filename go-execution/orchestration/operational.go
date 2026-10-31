@@ -26,6 +26,22 @@ type JobOperationalConfig struct {
 	PinnedAt          time.Time           `json:"pinned_at"`
 	Settings          OperationalSettings `json:"settings"`
 	Telegram          *TelegramSettings   `json:"telegram,omitempty"`
+	Viber             *ViberSettings      `json:"viber,omitempty"`
+}
+
+// ViberSettings preserves the non-secret producer snapshot on job configuration
+// responses. It remains optional for attempts pinned before Viber support.
+type ViberSettings struct {
+	Revision                   int64      `json:"revision"`
+	DeliveryEnabled            bool       `json:"delivery_enabled"`
+	ChannelID                  string     `json:"channel_id"`
+	ChannelName                string     `json:"channel_name"`
+	SenderID                   string     `json:"sender_id"`
+	CredentialRevision         int64      `json:"credential_revision"`
+	VerifiedCredentialRevision int64      `json:"verified_credential_revision"`
+	WebhookReady               bool       `json:"webhook_ready"`
+	VerifiedAt                 *time.Time `json:"verified_at"`
+	EnabledFrom                *time.Time `json:"enabled_from"`
 }
 
 type JobConfigPreparer func(context.Context, execution.ExecutionContext) (JobOperationalConfig, error)

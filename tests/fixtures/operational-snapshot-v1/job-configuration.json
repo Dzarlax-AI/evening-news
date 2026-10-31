@@ -1,0 +1,35 @@
+{
+  "job_id": "20000000-0000-4000-8000-000000000002",
+  "attempt_generation": 1,
+  "pinned_at": "2026-10-31T14:35:49Z",
+  "settings": {
+    "revision": 2,
+    "limits_enabled": false,
+    "max_articles": 50,
+    "per_source": 50,
+    "days": 1,
+    "newest_date": "",
+    "processing_enabled": true,
+    "delivery_enabled": true,
+    "serbian_enabled": true
+  },
+  "telegram": {
+    "revision": 1,
+    "chat_id": "@fixture_ru",
+    "service_chat_id": "",
+    "serbian_chat_id": "@fixture_sr",
+    "serbian_delivery_enabled": true
+  },
+  "viber": {
+    "revision": 3,
+    "delivery_enabled": true,
+    "channel_id": "fixture-channel",
+    "channel_name": "Fixture channel",
+    "sender_id": "fixture-sender",
+    "credential_revision": 1,
+    "verified_credential_revision": 1,
+    "webhook_ready": true,
+    "verified_at": "2026-10-31T14:00:00Z",
+    "enabled_from": "2026-10-31T14:30:00Z"
+  }
+}
