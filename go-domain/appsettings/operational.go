@@ -49,6 +49,7 @@ type JobOperational struct {
 	PinnedAt          time.Time   `json:"pinned_at"`
 	Settings          Operational `json:"settings"`
 	Telegram          *Telegram   `json:"telegram,omitempty"`
+	Viber             *Viber      `json:"viber,omitempty"`
 }
 
 func defaultOperational() Operational {
@@ -112,6 +113,28 @@ func (s Store) UpdateOperational(ctx context.Context, in OperationalUpdate) (Ope
 	}
 	if rev != in.ExpectedRevision {
 		return Operational{}, ErrConflict
+	}
+	previous, err := operationalInTx(ctx, tx)
+	if err != nil {
+		return Operational{}, err
+	}
+	if previous.DeliveryEnabled != v.DeliveryEnabled {
+		if _, err = tx.Exec(ctx, `SELECT pg_advisory_xact_lock(1649258121,728441)`); err != nil {
+			return Operational{}, err
+		}
+		// Rotate the activation epoch on both edges; an older pinned job cannot revive a backlog.
+		if _, err = tx.Exec(ctx, `UPDATE settings SET value=jsonb_set(jsonb_set(value::jsonb,'{enabled_from}',to_jsonb(clock_timestamp())),'{revision}',to_jsonb(COALESCE((value->>'revision')::bigint,0)+1)),updated_at=now() WHERE key='viber_settings' AND COALESCE((value->>'delivery_enabled')::boolean,false)`); err != nil {
+			return Operational{}, err
+		}
+		var present bool
+		if err = tx.QueryRow(ctx, `SELECT to_regclass(current_schema()||'.viber_digest_deliveries') IS NOT NULL`).Scan(&present); err != nil {
+			return Operational{}, err
+		}
+		if present && !v.DeliveryEnabled {
+			if _, err = tx.Exec(ctx, `UPDATE viber_digest_deliveries SET state='cancelled',updated_at=now() WHERE state IN ('waiting_edition','ready','retry_wait')`); err != nil {
+				return Operational{}, err
+			}
+		}
 	}
 	pairs := [][2]any{
 		{"operational_limits_enabled", v.LimitsEnabled}, {"operational_max_articles", v.MaxArticles},
@@ -195,7 +218,18 @@ func (s Store) PinOperational(ctx context.Context, jobID string, attempt int64) 
 	if err != nil {
 		return JobOperational{}, err
 	}
-	pinned := JobOperational{JobID: jobID, AttemptGeneration: attempt, PinnedAt: time.Now().UTC(), Settings: settings, Telegram: &telegram}
+	if _, err = tx.Exec(ctx, `SELECT pg_advisory_xact_lock_shared(1649258121,728441)`); err != nil {
+		return JobOperational{}, err
+	}
+	var viber Viber
+	var viberRaw []byte
+	if err = tx.QueryRow(ctx, `SELECT value FROM settings WHERE key='viber_settings'`).Scan(&viberRaw); err != nil && !errors.Is(err, pgx.ErrNoRows) {
+		return JobOperational{}, err
+	}
+	if len(viberRaw) > 0 && json.Unmarshal(viberRaw, &viber) != nil {
+		return JobOperational{}, errors.New("Viber settings are invalid")
+	}
+	pinned := JobOperational{JobID: jobID, AttemptGeneration: attempt, PinnedAt: time.Now().UTC(), Settings: settings, Telegram: &telegram, Viber: &viber}
 	data, err := json.Marshal(pinned)
 	if err != nil {
 		return JobOperational{}, err

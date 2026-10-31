@@ -32,8 +32,8 @@ func TestSettingsRecoveryRecipes(t *testing.T) {
 		t.Skip("isolated settings recovery fixture not configured")
 	}
 	cfg, err := pgx.ParseConfig(dsn)
-	if err != nil || cfg.Database != "settings_recovery_fixture" || (cfg.Host != "127.0.0.1" && cfg.Host != "localhost") {
-		t.Fatal("fixture requires explicit loopback settings_recovery_fixture database")
+	if err != nil || (cfg.Database != "settings_recovery_fixture" && cfg.Database != "viber_fixture") || (cfg.Host != "127.0.0.1" && cfg.Host != "localhost") {
+		t.Fatal("fixture requires explicit loopback settings_recovery_fixture or viber_fixture database")
 	}
 	ctx := context.Background()
 	admin, err := pgx.Connect(ctx, dsn)
@@ -100,6 +100,10 @@ func TestSettingsRecoveryRecipes(t *testing.T) {
 	if err != nil {
 		t.Fatal("fixture encryption failed")
 	}
+	viberEnvelope, err := credentialstore.Seal(key, "fixture-key", installation, "viber", []byte("synthetic-viber-token-no-api-call"))
+	if err != nil {
+		t.Fatal("Viber fixture encryption failed")
+	}
 	_, err = src.Exec(ctx, `INSERT INTO installation_state(id,installation_id,provisioning_complete,onboarding_completed) VALUES(1,$1,true,true);`, installation)
 	if err != nil {
 		t.Fatal("fixture identity seed failed")
@@ -113,13 +117,19 @@ func TestSettingsRecoveryRecipes(t *testing.T) {
  INSERT INTO category_mapping(ai_category,fixed_category,created_by,usage_count) VALUES('Fixture input','Fixture','fixture',19);
  INSERT INTO extraction_patterns(domain,selector_pattern,extraction_strategy,discovered_by,success_count) VALUES('fixture.invalid','article','css','manual',9),('fixture.invalid','aside','css','ai',12);
  INSERT INTO integration_credentials(provider,revision) VALUES('openai',4);
- INSERT INTO settings(key,value) VALUES('ai_settings','{"active_provider":"gemini","profiles":{"gemini":{"models":{"article":"fixture-model","digest":"fixture-model","text":"fixture-model"}},"openai":{"models":{"article":"fixture-a","digest":"fixture-d","text":"fixture-t"}}}}');`)
+	 INSERT INTO settings(key,value) VALUES
+ ('ai_settings','{"active_provider":"gemini","profiles":{"gemini":{"models":{"article":"fixture-model","digest":"fixture-model","text":"fixture-model"}},"openai":{"models":{"article":"fixture-a","digest":"fixture-d","text":"fixture-t"}}}}'),
+ ('viber_settings','{"revision":8,"delivery_enabled":true,"channel_id":"fixture-channel","channel_name":"Fixture Channel","sender_id":"fixture-sender","credential_revision":5,"verified_credential_revision":5,"webhook_ready":true,"verified_at":"2026-10-31T10:00:00Z","enabled_from":"2026-10-30T10:00:00Z"}');`)
 	if err != nil {
 		t.Fatal("fixture configuration seed failed")
 	}
 	_, err = src.Exec(ctx, `INSERT INTO integration_credentials(provider,revision,envelope_version,key_id,nonce,ciphertext) VALUES('gemini',1,$1,$2,$3,$4)`, envelope.Version, envelope.KeyID, envelope.Nonce, envelope.Ciphertext)
 	if err != nil {
 		t.Fatal("fixture credential seed failed")
+	}
+	_, err = src.Exec(ctx, `INSERT INTO integration_credentials(provider,revision,envelope_version,key_id,nonce,ciphertext) VALUES('viber',5,$1,$2,$3,$4)`, viberEnvelope.Version, viberEnvelope.KeyID, viberEnvelope.Nonce, viberEnvelope.Ciphertext)
+	if err != nil {
+		t.Fatal("Viber fixture credential seed failed")
 	}
 	for i := 1; i <= 8; i++ {
 		typ := "rss"
@@ -170,6 +180,18 @@ func TestSettingsRecoveryRecipes(t *testing.T) {
 	if json.Unmarshal(data, &document) != nil {
 		t.Fatal("export is not one JSON document")
 	}
+	if document["schema_version"] != float64(20) {
+		t.Fatal("export did not use schema version 20")
+	}
+	var exportedViber bool
+	for _, row := range document["settings"].([]any) {
+		if row.(map[string]any)["key"] == "viber_settings" {
+			exportedViber = true
+		}
+	}
+	if !exportedViber || bytes.Contains(data, []byte("viber_webhook_ack")) || bytes.Contains(data, []byte("viber_digest_deliveries")) || bytes.Contains(data, []byte("viber_digest_parts")) {
+		t.Fatal("Viber setting missing or transient Viber history escaped settings export")
+	}
 	if err = os.WriteFile(filepath.Join(dir, "settings.json"), data, 0600); err != nil {
 		t.Fatal(err)
 	}
@@ -188,7 +210,7 @@ func TestSettingsRecoveryRecipes(t *testing.T) {
 	}
 	for _, row := range document["settings"].([]any) {
 		item := row.(map[string]any)
-		if strings.HasPrefix(item["key"].(string), "operational_") || item["key"] == "telegram_serbian_delivery_enabled" {
+		if strings.HasPrefix(item["key"].(string), "operational_") || item["key"] == "telegram_serbian_delivery_enabled" || item["key"] == "viber_settings" {
 			continue
 		}
 		found := false
@@ -224,6 +246,14 @@ func TestSettingsRecoveryRecipes(t *testing.T) {
 	if err != nil || telegram.SerbianDeliveryEnabled || telegram.SerbianChatID != "synthetic-sr" {
 		t.Fatal("Serbian destination not preserved disabled after recovery")
 	}
+	viber, err := (appsettings.Store{Pool: dst}).Viber(ctx)
+	if err != nil || viber.DeliveryEnabled || viber.WebhookReady || viber.VerifiedCredentialRevision != 0 || viber.VerifiedAt != nil || viber.EnabledFrom != nil || viber.ChannelID != "fixture-channel" || viber.ChannelName != "Fixture Channel" || viber.SenderID != "fixture-sender" || viber.CredentialRevision != 5 {
+		t.Fatal("Viber settings did not restore disabled and unverified with channel configuration preserved")
+	}
+	viberClear, _, err := (&credentialstore.Store{Pool: dst, Key: key, KeyID: "fixture-key", InstallationID: installation}).Resolve(ctx, "viber")
+	if err != nil || string(viberClear) != "synthetic-viber-token-no-api-call" {
+		t.Fatal("Viber encrypted credential recovery mismatch")
+	}
 	clear, _, err := (&credentialstore.Store{Pool: dst, Key: key, KeyID: "fixture-key", InstallationID: installation}).Resolve(ctx, "gemini")
 	if err != nil || string(clear) != "synthetic-key-no-provider-call" {
 		t.Fatal("credential recovery mismatch")
@@ -231,7 +261,7 @@ func TestSettingsRecoveryRecipes(t *testing.T) {
 	if _, _, err = (&credentialstore.Store{Pool: dst, Key: bytes.Repeat([]byte{4}, 32), KeyID: "fixture-key", InstallationID: installation}).Resolve(ctx, "gemini"); err == nil {
 		t.Fatal("wrong credential key accepted")
 	}
-	for _, table := range []string{"articles", "editorial_digest_editions", "background_jobs", "source_collection_state", "setup_tokens", "article_ingestion_runs", "digest_delivery_parts"} {
+	for _, table := range []string{"articles", "editorial_digest_editions", "background_jobs", "source_collection_state", "setup_tokens", "article_ingestion_runs", "digest_delivery_parts", "viber_digest_deliveries", "viber_digest_parts", "viber_channel_leases", "viber_test_receipts"} {
 		if dst.QueryRow(ctx, "SELECT count(*) FROM "+pgx.Identifier{"news", table}.Sanitize()).Scan(&count) != nil || count != 0 {
 			t.Fatal("history or runtime state restored")
 		}
@@ -264,17 +294,27 @@ func TestSettingsRecoveryRecipes(t *testing.T) {
 	// Recovery materializes the complete typed operational set even for old or
 	// interrupted sources. Compare via the production store, not SQL row counts.
 	for index, tc := range []struct {
-		name       string
-		settings   []map[string]any
-		maximum    int
-		processing bool
-		invalid    bool
-		history    bool
+		name          string
+		settings      []map[string]any
+		schemaVersion int
+		omitViber     bool
+		viberValue    any
+		maximum       int
+		processing    bool
+		invalid       bool
+		history       bool
+		testHistory   bool
 	}{
-		{name: "missing_revision_and_settings", maximum: 17, processing: true},
-		{name: "partial_with_revision", settings: []map[string]any{{"key": "operational_settings_revision", "value": 8}, {"key": "operational_max_articles", "value": 23}, {"key": "operational_processing_enabled", "value": false}}, maximum: 23},
+		{name: "schema_16_without_viber", schemaVersion: 16, omitViber: true, maximum: 17, processing: true},
+		{name: "schema_18_without_viber", schemaVersion: 18, omitViber: true, settings: []map[string]any{{"key": "operational_settings_revision", "value": 8}, {"key": "operational_max_articles", "value": 23}, {"key": "operational_processing_enabled", "value": false}}, maximum: 23},
+		{name: "schema_20_with_viber", schemaVersion: 20, maximum: 17, processing: true},
 		{name: "old_history", history: true},
+		{name: "viber_test_history", testHistory: true},
 		{name: "invalid_limit", settings: []map[string]any{{"key": "operational_max_articles", "value": 100001}}, invalid: true},
+		{name: "viber_missing_field", invalid: true, viberValue: map[string]any{"revision": 8, "delivery_enabled": true, "channel_id": "fixture-channel", "channel_name": "Fixture Channel", "sender_id": "fixture-sender", "credential_revision": 5, "verified_credential_revision": 5, "webhook_ready": true, "enabled_from": "2026-10-30T10:00:00Z"}},
+		{name: "viber_unknown_field", invalid: true, viberValue: map[string]any{"revision": 8, "delivery_enabled": true, "channel_id": "fixture-channel", "channel_name": "Fixture Channel", "sender_id": "fixture-sender", "credential_revision": 5, "verified_credential_revision": 5, "webhook_ready": true, "verified_at": "2026-10-31T10:00:00Z", "enabled_from": "2026-10-30T10:00:00Z", "unknown": true}},
+		{name: "viber_invalid_revision", invalid: true, viberValue: map[string]any{"revision": "8", "delivery_enabled": true, "channel_id": "fixture-channel", "channel_name": "Fixture Channel", "sender_id": "fixture-sender", "credential_revision": 5, "verified_credential_revision": 5, "webhook_ready": true, "verified_at": "2026-10-31T10:00:00Z", "enabled_from": "2026-10-30T10:00:00Z"}},
+		{name: "viber_invalid_timestamp", invalid: true, viberValue: map[string]any{"revision": 8, "delivery_enabled": true, "channel_id": "fixture-channel", "channel_name": "Fixture Channel", "sender_id": "fixture-sender", "credential_revision": 5, "verified_credential_revision": 5, "webhook_ready": true, "verified_at": "not-a-timestamp", "enabled_from": "2026-10-30T10:00:00Z"}},
 	} {
 		t.Run(tc.name, func(t *testing.T) {
 			db := fmt.Sprintf("news_restore_case_%d_%s", index, suffix)
@@ -301,6 +341,12 @@ func TestSettingsRecoveryRecipes(t *testing.T) {
 					t.Fatal("history fixture failed")
 				}
 			}
+			if tc.testHistory {
+				_, e = pool.Exec(ctx, `INSERT INTO viber_test_receipts(request_id,channel_id,sender_id,settings_revision,credential_revision,state) VALUES(gen_random_uuid(),'fixture-channel','fixture-sender',1,1,'unknown')`)
+				if e != nil {
+					t.Fatal("Viber test history fixture failed")
+				}
+			}
 			pool.Close()
 			if e != nil || len(r.Errors) > 0 {
 				t.Fatal("case migrations failed")
@@ -309,14 +355,30 @@ func TestSettingsRecoveryRecipes(t *testing.T) {
 			if json.Unmarshal(before, &d) != nil {
 				t.Fatal("case document failed")
 			}
+			if tc.schemaVersion != 0 {
+				d["schema_version"] = tc.schemaVersion
+			}
 			settings := []any{}
 			for _, x := range d["settings"].([]any) {
-				if !strings.HasPrefix(x.(map[string]any)["key"].(string), "operational_") {
+				key := x.(map[string]any)["key"].(string)
+				if !strings.HasPrefix(key, "operational_") && !(tc.omitViber && key == "viber_settings") && !(tc.viberValue != nil && key == "viber_settings") {
 					settings = append(settings, x)
 				}
 			}
+			if tc.omitViber {
+				credentials := []any{}
+				for _, x := range d["integration_credentials"].([]any) {
+					if x.(map[string]any)["provider"] != "viber" {
+						credentials = append(credentials, x)
+					}
+				}
+				d["integration_credentials"] = credentials
+			}
 			for _, x := range tc.settings {
 				settings = append(settings, x)
+			}
+			if tc.viberValue != nil {
+				settings = append(settings, map[string]any{"key": "viber_settings", "value": tc.viberValue})
 			}
 			d["settings"] = settings
 			b, _ := json.Marshal(d)
@@ -324,9 +386,9 @@ func TestSettingsRecoveryRecipes(t *testing.T) {
 				t.Fatal("case input failed")
 			}
 			_, e = psql(db, "import-settings.sql", "-v", "target_database="+db, "-v", "installation_id="+installation)
-			if tc.invalid || tc.history {
+			if tc.invalid || tc.history || tc.testHistory {
 				if e == nil {
-					t.Fatal("invalid operational setting accepted")
+					t.Fatal("invalid recovery setting accepted")
 				}
 				pool = connect(db)
 				var n int

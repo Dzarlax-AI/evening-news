@@ -3,10 +3,94 @@ interface Window {
   presentError: (error: unknown) => string;
   presentMessage: (message: string | undefined, code: unknown, success?: boolean) => unknown;
   localizedURL: (raw: string) => string;
+  viberSettingsText: (key: string) => string;
 }
 
 (() => {
   const locale = document.documentElement.lang === 'sr-Latn' ? 'sr-Latn' : 'ru';
+  const viberLabels: Record<string, Record<string, string>> = {
+    ru: {
+      heading:'Viber · Srpski', loading:'Загрузка настроек…', overview:'Состояние подключения', credential:'Токен канала', channel:'Канал', sender:'Отправитель',
+      tokenLabel:'Токен канала', tokenPlaceholder:'Введите новый токен', tokenHelp:'Токен хранится в зашифрованном виде. Его значение больше не показывается.',
+      configured:'Токен сохранён', missing:'Токен не задан', saveToken:'Сохранить токен', verify:'Проверить канал', connect:'Подключить webhook',
+      enable:'Включить доставку в Viber', disable:'Отключить доставку в Viber', refresh:'Обновить', previewTitle:'Предпросмотр сохранённого выпуска',
+      editionLabel:'ID сербского выпуска', editionPlaceholder:'Введите ID выпуска', preview:'Показать предпросмотр',
+      noPreview:'Введите ID сохранённого сербского выпуска, чтобы увидеть предпросмотр.',
+      enableHint:'Доставка новых выпусков начинается только после включения. Глобальная остановка доставки действует и для Viber.',
+      sourceHint:'Названия источников убраны из короткой публикации; ссылки остаются отдельными.', nothingSent:'Предпросмотр не отправляет сообщения.',
+      loadingError:'Не удалось загрузить настройки.', saveError:'Не удалось сохранить настройки.',
+      testTitle:'Пробное сообщение', testButton:'Отправить тест в Viber',
+      testHelp:'Отправляет одно пробное сообщение в этот канал. Не публикует дайджест и не меняет автоматическую доставку.',
+      testConfirmDuplicate:'Результат предыдущего теста неизвестен. Новая попытка может создать дубликат. Всё равно отправить новое тестовое сообщение?',
+      testSending:'Отправляем одно тестовое сообщение…', testSent:'Viber подтвердил приём тестового сообщения.',
+      testRejected:'Viber отклонил тестовое сообщение. Автоматического повтора не будет.',
+      testUnknown:'Результат тестового сообщения не подтверждён. Настройки обновлены; новая попытка может создать дубликат.',
+      testUnknownNoRefresh:'Результат тестового сообщения не подтверждён, а состояние не обновлено. Не отправляйте тест повторно, пока не проверите статус.',
+      testSendingState:'Тестовое сообщение ещё обрабатывается. Обновите состояние перед новой отправкой.',
+      testConflict:'Настройки изменились. Состояние обновлено; тест автоматически не повторялся.',
+      testConflictNoRefresh:'Настройки изменились, но состояние не удалось обновить. Тест не повторялся; обновите страницу перед новой попыткой.',
+      testError:'Не удалось подтвердить результат тестового сообщения. Проверьте состояние перед новой попыткой.',
+      testUnavailable:'Не удалось создать идентификатор тестового сообщения. Сообщение не отправлено.',
+      noTest:'Тестовых сообщений пока нет.', testState_sent:'Отправлено и подтверждено',
+      testState_rejected:'Отклонено', testState_unknown:'Результат не подтверждён', testState_sending:'Отправка выполняется',
+      conflict:'Настройки изменились в другом окне. Обновите их перед повторной попыткой.', tokenSaved:'Токен сохранён. Проверьте канал перед подключением.',
+      tokenSaveUnknown:'Результат сохранения токена не подтверждён. Обновите состояние перед повторной попыткой.', verified:'Канал проверен.',
+      toggleRejected:'Изменение отклонено (HTTP 422). Настройки обновлены; проверьте состояние перед повторной попыткой.',
+      toggleRejectedNoRefresh:'Изменение отклонено (HTTP 422), но не удалось обновить настройки. Обновите состояние перед новым действием.',
+      toggleUnknown:'Результат изменения не подтверждён (HTTP {status}). Настройки обновлены; проверьте состояние перед повторной попыткой.',
+      toggleUnknownNoRefresh:'Результат изменения не подтверждён (HTTP {status}). Не удалось обновить настройки; проверьте состояние вручную перед повторной попыткой.',
+      conflictNoRefresh:'Настройки изменились в другом окне, но их не удалось обновить. Обновите состояние перед повторной попыткой.',
+      verifyError:'Проверка канала не подтверждена.', connected:'Webhook зарегистрирован. Ожидается подтверждение входящего callback.',
+      connectError:'Подключение webhook не подтверждено.', enabled:'Доставка в Viber включена для новых выпусков.', disabled:'Доставка в Viber отключена.',
+      previewError:'Не удалось загрузить предпросмотр.', selectSender:'Выберите superadmin-отправителя',
+      senderRequired:'Выберите отправителя и повторно проверьте канал.', notVerified:'Канал нужно проверить с текущим токеном.',
+      webhookPending:'Ожидается подтверждение callback.', ready:'Готово', enabledStatus:'Включена', disabledStatus:'Выключена',
+      verifiedAt:'Проверен', enabledFrom:'Включена с', lastDelivery:'Последняя доставка', noDelivery:'Доставок пока нет',
+      part:'частей', partUnit:'единиц UTF-16', byteUnit:'байт JSON', previewPart:'Часть', budget:'Лимит',
+      previewIdRequired:'Введите ID выпуска.', noSend:'Эта страница не отправляет сообщения.', retryLoad:'Повторить загрузку', errorStatus:'Состояние недоступно.'
+    },
+    'sr-Latn': {
+      heading:'Viber · Srpski', loading:'Učitavanje podešavanja…', overview:'Status veze', credential:'Token kanala', channel:'Kanal', sender:'Pošiljalac',
+      tokenLabel:'Token za kanal', tokenPlaceholder:'Unesite novi token', tokenHelp:'Token se čuva šifrovano. Vrednost se nikada ponovo ne prikazuje.',
+      configured:'Token je sačuvan', missing:'Token nije podešen', saveToken:'Sačuvaj token', verify:'Proveri kanal', connect:'Poveži webhook',
+      enable:'Uključi Viber dostavu', disable:'Isključi Viber dostavu', refresh:'Osveži', previewTitle:'Pregled sačuvanog izdanja',
+      editionLabel:'ID srpskog izdanja', editionPlaceholder:'Unesite ID izdanja', preview:'Prikaži pregled',
+      noPreview:'Unesite ID sačuvanog srpskog izdanja da biste videli pregled.',
+      enableHint:'Dostava za nova izdanja počinje tek nakon uključivanja. Globalno zaustavljanje dostave važi i za Viber.',
+      sourceHint:'Nazivi izvora su izostavljeni iz kratke objave; linkovi ostaju odvojeni.', nothingSent:'Pregled ne šalje poruke.',
+      loadingError:'Podešavanja nisu učitana.', saveError:'Podešavanja nisu sačuvana.',
+      testTitle:'Probna poruka', testButton:'Pošalji probnu poruku',
+      testHelp:'Šalje jednu probnu poruku u ovaj kanal. Ne objavljuje dnevni pregled i ne menja automatsku dostavu.',
+      testConfirmDuplicate:'Ishod prethodnog testa nije poznat. Novi pokušaj može poslati duplikat. Ipak poslati novu probnu poruku?',
+      testSending:'Šalje se jedna probna poruka…', testSent:'Viber je potvrdio prijem probne poruke.',
+      testRejected:'Viber je odbio probnu poruku. Automatsko ponavljanje neće biti izvršeno.',
+      testUnknown:'Ishod probne poruke nije potvrđen. Podešavanja su osvežena; novi pokušaj može poslati duplikat.',
+      testUnknownNoRefresh:'Ishod probne poruke nije potvrđen, a stanje nije osveženo. Ne šaljite test ponovo dok ne proverite status.',
+      testSendingState:'Probna poruka se još obrađuje. Osvežite stanje pre novog slanja.',
+      testConflict:'Podešavanja su promenjena. Stanje je osveženo; test nije automatski ponovljen.',
+      testConflictNoRefresh:'Podešavanja su promenjena, ali stanje nije osveženo. Test nije ponovljen; osvežite stranicu pre novog pokušaja.',
+      testError:'Ishod probne poruke nije potvrđen. Proverite stanje pre novog pokušaja.',
+      testUnavailable:'Nije moguće napraviti ID probne poruke. Poruka nije poslata.',
+      noTest:'Još nema probnih poruka.', testState_sent:'Poslato i potvrđeno',
+      testState_rejected:'Odbijeno', testState_unknown:'Ishod nije potvrđen', testState_sending:'Slanje je u toku',
+      conflict:'Podešavanja su promenjena drugde. Osvežite ih pre novog pokušaja.', tokenSaved:'Token je sačuvan. Proverite kanal pre povezivanja.',
+      tokenSaveUnknown:'Ishod čuvanja tokena nije potvrđen. Osvežite status pre novog pokušaja.', verified:'Kanal je proveren.',
+      toggleRejected:'Izmena je odbijena (HTTP 422). Podešavanja su osvežena; proverite stanje pre novog pokušaja.',
+      toggleRejectedNoRefresh:'Izmena je odbijena (HTTP 422), ali podešavanja nisu osvežena. Osvežite stanje pre nove radnje.',
+      toggleUnknown:'Ishod izmene nije potvrđen (HTTP {status}). Podešavanja su osvežena; proverite stanje pre novog pokušaja.',
+      toggleUnknownNoRefresh:'Ishod izmene nije potvrđen (HTTP {status}). Podešavanja nisu osvežena; ručno proverite stanje pre novog pokušaja.',
+      conflictNoRefresh:'Podešavanja su promenjena drugde, ali nisu ponovo učitana. Osvežite stanje pre novog pokušaja.',
+      verifyError:'Provera kanala nije potvrđena.', connected:'Webhook je registrovan. Sačekajte potvrdu dolaznog callback-a.',
+      connectError:'Webhook nije potvrđeno povezan.', enabled:'Viber dostava je uključena za nova izdanja.', disabled:'Viber dostava je isključena.',
+      previewError:'Pregled nije učitan.', selectSender:'Izaberite superadmin pošiljaoca',
+      senderRequired:'Izaberite pošiljaoca pa ponovo proverite kanal.', notVerified:'Kanal treba proveriti trenutnim tokenom.',
+      webhookPending:'Čeka se potvrda callback-a.', ready:'Spremno', enabledStatus:'Uključeno', disabledStatus:'Isključeno',
+      verifiedAt:'Proveren', enabledFrom:'Uključeno od', lastDelivery:'Poslednja dostava', noDelivery:'Još nema dostava',
+      part:'delova', partUnit:'UTF-16 jedinica', byteUnit:'JSON bajtova', previewPart:'Deo', budget:'Budžet',
+      previewIdRequired:'Unesite ID izdanja.', noSend:'Ova stranica ne šalje poruke.', retryLoad:'Pokušaj ponovo', errorStatus:'Status nije dostupan.'
+    }
+  };
+  window.viberSettingsText = (key: string): string => viberLabels[locale][key] || key;
   const nativeFetch = window.fetch.bind(window);
   window.serbianCountForm = (number: number, one: string, few: string, many: string): string => {
     const n = Math.abs(Math.trunc(Number(number) || 0));

@@ -125,7 +125,7 @@ func (s *Service) prune(now time.Time) {
 	}
 }
 func supported(op string) bool {
-	return op == "summary_status" || op == "summaries_generate" || op == "digest_prepare" || op == "digest_publish" || op == "serbian_digest_retry" || op == "stats_publish" || op == "media_refresh" || op == "source_test" || op == "backup"
+	return op == "summary_status" || op == "summaries_generate" || op == "digest_prepare" || op == "digest_publish" || op == "serbian_digest_retry" || op == "viber_digest_delivery" || op == "stats_publish" || op == "media_refresh" || op == "source_test" || op == "backup"
 }
 func (s *Service) Post(w http.ResponseWriter, r *http.Request) {
 	if !s.auth(w, r) {
@@ -314,7 +314,7 @@ func (s *Service) run(ctx context.Context, k string, rec *record) {
 		if errors.Is(err, context.Canceled) || errors.Is(ctx.Err(), context.Canceled) {
 			code = "stale_fence"
 		}
-		if req.Operation == "digest_publish" || req.Operation == "serbian_digest_retry" {
+		if req.Operation == "digest_publish" || req.Operation == "serbian_digest_retry" || req.Operation == "viber_digest_delivery" {
 			code = "external_outcome_unknown"
 		}
 		rec.code = &code

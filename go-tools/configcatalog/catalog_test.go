@@ -335,7 +335,7 @@ func TestFullExampleCoversProductionNames(t *testing.T) {
 		t.Fatal(err)
 	}
 	for _, e := range entries {
-		if strings.HasPrefix(e.Store, "test/fixture") || strings.HasPrefix(e.Store, "operator/CI") || e.Class == "compose_output" {
+		if strings.HasPrefix(e.Store, "test/fixture") || strings.HasPrefix(e.Store, "operator/CI") || e.Class == "compose_output" || e.Class == "database_setting" {
 			continue
 		}
 		if !strings.Contains(string(template), "# "+e.Key+"=") {
@@ -348,6 +348,27 @@ func TestFullExampleCoversProductionNames(t *testing.T) {
 			t.Errorf("full example contains an active assignment")
 		}
 	}
+}
+
+func TestViberSettingsCatalogDescribesPersistedSetting(t *testing.T) {
+	b, err := os.ReadFile("catalog.json")
+	if err != nil {
+		t.Fatal(err)
+	}
+	var entries []entry
+	if err = json.Unmarshal(b, &entries); err != nil {
+		t.Fatal(err)
+	}
+	for _, e := range entries {
+		if e.Key != "viber_settings" {
+			continue
+		}
+		if e.Class != "database_setting" || !strings.Contains(e.Store, "news.settings") || len(e.ManagedRoles) != 0 {
+			t.Fatalf("Viber settings must be catalogued as persisted application data, got %+v", e)
+		}
+		return
+	}
+	t.Fatal("Viber persisted setting is missing from the catalog")
 }
 
 func TestDiscoverHelpersAndTableEntries(t *testing.T) {

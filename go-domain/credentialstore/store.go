@@ -27,7 +27,9 @@ type Store struct {
 	KeyID, InstallationID string
 }
 
-func validProvider(p string) bool { return p == "gemini" || p == "openai" || p == "telegram" }
+func validProvider(p string) bool {
+	return p == "gemini" || p == "openai" || p == "telegram" || p == "viber"
+}
 func (s *Store) valid(provider string) bool {
 	return s != nil && s.Pool != nil && len(s.Key) == 32 && s.KeyID != "" && s.InstallationID != "" && validProvider(provider)
 }

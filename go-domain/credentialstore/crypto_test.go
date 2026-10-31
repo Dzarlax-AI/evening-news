@@ -48,3 +48,9 @@ func TestRejectInvalidKeyAndNonce(t *testing.T) {
 		t.Fatal("accepted nonce")
 	}
 }
+
+func TestViberProviderAllowed(t *testing.T) {
+	if !validProvider("viber") || validProvider("viber-other") {
+		t.Fatal("provider allowlist")
+	}
+}

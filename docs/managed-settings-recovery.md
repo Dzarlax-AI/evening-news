@@ -10,16 +10,16 @@ The SQL allowlist in [export-settings.sql](../deploy/recovery/export-settings.sq
 
 - Sources: IDs, name/type/URL, enabled flag, interval and supported configuration fields. Collection offsets/hashes/acknowledgements, last fetch/success/error and error counts are reset. `source_collection_state` is not copied.
 - Categories and category mappings; extraction patterns explicitly marked `manual` or `user`, including their success/failure counters needed by the existing eligibility/rate filter. Other automatic learning caches/statistics are disposable.
-- AI provider/model settings, operational settings and Telegram destination settings, with their revisions. Job-specific setting snapshots and unrelated keys are excluded.
+- AI provider/model settings, operational settings, Telegram destination settings and Viber channel configuration, with their revisions. Encrypted provider credentials remain in the existing credential section. Job-specific setting snapshots and unrelated keys are excluded.
 - Installation identity, administrator hash/revision, integration credential envelopes (including null-envelope deleted-key revisions), and the matching domain encryption key/key ID. One-time setup tokens are never restored.
 - Logical schedules, including calendars/timezones, keys, operations, targets and payloads. Live dispatch/outbox/occurrences, old due instants and leases are excluded.
 - Exact image digests/source revision, schema revision, current Compose, role/grant/search-path metadata, private role manifests and the adopted setup completion marker.
 
-Articles, editions, prior Telegram delivery receipts, jobs, execution runs, logs, caches, PostgreSQL data directories and browser cookies/profile are not included. RSS/channel history may no longer be available. The aim is to resume collection, not reproduce every past article. Previously sent Telegram messages remain outside this archive; delivery therefore stays disabled until an operator deliberately enables it.
+Articles, editions, prior Telegram or Viber delivery receipts, Viber webhook acknowledgements, jobs, execution runs, logs, caches, PostgreSQL data directories and browser cookies/profile are not included. RSS/channel history may no longer be available. The aim is to resume collection, not reproduce every past article. Previously sent messages remain outside this archive; delivery stays disabled until an operator deliberately enables it. Restored Viber channel identity is unverified: webhook readiness, verification time, verified credential revision and enablement time are cleared, and the channel must be verified and explicitly enabled again.
 
 ## Preconditions and trust boundary
 
-Use the exact reviewed application revision that produced the copy. The recipe currently exports schema revision 018 and accepts settings exports from revisions 016 and 018 with schema `news`; the scheduler uses `scheduler_service`. Migration 019 adds runtime retry metadata only; it does not change this settings export format. An upgrade is a separate step after recovery acceptance.
+Use the exact reviewed application revision that produced the copy. The recipe exports settings schema revision 020 and accepts settings exports from revisions 016, 018 and 020 with schema `news`; the scheduler uses `scheduler_service`. Migration 020 adds Viber delivery state, which is deliberately excluded from this settings-only archive. Older exports without Viber settings remain supported. An upgrade is a separate step after recovery acceptance.
 
 Tools: Bash, Docker Compose v2 or newer, `psql` matching the server major (16 or 17), `jq`, SHA-256 tooling, tar and [age](https://github.com/FiloSottile/age). Verify tool versions and available space before maintenance. Do not install tools or restart infrastructure as an implicit part of backup. The recipe has no dependency on a new always-running service.
 
@@ -86,7 +86,7 @@ PGSERVICE=scheduler_source psql -XqAt -v ON_ERROR_STOP=1 \
 }
 # Reject missing identity, empty admin, unknown format or oversized output.
 test "$(wc -c < "$NEWS_STAGE/settings.json")" -le 16777216
-jq -e '.format == "news-settings-v1" and (.schema_version == 16 or .schema_version == 18) and
+jq -e '.format == "news-settings-v1" and (.schema_version == 16 or .schema_version == 18 or .schema_version == 20) and
   (.identity.installation_id | test("^[a-f0-9]{32}$")) and
   (.managed_admin | length == 1)' "$NEWS_STAGE/settings.json" >/dev/null
 
@@ -126,7 +126,7 @@ roles.json
 RESTORE.md
 ```
 
-Create `manifest.json` with format `settings-recovery-v1`, the source installation ID, profile `adopted-native-external`, schema revision matching `settings.json` (18 for a current export), UTC time, source revision/image digests, and the exact byte size/SHA-256 of every other entry. The manifest itself must not contain the archive's own digest. Include it inside the encrypted payload. Read checksums locally into the manifest; never print the files to create a report. Refuse unknown/missing entries and an unexpected identity before encryption.
+Create `manifest.json` with format `settings-recovery-v1`, the source installation ID, profile `adopted-native-external`, schema revision matching `settings.json` (20 for a current export), UTC time, source revision/image digests, and the exact byte size/SHA-256 of every other entry. The manifest itself must not contain the archive's own digest. Include it inside the encrypted payload. Read checksums locally into the manifest; never print the files to create a report. Refuse unknown/missing entries and an unexpected identity before encryption.
 
 ```bash
 # Use an explicit allowlist, not tar of an entire deployment directory.
@@ -184,9 +184,11 @@ PGSERVICE=news_target psql -XqAt -v ON_ERROR_STOP=1 \
 }
 ```
 
-The recipe materializes all seven operational settings before assigning a revision. Saved fields win; missing fields use the matching background manifest’s NEWS_LIMIT_* values, then the application/adoption defaults (limits off, 50 total, 50 per source, one day, no date cutoff, processing on). A partial old set is repaired only in the fresh target, never written back to the source. The complete set is range/date/type validated; invalid input rolls back the transaction. Delivery is always forced off and the operational revision advances.
+The recipe materializes all seven operational settings before assigning a revision. Saved fields win; missing fields use the matching background manifest’s NEWS_LIMIT_* values, then the application/adoption defaults (limits off, 50 total, 50 per source, one day, no date cutoff, processing on). A partial old set is repaired only in the fresh target, never written back to the source. The complete set is range/date/type validated; invalid input rolls back the transaction. Delivery is always forced off and the operational revision advances. If Viber settings are present, their exact `appsettings.Viber` JSON shape is validated before import; channel identifiers are preserved while delivery and webhook verification state are reset and the settings revision advances.
 
 The recipe imports explicit columns in dependency order, resets source cursors/error state, restores sequences, excludes setup tokens and histories, and commits with `maintenance_mode=true` and delivery disabled. It rejects populated targets, unknown format/version, mismatched identity or another active target connection. A repeat is refused rather than merged into live configuration. Do not remove a guard to import over an existing installation. If import fails, keep the new target inactive; investigate and rebuild a fresh target instead of applying ad hoc partial SQL.
+
+This settings-only recipe resets Viber verification and delivery state. A separate full local volume restore preserves the database snapshot, including Viber settings and delivery history. Before explicitly running `newsctl resume`, inspect Viber settings through the authenticated admin page and confirm `delivery_enabled` is false; if it is enabled, turn it off and reload the settings before resuming. Review any incomplete or unknown Viber deliveries separately. Do not manually replay them.
 
 ### Reattach private state and validate
 
@@ -196,7 +198,7 @@ Generate a new web JWT signing secret privately to invalidate old sessions; keep
 
 Use the existing native browser/egress only after explicit activation approval. For a rehearsal use synthetic tokens/endpoints and deny all external egress. Do not start a cloned stack with production provider credentials, Telegram destinations or an internet route. No real provider request or Telegram test is needed: domain-local credential decryption and authenticated configuration reads are sufficient.
 
-Verify source/category/mapping counts and values, administrator state, AI/provider configuration, Telegram settings, source configuration reset and role-denial boundaries. Articles, editions, queues and receipts must be empty. Wrong key/installation ID must fail credential decryption. A database dump without the matching private state is not a valid copy.
+Verify source/category/mapping counts and values, administrator state, AI/provider configuration, Telegram settings, restored-but-disabled/unverified Viber settings and encrypted Viber credential recovery, source configuration reset and role-denial boundaries. Articles, editions, queues and Telegram/Viber receipts must be empty. Wrong key/installation ID must fail credential decryption. A database dump without the matching private state is not a valid copy.
 
 ### Recreate schedules without replay
 
@@ -212,6 +214,6 @@ The operator explicitly releases maintenance and authorizes the first collection
 
 ## Verification and limits
 
-The isolated recipe gate is `TestSettingsRecoveryRecipes` in `go-domain/recovery/settings_recipe_test.go`. It requires `psql` and an explicitly named loopback `settings_recovery_fixture` database via `NEWS_SETTINGS_RECOVERY_TEST_URL`. It creates/drops only uniquely named test databases, runs the actual published SQL files, and uses synthetic source/admin/provider settings. Never use a shared or production URL.
+The isolated recipe gate is `TestSettingsRecoveryRecipes` in `go-domain/recovery/settings_recipe_test.go`. It requires `psql` and an explicitly named loopback `settings_recovery_fixture` or `viber_fixture` database via `NEWS_SETTINGS_RECOVERY_TEST_URL`. It creates/drops only uniquely named test databases, runs the actual published SQL files, and uses synthetic source/admin/provider settings. Never use a shared or production URL.
 
 Run it against PostgreSQL 16 and 17 before accepting changes. Unit tests for credentialstore/recovery cover ciphertext/identity and encrypted bundle failures separately. Full native-browser/external-server recovery is still an operator workflow; this procedure does not add unsupported functionality to `newsctl`. Actual production backup and restoration, off-host destination setup, automatic scheduling/retention, and browser infrastructure recovery require separate authorization.

@@ -16,7 +16,7 @@ type credentialWrite struct {
 
 func (s *Server) credential(w http.ResponseWriter, r *http.Request) {
 	provider := r.PathValue("provider")
-	if provider != "gemini" && provider != "openai" && provider != "telegram" {
+	if provider != "gemini" && provider != "openai" && provider != "telegram" && provider != "viber" {
 		reject(w, 422, "Invalid provider")
 		return
 	}

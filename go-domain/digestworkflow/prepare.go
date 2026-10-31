@@ -159,14 +159,88 @@ func (w Workflow) Prepare(ctx context.Context, cache *PreparedCache, id Identity
 
 // PrepareLocalized binds each ready locale to its paired edition and pinned destination.
 func (w Workflow) PrepareLocalized(ctx context.Context, cache *PreparedCache, id Identity, now time.Time, destinations map[string]string) (string, error) {
-	p, err := w.loadPrepared(ctx, id, now, "ru", "")
+	p, err := w.Publication(ctx, id, now)
+	if err != nil {
+		return "", err
+	}
+	return w.PreparePublication(ctx, cache, p, destinations)
+}
+
+// Publication selects and validates the exact edition once for all delivery channels.
+func (w Workflow) Publication(ctx context.Context, id Identity, now time.Time) (Prepared, error) {
+	tx, err := w.Pool.Begin(ctx)
+	if err != nil {
+		return Prepared{}, err
+	}
+	defer tx.Rollback(ctx)
+	if err = w.Fence.Validate(ctx, tx); err != nil {
+		return Prepared{}, err
+	}
+	key := fmt.Sprintf("managed_digest_publication:%s:%d", id.JobID, id.Attempt)
+	var previous []byte
+	err = tx.QueryRow(ctx, `SELECT value FROM settings WHERE key=$1`, key).Scan(&previous)
+	var selection struct {
+		JobID         string    `json:"job_id"`
+		Attempt       int       `json:"attempt_generation"`
+		EditionID     string    `json:"russian_edition_id"`
+		PublicationAt time.Time `json:"publication_at"`
+	}
+	if err == nil {
+		if json.Unmarshal(previous, &selection) != nil || selection.JobID != id.JobID || selection.Attempt != id.Attempt || selection.EditionID == "" {
+			return Prepared{}, ErrInvalid
+		}
+	} else if !errors.Is(err, pgx.ErrNoRows) {
+		return Prepared{}, err
+	}
+	var editionID string
+	var snapshotRaw, editionRaw []byte
+	if selection.EditionID != "" {
+		err = tx.QueryRow(ctx, `SELECT id::text,snapshot,edition FROM editorial_digest_editions WHERE id=$1::uuid AND locale='ru'`, selection.EditionID).Scan(&editionID, &snapshotRaw, &editionRaw)
+	} else {
+		err = tx.QueryRow(ctx, `SELECT id::text,snapshot,edition FROM editorial_digest_editions WHERE edition_date=$1::date AND locale='ru' ORDER BY created_at DESC,id DESC LIMIT 1`, now.UTC().Format("2006-01-02")).Scan(&editionID, &snapshotRaw, &editionRaw)
+	}
+	if errors.Is(err, pgx.ErrNoRows) {
+		return Prepared{}, ErrNotReady
+	}
+	if err != nil {
+		return Prepared{}, err
+	}
+	var snapshot editorial.Snapshot
+	var edition editorial.Edition
+	if json.Unmarshal(snapshotRaw, &snapshot) != nil || json.Unmarshal(editionRaw, &edition) != nil || editorial.ValidateEdition(snapshot, "ru", edition) != nil {
+		return Prepared{}, ErrInvalid
+	}
+	if selection.EditionID == "" {
+		selection.JobID = id.JobID
+		selection.Attempt = id.Attempt
+		selection.EditionID = editionID
+		selection.PublicationAt = now.UTC()
+		raw, _ := json.Marshal(selection)
+		if _, err = tx.Exec(ctx, `INSERT INTO settings(key,value,updated_at) VALUES($1,$2::jsonb,now())`, key, raw); err != nil {
+			return Prepared{}, err
+		}
+	}
+	if err = tx.Commit(ctx); err != nil {
+		return Prepared{}, err
+	}
+	return Prepared{Identity: id, EditionID: editionID, Edition: edition}, nil
+}
+
+// PreparePublication retains the selected edition across midnight and concurrent new editions.
+func (w Workflow) PreparePublication(ctx context.Context, cache *PreparedCache, p Prepared, destinations map[string]string) (string, error) {
+	date, err := time.Parse("2006-01-02", p.Edition.Date)
+	if err != nil {
+		return "", ErrInvalid
+	}
+	// Telegram-only rendering validation happens after other channels have their durable intent.
+	p, err = w.loadPrepared(ctx, p.Identity, date, "ru", p.EditionID)
 	if err != nil {
 		return "", err
 	}
 	p.Destination = destinations["ru"]
 	_, p.DestinationPinned = destinations["ru"]
 	if destination := destinations["sr-Latn"]; destination != "" {
-		sr, err := w.loadPrepared(ctx, id, now, "sr-Latn", serbianEditionID(p.EditionID))
+		sr, err := w.loadPrepared(ctx, p.Identity, date, "sr-Latn", serbianEditionID(p.EditionID))
 		if err == nil {
 			if !editorial.SameEditorialPlan(p.Edition, sr.Edition) {
 				return "", ErrInvalid

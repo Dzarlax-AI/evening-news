@@ -90,10 +90,10 @@ func TestManagedRolePrivileges(t *testing.T) {
 		}
 	}
 	for name, queries := range map[string][]string{
-		"news_web_runtime":        {"SELECT * FROM integration_credentials", "UPDATE background_worker_status SET generation=99", "UPDATE articles SET content='changed'"},
+		"news_web_runtime":        {"SELECT * FROM viber_test_receipts", "SELECT * FROM viber_digest_deliveries", "SELECT enqueue_viber_digest_delivery()", "SELECT * FROM integration_credentials", "UPDATE background_worker_status SET generation=99", "UPDATE articles SET content='changed'"},
 		"news_domain_runtime":     {"SELECT * FROM managed_admin", "SELECT * FROM setup_tokens", "UPDATE background_worker_status SET generation=99", "UPDATE background_jobs SET state='failed'", "DELETE FROM articles"},
-		"news_worker_runtime":     {"SELECT * FROM integration_credentials", "SELECT * FROM managed_admin", "UPDATE articles SET content='changed'"},
-		"news_execution_runtime":  {"SELECT * FROM integration_credentials", "UPDATE background_worker_status SET generation=99", "INSERT INTO articles(title,url) VALUES('x','https://fixture.invalid')"},
+		"news_worker_runtime":     {"SELECT * FROM viber_test_receipts", "SELECT * FROM viber_digest_parts", "SELECT * FROM integration_credentials", "SELECT * FROM managed_admin", "UPDATE articles SET content='changed'"},
+		"news_execution_runtime":  {"SELECT * FROM viber_digest_parts", "SELECT enqueue_viber_digest_delivery()", "SELECT * FROM integration_credentials", "UPDATE background_worker_status SET generation=99", "INSERT INTO articles(title,url) VALUES('x','https://fixture.invalid')"},
 		"news_ingestion_runtime":  {"SELECT * FROM integration_credentials", "UPDATE background_jobs SET state='failed'", "UPDATE articles SET summary='changed'"},
 		"news_processing_runtime": {"SELECT * FROM integration_credentials", "UPDATE background_jobs SET state='failed'", "DELETE FROM articles"},
 	} {
@@ -112,10 +112,74 @@ func TestManagedRolePrivileges(t *testing.T) {
 			})
 		}
 	}
+
+	// Reserved snapshots are producer-owned even though web can edit settings.
+	for _, prefix := range []string{"managed_digest_publication:", "managed_job_config:"} {
+		protectedKey := prefix + "fixture"
+		ordinaryKey := "ordinary_fixture_" + strings.TrimSuffix(prefix, ":")
+		if _, err = pool.Exec(ctx, `INSERT INTO settings(key,value) VALUES($1,'{}'),($2,'{}')`, protectedKey, ordinaryKey); err != nil {
+			t.Fatal(err)
+		}
+		for _, tc := range []struct {
+			name, sql string
+			args      []any
+		}{
+			{"insert", `INSERT INTO settings(key,value) VALUES($1,'{}')`, []any{prefix + "forged"}},
+			{"update", `UPDATE settings SET value='{"forged":true}' WHERE key=$1`, []any{protectedKey}},
+			{"delete", `DELETE FROM settings WHERE key=$1`, []any{protectedKey}},
+			{"rename_from", `UPDATE settings SET key=$2 WHERE key=$1`, []any{protectedKey, ordinaryKey + "_renamed"}},
+			{"rename_to", `UPDATE settings SET key=$2 WHERE key=$1`, []any{ordinaryKey, prefix + "renamed"}},
+		} {
+			t.Run("web/"+prefix+tc.name, func(t *testing.T) {
+				tx, err := pool.Begin(ctx)
+				if err != nil {
+					t.Fatal(err)
+				}
+				defer tx.Rollback(ctx)
+				if _, err = tx.Exec(ctx, "SET LOCAL ROLE "+ident(roles["news_web_runtime"])); err != nil {
+					t.Fatal(err)
+				}
+				_, err = tx.Exec(ctx, tc.sql, tc.args...)
+				requireDenied(t, err)
+			})
+		}
+		t.Run("domain/"+prefix, func(t *testing.T) {
+			tx, err := pool.Begin(ctx)
+			if err != nil {
+				t.Fatal(err)
+			}
+			defer tx.Rollback(ctx)
+			if _, err = tx.Exec(ctx, "SET LOCAL ROLE "+ident(roles["news_domain_runtime"])); err != nil {
+				t.Fatal(err)
+			}
+			if _, err = tx.Exec(ctx, `INSERT INTO settings(key,value) VALUES($1,'{}')`, prefix+"producer"); err != nil {
+				t.Fatal(err)
+			}
+			if _, err = tx.Exec(ctx, `UPDATE settings SET value='{"updated":true}' WHERE key=$1`, protectedKey); err != nil {
+				t.Fatal(err)
+			}
+			if _, err = tx.Exec(ctx, `DELETE FROM settings WHERE key=$1`, protectedKey); err != nil {
+				t.Fatal(err)
+			}
+		})
+	}
+	t.Run("web/ordinary_settings_dml", func(t *testing.T) {
+		tx, err := pool.Begin(ctx)
+		if err != nil {
+			t.Fatal(err)
+		}
+		defer tx.Rollback(ctx)
+		if _, err = tx.Exec(ctx, "SET LOCAL ROLE "+ident(roles["news_web_runtime"])); err != nil {
+			t.Fatal(err)
+		}
+		if _, err = tx.Exec(ctx, `INSERT INTO settings(key,value) VALUES('ordinary_web_fixture','{}'); UPDATE settings SET value='{"ok":true}' WHERE key='ordinary_web_fixture'; DELETE FROM settings WHERE key='ordinary_web_fixture'`); err != nil {
+			t.Fatal(err)
+		}
+	})
 	for name, query := range map[string]string{
 		"news_web_runtime":       "SELECT * FROM managed_admin; SELECT * FROM installation_state; SELECT * FROM sources; SELECT * FROM editorial_digest_editions; SELECT j.id FROM background_jobs j JOIN background_job_idempotency_keys k ON k.job_id=j.id FOR UPDATE; SELECT occurrence_id FROM scheduler_occurrence_receipts FOR UPDATE",
-		"news_domain_runtime":    "SELECT * FROM integration_credentials; SELECT * FROM background_worker_status FOR UPDATE; SELECT * FROM article_processing_items FOR UPDATE",
-		"news_worker_runtime":    "SELECT * FROM background_worker_status FOR UPDATE; SELECT * FROM background_jobs FOR UPDATE",
+		"news_domain_runtime":    "SELECT * FROM viber_test_receipts; SELECT * FROM viber_digest_deliveries; SELECT * FROM viber_digest_parts; SELECT * FROM viber_channel_leases; SELECT * FROM integration_credentials; SELECT * FROM background_worker_status FOR UPDATE; SELECT * FROM article_processing_items FOR UPDATE",
+		"news_worker_runtime":    "SELECT enqueue_viber_digest_delivery(); SELECT * FROM background_worker_status FOR UPDATE; SELECT * FROM background_jobs FOR UPDATE",
 		"news_execution_runtime": "SELECT * FROM background_worker_status FOR UPDATE; SELECT * FROM background_jobs FOR UPDATE",
 	} {
 		t.Run(name+"/allowed", func(t *testing.T) {

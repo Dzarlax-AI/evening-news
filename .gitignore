@@ -84,3 +84,4 @@ scripts/restore.sh
 # Generated frontend assets and compiler dependencies
 /web/node_modules/
 /web/static/js/locale.js
+/web/static/js/viber-settings.js

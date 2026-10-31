@@ -61,6 +61,8 @@ func (s *Server) executeDigest(ctx context.Context, v digestInput, f authority.F
 	deadline, _ := time.Parse(time.RFC3339Nano, v.Envelope.Deadline)
 	identity := digestworkflow.Identity{JobID: v.Envelope.JobID, Attempt: v.Envelope.Attempt, DomainInstanceID: v.DomainInstanceID, Deadline: deadline}
 	switch v.Operation {
+	case "viber_digest_delivery":
+		return s.executeViberDelivery(ctx, v, f)
 	case "summary_status":
 		n, e := wf.Count(ctx, time.Now())
 		return map[string]any{"summaries_count": n}, e
@@ -135,6 +137,16 @@ func (s *Server) executeDigest(ctx context.Context, v digestInput, f authority.F
 		}
 		return map[string]any{"status": status, "success": published["success"], "parts_sent": published["parts_sent"]}, nil
 	case "digest_prepare":
+		publication, prepareErr := wf.Publication(ctx, identity, time.Now())
+		if prepareErr != nil {
+			return nil, prepareErr
+		}
+		// A durable request precedes Telegram-specific validation and external I/O.
+		viberBindingStatus := "prepared"
+		if prepareErr = s.bindViberPublication(ctx, v, f, pinned, publication.EditionID); prepareErr != nil {
+			// Admission reconstructs a missing request from the shared pinned publication.
+			viberBindingStatus = "retry_pending"
+		}
 
 		destinations := map[string]string{}
 		if pinned != nil && pinned.Telegram != nil {
@@ -146,8 +158,8 @@ func (s *Server) executeDigest(ctx context.Context, v digestInput, f authority.F
 				destinations["sr-Latn"] = pinned.Telegram.SerbianChatID
 			}
 		}
-		token, e := wf.PrepareLocalized(ctx, &s.digest.prepared, identity, time.Now(), destinations)
-		return map[string]any{"prepared_token": token}, e
+		token, e := wf.PreparePublication(ctx, &s.digest.prepared, publication, destinations)
+		return map[string]any{"prepared_token": token, "viber_binding_status": viberBindingStatus}, e
 	case "digest_publish":
 		var input struct {
 			Token string `json:"prepared_token"`

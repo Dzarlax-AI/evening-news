@@ -31,6 +31,13 @@ func RegisterBackend(mux *http.ServeMux, service *auth.Service, ops backend.Oper
 	admin("GET /api/v1/configuration/readiness", h.configuration)
 	admin("GET /api/v1/configuration/telegram", h.configuration)
 	admin("PUT /api/v1/configuration/telegram", h.configuration)
+	admin("GET /api/v1/configuration/viber", h.configuration)
+	admin("PUT /api/v1/configuration/viber", h.configuration)
+	admin("POST /api/v1/viber/verify", h.viberOperation)
+	admin("POST /api/v1/viber/connect", h.viberOperation)
+	admin("POST /api/v1/viber/test", h.viberOperation)
+	admin("GET /api/v1/viber/preview", h.viberOperation)
+	mux.HandleFunc("POST /integrations/viber/webhook", h.viberWebhook)
 	admin("GET /api/v1/configuration/operational", h.configuration)
 	admin("PUT /api/v1/configuration/operational", h.configuration)
 	admin("POST /api/v1/categories/ai-category-analysis", h.analyzeCategories)
@@ -79,7 +86,7 @@ func (h *backendHandler) credential(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	provider := r.PathValue("provider")
-	if provider != "gemini" && provider != "openai" && provider != "telegram" {
+	if provider != "gemini" && provider != "openai" && provider != "telegram" && provider != "viber" {
 		writeProblem(w, 422, "Invalid provider")
 		return
 	}

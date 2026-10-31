@@ -28,12 +28,21 @@ type Server struct {
 	Credentials                                      *credentialstore.Store
 	Worker, AllowCreateAll                           bool
 	BackupRoot, TelegramToken, ChatID, ServiceChatID string
+	ViberSiteBase                                    string
+	ViberClient                                      *http.Client
 }
 
 func (s *Server) Handler() http.Handler {
 	mux := http.NewServeMux()
 	mux.HandleFunc("GET /internal/web/v1/configuration/telegram", s.telegramConfiguration)
 	mux.HandleFunc("PUT /internal/web/v1/configuration/telegram", s.telegramConfiguration)
+	mux.HandleFunc("GET /internal/web/v1/configuration/viber", s.viberConfiguration)
+	mux.HandleFunc("PUT /internal/web/v1/configuration/viber", s.viberConfiguration)
+	mux.HandleFunc("POST /internal/web/v1/viber/verify", s.viberVerify)
+	mux.HandleFunc("POST /internal/web/v1/viber/connect", s.viberConnect)
+	mux.HandleFunc("POST /internal/web/v1/viber/test", s.viberTest)
+	mux.HandleFunc("POST /internal/web/v1/viber/webhook", s.viberWebhook)
+	mux.HandleFunc("GET /internal/web/v1/viber/preview", s.viberPreview)
 	mux.HandleFunc("GET /internal/web/v1/configuration/operational", s.operationalConfiguration)
 	mux.HandleFunc("PUT /internal/web/v1/configuration/operational", s.operationalConfiguration)
 	mux.HandleFunc("GET /internal/web/v1/configuration/readiness", s.configurationReadiness)

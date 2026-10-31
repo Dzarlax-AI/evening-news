@@ -270,7 +270,7 @@ func run() error {
 		return errors.New("invalid ALLOW_CREATE_ALL")
 	}
 	worker := source.get("BACKGROUND_EXECUTION_MODE") != "embedded"
-	web := &webbackend.Server{Credentials: credentials, Guard: guard, Pool: pool, Runtime: runtime, Worker: worker, AllowCreateAll: allowCreateAll, TelegramToken: config.TelegramToken, ChatID: config.TelegramMain, ServiceChatID: config.TelegramService}
+	web := &webbackend.Server{Credentials: credentials, Guard: guard, Pool: pool, Runtime: runtime, Worker: worker, AllowCreateAll: allowCreateAll, TelegramToken: config.TelegramToken, ChatID: config.TelegramMain, ServiceChatID: config.TelegramService, ViberSiteBase: config.SiteBase}
 	mux.HandleFunc("GET /internal/v1/runtime-configuration", func(w http.ResponseWriter, r *http.Request) {
 		expected := "Bearer " + jobToken
 		given := r.Header.Get("Authorization")
