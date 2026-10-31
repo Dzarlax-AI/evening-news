@@ -7,6 +7,7 @@ import (
 	"time"
 
 	"github.com/Dzarlax-AI/evening-news/go-domain/analysis"
+	"github.com/Dzarlax-AI/evening-news/go-domain/digestworkflow"
 	ai "github.com/Dzarlax-AI/go-ai"
 	"github.com/Dzarlax-AI/go-ai/providers/gemini"
 	"github.com/Dzarlax-AI/go-ai/providers/openai"
@@ -80,7 +81,7 @@ func (p *managedProvider) Generate(ctx context.Context, req ai.Request) (ai.Resp
 				timeout = 40 * time.Second
 			}
 			if req.Purpose == "digest" {
-				timeout = 60 * time.Second
+				timeout = digestworkflow.GenerationTimeout
 			}
 			attemptCtx, cancel := context.WithTimeout(ctx, timeout)
 			response, err := p.provider.Generate(attemptCtx, req)

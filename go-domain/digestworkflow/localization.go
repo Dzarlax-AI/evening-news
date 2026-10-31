@@ -347,7 +347,7 @@ func (w Workflow) generateLocalized(ctx context.Context, job string, attempt int
 	if existing && !admitted {
 		return 1, nil
 	}
-	providerCtx, cancel := context.WithTimeout(ctx, 60*time.Second)
+	providerCtx, cancel := generationContext(ctx)
 	defer cancel()
 	if !existing && sr != nil && admitted {
 		result, e := editorial.GenerateBilingual(providerCtx, ru, *sr, provider)
