@@ -78,6 +78,35 @@ func draftFor(ids []string, summaries map[string]string, serbian bool) map[strin
 	}
 	return map[string]any{"main_stories": []any{map[string]any{"title": title, "summary": summaries[ids[0]], "primary_article_id": ids[0], "article_ids": ids}}, "brief_stories": []any{}, "article_stories": items}
 }
+
+func TestRussianGenerationUsesBoundedProviderBudget(t *testing.T) {
+	pool := localizedPG(t)
+	ctx := context.Background()
+	cutoff := time.Now().UTC().Truncate(time.Microsecond)
+	_, err := pool.Exec(ctx, `INSERT INTO sources(id,name,source_type,url) VALUES(90002,'Fixture','rss','https://source.fixture/feed'); INSERT INTO categories(id,name,display_name) VALUES(90002,'fixture-category','Категория'); INSERT INTO articles(id,title,url,summary,source_id,fetched_at,processing_state) VALUES(90002,'Русский заголовок','https://source.fixture/2','Город начал строительство моста.',90002,$1,'completed'); INSERT INTO article_categories(article_id,category_id,confidence) VALUES(90002,90002,1)`, pgx.QueryExecModeSimpleProtocol, cutoff)
+	if err != nil {
+		t.Fatal(err)
+	}
+	calls := 0
+	provider := localeTestProvider(func(providerCtx context.Context, req ai.Request) (ai.Response, error) {
+		calls++
+		deadline, ok := providerCtx.Deadline()
+		if !ok || time.Until(deadline) < 179*time.Second || time.Until(deadline) > 181*time.Second || req.Purpose != "digest" {
+			t.Fatal("Russian generation did not receive the bounded digest budget")
+		}
+		raw, err := json.Marshal(draftFor([]string{"90002"}, map[string]string{"90002": "Город начал строительство моста."}, false))
+		if err != nil {
+			t.Fatal(err)
+		}
+		return ai.Response{Status: ai.Complete, Text: string(raw), Model: "fixture", Provider: "fixture"}, nil
+	})
+	wf := Workflow{Pool: pool, Fence: localeTestFence{}, SiteBase: "https://news.fixture", Provider: editorial.ProviderConfig{Provider: provider, Model: "fixture"}}
+	n, err := wf.Generate(ctx, "10000000-0000-4000-8000-000000000002", 1, "20000000-0000-4000-8000-000000000001", cutoff)
+	if err != nil || n != 1 || calls != 1 {
+		t.Fatalf("Russian generation count=%d calls=%d error=%v", n, calls, err)
+	}
+}
+
 func TestLocalizedEditionPartialFrozenRetryAndFreshJob(t *testing.T) {
 	pool := localizedPG(t)
 	ctx := context.Background()
@@ -90,7 +119,11 @@ func TestLocalizedEditionPartialFrozenRetryAndFreshJob(t *testing.T) {
 	srSummaries := map[string]string{"90001": "Grad je počeo izgradnju mosta."}
 	ids := []string{"90001"}
 	calls := 0
-	provider := localeTestProvider(func(_ context.Context, r ai.Request) (ai.Response, error) {
+	provider := localeTestProvider(func(providerCtx context.Context, r ai.Request) (ai.Response, error) {
+		deadline, ok := providerCtx.Deadline()
+		if !ok || time.Until(deadline) < 179*time.Second || time.Until(deadline) > 181*time.Second {
+			t.Fatal("localized provider did not receive the full generation budget")
+		}
 		calls++
 		var output any
 		if calls == 1 {

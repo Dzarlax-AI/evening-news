@@ -46,7 +46,7 @@ func (w Workflow) Generate(ctx context.Context, job string, attempt int, operati
 			return 0, err
 		}
 	}
-	providerCtx, cancel := context.WithTimeout(ctx, 60*time.Second)
+	providerCtx, cancel := generationContext(ctx)
 	generation, err := editorial.Generate(providerCtx, snap, "ru", provider)
 	cancel()
 	if err != nil {

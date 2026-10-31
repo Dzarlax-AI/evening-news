@@ -5,8 +5,8 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
-	ai "github.com/Dzarlax-AI/go-ai"
 	"github.com/Dzarlax-AI/evening-news/go-domain/analysis"
+	ai "github.com/Dzarlax-AI/go-ai"
 	"io"
 	"net/http"
 	"strings"
@@ -123,9 +123,9 @@ func TestManagedProviderAttemptDeadlineAndCancellation(t *testing.T) {
 		purpose string
 		schema  json.RawMessage
 		seconds int
-	}{{"article", nil, 40}, {"text", nil, 30}, {"text", json.RawMessage(`{"type":"object","properties":{}}`), 40}, {"digest", nil, 60}} {
+	}{{"article", nil, 40}, {"text", nil, 30}, {"text", json.RawMessage(`{"type":"object","properties":{}}`), 40}, {"digest", nil, 180}} {
 		t.Run(tc.purpose+fmt.Sprint(tc.seconds), func(t *testing.T) {
-			base, cancel := context.WithTimeout(context.Background(), 2*time.Minute)
+			base, cancel := context.WithTimeout(context.Background(), 5*time.Minute)
 			defer cancel()
 			ctx, stop := context.WithCancel(base)
 			defer stop()
@@ -164,5 +164,18 @@ func TestRetryAfterCannotOutliveOperationDeadline(t *testing.T) {
 	_, err = s.generateWithSnapshot(ctx, snap, generateRequest{Mode: "text", Prompt: "fixture", Options: generateOptions{MaxTokens: 10}})
 	if err == nil || calls != 1 || time.Since(start) > time.Second/2 {
 		t.Fatalf("err=%v calls=%d", err, calls)
+	}
+}
+
+func TestManagedDigestHonorsEarlierJobDeadline(t *testing.T) {
+	fake := &deadlineProvider{seen: make(chan struct{})}
+	s := NewServer(Config{RPS: 100}, nil)
+	p := managedProvider{server: s, provider: fake, breaker: NewBreaker()}
+	ctx, cancel := context.WithTimeout(context.Background(), 200*time.Millisecond)
+	defer cancel()
+	jobDeadline, _ := ctx.Deadline()
+	_, err := p.Generate(ctx, ai.Request{Purpose: "digest"})
+	if !errors.Is(err, context.DeadlineExceeded) || !fake.deadline.Equal(jobDeadline) {
+		t.Fatal("digest attempt did not preserve the earlier job deadline")
 	}
 }
