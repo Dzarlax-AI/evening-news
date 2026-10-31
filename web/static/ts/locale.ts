@@ -47,7 +47,7 @@ interface Window {
       webhookPending:'Ожидается подтверждение callback.', ready:'Готово', enabledStatus:'Включена', disabledStatus:'Выключена',
       verifiedAt:'Проверен', enabledFrom:'Включена с', lastDelivery:'Последняя доставка', noDelivery:'Доставок пока нет',
       part:'частей', partUnit:'единиц UTF-16', byteUnit:'байт JSON', previewPart:'Часть', budget:'Лимит',
-      previewIdRequired:'Введите ID выпуска.', noSend:'Эта страница не отправляет сообщения.', retryLoad:'Повторить загрузку', errorStatus:'Состояние недоступно.'
+      previewIdRequired:'Введите ID выпуска.', noSend:'Предпросмотр не отправляет сообщения.', retryLoad:'Повторить загрузку', errorStatus:'Состояние недоступно.'
     },
     'sr-Latn': {
       heading:'Viber · Srpski', loading:'Učitavanje podešavanja…', overview:'Status veze', credential:'Token kanala', channel:'Kanal', sender:'Pošiljalac',
@@ -87,7 +87,7 @@ interface Window {
       webhookPending:'Čeka se potvrda callback-a.', ready:'Spremno', enabledStatus:'Uključeno', disabledStatus:'Isključeno',
       verifiedAt:'Proveren', enabledFrom:'Uključeno od', lastDelivery:'Poslednja dostava', noDelivery:'Još nema dostava',
       part:'delova', partUnit:'UTF-16 jedinica', byteUnit:'JSON bajtova', previewPart:'Deo', budget:'Budžet',
-      previewIdRequired:'Unesite ID izdanja.', noSend:'Ova stranica ne šalje poruke.', retryLoad:'Pokušaj ponovo', errorStatus:'Status nije dostupan.'
+      previewIdRequired:'Unesite ID izdanja.', noSend:'Pregled ne šalje poruke.', retryLoad:'Pokušaj ponovo', errorStatus:'Status nije dostupan.'
     }
   };
   window.viberSettingsText = (key: string): string => viberLabels[locale][key] || key;
