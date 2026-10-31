@@ -120,3 +120,10 @@ func editorialLocalizationMigration() migration {
 		return map[string]any{"localized_editions": true}, schemaSQL(ctx, tx, editorialLocalizationSQL)
 	}}
 }
+
+//go:embed sql/020.sql
+var viberSQL string
+
+func viberMigration() migration {
+	return fencedMigration("020_viber_digest_delivery", "Add durable Viber delivery", viberSQL, []string{"viber_publication_requests", "viber_digest_deliveries", "viber_digest_parts", "viber_test_receipts", "viber_channel_leases"}, "enqueue_viber_digest_delivery", map[string]any{"viber_digest_delivery": true})
+}

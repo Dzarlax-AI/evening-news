@@ -12,7 +12,7 @@ Originally written in Python, the application now runs on Go.
 - Full-text extraction with HTTP and optional native Cloak browser support.
 - Duplicate detection, content filtering, AI summaries, and categorization.
 - Russian and optional Serbian Latin articles and digests, with a shared editorial composition and separate delivery channels.
-- Telegram delivery and permanent digest pages on the website.
+- Telegram and Viber delivery for the saved Serbian digest, with independent delivery state and permanent digest pages on the website.
 - A searchable public reader with category/source filters, dark mode, and mobile layouts.
 - Russian/Serbian public, admin, login, and setup interfaces for providers, credentials, sources, categories, schedules, and processing limits.
 
@@ -22,7 +22,7 @@ Originally written in Python, the application now runs on Go.
 2. Extract full text where needed and filter duplicate or unsuitable content.
 3. Generate an article summary and categories with the selected AI provider.
 4. Build an editorial edition from the saved summaries, selecting main stories and grouping short items.
-5. Validate the edition, add links in code, save it, and deliver it to Telegram.
+5. Validate the edition, add links in code, save it, and deliver it to Telegram or, for the saved Serbian digest, independently to Viber.
 
 Headlines link to the article on this site. Website source labels link to the original publication; Telegram displays source names as plain text. Stored editions retain their article snapshot and delivery receipts. See [editorial digest contracts](docs/editorial-digests.md) and [digest delivery](docs/go-digest-delivery.md).
 
@@ -44,6 +44,7 @@ flowchart LR
     Sources["RSS, Telegram, and monitored pages"]
     Providers["Gemini or OpenAI"]
     Telegram["Telegram channel"]
+    Viber["Viber channel"]
 
     Reader --> Web
     Web <--> NewsDB
@@ -57,6 +58,7 @@ flowchart LR
     Domain <--> NewsDB
     Domain --> Providers
     Domain --> Telegram
+    Domain --> Viber
     Extractor --> Sources
     Extractor --> Browser
     Browser --> Egress
@@ -96,6 +98,7 @@ Configure everyday application settings through the web interface:
 
 - **AI:** Gemini/OpenAI credentials, active provider, and models for articles, digests, and auxiliary text.
 - **Telegram:** one protected bot token, Russian digest and service channels, and an optional separate Serbian digest channel.
+- **Viber:** an encrypted channel token, channel and sender IDs, and an HTTPS webhook verification. Restored Viber settings stay disabled until the channel is verified and explicitly enabled again.
 - **Sources and categories:** feeds, channel/page settings, categories, and mappings.
 - **Schedules:** collection and digest timing.
 - **Processing:** article limits, publication age/date filters, processing/delivery switches, and opt-in Serbian generation.

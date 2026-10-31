@@ -326,7 +326,7 @@ func validateReceipt(r domainReceipt, f execution.ExecutionContext, instance, op
 
 func allowedOperation(op string) bool {
 	switch op {
-	case "summary_status", "summaries_generate", "digest_prepare", "digest_publish", "serbian_digest_retry", "stats_publish", "media_refresh", "source_test", "backup":
+	case "summary_status", "summaries_generate", "digest_prepare", "digest_publish", "serbian_digest_retry", "viber_digest_delivery", "stats_publish", "media_refresh", "source_test", "backup":
 		return true
 	}
 	return false

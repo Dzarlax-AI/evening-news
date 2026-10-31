@@ -75,3 +75,8 @@ func (f Fence) Check(ctx context.Context) error {
 	}
 	return tx.Commit(ctx)
 }
+
+// ViberFenceIdentity ties Viber receipt mutations to this authenticated job.
+func (f Fence) ViberFenceIdentity() (string, int, string, json.RawMessage) {
+	return f.JobID, f.AttemptGeneration, f.Kind, f.Payload
+}

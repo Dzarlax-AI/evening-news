@@ -1080,6 +1080,54 @@
         ],
         "title": "ValidationError",
         "type": "object"
+      },
+      "ViberConfiguration": {
+        "type": "object",
+        "properties": {
+          "revision": {
+            "type": "integer"
+          },
+          "delivery_enabled": {
+            "type": "boolean"
+          },
+          "channel_id": {
+            "type": "string"
+          },
+          "channel_name": {
+            "type": "string"
+          },
+          "sender_id": {
+            "type": "string"
+          },
+          "credential_revision": {
+            "type": "integer"
+          },
+          "verified_credential_revision": {
+            "type": "integer"
+          },
+          "webhook_ready": {
+            "type": "boolean"
+          },
+          "verified_at": {
+            "type": "string",
+            "format": "date-time",
+            "nullable": true
+          },
+          "enabled_from": {
+            "type": "string",
+            "format": "date-time",
+            "nullable": true
+          }
+        },
+        "required": [
+          "revision",
+          "delivery_enabled",
+          "channel_id",
+          "sender_id",
+          "credential_revision",
+          "verified_credential_revision",
+          "webhook_ready"
+        ]
       }
     },
     "securitySchemes": {
@@ -5171,7 +5219,8 @@
               "enum": [
                 "gemini",
                 "openai",
-                "telegram"
+                "telegram",
+                "viber"
               ]
             }
           }
@@ -5190,7 +5239,8 @@
                       "enum": [
                         "gemini",
                         "openai",
-                        "telegram"
+                        "telegram",
+                        "viber"
                       ]
                     },
                     "revision": {
@@ -5239,7 +5289,8 @@
               "enum": [
                 "gemini",
                 "openai",
-                "telegram"
+                "telegram",
+                "viber"
               ]
             }
           }
@@ -5283,7 +5334,8 @@
                       "enum": [
                         "gemini",
                         "openai",
-                        "telegram"
+                        "telegram",
+                        "viber"
                       ]
                     },
                     "revision": {
@@ -5332,7 +5384,8 @@
               "enum": [
                 "gemini",
                 "openai",
-                "telegram"
+                "telegram",
+                "viber"
               ]
             }
           }
@@ -5371,7 +5424,8 @@
                       "enum": [
                         "gemini",
                         "openai",
-                        "telegram"
+                        "telegram",
+                        "viber"
                       ]
                     },
                     "revision": {
@@ -5646,6 +5700,418 @@
             "description": "Service unavailable"
           }
         }
+      }
+    },
+    "/api/v1/configuration/viber": {
+      "get": {
+        "operationId": "get_viber_configuration",
+        "responses": {
+          "200": {
+            "description": "Operation result",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ViberConfiguration"
+                }
+              }
+            }
+          },
+          "401": {
+            "description": "Authentication required"
+          },
+          "403": {
+            "description": "Admin or CSRF check failed"
+          },
+          "409": {
+            "description": "Settings revision conflict"
+          },
+          "422": {
+            "description": "Invalid request or unverified integration"
+          },
+          "502": {
+            "description": "Provider operation not confirmed"
+          },
+          "503": {
+            "description": "Integration unavailable"
+          }
+        }
+      },
+      "put": {
+        "operationId": "update_viber_configuration",
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": {
+              "schema": {
+                "type": "object",
+                "additionalProperties": false,
+                "properties": {
+                  "expected_revision": {
+                    "type": "integer",
+                    "minimum": 0
+                  },
+                  "delivery_enabled": {
+                    "type": "boolean"
+                  },
+                  "sender_id": {
+                    "type": "string",
+                    "maxLength": 128
+                  }
+                },
+                "required": [
+                  "expected_revision",
+                  "delivery_enabled",
+                  "sender_id"
+                ]
+              }
+            }
+          }
+        },
+        "responses": {
+          "200": {
+            "description": "Operation result",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ViberConfiguration"
+                }
+              }
+            }
+          },
+          "401": {
+            "description": "Authentication required"
+          },
+          "403": {
+            "description": "Admin or CSRF check failed"
+          },
+          "409": {
+            "description": "Settings revision conflict"
+          },
+          "422": {
+            "description": "Invalid request or unverified integration"
+          },
+          "502": {
+            "description": "Provider operation not confirmed"
+          },
+          "503": {
+            "description": "Integration unavailable"
+          }
+        }
+      }
+    },
+    "/api/v1/viber/verify": {
+      "post": {
+        "operationId": "verify_viber_channel",
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": {
+              "schema": {
+                "type": "object",
+                "additionalProperties": false,
+                "properties": {
+                  "expected_revision": {
+                    "type": "integer",
+                    "minimum": 0
+                  },
+                  "sender_id": {
+                    "type": "string",
+                    "maxLength": 128
+                  }
+                },
+                "required": [
+                  "expected_revision"
+                ]
+              }
+            }
+          }
+        },
+        "responses": {
+          "200": {
+            "description": "Operation result",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object",
+                  "properties": {
+                    "configuration": {
+                      "$ref": "#/components/schemas/ViberConfiguration"
+                    },
+                    "superadmins": {
+                      "type": "array",
+                      "items": {
+                        "type": "object",
+                        "properties": {
+                          "id": {
+                            "type": "string"
+                          },
+                          "name": {
+                            "type": "string"
+                          }
+                        }
+                      }
+                    }
+                  }
+                }
+              }
+            }
+          },
+          "401": {
+            "description": "Authentication required"
+          },
+          "403": {
+            "description": "Admin or CSRF check failed"
+          },
+          "409": {
+            "description": "Settings revision conflict"
+          },
+          "422": {
+            "description": "Invalid request or unverified integration"
+          },
+          "502": {
+            "description": "Provider operation not confirmed"
+          },
+          "503": {
+            "description": "Integration unavailable"
+          }
+        }
+      }
+    },
+    "/api/v1/viber/connect": {
+      "post": {
+        "operationId": "connect_viber_channel",
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": {
+              "schema": {
+                "type": "object",
+                "additionalProperties": false,
+                "properties": {
+                  "expected_revision": {
+                    "type": "integer",
+                    "minimum": 0
+                  }
+                },
+                "required": [
+                  "expected_revision"
+                ]
+              }
+            }
+          }
+        },
+        "responses": {
+          "200": {
+            "description": "Operation result",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ViberConfiguration"
+                }
+              }
+            }
+          },
+          "401": {
+            "description": "Authentication required"
+          },
+          "403": {
+            "description": "Admin or CSRF check failed"
+          },
+          "409": {
+            "description": "Settings revision conflict"
+          },
+          "422": {
+            "description": "Invalid request or unverified integration"
+          },
+          "502": {
+            "description": "Provider operation not confirmed"
+          },
+          "503": {
+            "description": "Integration unavailable"
+          }
+        }
+      }
+    },
+    "/api/v1/viber/preview": {
+      "get": {
+        "operationId": "preview_viber_edition",
+        "description": "Renders one saved Serbian edition without AI or message publication. Publisher labels are omitted; URLs are separate.",
+        "parameters": [
+          {
+            "name": "edition_id",
+            "in": "query",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "format": "uuid"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Operation result",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object",
+                  "properties": {
+                    "edition_id": {
+                      "type": "string",
+                      "format": "uuid"
+                    },
+                    "version": {
+                      "type": "string"
+                    },
+                    "parts": {
+                      "type": "array",
+                      "items": {
+                        "type": "object",
+                        "properties": {
+                          "text": {
+                            "type": "string"
+                          },
+                          "utf16_units": {
+                            "type": "integer",
+                            "maximum": 6500
+                          },
+                          "json_bytes": {
+                            "type": "integer",
+                            "maximum": 28000
+                          }
+                        }
+                      }
+                    }
+                  }
+                }
+              }
+            }
+          },
+          "401": {
+            "description": "Authentication required"
+          },
+          "403": {
+            "description": "Admin or CSRF check failed"
+          },
+          "409": {
+            "description": "Settings revision conflict"
+          },
+          "422": {
+            "description": "Invalid request or unverified integration"
+          },
+          "502": {
+            "description": "Provider operation not confirmed"
+          },
+          "503": {
+            "description": "Integration unavailable"
+          }
+        }
+      }
+    },
+    "/integrations/viber/webhook": {
+      "post": {
+        "operationId": "verify_viber_webhook",
+        "description": "Public HTTPS callback authenticated by a Viber HMAC-SHA256 signature over the original body. No admin cookie required. Does not confirm channel post delivery.",
+        "security": [],
+        "parameters": [
+          {
+            "name": "X-Viber-Content-Signature",
+            "in": "header",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "minLength": 64,
+              "maxLength": 64
+            }
+          }
+        ],
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": {
+              "schema": {
+                "type": "object"
+              }
+            }
+          }
+        },
+        "responses": {
+          "200": {
+            "description": "Signed callback acknowledged"
+          },
+          "400": {
+            "description": "Invalid callback"
+          },
+          "401": {
+            "description": "Invalid callback signature"
+          },
+          "413": {
+            "description": "Body exceeds 16 KiB"
+          },
+          "503": {
+            "description": "Verification unavailable"
+          }
+        }
+      }
+    },
+    "/api/v1/viber/test": {
+      "post": {
+        "operationId": "sendViberTest",
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": {
+              "schema": {
+                "type": "object",
+                "additionalProperties": false,
+                "required": [
+                  "request_id",
+                  "expected_revision"
+                ],
+                "properties": {
+                  "request_id": {
+                    "type": "string",
+                    "format": "uuid"
+                  },
+                  "expected_revision": {
+                    "type": "integer",
+                    "minimum": 0
+                  }
+                }
+              }
+            }
+          }
+        },
+        "responses": {
+          "200": {
+            "description": "Operation result",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ViberConfiguration"
+                }
+              }
+            }
+          },
+          "401": {
+            "description": "Authentication required"
+          },
+          "403": {
+            "description": "Admin or CSRF check failed"
+          },
+          "409": {
+            "description": "Settings revision conflict"
+          },
+          "422": {
+            "description": "Invalid request or unverified integration"
+          },
+          "502": {
+            "description": "Provider operation not confirmed"
+          },
+          "503": {
+            "description": "Integration unavailable"
+          }
+        },
+        "summary": "Send one idempotent Serbian test message"
       }
     }
   },

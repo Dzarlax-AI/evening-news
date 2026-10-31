@@ -4063,5 +4063,21 @@
     "managed_roles": [
       "background"
     ]
+  },
+  {
+    "key": "viber_settings",
+    "owner": "domain",
+    "type": "JSON",
+    "default": "disabled and unconfigured",
+    "secret": false,
+    "store": "news.settings JSON row; Viber token is held separately in encrypted integration credentials",
+    "reload": "read from the settings snapshot for each Viber delivery operation",
+    "migration": "settings recovery preserves channel identity but resets delivery and webhook verification; verify/connect and explicitly enable after restore",
+    "precedence": "persisted application setting; no process environment fallback",
+    "sources": [
+      "go-domain/appsettings/viber.go:44"
+    ],
+    "class": "database_setting",
+    "managed_roles": []
   }
 ]

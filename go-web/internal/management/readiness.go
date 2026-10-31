@@ -36,6 +36,7 @@ func NewConfigurationPreflight(reader configurationReader) func(context.Context,
 		var state struct {
 			AI         bool  `json:"ai_configured"`
 			Telegram   bool  `json:"telegram_configured"`
+			Viber      bool  `json:"viber_configured"`
 			Processing *bool `json:"processing_enabled"`
 			Delivery   *bool `json:"delivery_enabled"`
 		}
@@ -51,13 +52,13 @@ func NewConfigurationPreflight(reader configurationReader) func(context.Context,
 			}
 		}
 		if needsTelegram && state.Delivery != nil && !*state.Delivery {
-			return &APIError{Status: 409, Detail: "Telegram delivery is disabled"}
+			return &APIError{Status: 409, Detail: "Delivery is disabled"}
 		}
 		if needsAI && !state.AI {
 			return &APIError{Status: 409, Detail: "Configure AI before starting processing"}
 		}
-		if needsTelegram && !state.Telegram {
-			return &APIError{Status: 409, Detail: "Configure Telegram before starting delivery"}
+		if needsTelegram && !state.Telegram && !state.Viber {
+			return &APIError{Status: 409, Detail: "Configure a delivery channel before starting delivery"}
 		}
 		return nil
 	}

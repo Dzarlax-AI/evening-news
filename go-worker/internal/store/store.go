@@ -8,7 +8,9 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"log"
 	"sync"
+	"sync/atomic"
 	"time"
 
 	"github.com/jackc/pgx/v5"
@@ -75,13 +77,14 @@ type LeaseInfo struct {
 }
 
 type Store struct {
-	Pool       *pgxpool.Pool
-	leaseConn  *pgx.Conn
-	leaseMu    sync.Mutex
-	ownerID    string
-	generation int64
-	backendPID int32
-	closed     bool
+	Pool                 *pgxpool.Pool
+	leaseConn            *pgx.Conn
+	leaseMu              sync.Mutex
+	ownerID              string
+	generation           int64
+	backendPID           int32
+	closed               bool
+	viberAdmissionFailed atomic.Bool
 }
 
 func Open(ctx context.Context, dsn string, maxConns int32) (*Store, error) {
@@ -443,11 +446,42 @@ func (s *Store) Claim(ctx context.Context, maxAttempts int64) (Job, error) {
 			return Job{}, errors.New("retry admission failed")
 		}
 	}
+	var viberAdmissionAvailable bool
+	if err = tx.QueryRow(ctx, `SELECT to_regprocedure('enqueue_viber_digest_delivery()') IS NOT NULL`).Scan(&viberAdmissionAvailable); err != nil {
+		return Job{}, errors.New("Viber admission unavailable")
+	}
+	if viberAdmissionAvailable {
+		// A Viber-specific failure must not abort claims for other job kinds.
+		admission, beginErr := tx.Begin(ctx)
+		if beginErr != nil {
+			return Job{}, errors.New("Viber admission coordination failed")
+		}
+		_, admissionErr := admission.Exec(ctx, `SELECT enqueue_viber_digest_delivery()`)
+		if admissionErr != nil {
+			if rollbackErr := admission.Rollback(ctx); rollbackErr != nil {
+				return Job{}, errors.New("Viber admission rollback failed")
+			}
+			if !s.viberAdmissionFailed.Swap(true) {
+				log.Print("Viber admission deferred; other jobs remain available")
+			}
+		} else {
+			if commitErr := admission.Commit(ctx); commitErr != nil {
+				return Job{}, errors.New("Viber admission commit failed")
+			}
+			if s.viberAdmissionFailed.Swap(false) {
+				log.Print("Viber admission resumed")
+			}
+		}
+	}
 	job, err := scanJob(tx.QueryRow(ctx, `SELECT id::text,kind,payload,result,queue_position,state,owner_generation,
 		attempt_generation,created_at,started_at,finished_at,error_code,schedule_key,schedule_revision
 		FROM background_jobs WHERE state='queued' OR (state='interrupted' AND attempt_generation < $1)
 		ORDER BY queue_position LIMIT 1 FOR UPDATE SKIP LOCKED`, maxAttempts))
 	if errors.Is(err, pgx.ErrNoRows) {
+		// Admission can reconcile a waiting or terminal delivery without enqueuing a job.
+		if err = tx.Commit(ctx); err != nil {
+			return Job{}, errors.New("idle admission commit failed")
+		}
 		return Job{}, ErrNoJob
 	}
 	if err != nil {

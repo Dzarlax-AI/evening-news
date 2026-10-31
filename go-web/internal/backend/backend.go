@@ -150,7 +150,7 @@ type ConfigurationOperations interface {
 }
 
 func (c *Client) Configuration(ctx context.Context, method, group string, body json.RawMessage) (json.RawMessage, error) {
-	if group != "telegram" && group != "operational" && group != "readiness" {
+	if group != "telegram" && group != "viber" && group != "operational" && group != "readiness" {
 		return nil, &APIError{Status: 422, Detail: "Invalid configuration group"}
 	}
 	var reader io.Reader
@@ -161,7 +161,7 @@ func (c *Client) Configuration(ctx context.Context, method, group string, body j
 }
 
 func (c *Client) Credential(ctx context.Context, method, provider string, body json.RawMessage) (json.RawMessage, error) {
-	if provider != "gemini" && provider != "openai" && provider != "telegram" {
+	if provider != "gemini" && provider != "openai" && provider != "telegram" && provider != "viber" {
 		return nil, &APIError{Status: 422, Detail: "Invalid provider"}
 	}
 	var reader io.Reader
@@ -326,8 +326,13 @@ func (c *Client) request(ctx context.Context, method, endpoint string, body io.R
 	if !strings.HasPrefix(endpoint, "/") {
 		return nil, errors.New("invalid private operation")
 	}
+	operationURL, err := url.ParseRequestURI(endpoint)
+	if err != nil || operationURL.IsAbs() || operationURL.Host != "" || operationURL.Fragment != "" {
+		return nil, errors.New("invalid private operation")
+	}
 	u := *c.base
-	u.Path = path.Join(strings.TrimSuffix(c.base.Path, "/"), "/internal/web/v1", endpoint)
+	u.Path = path.Join(strings.TrimSuffix(c.base.Path, "/"), "/internal/web/v1", operationURL.Path)
+	u.RawQuery = operationURL.RawQuery
 	req, err := http.NewRequestWithContext(ctx, method, u.String(), body)
 	if err != nil {
 		return nil, err

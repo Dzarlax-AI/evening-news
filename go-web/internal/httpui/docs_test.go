@@ -190,7 +190,7 @@ func TestDocsRoutesServeFrozenOpenAPIWithoutRemoteAssets(t *testing.T) {
 	if err := json.Unmarshal(resp.Body.Bytes(), &served); err != nil {
 		t.Fatal(err)
 	}
-	if len(served["paths"].(map[string]any)) != 98 {
+	if len(served["paths"].(map[string]any)) != 104 {
 		t.Fatalf("unexpected frozen schema path count: %d", len(served["paths"].(map[string]any)))
 	}
 }
@@ -221,7 +221,7 @@ func TestCheckedInOpenAPIPreservesBaselineAndAddsAISettings(t *testing.T) {
 	paths := gotRoot["paths"].(map[string]any)
 	components := gotRoot["components"].(map[string]any)
 	schemas := components["schemas"].(map[string]any)
-	for _, name := range []string{"OperationalSettings", "OperationalSettingsUpdate"} {
+	for _, name := range []string{"OperationalSettings", "OperationalSettingsUpdate", "ViberConfiguration"} {
 		if schemas[name] == nil {
 			t.Fatalf("missing operational settings schema %s", name)
 		}
@@ -236,7 +236,7 @@ func TestCheckedInOpenAPIPreservesBaselineAndAddsAISettings(t *testing.T) {
 		t.Fatal("AI settings update contract is incomplete")
 	}
 	delete(paths, "/api/v1/ai/settings")
-	for path, methods := range map[string][]string{"/api/v1/configuration/readiness": {"get"}, "/api/v1/configuration/telegram": {"get", "put"}, "/api/v1/configuration/operational": {"get", "put"}, "/api/v1/setup/status": {"get"}, "/api/v1/setup/claim": {"post"}, "/api/v1/installation/progress": {"get", "put"}, "/api/v1/credentials/{provider}": {"get", "put", "delete"}} {
+	for path, methods := range map[string][]string{"/api/v1/configuration/readiness": {"get"}, "/api/v1/configuration/telegram": {"get", "put"}, "/api/v1/configuration/viber": {"get", "put"}, "/api/v1/viber/verify": {"post"}, "/api/v1/viber/connect": {"post"}, "/api/v1/viber/test": {"post"}, "/api/v1/viber/preview": {"get"}, "/integrations/viber/webhook": {"post"}, "/api/v1/configuration/operational": {"get", "put"}, "/api/v1/setup/status": {"get"}, "/api/v1/setup/claim": {"post"}, "/api/v1/installation/progress": {"get", "put"}, "/api/v1/credentials/{provider}": {"get", "put", "delete"}} {
 		item, ok := paths[path].(map[string]any)
 		if !ok {
 			t.Fatalf("missing onboarding path %s", path)

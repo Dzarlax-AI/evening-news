@@ -7,11 +7,20 @@
 
 <div class="settings-tabs">
     <button class="settings-tab active" onclick="switchSettingsTab('telegram')">Telegram</button>
+    <button class="settings-tab" onclick="switchSettingsTab('viber')">Viber · Srpski</button>
     {{if .Managed}}
     <button class="settings-tab" onclick="switchSettingsTab('operational')">Рабочие настройки</button>
     {{end}}
     <button class="settings-tab" onclick="switchSettingsTab('schedule')">Расписание</button>
     <button class="settings-tab" onclick="switchSettingsTab('ai')">AI</button>
+</div>
+
+<!-- Viber copy and interaction are owned by the TypeScript settings module. -->
+<div id="settings-tab-viber" class="settings-panel" style="display:none;">
+    <div id="viber-settings">
+        <h2>Viber · Srpski</h2>
+        <p data-viber-status role="status" aria-live="polite">Loading…</p>
+    </div>
 </div>
 
 {{if .Managed}}
@@ -204,7 +213,7 @@
 
 <style>
 /* Settings tabs */
-.settings-tabs { display:flex; gap:.5rem; margin-bottom:1.5rem; border-bottom:2px solid var(--border,#e0e0e0); padding-bottom:.5rem; }
+.settings-tabs { display:flex; flex-wrap:wrap; gap:.5rem; margin-bottom:1.5rem; border-bottom:2px solid var(--border,#e0e0e0); padding-bottom:.5rem; }
 .settings-tab { background:none; border:none; padding:.5rem 1rem; cursor:pointer; color:var(--text-muted); font-size:1rem; border-radius:6px 6px 0 0; border-bottom:2px solid transparent; margin-bottom:-2px; }
 .settings-tab.active { color:var(--primary-color); border-bottom-color:var(--primary-color); font-weight:600; }
 
@@ -663,6 +672,7 @@ async function schCreateSchedule() {
     } catch (e) { alert('Ошибка: ' + window.presentError(e)); }
 }
 </script>
+<script src="/static/js/viber-settings.js" defer></script>
 {{end}}
 
 {{template "admin-base" .}}

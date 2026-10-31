@@ -66,7 +66,7 @@ func validatePayload(kind string, payload json.RawMessage) (json.RawMessage, err
 		return nil, ErrInvalidPayload
 	}
 	allowed := map[string]map[string]bool{
-		"news_processing": {"schedule_id": true, "scheduled_for": true, "timeout_seconds": true}, "news_digest": {"schedule_id": true, "scheduled_for": true, "run_processing": true, "send_telegram": true, "timeout_seconds": true}, "telegram_digest": {"schedule_id": true, "scheduled_for": true, "timeout_seconds": true}, "backup": {"schedule_id": true, "scheduled_for": true, "timeout_seconds": true}, "reprocess_failed": {"schedule_id": true, "scheduled_for": true, "limit": true, "dry_run": true, "timeout_seconds": true}, "article_reprocess": {"article_ids": true, "force": true, "reextract_media": true}, "summaries_generate": {}, "source_test": {"source_id": true}, "serbian_digest_retry": {"russian_edition_id": true},
+		"news_processing": {"schedule_id": true, "scheduled_for": true, "timeout_seconds": true}, "news_digest": {"schedule_id": true, "scheduled_for": true, "run_processing": true, "send_telegram": true, "timeout_seconds": true}, "telegram_digest": {"schedule_id": true, "scheduled_for": true, "timeout_seconds": true}, "backup": {"schedule_id": true, "scheduled_for": true, "timeout_seconds": true}, "reprocess_failed": {"schedule_id": true, "scheduled_for": true, "limit": true, "dry_run": true, "timeout_seconds": true}, "article_reprocess": {"article_ids": true, "force": true, "reextract_media": true}, "summaries_generate": {}, "source_test": {"source_id": true}, "serbian_digest_retry": {"russian_edition_id": true}, "viber_digest_delivery": {"delivery_id": true},
 	}[kind]
 	if allowed == nil {
 		return nil, ErrInvalidPayload
@@ -74,6 +74,15 @@ func validatePayload(kind string, payload json.RawMessage) (json.RawMessage, err
 	if kind == "serbian_digest_retry" {
 		var id string
 		if len(p) != 1 || json.Unmarshal(p["russian_edition_id"], &id) != nil {
+			return nil, ErrInvalidPayload
+		}
+		if _, err := canonicalUUID(id); err != nil {
+			return nil, ErrInvalidPayload
+		}
+	}
+	if kind == "viber_digest_delivery" {
+		var id string
+		if len(p) != 1 || json.Unmarshal(p["delivery_id"], &id) != nil {
 			return nil, ErrInvalidPayload
 		}
 		if _, err := canonicalUUID(id); err != nil {
@@ -315,7 +324,7 @@ func validateArticleOutcomes(result map[string]json.RawMessage) error {
 }
 
 func mayDeliver(kind string, p json.RawMessage) bool {
-	if kind == "telegram_digest" || kind == "serbian_digest_retry" {
+	if kind == "telegram_digest" || kind == "serbian_digest_retry" || kind == "viber_digest_delivery" {
 		return true
 	}
 	if kind != "news_digest" {

@@ -150,5 +150,16 @@ func (s *Server) configurationReadiness(w http.ResponseWriter, r *http.Request) 
 		reject(w, 503, "Settings unavailable")
 		return
 	}
-	write(w, 200, map[string]bool{"ai_configured": ai, "telegram_configured": tg.Configured && v.ChatID != "", "processing_enabled": operational.ProcessingEnabled, "delivery_enabled": operational.DeliveryEnabled})
+	viber, err := (appsettings.Store{Pool: s.Pool}).Viber(r.Context())
+	if err != nil {
+		reject(w, 503, "Viber settings unavailable")
+		return
+	}
+	viberMeta, err := s.Credentials.Metadata(r.Context(), "viber")
+	if err != nil {
+		reject(w, 503, "Viber credential metadata unavailable")
+		return
+	}
+	viberReady := viber.DeliveryEnabled && viber.WebhookReady && viberMeta.Configured && viber.VerifiedCredentialRevision == viberMeta.Revision && viber.ChannelID != "" && viber.SenderID != ""
+	write(w, 200, map[string]bool{"ai_configured": ai, "telegram_configured": tg.Configured && v.ChatID != "", "viber_configured": viberReady, "processing_enabled": operational.ProcessingEnabled, "delivery_enabled": operational.DeliveryEnabled})
 }
