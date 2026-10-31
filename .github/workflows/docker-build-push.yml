@@ -110,6 +110,7 @@ jobs:
       - uses: actions/checkout@v4
         with:
           ref: ${{ needs.impact.outputs.head_sha }}
+          fetch-depth: ${{ matrix.module == 'go-tools' && '0' || '1' }}
           persist-credentials: false
       - uses: actions/setup-go@v5
         with:
