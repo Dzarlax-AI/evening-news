@@ -1,20 +1,3 @@
-{{define "extra-head"}}<link rel="stylesheet" href="/static/css/editorial.css">{{end}}
-{{define "content"}}
-<div class="editorial-page article-page">
-  <article class="editorial-shell article-shell">
-    <a class="editorial-back" href="/{{if eq .Locale "sr-Latn"}}?locale=sr-Latn{{end}}">← {{if eq .Locale "sr-Latn"}}Na vesti{{else}}К ленте{{end}}</a>
-    <header class="editorial-masthead article-masthead">
-      <p class="editorial-eyebrow">{{if .Article.Category}}{{.Article.Category}}{{else}}{{if eq .Locale "sr-Latn"}}Članak{{else}}Материал{{end}}{{end}}{{if .Article.PublishedAt}} · <time datetime="{{.Article.PublishedISO}}">{{.Article.PublishedAt}}</time>{{end}}</p>
-      <h1>{{.Article.Title}}</h1>
-      {{if .Article.Summary}}<p class="editorial-deck">{{.Article.Summary}}</p>{{end}}
-      {{if .Article.SourceURL}}<p class="article-source">{{if eq .Locale "sr-Latn"}}Izvor:{{else}}Источник:{{end}} <a href="{{.Article.SourceURL}}" target="_blank" rel="noopener noreferrer">{{if .Article.SourceName}}{{.Article.SourceName}}{{else}}{{if eq .Locale "sr-Latn"}}Otvori original{{else}}Открыть оригинал{{end}}{{end}}</a></p>{{end}}
-    </header>
-    {{if and (eq .Locale "sr-Latn") .Article.Content}}<h2>Izvorni tekst</h2>{{end}}
-    <div class="article-content"{{if eq .Locale "sr-Latn"}} lang="und"{{end}}>
-      {{range paragraphs .Article.Content}}<p>{{.}}</p>{{end}}
-    </div>
-    <footer class="article-footer"><a href="/{{if eq .Locale "sr-Latn"}}?locale=sr-Latn{{end}}">← {{if eq .Locale "sr-Latn"}}Nazad na vesti{{else}}Вернуться к новостям{{end}}</a></footer>
-  </article>
-</div>
-{{end}}
+{{define "extra-head"}}<link rel="stylesheet" href="/static/css/editorial.css"><link rel="stylesheet" href="/static/css/article-reader.css"><script src="/static/js/article-reader.js" defer></script>{{end}}
+{{define "content"}}<div class="editorial-page article-page"><article class="editorial-shell"><a class="editorial-back" href="/{{if eq .Locale "sr-Latn"}}?locale=sr-Latn{{end}}">← {{if eq .Locale "sr-Latn"}}Na vesti{{else}}К ленте{{end}}</a><div class="modal-content">{{template "article-reader" .}}</div></article></div>{{end}}
 {{template "base" .}}
