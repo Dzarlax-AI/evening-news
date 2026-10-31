@@ -303,11 +303,13 @@ func TestSettingsRecoveryRecipes(t *testing.T) {
 		processing    bool
 		invalid       bool
 		history       bool
+		testHistory   bool
 	}{
 		{name: "schema_16_without_viber", schemaVersion: 16, omitViber: true, maximum: 17, processing: true},
 		{name: "schema_18_without_viber", schemaVersion: 18, omitViber: true, settings: []map[string]any{{"key": "operational_settings_revision", "value": 8}, {"key": "operational_max_articles", "value": 23}, {"key": "operational_processing_enabled", "value": false}}, maximum: 23},
 		{name: "schema_20_with_viber", schemaVersion: 20, maximum: 17, processing: true},
 		{name: "old_history", history: true},
+		{name: "viber_test_history", testHistory: true},
 		{name: "invalid_limit", settings: []map[string]any{{"key": "operational_max_articles", "value": 100001}}, invalid: true},
 		{name: "viber_missing_field", invalid: true, viberValue: map[string]any{"revision": 8, "delivery_enabled": true, "channel_id": "fixture-channel", "channel_name": "Fixture Channel", "sender_id": "fixture-sender", "credential_revision": 5, "verified_credential_revision": 5, "webhook_ready": true, "enabled_from": "2026-10-30T10:00:00Z"}},
 		{name: "viber_unknown_field", invalid: true, viberValue: map[string]any{"revision": 8, "delivery_enabled": true, "channel_id": "fixture-channel", "channel_name": "Fixture Channel", "sender_id": "fixture-sender", "credential_revision": 5, "verified_credential_revision": 5, "webhook_ready": true, "verified_at": "2026-10-31T10:00:00Z", "enabled_from": "2026-10-30T10:00:00Z", "unknown": true}},
@@ -337,6 +339,12 @@ func TestSettingsRecoveryRecipes(t *testing.T) {
 				_, e = pool.Exec(ctx, `INSERT INTO daily_summaries(date,category,summary_text,articles_count) VALUES('2026-01-01','Fixture','synthetic-only',1)`)
 				if e != nil {
 					t.Fatal("history fixture failed")
+				}
+			}
+			if tc.testHistory {
+				_, e = pool.Exec(ctx, `INSERT INTO viber_test_receipts(request_id,channel_id,sender_id,settings_revision,credential_revision,state) VALUES(gen_random_uuid(),'fixture-channel','fixture-sender',1,1,'unknown')`)
+				if e != nil {
+					t.Fatal("Viber test history fixture failed")
 				}
 			}
 			pool.Close()
@@ -378,7 +386,7 @@ func TestSettingsRecoveryRecipes(t *testing.T) {
 				t.Fatal("case input failed")
 			}
 			_, e = psql(db, "import-settings.sql", "-v", "target_database="+db, "-v", "installation_id="+installation)
-			if tc.invalid || tc.history {
+			if tc.invalid || tc.history || tc.testHistory {
 				if e == nil {
 					t.Fatal("invalid recovery setting accepted")
 				}

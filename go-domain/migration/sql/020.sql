@@ -149,10 +149,11 @@ BEGIN
  UPDATE __SCHEMA_Q__.viber_publication_requests r SET state='materialized' WHERE r.state='pending' AND EXISTS
  (SELECT 1 FROM __SCHEMA_Q__.viber_digest_deliveries d WHERE d.russian_edition_id=r.russian_edition_id AND d.channel_id=r.channel_id AND d.purpose=r.purpose AND d.enabled_from=r.enabled_from AND d.sender_id=r.sender_id AND d.credential_revision=r.credential_revision AND d.settings_revision=r.settings_revision);
  UPDATE __SCHEMA_Q__.viber_digest_deliveries x SET state='delivery_unknown',updated_at=now()
- WHERE x.state='sending' AND EXISTS(SELECT 1 FROM __SCHEMA_Q__.viber_digest_parts p WHERE p.delivery_id=x.id AND p.state='sending')
+ WHERE x.state IN ('ready','retry_wait','sending')
+ AND (x.state='sending' OR EXISTS(SELECT 1 FROM __SCHEMA_Q__.viber_digest_parts p WHERE p.delivery_id=x.id AND p.state IN ('sending','unknown')))
  AND EXISTS(SELECT 1 FROM __SCHEMA_Q__.background_jobs j WHERE j.id=x.last_job_id AND j.state IN ('failed','succeeded','delivery_unknown','interrupted','queued'));
  UPDATE __SCHEMA_Q__.viber_digest_deliveries x SET state='exhausted',updated_at=now()
- WHERE x.state IN ('waiting_edition','ready','retry_wait') AND (x.created_at<=now()-interval '24 hours' OR x.dispatches>=6) AND (x.last_job_id IS NULL OR EXISTS (SELECT 1 FROM __SCHEMA_Q__.background_jobs j WHERE j.id=x.last_job_id AND j.state IN ('succeeded','failed')));
+ WHERE x.state IN ('waiting_edition','ready','retry_wait') AND (x.created_at<=now()-interval '24 hours' OR x.dispatches>=6) AND (x.last_job_id IS NULL OR EXISTS (SELECT 1 FROM __SCHEMA_Q__.background_jobs j WHERE j.id=x.last_job_id AND j.state IN ('succeeded','failed','delivery_unknown')));
  UPDATE __SCHEMA_Q__.viber_digest_deliveries x SET serbian_edition_id=sr.id,snapshot_hash=sr.snapshot_hash,content_hash=encode(sha256(convert_to(sr.edition::text,'UTF8')),'hex'),state='ready',updated_at=now()
  FROM __SCHEMA_Q__.editorial_digest_editions ru JOIN __SCHEMA_Q__.editorial_digest_editions sr ON sr.job_id=ru.job_id AND sr.attempt_generation=ru.attempt_generation AND sr.locale='sr-Latn'
  WHERE x.state='waiting_edition' AND x.russian_edition_id=ru.id AND ru.locale='ru';
@@ -160,7 +161,8 @@ BEGIN
  LEFT JOIN __SCHEMA_Q__.background_jobs j ON j.id=x.last_job_id
  WHERE x.state IN ('ready','retry_wait') AND x.serbian_edition_id IS NOT NULL AND x.dispatches<6
  AND x.next_dispatch_at<=now() AND x.created_at>now()-interval '24 hours'
- AND (x.last_job_id IS NULL OR j.id IS NULL OR j.state IN ('succeeded','failed'))
+ AND (x.last_job_id IS NULL OR j.id IS NULL OR j.state IN ('succeeded','failed','delivery_unknown'))
+ AND NOT EXISTS(SELECT 1 FROM __SCHEMA_Q__.viber_digest_parts p WHERE p.delivery_id=x.id AND (p.state IN ('sending','unknown') OR (p.state='rejected' AND x.state<>'retry_wait')))
  ORDER BY x.next_dispatch_at,x.id FOR UPDATE OF x SKIP LOCKED LIMIT 1;
  IF NOT FOUND THEN RETURN false; END IF;
  new_id:=gen_random_uuid();

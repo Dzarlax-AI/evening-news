@@ -127,6 +127,19 @@ func TestPostgresState(t *testing.T) {
 	if _, e = pool.Exec(ctx, `UPDATE viber_digest_parts SET text='changed' WHERE delivery_id=$1`, id); e == nil {
 		t.Fatal("immutable part changed")
 	}
+	// A terminal operation error before any POST can be dispatched again.
+	if _, e = pool.Exec(ctx, `UPDATE background_jobs SET state='delivery_unknown' WHERE id=$1`, s.JobID); e != nil {
+		t.Fatal(e)
+	}
+	if e = pool.QueryRow(ctx, `SELECT enqueue_viber_digest_delivery()`).Scan(&enqueued); e != nil || !enqueued {
+		t.Fatal("pre-reservation unknown job stalled", e)
+	}
+	if e = pool.QueryRow(ctx, `SELECT last_job_id::text FROM viber_digest_deliveries WHERE id=$1`, id).Scan(&s.JobID); e != nil {
+		t.Fatal(e)
+	}
+	if _, e = pool.Exec(ctx, `UPDATE background_jobs SET state='running' WHERE id=$1`, s.JobID); e != nil {
+		t.Fatal(e)
+	}
 	binding = "10000000-0000-4000-8000-000000000099"
 	if _, e = s.Reserve(ctx, id, 0, d.Parts[0].Hash); !errors.Is(e, ErrConflict) {
 		t.Fatal("mismatched job payload accepted")
@@ -211,6 +224,19 @@ func TestPostgresState(t *testing.T) {
 	}
 
 	if e = s.Finish(ctx, id, 0, Result{State: Sent, MessageToken: "123"}); e != nil {
+		t.Fatal(e)
+	}
+	// An error between already-confirmed and still-pending parts is also safe.
+	if _, e = pool.Exec(ctx, `UPDATE background_jobs SET state='delivery_unknown' WHERE id=$1`, s.JobID); e != nil {
+		t.Fatal(e)
+	}
+	if e = pool.QueryRow(ctx, `SELECT enqueue_viber_digest_delivery()`).Scan(&enqueued); e != nil || !enqueued {
+		t.Fatal("between-parts unknown job stalled", e)
+	}
+	if e = pool.QueryRow(ctx, `SELECT last_job_id::text FROM viber_digest_deliveries WHERE id=$1`, id).Scan(&s.JobID); e != nil {
+		t.Fatal(e)
+	}
+	if _, e = pool.Exec(ctx, `UPDATE background_jobs SET state='running' WHERE id=$1`, s.JobID); e != nil {
 		t.Fatal(e)
 	}
 	if r, e = s.Reserve(ctx, id, 0, d.Parts[0].Hash); e != nil || r != AlreadySent {
@@ -336,6 +362,13 @@ func TestPostgresState(t *testing.T) {
 	if _, e = pool.Exec(ctx, `UPDATE viber_channel_leases SET lease_until=clock_timestamp()+interval '60 seconds' WHERE delivery_id=$1`, id3); e != nil {
 		t.Fatal(e)
 	}
+	// A sending part on an unknown terminal job is never eligible for another POST.
+	if _, e = pool.Exec(ctx, `UPDATE background_jobs SET state='delivery_unknown' WHERE id=$1`, s3.JobID); e != nil {
+		t.Fatal(e)
+	}
+	if e = pool.QueryRow(ctx, `SELECT enqueue_viber_digest_delivery()`).Scan(&enqueued); e != nil || enqueued {
+		t.Fatal("uncertain part was requeued", e)
+	}
 	s3.DomainInstanceID = "10000000-0000-4000-8000-000000000099"
 	d3, e = s3.Load(ctx, id3)
 	if e != nil || d3.State != "delivery_unknown" {
@@ -382,6 +415,16 @@ func TestPostgresState(t *testing.T) {
 	}
 	if _, e = pool.Exec(ctx, `UPDATE viber_digest_deliveries SET created_at=now()-interval '25 hours' WHERE id=$1`, binding4); e != nil {
 		t.Fatal(e)
+	}
+	if _, e = pool.Exec(ctx, `UPDATE background_jobs SET state='delivery_unknown' WHERE id=$1`, s4.JobID); e != nil {
+		t.Fatal(e)
+	}
+	if e = pool.QueryRow(ctx, `SELECT enqueue_viber_digest_delivery()`).Scan(&enqueued); e != nil || enqueued {
+		t.Fatal("expired unknown job requeued", e)
+	}
+	var expiredState string
+	if e = pool.QueryRow(ctx, `SELECT state FROM viber_digest_deliveries WHERE id=$1`, binding4).Scan(&expiredState); e != nil || expiredState != "exhausted" {
+		t.Fatal("expired unknown job not exhausted", e)
 	}
 	if r, e = s4.Reserve(ctx, binding4, 0, d4.Parts[0].Hash); e != nil || r != InFlight {
 		t.Fatal("expired queued job reserved", e)

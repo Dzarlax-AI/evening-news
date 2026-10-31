@@ -50,6 +50,7 @@ interface ViberTestResult {
   let testInFlight = false;
   let testPending = false;
   let latestTestState: ViberTestResult['state'] | null = null;
+  let senderChoicesCredentialRevision: number | null = null;
   const escapeHTML = (value: string): string => value.replace(/[&<>"']/g, char => ({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#39;'}[char] || char));
   const setStatus = (message: string, error = false): void => {
     const status = root.querySelector<HTMLElement>('[data-viber-status]');
@@ -68,8 +69,9 @@ interface ViberTestResult {
     const lastTest = config?.last_test;
     const shownTestState = latestTestState || lastTest?.state;
     const testStateLabel = shownTestState ? tr(`testState_${shownTestState}`) : tr('noTest');
+    const senderSelectionCurrent = Boolean(credential && config?.verified_credential_revision === credential.revision);
     const senderSelection = state.senders.length > 1
-      ? `<label class="settings-form-group"><span>${tr('sender')}</span><select id="viber-sender" class="settings-input"><option value="">${tr('selectSender')}</option>${state.senders.map(item => `<option value="${escapeHTML(item.id)}" ${config?.sender_id === item.id ? 'selected' : ''}>${escapeHTML(item.name)} · ${escapeHTML(item.id)}</option>`).join('')}</select><small>${tr('senderRequired')}</small></label>`
+      ? `<label class="settings-form-group"><span>${tr('sender')}</span><select id="viber-sender" class="settings-input"><option value="">${tr('selectSender')}</option>${state.senders.map(item => `<option value="${escapeHTML(item.id)}" ${senderSelectionCurrent && config?.sender_id === item.id ? 'selected' : ''}>${escapeHTML(item.name)} · ${escapeHTML(item.id)}</option>`).join('')}</select><small>${tr('senderRequired')}</small></label>`
       : `<div class="tg-config-row"><span class="tg-config-label">${tr('sender')}</span><span class="tg-config-value">${escapeHTML(config?.sender_id || '—')}</span></div>`;
     root.innerHTML = `
       <div style="display:flex;justify-content:space-between;align-items:center;gap:12px;margin-bottom:16px;flex-wrap:wrap;">
@@ -145,6 +147,7 @@ interface ViberTestResult {
       state.config = config;
       state.credential = credential;
       state.senders = [];
+      senderChoicesCredentialRevision = null;
       if (config.last_test) latestTestState = config.last_test.state;
       if (config.last_test) testPending = config.last_test.state === 'sending';
       else if (!testInFlight) testPending = false;
@@ -174,6 +177,10 @@ interface ViberTestResult {
     if (button) button.disabled = true;
     try {
       state.credential = await requestJSON<ViberCredentialMetadata>('/api/v1/credentials/viber', put({ expected_revision: state.credential.revision, value }));
+      if (state.config?.verified_credential_revision !== state.credential.revision) {
+        state.senders = [];
+        senderChoicesCredentialRevision = null;
+      }
       if (input) input.value = '';
       setStatus(tr('tokenSaved'));
       render();
@@ -191,16 +198,23 @@ interface ViberTestResult {
 
   async function verify(): Promise<void> {
     if (!state.config) return;
-    const selected = root.querySelector<HTMLSelectElement>('#viber-sender')?.value || state.config.sender_id || '';
+    const verificationCurrent = Boolean(state.credential && state.config.verified_credential_revision === state.credential.revision);
+    const choicesCurrent = Boolean(state.credential && senderChoicesCredentialRevision === state.credential.revision);
+    const senderSelect = root.querySelector<HTMLSelectElement>('#viber-sender');
+    const selected = choicesCurrent
+      ? senderSelect ? senderSelect.value : state.senders.length === 1 ? state.senders[0].id : ''
+      : verificationCurrent ? senderSelect?.value || state.config.sender_id || '' : '';
     const button = root.querySelector<HTMLButtonElement>('#viber-verify');
     if (button) button.disabled = true;
     try {
       const result = await requestJSON<{ configuration: ViberConfiguration; superadmins: ViberSender[] }>('/api/v1/viber/verify', post({ expected_revision: state.config.revision, ...(selected ? { sender_id: selected } : {}) }));
       state.config = result.configuration;
       state.senders = result.superadmins || [];
+      senderChoicesCredentialRevision = state.senders.length && state.credential ? state.credential.revision : null;
       render();
       const many = state.senders.length > 1;
-      setStatus(many && !state.config.sender_id ? tr('senderRequired') : tr('verified'), many && !state.config.sender_id);
+      const senderSelected = many ? Boolean(root.querySelector<HTMLSelectElement>('#viber-sender')?.value) : Boolean(state.config.sender_id);
+      setStatus(many && !senderSelected ? tr('senderRequired') : tr('verified'), many && !senderSelected);
     } catch (error) {
       if (error instanceof Error && error.message === 'conflict') { await load(); setStatus(tr('conflict'), true); }
       else setStatus(tr('verifyError'), true);

@@ -10,6 +10,7 @@ const {chromium} = require('playwright');
 const repo = path.resolve(__dirname, '../..');
 const artifacts = path.resolve(repo, '../../outputs');
 const secret = 'synthetic-viber-channel-token-never-display';
+const replacementSecret = 'synthetic-replacement-token-never-display';
 let browser;
 let server;
 let origin;
@@ -21,6 +22,7 @@ let nextToggleStatus;
 let nextTestStatus;
 let nextTestState;
 let testRequestIds;
+let verifyInputs;
 
 const initialConfig = () => ({
   revision: 1, delivery_enabled: false, channel_id: '', channel_name: '', sender_id: '',
@@ -62,6 +64,7 @@ function startServer() {
   nextTestStatus = null;
   nextTestState = 'sent';
   testRequestIds = [];
+  verifyInputs = [];
   server = http.createServer(async (req, res) => {
     const url = new URL(req.url, 'http://localhost');
     if (url.pathname.startsWith('/api/')) {
@@ -82,17 +85,25 @@ function startServer() {
         await delay(70);
         if (forcedConflicts.delete('credential')) return json(res, 409, {detail: 'stale revision'});
         if (input.expected_revision !== state.credential.revision) return json(res, 409, {detail: 'stale revision'});
-        assert.equal(input.value, secret, 'credential body should carry only the newly entered value');
+        assert.ok([secret, replacementSecret].includes(input.value), 'credential body should carry only the newly entered value');
         state.credential = {provider: 'viber', revision: state.credential.revision + 1, configured: true};
+        if (input.value === replacementSecret) state.superadmins = [
+          {id: 'sender-b', name: 'Sender B'}, {id: 'sender-c', name: 'Replacement Sender C'}, {id: 'sender-d', name: 'Replacement Sender D'}
+        ];
         return json(res, 200, state.credential);
       }
       if (req.method === 'POST' && url.pathname === '/api/v1/viber/verify') {
         requestCounts.verify++;
+        verifyInputs.push(input);
         await delay(70);
         if (forcedConflicts.delete('verify') || input.expected_revision !== state.config.revision) return json(res, 409, {detail: 'stale revision'});
+        const credentialChanged = state.config.verified_credential_revision !== state.credential.revision;
+        if (credentialChanged && !input.sender_id) return json(res, 200, {configuration: state.config, superadmins: state.superadmins});
         state.config = {...state.config, revision: state.config.revision + 1, channel_id: 'channel-123', channel_name: 'Synthetic News',
-          sender_id: input.sender_id || state.config.sender_id, credential_revision: state.credential.revision,
-          verified_credential_revision: state.credential.revision, verified_at: '2026-10-31T11:00:00Z'};
+          sender_id: input.sender_id || state.config.sender_id,
+          webhook_ready: credentialChanged ? false : state.config.webhook_ready,
+          credential_revision: state.credential.revision, verified_credential_revision: state.credential.revision,
+          verified_at: '2026-10-31T11:00:00Z'};
         return json(res, 200, {configuration: state.config, superadmins: state.superadmins});
       }
       if (req.method === 'POST' && url.pathname === '/api/v1/viber/connect') {
@@ -247,6 +258,41 @@ test('verification and connect conflicts refresh state without duplicate POSTs; 
   await page.waitForFunction(() => document.querySelector('#viber-enable')?.disabled === false);
   assert.equal(state.config.webhook_ready, true, 'synthetic callback becomes visible after reload');
   assert.equal(await page.locator('#viber-enable').isDisabled(), false);
+  assert.equal(await page.locator('#viber-test').isDisabled(), false);
+});
+
+test('token replacement discovers new senders before reusing the saved sender ID', async () => {
+  assert.equal(state.config.sender_id, 'sender-b');
+  const oldConfigRevision = state.config.revision;
+  const verifyStart = verifyInputs.length;
+  await page.locator('#viber-token').fill(replacementSecret);
+  await page.locator('#viber-save-token').click();
+  await page.getByText('Токен сохранён. Проверьте канал перед подключением.', {exact: true}).waitFor();
+  assert.equal(await page.locator('#viber-test').isDisabled(), true, 'the new credential invalidates the old verification');
+
+  await page.locator('#viber-verify').click();
+  await page.locator('#viber-sender').waitFor();
+  await page.locator('[data-viber-status]').getByText('Выберите отправителя и повторно проверьте канал.', {exact: true}).waitFor();
+  assert.equal(Object.hasOwn(verifyInputs[verifyStart], 'sender_id'), false, 'initial verification omits the old sender ID');
+  assert.deepEqual(await page.locator('#viber-sender option').evaluateAll(options => options.map(option => option.value).filter(Boolean)), ['sender-b', 'sender-c', 'sender-d']);
+  assert.equal(await page.locator('#viber-sender').inputValue(), '', 'the old sender is not silently preselected from stale configuration');
+  assert.equal(state.config.sender_id, 'sender-b', 'discovery leaves the prior configuration unchanged');
+  assert.equal(state.config.revision, oldConfigRevision, 'sender discovery does not mutate configuration revision');
+  assert.equal(await page.locator('#viber-connect').isDisabled(), true, 'a sender must be selected and verified before connecting');
+
+  await page.locator('#viber-sender').selectOption('sender-c');
+  await page.locator('#viber-verify').click();
+  await page.getByText('Канал проверен.', {exact: true}).waitFor();
+  assert.equal(verifyInputs[verifyStart + 1].sender_id, 'sender-c');
+  assert.equal(state.config.sender_id, 'sender-c');
+  assert.equal(state.config.webhook_ready, false, 'replacement account requires its own webhook confirmation');
+
+  await page.locator('#viber-connect').click();
+  await page.getByText('Webhook зарегистрирован.', {exact: false}).waitFor();
+  const callbackReload = page.waitForResponse(response => response.url().includes('/api/v1/configuration/viber') && response.request().method() === 'GET');
+  await page.locator('#viber-refresh').click();
+  await callbackReload;
+  await page.waitForFunction(() => document.querySelector('#viber-test')?.disabled === false);
 });
 
 test('manual test works with automatic delivery off and posts once with a request ID', async () => {
@@ -359,6 +405,7 @@ test('Serbian labels localize the Viber controls without leaking Russian strings
   const labels = await srPage.locator('#viber-settings').innerText();
   assert.match(labels, /Status veze/);
   assert.match(labels, /Token za kanal/);
+  assert.match(labels, /Pošalji probnu poruku/);
   assert.doesNotMatch(labels, /Токен|Настройки|Канал проверен/);
   assert.equal(await srPage.locator('#viber-enable').isDisabled(), false, 'the verified shared synthetic config is ready in Serbian too');
   await srPage.close();
@@ -389,7 +436,7 @@ test('keyboard focus and six responsive light/dark views render without horizont
   assert.ok(focus.label, 'tab navigation should land on a labeled button');
   fs.writeFileSync(path.join(artifacts, 'viber-settings-qa.json'), JSON.stringify({
     result: 'passed', browser: 'Chromium headless', api: 'localhost synthetic mock only',
-    checks: ['credential mask and clear', 'CAS refresh without retry', 'sender selection', 'webhook gate', 'manual test while auto delivery is off', 'request ID and duplicate guard', 'test 409 and 503 behavior', 'confirmed retry after unknown', '422 rejection after reload', '503 ambiguity after reload', 'preview parts and budgets', 'RU/SR labels', 'responsive light/dark', 'keyboard focus'],
+    checks: ['credential mask and clear', 'token replacement and sender rediscovery', 'CAS refresh without retry', 'sender selection', 'webhook gate', 'manual test while auto delivery is off', 'request ID and duplicate guard', 'test 409 and 503 behavior', 'confirmed retry after unknown', '422 rejection after reload', '503 ambiguity after reload', 'preview parts and budgets', 'RU/SR labels', 'responsive light/dark', 'keyboard focus'],
     screenshots: views.flatMap(([, label]) => ['light', 'dark'].map(scheme => `viber-settings-${label}-${scheme}.png`)),
     requests: requestCounts
   }, null, 2) + '\n');
