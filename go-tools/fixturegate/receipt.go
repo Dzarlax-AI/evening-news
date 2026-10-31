@@ -5,6 +5,8 @@ import (
 	"errors"
 	"os"
 	"path/filepath"
+
+	"github.com/Dzarlax-AI/evening-news/go-tools/corerelease"
 )
 
 // WriteReceipt records only images that completed the gate and cleanup.
@@ -47,4 +49,40 @@ func WriteReceipt(dir string, images map[string]Image) error {
 		return err
 	}
 	return nil
+}
+
+// WriteCatalogReceipt binds acceptance to the full catalog and selected targets.
+func WriteCatalogReceipt(dir string, images map[string]Image, catalog corerelease.Catalog) error {
+	if err := catalog.Validate(); err != nil {
+		return err
+	}
+	refs := map[string]string{"web": "evening-news-web:consolidation-fixture", "background": "evening-news-background:consolidation-fixture", "executor": "evening-news-executor:consolidation-fixture"}
+	if len(images) != 3 || dir == "" {
+		return errors.New("invalid_acceptance")
+	}
+	for _, t := range targets {
+		if images[t] != (Image{catalog.Images[t].ImageID, catalog.Images[t].Revision}) {
+			return errors.New("invalid_acceptance")
+		}
+	}
+	data, err := json.MarshalIndent(corerelease.ReceiptV2{Version: 2, Result: "passed", Catalog: catalog, Targets: catalog.Targets(), Tags: refs}, "", "  ")
+	if err != nil {
+		return err
+	}
+	if err = os.MkdirAll(dir, 0700); err != nil {
+		return err
+	}
+	path := filepath.Join(dir, "receipt.json")
+	f, err := os.OpenFile(path, os.O_WRONLY|os.O_CREATE|os.O_EXCL, 0600)
+	if err != nil {
+		return err
+	}
+	_, err = f.Write(append(data, '\n'))
+	if e := f.Close(); err == nil {
+		err = e
+	}
+	if err != nil {
+		_ = os.Remove(path)
+	}
+	return err
 }

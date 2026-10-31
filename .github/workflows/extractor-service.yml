@@ -4,26 +4,42 @@ on:
   pull_request:
     paths:
       - 'go/**'
-      - 'go-tools/**'
-      - 'go-processing/**'
+      - 'go-tools/extractorcompare/**'
+      - 'go-tools/extractorsmoke/**'
+      - 'go-tools/cloakfixture/**'
+      - 'go-tools/cmd/extractor-candidate-metadata/**'
+      - 'go-tools/cmd/smoke-extractor-service/**'
+      - 'go-tools/cmd/compare-extractor-service/**'
+      - 'go-tools/cmd/cloak-fixture/**'
+      - 'go-tools/go.mod'
+      - 'go-tools/go.sum'
       - 'go-web/templates/public/fragments/feed_core.html'
-      - 'tests/fixtures/**'
+      - 'tests/fixtures/go-parity/**'
+      - 'tests/fixtures/extractor-service/**'
       - 'scripts/shadow_cdp_relay.py'
       - 'scripts/shadow_x11_client.sh'
-      - 'deploy/news-extractor/**'
+      - 'deploy/news-extractor/extractor/**'
       - 'docker/Dockerfile.extractor'
       - 'deploy/compose/extractor-test.yml'
       - '.github/workflows/extractor-service.yml'
   push:
     paths:
       - 'go/**'
-      - 'go-tools/**'
-      - 'go-processing/**'
+      - 'go-tools/extractorcompare/**'
+      - 'go-tools/extractorsmoke/**'
+      - 'go-tools/cloakfixture/**'
+      - 'go-tools/cmd/extractor-candidate-metadata/**'
+      - 'go-tools/cmd/smoke-extractor-service/**'
+      - 'go-tools/cmd/compare-extractor-service/**'
+      - 'go-tools/cmd/cloak-fixture/**'
+      - 'go-tools/go.mod'
+      - 'go-tools/go.sum'
       - 'go-web/templates/public/fragments/feed_core.html'
-      - 'tests/fixtures/**'
+      - 'tests/fixtures/go-parity/**'
+      - 'tests/fixtures/extractor-service/**'
       - 'scripts/shadow_cdp_relay.py'
       - 'scripts/shadow_x11_client.sh'
-      - 'deploy/news-extractor/**'
+      - 'deploy/news-extractor/extractor/**'
       - 'docker/Dockerfile.extractor'
       - 'deploy/compose/extractor-test.yml'
       - '.github/workflows/extractor-service.yml'
@@ -38,7 +54,57 @@ permissions:
   contents: read
 
 jobs:
+  impact:
+    runs-on: ubuntu-latest
+    outputs:
+      check_extractor: ${{ steps.select.outputs.check_extractor }}
+      check_browser: ${{ steps.select.outputs.check_browser }}
+      fixture_targets: ${{ steps.select.outputs.fixture_targets }}
+      modules: ${{ steps.select.outputs.modules }}
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          ref: ${{ github.event.pull_request.head.sha || github.sha }}
+          fetch-depth: 0
+          persist-credentials: false
+      - uses: actions/setup-go@v5
+        with:
+          go-version-file: go-tools/go.mod
+          cache-dependency-path: go-tools/go.sum
+      - name: Select impacted checks
+        id: select
+        env:
+          CI_IMPACT_HEAD: ${{ github.event.pull_request.head.sha || github.sha }}
+          CI_IMPACT_BASE: ${{ github.event.before }}
+        run: scripts/ci-impact.sh
+
+  contracts:
+    needs: impact
+    if: ${{ always() && (needs.impact.result != 'success' || ((needs.impact.outputs.check_extractor == 'true' && !contains(fromJSON(needs.impact.outputs.modules), 'go-tools')) || (github.event_name == 'workflow_dispatch' && inputs.publish))) }}
+    runs-on: ubuntu-latest
+    timeout-minutes: 12
+    steps:
+      - name: Fail if impact selection failed
+        if: ${{ needs.impact.result != 'success' }}
+        run: exit 1
+      - uses: actions/checkout@v4
+        with:
+          ref: ${{ github.event.pull_request.head.sha || github.sha }}
+          persist-credentials: false
+      - uses: actions/setup-go@v5
+        with:
+          go-version-file: go-tools/go.mod
+          cache-dependency-path: go-tools/go.sum
+      - name: Test extractor clients and candidate evidence tools
+        working-directory: go-tools
+        run: |
+          go mod verify
+          go test -race ./extractorcompare ./extractorsmoke ./cmd/extractor-candidate-metadata
+          go vet ./extractorcompare ./extractorsmoke ./cmd/extractor-candidate-metadata
+
   verify:
+    needs: impact
+    if: ${{ always() && (needs.impact.result != 'success' || contains(needs.impact.outputs.fixture_targets, 'extractor') || (github.event_name == 'workflow_dispatch' && inputs.publish)) }}
     runs-on: ubuntu-latest
     timeout-minutes: 20
     services:
@@ -70,6 +136,9 @@ jobs:
       ARTICLE_AI_TOKEN: isolated-article-ai-token
       TEST_DATABASE_URL: postgresql+asyncpg://postgres:test-only@127.0.0.1:5432/evening_news_test
     steps:
+      - name: Fail if impact selection failed
+        if: ${{ needs.impact.result != 'success' }}
+        run: exit 1
       - uses: actions/checkout@v4
       - uses: actions/setup-go@v5
         with:
@@ -78,17 +147,6 @@ jobs:
       - uses: actions/setup-node@v4
         with:
           node-version: '22'
-      - name: Test Go contracts and lifecycle
-        working-directory: go
-        run: |
-          go test -race -count=1 ./...
-          go vet ./...
-          go mod verify
-      - name: Test Go fixture probes
-        working-directory: go-tools
-        run: |
-          go test -race ./extractorcompare ./extractorsmoke ./cmd/extractor-candidate-metadata
-          go vet ./extractorcompare ./extractorsmoke ./cmd/extractor-candidate-metadata
       - name: Build independent image and start isolated service
         run: docker compose --project-directory . --env-file /dev/null -f deploy/compose/extractor-test.yml up -d --build --wait
       - name: Smoke API through the Go client
@@ -127,8 +185,8 @@ jobs:
         run: docker compose --project-directory . --env-file /dev/null -f deploy/compose/extractor-test.yml down
 
   publish:
-    needs: [verify, native-cloak-concurrency]
-    if: ${{ github.event_name == 'workflow_dispatch' && inputs.publish && github.ref == format('refs/heads/{0}', github.event.repository.default_branch) }}
+    needs: [impact, contracts, verify, native-cloak-concurrency]
+    if: ${{ github.event_name == 'workflow_dispatch' && inputs.publish && github.ref == 'refs/heads/main' && (needs.contracts.result == 'success' || (needs.contracts.result == 'skipped' && contains(fromJSON(needs.impact.outputs.modules), 'go-tools'))) && needs.verify.result == 'success' && (needs.native-cloak-concurrency.result == 'success' || needs.native-cloak-concurrency.result == 'skipped') }}
     runs-on: ubuntu-latest
     timeout-minutes: 15
     permissions:
@@ -167,11 +225,16 @@ jobs:
           path: extractor-image.txt
 
   native-cloak-concurrency:
+    needs: impact
+    if: ${{ always() && (needs.impact.result != 'success' || needs.impact.outputs.check_browser == 'true') }}
     runs-on: ubuntu-latest
     timeout-minutes: 12
     permissions:
       contents: read
     steps:
+      - name: Fail if impact selection failed
+        if: ${{ needs.impact.result != 'success' }}
+        run: exit 1
       - uses: actions/checkout@v4
       - uses: actions/setup-go@v5
         with:

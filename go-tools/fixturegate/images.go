@@ -4,6 +4,8 @@ package fixturegate
 
 import (
 	"errors"
+
+	"github.com/Dzarlax-AI/evening-news/go-tools/corerelease"
 	"regexp"
 	"strings"
 )
@@ -48,6 +50,39 @@ func VerifyImages(refs map[string]string, initial map[string]Image, run Runner) 
 	final, e := CaptureImages(refs, run)
 	if e != nil {
 		return e
+	}
+	for _, target := range targets {
+		if final[target] != initial[target] {
+			return errors.New("fixture_image_changed")
+		}
+	}
+	return nil
+}
+
+// CaptureCatalog checks all components against a validated complete catalog.
+func CaptureCatalog(refs map[string]string, catalog corerelease.Catalog, run Runner) (map[string]Image, error) {
+	if err := catalog.Validate(); err != nil {
+		return nil, err
+	}
+	out := make(map[string]Image, len(targets))
+	for _, target := range targets {
+		if refs[target] == "" {
+			return nil, errors.New("fixture_image_ref_missing")
+		}
+		v, err := run("image", "inspect", "--format", `{{.Id}} {{.Os}}/{{.Architecture}} {{index .Config.Labels "org.opencontainers.image.revision"}}`, refs[target])
+		f := strings.Fields(v)
+		want := catalog.Images[target]
+		if err != nil || len(f) != 3 || f[0] != want.ImageID || f[1] != want.Platform || f[2] != want.Revision {
+			return nil, errors.New("fixture_catalog_image_mismatch")
+		}
+		out[target] = Image{f[0], f[2]}
+	}
+	return out, nil
+}
+func VerifyCatalog(refs map[string]string, initial map[string]Image, catalog corerelease.Catalog, run Runner) error {
+	final, err := CaptureCatalog(refs, catalog, run)
+	if err != nil {
+		return err
 	}
 	for _, target := range targets {
 		if final[target] != initial[target] {

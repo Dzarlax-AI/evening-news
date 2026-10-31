@@ -1051,7 +1051,7 @@
     "key": "EGRESS_TOKEN",
     "owner": "egress",
     "type": "secret string",
-    "default": "empty; required (16–256 bytes)",
+    "default": "empty; required (16\u2013256 bytes)",
     "secret": true,
     "store": "legacy process environment; managed role manifest for egress",
     "reload": "process startup; restart or recreate after changing environment",
@@ -1861,6 +1861,38 @@
     "managed_roles": []
   },
   {
+    "key": "GITHUB_RUN_ID",
+    "owner": "operator tools",
+    "type": "string",
+    "default": "GitHub-assigned workflow run ID",
+    "secret": false,
+    "store": "operator/CI tool process environment",
+    "reload": "read per tool invocation",
+    "migration": "operator tool setting, not application migration state",
+    "precedence": "GitHub job environment; not an application runtime input",
+    "sources": [
+      "go-tools/ciartifact/client.go:190"
+    ],
+    "class": "operator_or_ci",
+    "managed_roles": []
+  },
+  {
+    "key": "GITHUB_TOKEN",
+    "owner": "operator tools",
+    "type": "secret string",
+    "default": "unset; required for private GitHub artifact reads",
+    "secret": true,
+    "store": "operator/CI tool process environment",
+    "reload": "read per tool invocation",
+    "migration": "operator tool setting, not application migration state",
+    "precedence": "GitHub job environment; not an application runtime input",
+    "sources": [
+      "go-tools/cmd/ci-artifacts/main.go:54"
+    ],
+    "class": "operator_or_ci",
+    "managed_roles": []
+  },
+  {
     "key": "HOME",
     "owner": "operator tools",
     "type": "path",
@@ -2472,7 +2504,7 @@
     "migration": "retain effective value per consuming role; no automatic adoption implied",
     "precedence": "explicit value, then component default; see source locations for validation",
     "sources": [
-      "go-tools/cmd/vertical-fixture-gate/main.go:1372"
+      "go-tools/cmd/vertical-fixture-gate/main.go:1399"
     ],
     "class": "fixture_only",
     "managed_roles": []

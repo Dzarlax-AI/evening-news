@@ -3,6 +3,7 @@ name: Shared Cloak browser image
 on:
   pull_request:
     paths:
+      - '.dockerignore'
       - 'deploy/news-extractor/browser/**'
       - 'deploy/news-extractor/compose.shared-browser.yml'
       - 'deploy/news-extractor/compose.native.yml'
@@ -11,11 +12,10 @@ on:
       - 'scripts/shadow_cdp_relay.py'
       - 'scripts/shadow_x11_client.sh'
       - 'go-tools/browsercontract/**'
-      - 'go-tools/go.mod'
-      - 'go-tools/go.sum'
       - '.github/workflows/shared-browser.yml'
   push:
     paths:
+      - '.dockerignore'
       - 'deploy/news-extractor/browser/**'
       - 'deploy/news-extractor/compose.shared-browser.yml'
       - 'deploy/news-extractor/compose.native.yml'
@@ -24,8 +24,6 @@ on:
       - 'scripts/shadow_cdp_relay.py'
       - 'scripts/shadow_x11_client.sh'
       - 'go-tools/browsercontract/**'
-      - 'go-tools/go.mod'
-      - 'go-tools/go.sum'
       - '.github/workflows/shared-browser.yml'
   workflow_dispatch:
     inputs:
@@ -38,10 +36,38 @@ permissions:
   contents: read
 
 jobs:
+  impact:
+    runs-on: ubuntu-latest
+    outputs:
+      check_browser: ${{ steps.select.outputs.check_browser }}
+      image_changed_browser: ${{ steps.select.outputs.image_changed_browser }}
+      modules: ${{ steps.select.outputs.modules }}
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          ref: ${{ github.event.pull_request.head.sha || github.sha }}
+          fetch-depth: 0
+          persist-credentials: false
+      - uses: actions/setup-go@v5
+        with:
+          go-version-file: go-tools/go.mod
+          cache-dependency-path: go-tools/go.sum
+      - name: Select impacted checks
+        id: select
+        env:
+          CI_IMPACT_HEAD: ${{ github.event.pull_request.head.sha || github.sha }}
+          CI_IMPACT_BASE: ${{ github.event.before }}
+        run: scripts/ci-impact.sh
+
   verify:
+    needs: impact
+    if: ${{ always() && (needs.impact.result != 'success' || ((needs.impact.outputs.check_browser == 'true' || (github.event_name == 'workflow_dispatch' && inputs.publish)) && (needs.impact.outputs.image_changed_browser == 'true' || !contains(fromJSON(needs.impact.outputs.modules), 'go-tools') || (github.event_name == 'workflow_dispatch' && inputs.publish)))) }}
     runs-on: ubuntu-latest
     timeout-minutes: 20
     steps:
+      - name: Fail if impact selection failed
+        if: ${{ needs.impact.result != 'success' }}
+        run: exit 1
       - uses: actions/checkout@v4
       - uses: docker/setup-buildx-action@v3
       - uses: actions/setup-go@v5
@@ -49,6 +75,7 @@ jobs:
           go-version-file: go-tools/go.mod
           cache-dependency-path: go-tools/go.sum
       - name: Build browser image for inspection on pull requests and branch pushes
+        if: ${{ needs.impact.outputs.image_changed_browser == 'true' || (github.event_name == 'workflow_dispatch' && inputs.publish) }}
         uses: docker/build-push-action@v5
         with:
           context: .
@@ -61,6 +88,7 @@ jobs:
             org.opencontainers.image.source=${{ github.server_url }}/${{ github.repository }}
             org.opencontainers.image.revision=${{ github.sha }}
       - name: Inspect and import the built browser runtime
+        if: ${{ needs.impact.outputs.image_changed_browser == 'true' || (github.event_name == 'workflow_dispatch' && inputs.publish) }}
         run: |
           set -euo pipefail
           docker image inspect evening-news-browser:test-${GITHUB_SHA} \
@@ -71,17 +99,18 @@ jobs:
           docker run --rm --entrypoint python evening-news-browser:test-${GITHUB_SHA} \
             -c 'import sys; sys.path.insert(0, "/opt/news-browser"); import entrypoint, policy; print("browser imports ok")'
       - name: Verify in-image policy, relay and Compose contracts
+        if: ${{ needs.impact.outputs.image_changed_browser == 'true' || !contains(fromJSON(needs.impact.outputs.modules), 'go-tools') || (github.event_name == 'workflow_dispatch' && inputs.publish) }}
         working-directory: go-tools
         env:
           NEWS_BROWSER_IMAGE: evening-news-browser:test-${{ github.sha }}
-          NEWS_BROWSER_CONTRACT_REQUIRED: '1'
+          NEWS_BROWSER_CONTRACT_REQUIRED: ${{ (needs.impact.outputs.image_changed_browser == 'true' || (github.event_name == 'workflow_dispatch' && inputs.publish)) && '1' || '0' }}
         run: |
           go test -race -count=1 ./browsercontract
           go vet ./browsercontract
 
   publish-candidate:
-    needs: verify
-    if: ${{ github.event_name == 'workflow_dispatch' && inputs.publish && github.ref == 'refs/heads/main' }}
+    needs: [impact, verify]
+    if: ${{ github.event_name == 'workflow_dispatch' && inputs.publish && github.ref == 'refs/heads/main' && needs.verify.result == 'success' }}
     runs-on: ubuntu-latest
     timeout-minutes: 25
     permissions:

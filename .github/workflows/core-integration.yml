@@ -1,0 +1,212 @@
+name: Core full integration gate
+
+on:
+  workflow_call:
+    inputs:
+      head_sha: {type: string, required: true}
+      candidate_run_id: {type: string, required: true}
+      candidate_artifact: {type: string, required: true}
+      catalog_key: {type: string, required: true}
+      is_pr: {type: boolean, default: false}
+      bootstrap_fixture: {type: boolean, default: false}
+    outputs:
+      gate_run_id:
+        value: ${{ jobs.accept.outputs.gate_run_id }}
+      gate_artifact:
+        value: ${{ jobs.accept.outputs.gate_artifact }}
+  workflow_dispatch:
+    inputs:
+      head_sha: {description: Reviewed main candidate SHA, type: string, required: true}
+      candidate_run_id: {description: Candidate run ID, type: string, required: true}
+      candidate_artifact: {description: Candidate artifact name, type: string, required: true}
+      catalog_key: {description: Exact catalog SHA256, type: string, required: true}
+      bootstrap_fixture: {description: Explicitly build a missing extractor fixture once, type: boolean, default: false}
+
+permissions:
+  contents: read
+  actions: read
+  packages: read
+
+env:
+  PYTHONDONTWRITEBYTECODE: '1'
+
+jobs:
+  vertical:
+    runs-on: ubuntu-latest
+    timeout-minutes: 60
+    outputs:
+      fixture_key: ${{ steps.gate.outputs.fixture_key }}
+      fixture_new: ${{ steps.gate.outputs.fixture_new }}
+    env:
+      NEWS_CI_TOOLS: /tmp/news-ci-tools
+      GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+      HEAD_SHA: ${{ inputs.head_sha }}
+      CANDIDATE_RUN_ID: ${{ inputs.candidate_run_id }}
+      CANDIDATE_NAME: ${{ inputs.candidate_artifact }}
+      CATALOG_KEY: ${{ inputs.catalog_key }}
+      IS_PR: ${{ inputs.is_pr || false }}
+      BOOTSTRAP: ${{ inputs.bootstrap_fixture }}
+    steps:
+      - name: Restrict direct invocation to main
+        if: github.event_name == 'workflow_dispatch' && github.ref != 'refs/heads/main'
+        run: exit 1
+      - uses: actions/checkout@v4
+        with:
+          ref: ${{ env.HEAD_SHA }}
+          fetch-depth: 0
+          persist-credentials: false
+      - uses: actions/setup-go@v5
+        with:
+          go-version-file: go-tools/go.mod
+          cache-dependency-path: go-tools/go.sum
+      - uses: docker/setup-buildx-action@v3
+      - uses: docker/login-action@v3
+        if: inputs.is_pr != true
+        with:
+          registry: ghcr.io
+          username: ${{ github.actor }}
+          password: ${{ secrets.GITHUB_TOKEN }}
+      - name: Build isolated gate tools
+        working-directory: go-tools
+        run: |
+          mkdir -p "$NEWS_CI_TOOLS"
+          for command in ci-impact ci-artifacts core-image-catalog vertical-fixture-gate managed-adoption-gate; do
+            go build -o "$NEWS_CI_TOOLS/$command" "./cmd/$command"
+          done
+      - name: Test the exact mixed image set on PG16 and PG17
+        id: gate
+        run: |
+          flags=()
+          if [ "$IS_PR" = true ]; then flags+=(--pr); fi
+          if [ "$BOOTSTRAP" = true ]; then flags+=(--bootstrap-fixture); fi
+          python3 scripts/ci-core.py gate --root "$GITHUB_WORKSPACE" --head "$HEAD_SHA" --run-id "$CANDIDATE_RUN_ID" --name "$CANDIDATE_NAME" --key "$CATALOG_KEY" --output "$RUNNER_TEMP/core-gate" "${flags[@]}"
+      - uses: actions/upload-artifact@v4
+        with:
+          name: core-gate-raw-${{ env.HEAD_SHA }}-${{ env.CATALOG_KEY }}
+          compression-level: 0
+          path: |
+            ${{ runner.temp }}/core-gate/accepted/receipt.json
+            ${{ runner.temp }}/core-gate/fixture/fixture.json
+            ${{ runner.temp }}/core-gate/fixture/fixture.tar
+          if-no-files-found: error
+          retention-days: 30
+
+  managed-recovery:
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    strategy:
+      fail-fast: false
+      matrix:
+        postgres: ['16', '17']
+    services:
+      postgres:
+        image: postgres:${{ matrix.postgres }}-alpine
+        env:
+          POSTGRES_USER: postgres
+          POSTGRES_PASSWORD: fixture-only
+          POSTGRES_DB: news_fixture
+        options: >-
+          --health-cmd "pg_isready -U postgres -d news_fixture"
+          --health-interval 5s --health-timeout 5s --health-retries 12
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          ref: ${{ inputs.head_sha }}
+          persist-credentials: false
+      - uses: actions/setup-go@v5
+        with:
+          go-version: '1.26.10'
+          cache: false
+      - name: Build isolated installer tests
+        working-directory: go-domain
+        run: CGO_ENABLED=0 GOOS=linux GOARCH=amd64 go test -c -o "$RUNNER_TEMP/news-installer.test" ./cmd/newsctl
+      - name: Check fresh roles and encrypted restore with matching PostgreSQL client
+        env:
+          PG_CONTAINER: ${{ job.services.postgres.id }}
+        run: |
+          set -eu
+          trap 'rm -f "$RUNNER_TEMP/news-installer.test"' EXIT
+          docker cp "$RUNNER_TEMP/news-installer.test" "$PG_CONTAINER:/tmp/news-installer.test"
+          docker exec "$PG_CONTAINER" mkdir -p "$GITHUB_WORKSPACE/go-scheduler/migrations"
+          docker cp go-scheduler/migrations/001_initial.sql "$PG_CONTAINER:$GITHUB_WORKSPACE/go-scheduler/migrations/001_initial.sql"
+          docker exec -e NEWS_INSTALLER_TEST_RECOVERY=1 -e 'NEWS_INSTALLER_TEST_DATABASE_URL=postgres://postgres:fixture-only@127.0.0.1:5432/news_fixture?sslmode=disable' "$PG_CONTAINER" /tmp/news-installer.test -test.run '^Test(FreshProvision|AdoptionImportPostgresFixture|ExternalInstallPostgresFixture)$' -test.count=1 -test.timeout=5m
+
+      - name: Build settings-recovery rehearsal and standard age tools
+        env:
+          CGO_ENABLED: '0'
+          GOOS: linux
+          GOARCH: amd64
+        run: |
+          set -eu
+          (cd go-domain && go test -c -o "$RUNNER_TEMP/news-settings-recovery.test" ./recovery)
+          (cd go-scheduler && go test -c -o "$RUNNER_TEMP/news-settings-schedules.test" ./internal/api)
+          GOBIN="$RUNNER_TEMP/news-settings-tools" go install filippo.io/age/cmd/age@v1.3.2
+          GOBIN="$RUNNER_TEMP/news-settings-tools" go install filippo.io/age/cmd/age-keygen@v1.3.2
+      - name: Rehearse settings-only encrypted recovery without external calls
+        env:
+          PG_CONTAINER: ${{ job.services.postgres.id }}
+        run: |
+          set -eu
+          trap 'rm -f "$RUNNER_TEMP/news-settings-recovery.test" "$RUNNER_TEMP/news-settings-schedules.test"; rm -rf "$RUNNER_TEMP/news-settings-tools"' EXIT
+          docker exec "$PG_CONTAINER" createdb -U postgres settings_recovery_fixture
+          docker exec "$PG_CONTAINER" mkdir -p "$GITHUB_WORKSPACE/deploy" "$GITHUB_WORKSPACE/go-domain/recovery" "$GITHUB_WORKSPACE/go-scheduler/internal/api" "$GITHUB_WORKSPACE/docs"
+          docker cp deploy/recovery "$PG_CONTAINER:$GITHUB_WORKSPACE/deploy/"
+          docker cp docs/managed-settings-recovery.md "$PG_CONTAINER:$GITHUB_WORKSPACE/docs/managed-settings-recovery.md"
+          docker cp "$RUNNER_TEMP/news-settings-recovery.test" "$PG_CONTAINER:/tmp/news-settings-recovery.test"
+          docker cp "$RUNNER_TEMP/news-settings-schedules.test" "$PG_CONTAINER:/tmp/news-settings-schedules.test"
+          docker cp "$RUNNER_TEMP/news-settings-tools/age" "$PG_CONTAINER:/tmp/age"
+          docker cp "$RUNNER_TEMP/news-settings-tools/age-keygen" "$PG_CONTAINER:/tmp/age-keygen"
+          for spec in 'go-domain/recovery:news-settings-recovery:TestSettingsRecoveryRecipes' 'go-scheduler/internal/api:news-settings-schedules:TestSettingsRecoverySchedulesNoReplay'; do
+            work=${spec%%:*}; rest=${spec#*:}; binary=${rest%%:*}; test_name=${rest#*:}
+            docker exec -w "$GITHUB_WORKSPACE/$work" -e PATH=/tmp:/usr/local/bin:/usr/bin:/bin -e 'NEWS_SETTINGS_RECOVERY_TEST_URL=postgres://postgres:fixture-only@127.0.0.1:5432/settings_recovery_fixture?sslmode=disable' "$PG_CONTAINER" "/tmp/$binary.test" -test.run "^$test_name$" -test.count=1 -test.timeout=5m
+          done
+
+  accept:
+    needs: [vertical, managed-recovery]
+    runs-on: ubuntu-latest
+    outputs:
+      gate_run_id: ${{ steps.identity.outputs.gate_run_id }}
+      gate_artifact: ${{ steps.identity.outputs.gate_artifact }}
+    env:
+      HEAD_SHA: ${{ inputs.head_sha }}
+      CATALOG_KEY: ${{ inputs.catalog_key }}
+      FIXTURE_KEY: ${{ needs.vertical.outputs.fixture_key }}
+      IS_PR: ${{ inputs.is_pr || false }}
+    steps:
+      - uses: actions/download-artifact@v4
+        with:
+          name: core-gate-raw-${{ env.HEAD_SHA }}-${{ env.CATALOG_KEY }}
+          path: ${{ runner.temp }}/accepted/
+      - name: Check receipt identity after all recovery jobs passed
+        id: identity
+        run: |
+          python3 - <<'PYTHON'
+          import hashlib,json,os,pathlib,re
+          root=pathlib.Path(os.environ['RUNNER_TEMP'])/'accepted'
+          receipt=json.loads((root/'accepted/receipt.json').read_text())
+          assert receipt['result']=='passed'
+          assert re.fullmatch('[0-9a-f]{40}',os.environ['HEAD_SHA'])
+          assert re.fullmatch('[0-9a-f]{64}',os.environ['CATALOG_KEY'])
+          if os.environ['IS_PR']!='true':
+            assert receipt['schemaVersion']==2 and receipt['catalog']['revision']==os.environ['HEAD_SHA']
+            digest=hashlib.sha256(json.dumps(receipt['catalog'],sort_keys=True,separators=(',',':')).encode()).hexdigest()
+            assert digest==os.environ['CATALOG_KEY']
+          with open(os.environ['GITHUB_OUTPUT'],'a') as f:
+            f.write('gate_run_id='+os.environ['GITHUB_RUN_ID']+'\n')
+            f.write('gate_artifact=core-acceptance-'+os.environ['HEAD_SHA']+'-'+os.environ['CATALOG_KEY']+'\n')
+          PYTHON
+      - uses: actions/upload-artifact@v4
+        with:
+          name: core-acceptance-${{ env.HEAD_SHA }}-${{ env.CATALOG_KEY }}
+          path: ${{ runner.temp }}/accepted/accepted/receipt.json
+          if-no-files-found: error
+          retention-days: 30
+      - name: Save accepted reusable extractor fixture
+        if: ${{ inputs.is_pr != true && needs.vertical.outputs.fixture_new == 'true' }}
+        uses: actions/upload-artifact@v4
+        with:
+          name: extractor-fixture-${{ env.FIXTURE_KEY }}
+          compression-level: 0
+          path: ${{ runner.temp }}/accepted/fixture/
+          if-no-files-found: error
+          retention-days: 90
