@@ -25,24 +25,44 @@ permissions:
   contents: read
 
 jobs:
+  impact:
+    runs-on: ubuntu-latest
+    outputs:
+      check_prototype: ${{ steps.select.outputs.check_prototype }}
+      modules: ${{ steps.select.outputs.modules }}
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          ref: ${{ github.event.pull_request.head.sha || github.sha }}
+          fetch-depth: 0
+          persist-credentials: false
+      - uses: actions/setup-go@v5
+        with:
+          go-version-file: go-tools/go.mod
+          cache-dependency-path: go-tools/go.sum
+      - name: Select impacted checks
+        id: select
+        run: scripts/ci-impact.sh
+
   replay:
+    needs: impact
+    if: ${{ always() && (needs.impact.result != 'success' || needs.impact.outputs.check_prototype == 'true') }}
     runs-on: ubuntu-latest
     timeout-minutes: 15
     env:
       SCHEDULER_ENABLED: 'false'
       NO_BROWSER: '1'
     steps:
+      - name: Fail if impact selection failed
+        if: ${{ needs.impact.result != 'success' }}
+        run: exit 1
       - uses: actions/checkout@v4
       - uses: actions/setup-go@v5
         with:
           go-version-file: go/go.mod
           cache-dependency-path: go/go.sum
-      - name: Go unit tests, race detector, and static checks
-        working-directory: go
-        run: |
-          go test -race ./...
-          go vet ./...
       - name: Replay comparison tests
+        if: ${{ !contains(fromJSON(needs.impact.outputs.modules), 'go-tools') }}
         working-directory: go-tools
         run: |
           go test -race ./replaycheck ./cmd/compare-extraction-replays

@@ -30,7 +30,28 @@ permissions:
   contents: read
 
 jobs:
+  impact:
+    runs-on: ubuntu-latest
+    outputs:
+      check_web_api: ${{ steps.select.outputs.check_web_api }}
+      modules: ${{ steps.select.outputs.modules }}
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          ref: ${{ github.event.pull_request.head.sha || github.sha }}
+          fetch-depth: 0
+          persist-credentials: false
+      - uses: actions/setup-go@v5
+        with:
+          go-version-file: go-tools/go.mod
+          cache-dependency-path: go-tools/go.sum
+      - name: Select impacted checks
+        id: select
+        run: scripts/ci-impact.sh
+
   contracts:
+    needs: impact
+    if: ${{ always() && (needs.impact.result != 'success' || needs.impact.outputs.check_web_api == 'true') }}
     runs-on: ubuntu-latest
     timeout-minutes: 20
     strategy:
@@ -57,6 +78,9 @@ jobs:
       JWT_SECRET: fixture-only-signing-key-at-least-thirty-two-bytes
       SCHEDULER_ENABLED: 'false'
     steps:
+      - name: Fail if impact selection failed
+        if: ${{ needs.impact.result != 'success' }}
+        run: exit 1
       - uses: actions/checkout@v4
         with:
           persist-credentials: false
@@ -75,19 +99,12 @@ jobs:
       - name: Verify admin digest dates against UTC near local midnight
         working-directory: go-web
         run: TZ=Pacific/Kiritimati node --test test/summaries_date.test.cjs
-      - name: Go component checks
-        working-directory: go-web
-        run: |
-          go mod verify
-          go test -race -count=1 ./...
-          go vet ./...
-          CGO_ENABLED=0 GOOS=linux GOARCH=amd64 go build -o /tmp/news-web-amd64 ./cmd/news-web
-          CGO_ENABLED=0 GOOS=linux GOARCH=arm64 go build -o /tmp/news-web-arm64 ./cmd/news-web
       - uses: actions/setup-go@v5
         with:
           go-version-file: go-domain/go.mod
           cache-dependency-path: go-domain/go.sum
       - name: Verify native private backend and migration contracts
+        if: ${{ !contains(fromJSON(needs.impact.outputs.modules), 'go-domain') }}
         working-directory: go-domain
         run: |
           go test -race -count=1 -p=1 ./webbackend ./migration

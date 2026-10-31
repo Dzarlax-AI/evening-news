@@ -1,0 +1,126 @@
+<!doctype html>
+<html lang="ru">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width,initial-scale=1">
+<title>Evening News — выборочный CI и публикация образов</title>
+<style>
+:root{color-scheme:light dark;--bg:#f4f1e9;--paper:#fffdf8;--ink:#242521;--muted:#66675e;--line:#d5d2c8;--accent:#245c4a}
+*{box-sizing:border-box}body{margin:0;background:var(--bg);color:var(--ink);font:16px/1.6 system-ui,sans-serif}main{max-width:1120px;margin:auto;padding:32px 20px 64px}h1,h2{font-family:Georgia,serif;line-height:1.2}h1{font-size:clamp(28px,4vw,42px);max-width:850px}h2{font-size:25px}section{background:var(--paper);border:1px solid var(--line);padding:22px;margin:20px 0}p,li,td,code{overflow-wrap:anywhere}.meta{color:var(--muted)}.decision{border-left:5px solid var(--accent)}.table-wrap,pre{overflow-x:auto}table{width:100%;border-collapse:collapse;font-size:14px}th,td{text-align:left;vertical-align:top;padding:10px;border:1px solid var(--line)}code{font-size:.9em}li+li{margin-top:8px}a{color:var(--accent)}.tag{display:inline-block;padding:3px 9px;border:1px solid var(--line);border-radius:4px;font-size:13px}pre{padding:16px;border:1px solid var(--line);line-height:1.5}
+@media(prefers-color-scheme:dark){:root{--bg:#191c1b;--paper:#222625;--ink:#eeeee6;--muted:#b8bbaf;--line:#434940;--accent:#a1cfba}}@media(max-width:600px){main{padding:18px 12px}section{padding:16px}th,td{min-width:145px}}
+</style>
+</head>
+<body><main>
+<p class="meta">Evening News · 31 октября 2026 · Редакция 1 · <span class="tag">Реализовано и проверено локально</span></p>
+<h1>Проверять затронутые модули. Собирать и публиковать изменённые образы.</h1>
+<p>Полная интеграционная проверка остаётся отдельным обязательным gate перед публикацией. Она проверяет конкретный комплект новых и повторно используемых образов.</p>
+
+<section class="decision"><h2>1. Результат и границы</h2>
+<p>Обычный PR получает выборочные тесты с объяснением выбора. Релиз собирает каждый изменённый core-образ один раз, проверяет итоговый комплект и публикует только новые образы. Неизменённые компоненты сохраняют прежние digest и revision.</p>
+<p>В область входят выбор проверок во всех Go workflows, сборка трёх core targets, контракт acceptance receipt и публикационный manifest. Триггеры отдельных extractor/browser workflows используют собственные зависимости; их runtime, Dockerfile и поведение не меняются. Бизнес-логика, схемы БД, AI-вызовы, каналы доставки и прод не входят в реализацию этого плана.</p>
+<p><strong>Одобрение ниже разрешает локальную реализацию и проверки.</strong> Commit, push, PR, merge, публикация и выкладка требуют соответствующего отдельного разрешения. Разрешения на срочный релиз дайджеста не распространяются на CI.</p>
+</section>
+
+<section><h2>2. Что обнаружено в текущем коде</h2>
+<ul>
+<li><code>.github/workflows/docker-build-push.yml</code>: 11 модулей × PostgreSQL 16/17, recovery и ARM64; после этого PR собирает все три образа для полного gate. Ручная публикация снова выполняет проверки и сборку всех трёх.</li>
+<li>После merge автоматически запускается ещё один прогон. При срочном релизе <a href="https://github.com/Dzarlax-AI/evening-news/pull/58">PR #58</a> дублирующий push-прогон был отменён, чтобы освободить runners для публикации.</li>
+<li><code>go-tools/corerelease/release.go</code> всегда публикует <code>web/background/executor</code> и требует одну revision. <code>fixturegate/images.go</code> и <code>receipt.go</code> тоже требуют общую revision. Поэтому одних path filters недостаточно.</li>
+<li><code>docker-bake.hcl</code> уже позволяет выбирать targets. Их зависимости заданы в <code>docker/Dockerfile</code>. Изменение теста само по себе не требует нового runtime-образа; встроенные ресурсы и копируемые в финальный слой файлы требуют учёта.</li>
+</ul>
+<p class="meta">Основа проектирования — <code>origin/main@2ca1726453e49de86e5f5cec72654775267e8850</code>. Локальная ветка диагностики содержит отдельные незакоммиченные изменения; в работу CI они не попадут.</p>
+</section>
+
+<section><h2>3. Как определяется влияние</h2>
+<p>Новый Go-инструмент формирует проверяемый план: <code>base/head</code>, изменённые файлы с учётом удаления и переименования, модули для тестов, image targets, обязательные специальные gates и причины каждого выбора. Каталог владельцев файлов хранится в репозитории. Локальные import-зависимости читаются из AST исходников обеих Git-ревизий без сетевого разрешения зависимостей; общие fixtures и не-Go ресурсы имеют явных потребителей.</p>
+<div class="table-wrap"><table><thead><tr><th>Изменение</th><th>Тесты</th><th>Новые core-образы</th></tr></thead><tbody>
+<tr><td>Текущий timeout fix в <code>go-domain</code></td><td><code>go-domain</code></td><td><code>executor</code></td></tr>
+<tr><td>Изменения PR #57: runtime в execution/background, тесты domain</td><td><code>go-execution</code>, <code>go-background</code>, <code>go-domain</code></td><td><code>background</code></td></tr>
+<tr><td><code>go-editorial</code>, runtime-код</td><td><code>go-editorial</code> и потребитель <code>go-domain</code></td><td><code>executor</code></td></tr>
+<tr><td>Шаблоны, CSS, TypeScript reader</td><td>Проверки web и применимые проверки assets</td><td><code>web</code></td></tr>
+<tr><td>Только <code>_test.go</code> или общий test fixture</td><td>Модуль теста или объявленные потребители fixture</td><td>Нет, если файл не встроен в runtime</td></tr>
+<tr><td><code>go-tools/runtimeconfig</code></td><td>Tools и фактические импортирующие модули</td><td>Все три</td></tr>
+<tr><td><code>go-tools/corerelease</code></td><td>Tools и проверки release-контракта</td><td>Нет runtime-образов; требуется отдельный полный gate изменения CI</td></tr>
+<tr><td>Общий core Dockerfile / build recipe</td><td>Применимые модули и проверки image inventory</td><td>Консервативно все три</td></tr>
+<tr><td>Документация из явного безопасного списка</td><td>Классификатор и применимая проверка документа</td><td>Нет</td></tr>
+<tr><td>Неизвестный путь, недоступный diff или неразрешённая зависимость</td><td>Полная проверка либо остановка с причиной</td><td>Нельзя объявить «ничего не изменилось»</td></tr>
+</tbody></table></div>
+<p>Для runtime-файла проверяется модуль и обратные зависимости затронутых пакетов; для тестового файла — потребители этого тестового входа. Состав образа вычисляется отдельно: компилируемые зависимости команд, <code>go.mod/go.sum</code>, <code>go:embed</code>, финальные COPY, frontend assets и рецепт сборки. Изменения lockfiles считаются влияющими на соответствующие targets.</p>
+<p>PR сравнивается с merge base. Релиз сравнивается с revision последнего доверенного опубликованного каталога компонентов, а не только с <code>HEAD^</code>: так не пропускаются несколько накопленных коммитов. Новый план обязан показывать выбранные проверки и причины пропусков в GitHub summary.</p>
+</section>
+
+<section><h2>4. Три этапа вместо повторных полных прогонов</h2>
+<ol>
+<li><strong>PR / быстрые проверки.</strong> Только выбранные модули: race tests, vet и проверка зависимостей; PostgreSQL 16/17 сохраняются там, где есть соответствующие проверки. ARM64 — для затронутых runtime targets. Required check имеет стабильное имя и существует даже при пустой матрице. Неожиданно пропущенный выбранный job считается ошибкой.</li>
+<li><strong>Кандидат reviewed main.</strong> После merge определяется полный накопленный delta, выбранные образы собираются один раз. Результат и точные идентификаторы сохраняются как артефакты этого SHA. Одновременный merge/dispatch не запускает второй кандидат для того же SHA. Проверки PR другого SHA автоматически не засчитываются как проверка main.</li>
+<li><strong>Отдельный full integration gate → ручная публикация.</strong> Gate получает проверенный комплект из новых candidates и прежних immutable digests. Проверяет весь комплект на PG16/17, recovery, контракты и image identity. Публикация принимает только receipt именно этого комплекта и SHA; повторная сборка после acceptance запрещена. Если gate уже прошёл для тех же входов, второй gate не нужен.</li>
+</ol>
+<p>Full gate оформляется отдельным reusable workflow с ручным вызовом. Его можно вызвать до публикации для любого подготовленного комплекта; публикация без успешного gate запрещена. Изменения самого selector/release/gate вызывают расширенную проверку в PR. Пустой выбор образов даёт no-op отчёт и не создаёт новых тегов.</p>
+<p>Сохраняются vertical fixture, managed recovery и managed-adoption acceptance на PostgreSQL 16 и 17, включая extractor fixture. Неизменённый вспомогательный extractor fixture переиспользуется как проверенный OCI-артефакт с собственными source fingerprint/platform/image ID; его исходники меняются — он собирается один раз для gate. Первичный fixture-артефакт создаётся явно при переходе. При его утрате требуется явная bootstrap-сборка; скрытой пересборки неизменённых компонентов в full gate нет. Отдельная публикация extractor остаётся в своём workflow.</p>
+</section>
+
+<section><h2>5. Каталог компонентов и защита публикации</h2>
+<p>Каталог содержит все три core-компонента. У каждого — собственные <code>revision</code>, repository, platform, registry digest и проверенный config/image ID; новый manifest v2 дополнительно фиксирует source fingerprint, происхождение и признак <code>built/reused</code>. Top-level revision обозначает рассмотренный комплект, а не притворную пересборку каждого компонента. Registry digest и Docker config ID остаются разными полями.</p>
+<ul>
+<li>Baseline берётся из успешной публикации доверенного workflow этого репозитория на main. Проверяются workflow/event, conclusion, SHA, ancestry, platform, формат manifest и digest. Артефакты fork/PR не становятся baseline публикации.</li>
+<li>Полный v1 manifest ревизии <code>2ca1726…</code> уже скачан из успешного publication run <code>41229321309</code>. Импорт в первый baseline допустим только после проверки доступности всех трёх registry digests, их identities и вычисления source fingerprints по исходникам этой revision; эти проверки ещё не выполнены для всего каталога. Дальше используется v2. Неизвестная версия или недостоверный baseline блокируют публикацию; автоматического выбора <code>latest</code> нет.</li>
+<li>Неизменённый компонент подтягивается по digest и сохраняет старую revision. Новый компонент обязан иметь labels текущего SHA. Receipt содержит полный комплект и список разрешённых к публикации новых targets.</li>
+<li>Publisher перед первым push проверяет отсутствие только новых immutable SHA tags и соответствие receipt. Reused targets не retag/push. Чужой, устаревший или подменённый receipt отклоняется.</li>
+<li>Повторный dispatch использует завершённый кандидат/gate того же SHA и набора входов. При утрате артефакта нельзя незаметно пересобрать другой образ под уже принятым receipt. Повторная сборка создаёт новый кандидат и требует свежего gate.</li>
+<li><strong>Публикации разных SHA сериализуются общей блокировкой</strong>, отдельно от dedup одного SHA. Внутри неё baseline перечитывается перед первым push и перед выпуском полного manifest. Если другой релиз уже продвинул каталог, старый комплект не публикуется: пересчитывается delta/комплект и нужен свежий gate. Более старая revision не может откатить каталог более новой; недоступная или неоднозначная история публикаций блокирует операцию.</li>
+<li>Полный успешный manifest публикуется только после завершения всех новых push. Если публикация прервалась частично, уже существующие SHA tags не перезаписываются; требуется сверка состояния и продолжение только при доказанном совпадении.</li>
+</ul>
+<p>GitHub token получает package write только в публикационном job. Fork PR с недоступным baseline может пройти полный изолированный build/gate без публикации. Изменения mutable base images требуют явного пересмотра/принудительной сборки выбранных targets; reuse не означает автоматическое обновление базового слоя.</p>
+<p><strong>Граница acceptance:</strong> gate подтверждает указанный каталог компонентов. Произвольный прод-комплект с более старыми digest этим receipt не подтверждается. При последующей частичной выкладке нужно сверить реальные pins с проверенным комплектом или отдельно проверить фактическую комбинацию. Прод-каталог не меняется этим планом.</p>
+</section>
+
+<section><h2>6. Файлы, порядок и разделение работы</h2>
+<div class="table-wrap"><table><thead><tr><th>Блок и файлы</th><th>Исполнитель — предложение</th><th>Зависимость и приёмка</th></tr></thead><tbody>
+<tr><td>Контракт плана влияния; новые <code>go-tools/ciimpact/</code>, <code>go-tools/cmd/ci-impact/</code>, каталог владельцев</td><td>Terra: граф зависимостей, удалённые файлы, объяснимый выбор</td><td>Фиксированный JSON-контракт согласуется ведущим до работы. Табличные регрессии по примерам выше, unknown/rename/empty diff.</td></tr>
+<tr><td>Manifest/receipt v2: <code>go-tools/corerelease/</code>, <code>fixturegate/</code>, связанные CLI и тесты</td><td>Terra: проверки mixed revisions и ограничение publish targets</td><td>После фиксации контрактов; может идти параллельно selector без общих редактируемых файлов. Негативные тесты подмены и отсутствия доверенного baseline.</td></tr>
+<tr><td>Workflows: <code>docker-build-push.yml</code>, новый reusable integration workflow, остальные module workflows; <code>docker-bake.hcl</code> при необходимости</td><td>Luna: YAML-подключение к уже проверенным CLI; один владелец workflows</td><td>После двух предыдущих блоков. Не получает право менять контракт, секреты, prod или обходить gates.</td></tr>
+<tr><td><code>docs/core-image-build-and-release.md</code>, <code>go-tools/COVERAGE.md</code>; итоговая интеграция</td><td>Luna — документация; ведущий — проверка фактического поведения</td><td>Документация переписывается по итоговой реализации. Проверка полного diff и отдельных skipped jobs.</td></tr>
+<tr><td>Независимый review полного изменения</td><td>Отдельный Terra reviewer + итоговая приёмка ведущим</td><td>Не автор реализации. Контракты, права workflows, false negative выбора, доверие артефактам, rollback. До review нет утверждения «готово».</td></tr>
+</tbody></table></div>
+<p>Реализация начата после одобрения редакции 1; фактическое распределение и проверки записываются ниже. Ведущий фиксирует контракты и принимает результат. После одобрения — новая ветка <code>ci/selective-core-images</code> от актуального main; незакоммиченная диагностика сохраняется отдельно. Изоляция checkout нужна только если её требует сохранение текущего dirty state.</p>
+<p>Общий контракт, shared <code>go.mod</code> и workflows имеют одного владельца. Каждый блок возвращает изменённые файлы, результаты проверок, ограничения и открытые вопросы; пересечение владения согласуется до правок.</p>
+</section>
+
+<section><h2>7. Проверки и критерии приёмки</h2>
+<p><strong>Критерии приёмки редакции 1; фактические результаты приведены в журнале ниже:</strong></p>
+<ul>
+<li>Selector: runtime/test/docs-only, shared fixtures, reverse imports, embed/resources, lockfiles, удаление/rename, несколько коммитов после baseline, shallow checkout, несуществующий base, неизвестный путь. PR #57 и #58 становятся реальными регрессионными примерами выбора.</li>
+<li>Publication: нет baseline, неверные repo/workflow/event/SHA/ancestry/platform, неподходящий source fingerprint, отсутствующий/устаревший receipt, замена локального tag после gate, различающиеся PG receipts, пустой выбор, частичная публикация и повторный запуск.</li>
+<li>Publisher fake runner доказывает отсутствие build/tag/push для reused targets. Runtime source change не может получить пустой список образов. Контракт gate проверяет все три компонента даже при одной новой сборке.</li>
+<li>Для изменённых Go-пакетов — race tests и vet в соответствующем модуле. Для YAML — parser/linter, если доступен; затем изолированные прогонки без credentials публикации. Команды новых CLI документируются после реализации.</li>
+<li>Полный fixture gate PG16/17 на смешанном комплекте; managed recovery, managed-adoption acceptance, extractor fixture и проверка точных image identities сохраняются. Проверяется reuse вспомогательного fixture без лишней сборки. Все данные синтетические, реальные AI и Telegram/Viber не вызываются.</li>
+<li>Два разных main SHA одновременно используют один baseline: разрешён только актуальный каталог; после продвижения baseline старый receipt не разрешает push или замену полного manifest. Отмена и частичная публикация не превращаются в успех.</li>
+<li>После отдельного разрешения CI-проверки на GitHub: модульный PR, web-only, tests-only и docs-only; сводка выбора, required check, отсутствие ложных skipped. Публикация не используется для проверки простого trigger.</li>
+</ul>
+<p>Успех означает доказанный выбор и отсутствие лишних build/push в проверенных сценариях. Число минут или процент ускорения заранее не обещаются; сравнение выполняется по фактическим GitHub job timings после одобренного пробного прогона.</p>
+</section>
+
+<section><h2>8. Риски, допущения и восстановление</h2>
+<ul>
+<li><strong>Неполный каталог зависимостей:</strong> неизвестный runtime-файл запускает консервативную проверку/останавливает публикацию. Покрытие владельцев файлов проверяется автоматически.</li>
+<li><strong>Потерянный baseline:</strong> блокировка публикации с объяснением. Bootstrap полного каталога — отдельное явное действие, не скрытый fallback публикации.</li>
+<li><strong>Подтверждённое ограничение хранения:</strong> release manifest запрашивает retention 90 дней (политика репозитория может сократить срок); поиск ограничен 2000 артефактами всего репозитория. Утрата baseline или превышение границы блокирует также main impact, а не только publish. Core-baseline recovery/bootstrap пока не реализован; нужен отдельно согласованный проверяемый порядок восстановления. <code>bootstrap_fixture</code> относится только к вспомогательному extractor. Непрерывное хранение каталога требует отдельного решения.</li>
+<li><strong>Различающиеся версии компонентов:</strong> допустимы только при проверке полного комплекта; миграционные и wire-contract изменения не освобождаются от full gate.</li>
+<li><strong>Изменение build recipe/toolchain:</strong> отражается в fingerprints. Экспериментально уточняется полный набор build inputs по Dockerfile и import/asset graph; зависимые блоки не подключаются до прохождения проверки полноты.</li>
+<li><strong>Required checks / branch protection:</strong> текущие правила читаются перед подключением workflows. Их настройки автоматически не меняются; если потребуется переименование защищённого check, это отдельное согласование.</li>
+<li><strong>Rollback:</strong> вернуть workflow и инструменты к предыдущему проверенному коммиту через обычный reviewed change; уже опубликованные immutable digests и версии сохраняются. Исправление CI не требует отката прод-контейнеров или БД.</li>
+</ul>
+<p>Выбранные решения для одобрения: доверенный прошлый publication manifest как baseline; per-component revisions; обязательный отдельный full gate; повторное использование exact-SHA артефактов вместо повторных сборок. Пользовательских открытых вопросов к редакции 1 нет. Реализация останавливается и согласует изменение плана, если невозможно подтвердить происхождение baseline или полноту runtime input graph.</p>
+</section>
+
+<section class="decision"><h2>9. Одобрение и журнал исполнения</h2>
+<p><strong>Редакция 1 одобрена пользователем 31 октября 2026.</strong> на локальную реализацию описанного CI, работу Terra/Luna и независимый review. Production, commit/push/PR/merge и публикация сюда не входят.</p>
+<p>Почему требуется gate: меняется контракт release manifest/receipt и доверие к образам. <code>AGENTS.md</code> и навык <code>html-implementation-plan</code> требуют согласовать такие изменения до реализации.</p>
+<p><strong>Реализовано в новой ветке <code>ci/selective-core-images</code>:</strong> граф влияния пакетов и build inputs, выборочные module/ARM64 проверки, отдельный integration workflow, каталоги и receipts v2 со смешанными revisions, проверка происхождения GitHub artifacts, exact-SHA reuse и публикация только выбранных образов с повторной проверкой baseline под общей блокировкой.</p>
+<p>Terra реализовал selector, release-контракт и доверенный artifact client; Luna — маршрутизацию дополнительных workflows и документацию. Итоговую оркестрацию интегрировал ведущий. Независимый Terra review завершён без оставшихся P1/P2 после исправлений. Summary отражает окончательный выбор, включая PR fallback. При изменении самого алгоритма fingerprints несовпадение с опубликованным каталогом консервативно требует новой сборки.</p>
+<p><strong>Подтверждено локально:</strong> race tests и vet затронутых Go-пакетов, полный <code>go-tools: go test -race -timeout=15m ./...; go vet ./...</code> на отдельной локальной БД PostgreSQL 17 и DB-тесты scheduler bridge на PostgreSQL 16; 18 синтетических Python-тестов; actionlint v1.7.12 для всех девяти workflows; реальное read-only чтение доверенного v1 baseline через GitHub API. Полный vertical gate прошёл на PostgreSQL 16 и 17 с разными revisions трёх компонентов, canonical receipts совпали; managed-adoption прошёл на обеих версиях. Данные синтетические, внешние AI и каналы не вызывались.</p>
+<p><strong>Ограничения:</strong> GitHub Actions на новой ветке не запускался, публикация и прод не менялись. Настройки branch protection не менялись; read-only API сообщил, что main не защищён. Полная managed-recovery матрица сохранена в reusable workflow, но локально в этой реализации заново не выполнялась. Начальный переход меняет build recipe и закономерно выбирает все затронутые образы; дальнейшие изменения используют выборочный delta. Symlink/gitlink, неизвестный модуль и непроверенный Docker recipe останавливают selector. Первый вспомогательный OCI fixture требует явного bootstrap.</p>
+<p><strong>Сохранность:</strong> отдельный worktree не включает незакоммиченную диагностику дайджеста из исходного checkout. Commit/push/PR/merge и публикация остаются за отдельным разрешением.</p>
+<p class="meta">Локальная приёмка завершена. Тестовые контейнеры и образы удалены; исходные Immich-контейнеры и прежний PostgreSQL 17 сохранены. SHA-256 всех восьми файлов прежней диагностики совпали. Для активации CI нужен отдельно разрешённый commit → PR → CI; измерение времени и живой gate остаются до этого шага непроверенными.</p>
+</section>
+</main></body></html>

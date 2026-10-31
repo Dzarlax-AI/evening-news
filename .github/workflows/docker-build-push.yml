@@ -2,95 +2,99 @@ name: Core images and full-stack acceptance
 
 on:
   pull_request:
-    paths:
-      - 'db/**'
-      - 'docker/**'
-      - 'docker-bake.hcl'
-      - 'docker-compose.managed.yml'
-      - 'deploy/config/development.env.example'
-      - 'deploy/config/full.env.example'
-      - 'docs/configuration.md'
-      - 'deploy/recovery/**'
-      - 'deploy/compose/development.yml'
-      - 'deploy/compose/development.override.yml'
-      - 'Makefile'
-      - 'go-background/**'
-      - 'go-execution/**'
-      - 'go-editorial/**'
-      - 'go-domain/**'
-      - 'go-tools/**'
-      - 'go/**'
-      - 'go-ingestion/**'
-      - 'go-processing/**'
-      - 'go-scheduler/**'
-      - 'go-worker/**'
-      - 'go-web/**'
-      - 'docs/core-image-build-and-release.md'
-      - 'docs/ai-runtime.md'
-      - 'docs/article-analysis.md'
-      - 'docs/DOCKER_README.md'
-      - 'docs/web-api-components.md'
-      - 'README.md'
-      - '.env.example'
-      - 'deploy/news/**'
-      - 'tests/**'
-      - 'web/**'
-      - '.github/workflows/docker-build-push.yml'
   push:
     branches: [main]
-    paths:
-      - 'db/**'
-      - 'docker/**'
-      - 'docker-bake.hcl'
-      - 'docker-compose.managed.yml'
-      - 'deploy/config/development.env.example'
-      - 'deploy/config/full.env.example'
-      - 'docs/configuration.md'
-      - 'deploy/recovery/**'
-      - 'deploy/compose/development.yml'
-      - 'deploy/compose/development.override.yml'
-      - 'Makefile'
-      - 'go-background/**'
-      - 'go-execution/**'
-      - 'go-editorial/**'
-      - 'go-domain/**'
-      - 'go-tools/**'
-      - 'go/**'
-      - 'go-ingestion/**'
-      - 'go-processing/**'
-      - 'go-scheduler/**'
-      - 'go-worker/**'
-      - 'go-web/**'
-      - 'docs/core-image-build-and-release.md'
-      - 'docs/ai-runtime.md'
-      - 'docs/article-analysis.md'
-      - 'docs/DOCKER_README.md'
-      - 'docs/web-api-components.md'
-      - 'README.md'
-      - '.env.example'
-      - 'deploy/news/**'
-      - 'tests/**'
-      - 'web/**'
-      - '.github/workflows/docker-build-push.yml'
   workflow_dispatch:
     inputs:
       publish:
-        description: Publish all three tested core images from reviewed main
+        description: Publish only changed, fully accepted core images from main
+        type: boolean
+        default: false
+      full_integration:
+        description: Run the separate complete integration gate
+        type: boolean
+        default: false
+      bootstrap_fixture:
+        description: Explicitly build a missing extractor fixture artifact once
         type: boolean
         default: false
 
 permissions:
   contents: read
+  actions: read
+
+# Serialize the entire exact-SHA candidate lifecycle, including simultaneous
+# merge and dispatch. Publication across different SHAs has its own lock below.
+concurrency:
+  group: core-ci-${{ github.event.pull_request.head.sha || github.sha }}
+  cancel-in-progress: false
+
+env:
+  PYTHONDONTWRITEBYTECODE: '1'
 
 jobs:
+  impact:
+    runs-on: ubuntu-latest
+    timeout-minutes: 20
+    outputs:
+      head_sha: ${{ steps.select.outputs.head_sha }}
+      modules: ${{ steps.select.outputs.modules }}
+      targets: ${{ steps.select.outputs.targets }}
+      fixture_targets: ${{ steps.select.outputs.fixture_targets }}
+      candidate_required: ${{ steps.select.outputs.candidate_required }}
+      reuse_candidate: ${{ steps.select.outputs.reuse_candidate }}
+      integration_required: ${{ steps.select.outputs.integration_required }}
+    env:
+      NEWS_CI_TOOLS: /tmp/news-ci-tools
+      GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+      HEAD_SHA: ${{ github.event.pull_request.head.sha || github.sha }}
+      BASE_SHA: ${{ github.event.pull_request.base.sha }}
+      EVENT_NAME: ${{ github.event_name }}
+      FULL_INTEGRATION: ${{ inputs.full_integration || false }}
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          ref: ${{ env.HEAD_SHA }}
+          fetch-depth: 0
+          persist-credentials: false
+      - uses: actions/setup-go@v5
+        with:
+          go-version-file: go-tools/go.mod
+          cache-dependency-path: go-tools/go.sum
+      - name: Build selection and artifact tools
+        working-directory: go-tools
+        run: |
+          mkdir -p "$NEWS_CI_TOOLS"
+          for command in ci-impact ci-artifacts; do
+            go build -o "$NEWS_CI_TOOLS/$command" "./cmd/$command"
+          done
+      - name: Resolve trusted baseline and select affected checks
+        id: select
+        run: |
+          flags=()
+          if [ "$EVENT_NAME" = pull_request ]; then
+            base=$(git merge-base "$BASE_SHA" "$HEAD_SHA")
+            flags+=(--pr --base "$base")
+          fi
+          if [ "$FULL_INTEGRATION" = true ]; then flags+=(--full); fi
+          python3 scripts/ci-core.py plan --root "$GITHUB_WORKSPACE" --head "$HEAD_SHA" --output "$RUNNER_TEMP/core-plan" "${flags[@]}"
+      - uses: actions/upload-artifact@v4
+        with:
+          name: core-impact-${{ env.HEAD_SHA }}
+          path: ${{ runner.temp }}/core-plan/
+          if-no-files-found: error
+          retention-days: 30
+
   go-core-tests:
+    needs: impact
+    if: ${{ needs.impact.outputs.modules != '[]' && needs.impact.outputs.reuse_candidate != 'true' }}
     runs-on: ubuntu-latest
     timeout-minutes: 30
     strategy:
       fail-fast: false
       matrix:
         postgres: ['16', '17']
-        module: [go, go-web, go-worker, go-scheduler, go-ingestion, go-processing, go-execution, go-background, go-editorial, go-domain, go-tools]
+        module: ${{ fromJSON(needs.impact.outputs.modules) }}
     services:
       postgres:
         image: postgres:${{ matrix.postgres }}-alpine
@@ -105,6 +109,8 @@ jobs:
     steps:
       - uses: actions/checkout@v4
         with:
+          ref: ${{ needs.impact.outputs.head_sha }}
+          fetch-depth: ${{ matrix.module == 'go-tools' && '0' || '1' }}
           persist-credentials: false
       - uses: actions/setup-go@v5
         with:
@@ -114,251 +120,239 @@ jobs:
         if: matrix.module == 'go-web'
         with:
           node-version: '22'
-      - name: Build TypeScript browser assets
+      - name: Build TypeScript assets required by web tests
         if: matrix.module == 'go-web'
         run: |
           npm --prefix web ci --ignore-scripts --no-audit --no-fund
+          npm --prefix web run typecheck
           npm --prefix web run build
-      - name: Race tests, vet, and module verification
+      - name: Race tests, vet and dependency verification for selected module
         working-directory: ${{ matrix.module }}
         env:
           TEST_DATABASE_URL: postgres://fixture_admin:fixture-only@127.0.0.1:5432/go_core_tests
           SCHEDULER_TEST_DATABASE_URL: postgres://fixture_admin:fixture-only@127.0.0.1:5432/go_core_tests
+          SELECTED_MODULE: ${{ matrix.module }}
         run: |
           go mod verify
-          if [ '${{ matrix.module }}' = 'go-domain' ]; then
+          if [ "$SELECTED_MODULE" = go-domain ]; then
             go test -race -count=1 -p=1 ./...
           else
             go test -race -count=1 ./...
           fi
           go vet ./...
-
-  managed-recovery:
-    runs-on: ubuntu-latest
-    timeout-minutes: 15
-    strategy:
-      fail-fast: false
-      matrix:
-        postgres: ['16', '17']
-    services:
-      postgres:
-        image: postgres:${{ matrix.postgres }}-alpine
-        env:
-          POSTGRES_USER: postgres
-          POSTGRES_PASSWORD: fixture-only
-          POSTGRES_DB: news_fixture
-        options: >-
-          --health-cmd "pg_isready -U postgres -d news_fixture"
-          --health-interval 5s --health-timeout 5s --health-retries 12
-    steps:
-      - uses: actions/checkout@v4
-        with:
-          persist-credentials: false
-      - uses: actions/setup-go@v5
-        with:
-          go-version: '1.26.10'
-          cache: false
-      - name: Build isolated installer tests
-        working-directory: go-domain
-        run: CGO_ENABLED=0 GOOS=linux GOARCH=amd64 go test -c -o "$RUNNER_TEMP/news-installer.test" ./cmd/newsctl
-      - name: Check fresh roles and encrypted restore with matching PostgreSQL client
-        env:
-          PG_CONTAINER: ${{ job.services.postgres.id }}
-        run: |
-          set -eu
-          trap 'rm -f "$RUNNER_TEMP/news-installer.test"' EXIT
-          docker cp "$RUNNER_TEMP/news-installer.test" "$PG_CONTAINER:/tmp/news-installer.test"
-          docker exec "$PG_CONTAINER" mkdir -p "$GITHUB_WORKSPACE/go-scheduler/migrations"
-          docker cp go-scheduler/migrations/001_initial.sql "$PG_CONTAINER:$GITHUB_WORKSPACE/go-scheduler/migrations/001_initial.sql"
-          docker exec -e NEWS_INSTALLER_TEST_RECOVERY=1 -e 'NEWS_INSTALLER_TEST_DATABASE_URL=postgres://postgres:fixture-only@127.0.0.1:5432/news_fixture?sslmode=disable' "$PG_CONTAINER" /tmp/news-installer.test -test.run '^Test(FreshProvision|AdoptionImportPostgresFixture|ExternalInstallPostgresFixture)$' -test.count=1 -test.timeout=5m
-
-      - name: Build settings-recovery rehearsal and standard age tools
-        env:
-          CGO_ENABLED: '0'
-          GOOS: linux
-          GOARCH: amd64
-        run: |
-          set -eu
-          (cd go-domain && go test -c -o "$RUNNER_TEMP/news-settings-recovery.test" ./recovery)
-          (cd go-scheduler && go test -c -o "$RUNNER_TEMP/news-settings-schedules.test" ./internal/api)
-          GOBIN="$RUNNER_TEMP/news-settings-tools" go install filippo.io/age/cmd/age@v1.3.2
-          GOBIN="$RUNNER_TEMP/news-settings-tools" go install filippo.io/age/cmd/age-keygen@v1.3.2
-      - name: Rehearse settings-only encrypted recovery without external calls
-        env:
-          PG_CONTAINER: ${{ job.services.postgres.id }}
-        run: |
-          set -eu
-          trap 'rm -f "$RUNNER_TEMP/news-settings-recovery.test" "$RUNNER_TEMP/news-settings-schedules.test"; rm -rf "$RUNNER_TEMP/news-settings-tools"' EXIT
-          docker exec "$PG_CONTAINER" createdb -U postgres settings_recovery_fixture
-          docker exec "$PG_CONTAINER" mkdir -p "$GITHUB_WORKSPACE/deploy" "$GITHUB_WORKSPACE/go-domain/recovery" "$GITHUB_WORKSPACE/go-scheduler/internal/api" "$GITHUB_WORKSPACE/docs"
-          docker cp deploy/recovery "$PG_CONTAINER:$GITHUB_WORKSPACE/deploy/"
-          docker cp docs/managed-settings-recovery.md "$PG_CONTAINER:$GITHUB_WORKSPACE/docs/managed-settings-recovery.md"
-          docker cp "$RUNNER_TEMP/news-settings-recovery.test" "$PG_CONTAINER:/tmp/news-settings-recovery.test"
-          docker cp "$RUNNER_TEMP/news-settings-schedules.test" "$PG_CONTAINER:/tmp/news-settings-schedules.test"
-          docker cp "$RUNNER_TEMP/news-settings-tools/age" "$PG_CONTAINER:/tmp/age"
-          docker cp "$RUNNER_TEMP/news-settings-tools/age-keygen" "$PG_CONTAINER:/tmp/age-keygen"
-          for spec in 'go-domain/recovery:news-settings-recovery:TestSettingsRecoveryRecipes' 'go-scheduler/internal/api:news-settings-schedules:TestSettingsRecoverySchedulesNoReplay'; do
-            work=${spec%%:*}; rest=${spec#*:}; binary=${rest%%:*}; test_name=${rest#*:}
-            docker exec -w "$GITHUB_WORKSPACE/$work" -e PATH=/tmp:/usr/local/bin:/usr/bin:/bin -e 'NEWS_SETTINGS_RECOVERY_TEST_URL=postgres://postgres:fixture-only@127.0.0.1:5432/settings_recovery_fixture?sslmode=disable' "$PG_CONTAINER" "/tmp/$binary.test" -test.run "^$test_name$" -test.count=1 -test.timeout=5m
-          done
+      - name: Check CI orchestration without external effects
+        if: matrix.module == 'go-tools'
+        working-directory: .
+        run: python3 -m unittest discover -s scripts -p 'test_ci_*.py'
 
   cross-build-arm64:
+    needs: impact
+    if: ${{ needs.impact.outputs.targets != '[]' && needs.impact.outputs.reuse_candidate != 'true' }}
     runs-on: ubuntu-latest
     timeout-minutes: 35
-    permissions:
-      contents: read
+    env:
+      REVISION: ${{ needs.impact.outputs.head_sha }}
+      TARGETS_JSON: ${{ needs.impact.outputs.targets }}
+      PLATFORM: linux/arm64
     steps:
       - uses: actions/checkout@v4
         with:
+          ref: ${{ needs.impact.outputs.head_sha }}
           persist-credentials: false
       - uses: docker/setup-qemu-action@v3
       - uses: docker/setup-buildx-action@v3
-      - name: Build core images for Linux ARM64 without publication
-        env:
-          REVISION: ${{ github.sha }}
-          PLATFORM: linux/arm64
-        run: docker buildx bake -f docker-bake.hcl --set '*.platform=linux/arm64' --set '*.output=type=cacheonly'
+      - name: Compile only selected targets for ARM64
+        run: |
+          python3 - <<'PYTHON'
+          import json,os,subprocess
+          targets=json.loads(os.environ['TARGETS_JSON'])
+          assert targets and len(targets)==len(set(targets)) and set(targets)<=set(['web','background','executor'])
+          subprocess.run(['docker','buildx','bake','-f','docker-bake.hcl','--set','*.platform=linux/arm64','--set','*.output=type=cacheonly',*targets],check=True)
+          PYTHON
 
-  assemble-fixture:
-    if: ${{ !(github.event_name == 'workflow_dispatch' && inputs.publish && github.ref == 'refs/heads/main') }}
-    needs: [go-core-tests, cross-build-arm64, managed-recovery]
+  core-checks:
+    name: Core checks
+    if: always()
+    needs: [impact, go-core-tests, cross-build-arm64]
     runs-on: ubuntu-latest
-    timeout-minutes: 55
-    strategy:
-      fail-fast: false
-      matrix:
-        postgres: ['16', '17']
+    env:
+      PLAN_RESULT: ${{ needs.impact.result }}
+      MODULES: ${{ needs.impact.outputs.modules }}
+      TARGETS: ${{ needs.impact.outputs.targets }}
+      REUSED: ${{ needs.impact.outputs.reuse_candidate }}
+      TEST_RESULT: ${{ needs.go-core-tests.result }}
+      ARM_RESULT: ${{ needs.cross-build-arm64.result }}
+    steps:
+      - name: Reject failure or unexpected skipped checks
+        run: |
+          python3 - <<'PYTHON'
+          import json,os
+          assert os.environ['PLAN_RESULT']=='success'
+          if os.environ['REUSED']!='true':
+            assert not json.loads(os.environ['MODULES']) or os.environ['TEST_RESULT']=='success'
+            assert not json.loads(os.environ['TARGETS']) or os.environ['ARM_RESULT']=='success'
+          print('Selected checks completed; empty selections and verified reuse are explicit.')
+          PYTHON
+
+  candidate:
+    needs: [impact, core-checks]
+    if: ${{ needs.core-checks.result == 'success' && needs.impact.outputs.candidate_required == 'true' }}
+    runs-on: ubuntu-latest
+    timeout-minutes: 40
     permissions:
       contents: read
+      actions: read
+      packages: read
+    outputs:
+      candidate_run_id: ${{ steps.prepare.outputs.candidate_run_id }}
+      candidate_artifact: ${{ steps.prepare.outputs.candidate_artifact }}
+      catalog_key: ${{ steps.prepare.outputs.catalog_key }}
+    env:
+      NEWS_CI_TOOLS: /tmp/news-ci-tools
+      GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+      HEAD_SHA: ${{ needs.impact.outputs.head_sha }}
     steps:
       - uses: actions/checkout@v4
         with:
+          ref: ${{ env.HEAD_SHA }}
+          fetch-depth: 0
           persist-credentials: false
       - uses: actions/setup-go@v5
         with:
           go-version-file: go-tools/go.mod
           cache-dependency-path: go-tools/go.sum
       - uses: docker/setup-buildx-action@v3
-      - name: Build fixture gate
+      - uses: docker/login-action@v3
+        if: github.event_name != 'pull_request'
+        with:
+          registry: ghcr.io
+          username: ${{ github.actor }}
+          password: ${{ secrets.GITHUB_TOKEN }}
+      - name: Build trusted metadata tools
         working-directory: go-tools
         run: |
-          go build -o "$RUNNER_TEMP/news-vertical-fixture-gate" ./cmd/vertical-fixture-gate
-          go build -o "$RUNNER_TEMP/news-managed-adoption-gate" ./cmd/managed-adoption-gate
-      - name: Pull isolated fixture infrastructure
-        run: docker pull postgres:${{ matrix.postgres }}-alpine && docker pull alpine:3.21
-      - name: Build all three candidate core images
-        env:
-          REVISION: ${{ github.sha }}
-          PLATFORM: linux/amd64
-        run: docker buildx bake -f docker-bake.hcl --set '*.platform=linux/amd64' --load
-      - name: Check image contents and identity
-        working-directory: go-tools
-        run: go run ./cmd/check-core-image-inventory
-      - name: Build unchanged extractor fixture
-        run: docker build --platform linux/amd64 -f docker/Dockerfile.extractor -t evening-news-collector:consolidation-fixture go
-      - name: Run isolated image acceptance
-        env:
-          NEWS_FIXTURE_PG_MAJOR: ${{ matrix.postgres }}
-        run: >-
-          "$RUNNER_TEMP/news-vertical-fixture-gate" --output-dir "artifacts/acceptance-${NEWS_FIXTURE_PG_MAJOR}"
-      - name: Run isolated legacy adoption acceptance
-        run: >-
-          "$RUNNER_TEMP/news-managed-adoption-gate"
-          --postgres-major "${{ matrix.postgres }}"
-          --output-dir "artifacts/managed-adoption-${{ matrix.postgres }}"
-      - name: Remove fixture gate binaries
-        if: always()
-        run: rm -f "$RUNNER_TEMP/news-vertical-fixture-gate" "$RUNNER_TEMP/news-managed-adoption-gate"
-      - uses: actions/upload-artifact@v4
-        if: always()
+          mkdir -p "$NEWS_CI_TOOLS"
+          for command in ci-impact ci-artifacts core-image-catalog; do
+            go build -o "$NEWS_CI_TOOLS/$command" "./cmd/$command"
+          done
+      - uses: actions/download-artifact@v4
         with:
-          name: core-image-acceptance-pg${{ matrix.postgres }}
-          path: |
-            artifacts/acceptance-${{ matrix.postgres }}/
-            artifacts/managed-adoption-${{ matrix.postgres }}/
-          if-no-files-found: ignore
+          name: core-impact-${{ env.HEAD_SHA }}
+          path: ${{ runner.temp }}/core-plan/
+      - name: Build selected images once or reuse the exact successful candidate
+        id: prepare
+        run: python3 scripts/ci-core.py candidate --root "$GITHUB_WORKSPACE" --head "$HEAD_SHA" --plan "$RUNNER_TEMP/core-plan" --output "$RUNNER_TEMP/core-candidate"
+      - name: Save exact candidate images and catalog
+        uses: actions/upload-artifact@v4
+        if: steps.prepare.outputs.reused != 'true'
+        with:
+          name: core-candidate-${{ env.HEAD_SHA }}
+          compression-level: 0
+          path: ${{ runner.temp }}/core-candidate/
+          if-no-files-found: error
+          retention-days: 30
+
+  gate-reuse:
+    needs: [impact, candidate]
+    runs-on: ubuntu-latest
+    outputs:
+      found: ${{ steps.find.outputs.found }}
+      gate_run_id: ${{ steps.find.outputs.gate_run_id }}
+      gate_artifact: ${{ steps.find.outputs.gate_artifact }}
+    env:
+      NEWS_CI_TOOLS: /tmp/news-ci-tools
+      GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+      HEAD_SHA: ${{ needs.impact.outputs.head_sha }}
+      CATALOG_KEY: ${{ needs.candidate.outputs.catalog_key }}
+      IS_PR: ${{ github.event_name == 'pull_request' }}
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          ref: ${{ env.HEAD_SHA }}
+          fetch-depth: 0
+          persist-credentials: false
+      - uses: actions/setup-go@v5
+        with:
+          go-version-file: go-tools/go.mod
+          cache-dependency-path: go-tools/go.sum
+      - name: Build artifact verifier
+        working-directory: go-tools
+        run: |
+          mkdir -p "$NEWS_CI_TOOLS"
+          go build -o "$NEWS_CI_TOOLS/ci-artifacts" ./cmd/ci-artifacts
+      - id: find
+        name: Locate an already successful gate for this exact catalog
+        run: |
+          flags=()
+          if [ "$IS_PR" = true ]; then flags+=(--pr); fi
+          python3 scripts/ci-core.py lookup-gate --root "$GITHUB_WORKSPACE" --head "$HEAD_SHA" --key "$CATALOG_KEY" "${flags[@]}"
+
+  full-integration:
+    needs: [impact, candidate, gate-reuse]
+    if: ${{ needs.gate-reuse.outputs.found != 'true' && (inputs.publish || inputs.full_integration || needs.impact.outputs.integration_required == 'true') }}
+    uses: ./.github/workflows/core-integration.yml
+    permissions:
+      contents: read
+      actions: read
+      packages: read
+    with:
+      head_sha: ${{ needs.impact.outputs.head_sha }}
+      candidate_run_id: ${{ needs.candidate.outputs.candidate_run_id }}
+      candidate_artifact: ${{ needs.candidate.outputs.candidate_artifact }}
+      catalog_key: ${{ needs.candidate.outputs.catalog_key }}
+      is_pr: ${{ github.event_name == 'pull_request' }}
+      bootstrap_fixture: ${{ inputs.bootstrap_fixture || false }}
 
   publish-reviewed-main:
-    if: ${{ github.event_name == 'workflow_dispatch' && inputs.publish && github.ref == 'refs/heads/main' }}
-    needs: [go-core-tests, cross-build-arm64, managed-recovery]
-    concurrency:
-      group: core-image-publish-${{ github.sha }}
-      cancel-in-progress: false
+    needs: [impact, core-checks, candidate, gate-reuse, full-integration]
+    if: ${{ always() && github.event_name == 'workflow_dispatch' && inputs.publish && github.ref == 'refs/heads/main' && needs.impact.result == 'success' && needs.core-checks.result == 'success' && needs.candidate.result == 'success' && needs.impact.outputs.targets != '[]' && (needs.gate-reuse.outputs.found == 'true' || needs.full-integration.result == 'success') }}
     runs-on: ubuntu-latest
-    timeout-minutes: 60
+    timeout-minutes: 30
     permissions:
       contents: read
+      actions: read
       packages: write
+    # This lock spans DIFFERENT SHAs. Baseline is remotely re-read by the
+    # publisher before first push and before manifest emission inside the lock.
+    concurrency:
+      group: core-image-publication
+      cancel-in-progress: false
+    env:
+      NEWS_CI_TOOLS: /tmp/news-ci-tools
+      GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+      HEAD_SHA: ${{ needs.impact.outputs.head_sha }}
+      CANDIDATE_RUN_ID: ${{ needs.candidate.outputs.candidate_run_id }}
+      CANDIDATE_NAME: ${{ needs.candidate.outputs.candidate_artifact }}
+      CATALOG_KEY: ${{ needs.candidate.outputs.catalog_key }}
+      GATE_RUN_ID: ${{ needs.gate-reuse.outputs.gate_run_id || needs.full-integration.outputs.gate_run_id }}
     steps:
       - uses: actions/checkout@v4
         with:
+          ref: ${{ env.HEAD_SHA }}
+          fetch-depth: 0
           persist-credentials: false
       - uses: actions/setup-go@v5
         with:
           go-version-file: go-tools/go.mod
           cache-dependency-path: go-tools/go.sum
       - uses: docker/setup-buildx-action@v3
-      - name: Build fixture gate
-        working-directory: go-tools
-        run: |
-          go build -o "$RUNNER_TEMP/news-vertical-fixture-gate" ./cmd/vertical-fixture-gate
-          go build -o "$RUNNER_TEMP/news-managed-adoption-gate" ./cmd/managed-adoption-gate
-      - name: Pull isolated fixture infrastructure
-        run: docker pull postgres:16-alpine && docker pull postgres:17-alpine && docker pull alpine:3.21
-      - name: Build candidate images once
-        env:
-          REVISION: ${{ github.sha }}
-          PLATFORM: linux/amd64
-        run: docker buildx bake -f docker-bake.hcl --set '*.platform=linux/amd64' --load
-      - name: Check candidate target contents
-        working-directory: go-tools
-        run: go run ./cmd/check-core-image-inventory
-      - name: Build unchanged extractor fixture
-        run: docker build --platform linux/amd64 -f docker/Dockerfile.extractor -t evening-news-collector:consolidation-fixture go
-      - name: Run isolated acceptance on PostgreSQL 16 and 17
-        run: |
-          set -eu
-          trap 'rm -f "$RUNNER_TEMP/news-vertical-fixture-gate" "$RUNNER_TEMP/news-managed-adoption-gate"' EXIT
-          NEWS_FIXTURE_PG_MAJOR=16 "$RUNNER_TEMP/news-vertical-fixture-gate" --output-dir artifacts/acceptance-16
-          NEWS_FIXTURE_PG_MAJOR=17 "$RUNNER_TEMP/news-vertical-fixture-gate" --output-dir artifacts/acceptance-17
-          cmp artifacts/acceptance-16/receipt.json artifacts/acceptance-17/receipt.json
-          "$RUNNER_TEMP/news-managed-adoption-gate" --postgres-major 16 --output-dir artifacts/managed-adoption-16
-          "$RUNNER_TEMP/news-managed-adoption-gate" --postgres-major 17 --output-dir artifacts/managed-adoption-17
       - uses: docker/login-action@v3
         with:
           registry: ghcr.io
           username: ${{ github.actor }}
           password: ${{ secrets.GITHUB_TOKEN }}
-      - name: Refuse existing immutable SHA tags
-        env:
-          GHCR_USERNAME: ${{ github.actor }}
-          GHCR_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+      - name: Build verified publication tools
         working-directory: go-tools
         run: |
-          set -euo pipefail
-          for repository in rss-web rss-background rss-summarizer; do
-            GHCR_REPOSITORY="dzarlax-ai/${repository}" \
-              IMAGE_TAG="ghcr.io/dzarlax-ai/${repository}:sha-${GITHUB_SHA}" \
-              go run ./cmd/check-ghcr-tag-absent
+          mkdir -p "$NEWS_CI_TOOLS"
+          for command in ci-impact ci-artifacts core-image-catalog core-image-release; do
+            go build -o "$NEWS_CI_TOOLS/$command" "./cmd/$command"
           done
-      - name: Publish the accepted local images and record manifest
-        working-directory: go-tools
-        run: >-
-          go run ./cmd/core-image-release
-          --revision "${GITHUB_SHA}"
-          --platform linux/amd64
-          --output ../artifacts/release-images.json
-          --acceptance-dir ../artifacts/acceptance-17
+      - name: Restore accepted contents and publish selected targets without rebuilding
+        run: python3 scripts/ci-core.py publish --root "$GITHUB_WORKSPACE" --head "$HEAD_SHA" --run-id "$CANDIDATE_RUN_ID" --name "$CANDIDATE_NAME" --key "$CATALOG_KEY" --gate-run-id "$GATE_RUN_ID" --output "$RUNNER_TEMP/core-publication"
       - uses: actions/upload-artifact@v4
         with:
-          name: release-images-${{ github.sha }}
-          path: artifacts/release-images.json
-          retention-days: 30
-      - uses: actions/upload-artifact@v4
-        if: always()
-        with:
-          name: release-core-fixture-${{ github.sha }}
-          path: |
-            artifacts/acceptance-*/
-            artifacts/managed-adoption-*/
-          if-no-files-found: ignore
+          name: release-images-${{ env.HEAD_SHA }}
+          path: ${{ runner.temp }}/core-publication/release-images.json
+          if-no-files-found: error
+          retention-days: 90

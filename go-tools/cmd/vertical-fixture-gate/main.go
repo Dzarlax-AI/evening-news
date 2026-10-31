@@ -19,6 +19,7 @@ import (
 	"strings"
 	"time"
 
+	"github.com/Dzarlax-AI/evening-news/go-tools/corerelease"
 	"github.com/Dzarlax-AI/evening-news/go-tools/fixturegate"
 )
 
@@ -27,6 +28,7 @@ var jobIDPattern = regexp.MustCompile(`^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9
 type gate struct {
 	project, dir, compose, diagnosticJob string
 	accepted                             map[string]fixturegate.Image
+	catalog                              *corerelease.Catalog
 }
 
 // databaseReady checks the final TCP listener and the executor's actual
@@ -167,7 +169,13 @@ func (g *gate) run() (resultErr error) {
 		out, err := exec.Command("docker", args...).Output()
 		return string(out), err
 	}
-	initial, err := fixturegate.CaptureImages(refs, inspect)
+	var initial map[string]fixturegate.Image
+	var err error
+	if g.catalog != nil {
+		initial, err = fixturegate.CaptureCatalog(refs, *g.catalog, inspect)
+	} else {
+		initial, err = fixturegate.CaptureImages(refs, inspect)
+	}
 	if err != nil {
 		return err
 	}
@@ -1254,7 +1262,12 @@ func (g *gate) run() (resultErr error) {
 		return errors.New("worker restore boundary changed")
 	}
 	fmt.Println("fixture stage=backup_strict_restore passed")
-	if err := fixturegate.VerifyImages(refs, initial, inspect); err != nil {
+	if g.catalog != nil {
+		err = fixturegate.VerifyCatalog(refs, initial, *g.catalog, inspect)
+	} else {
+		err = fixturegate.VerifyImages(refs, initial, inspect)
+	}
+	if err != nil {
 		return err
 	}
 	g.accepted = initial
@@ -1302,6 +1315,7 @@ func (g *gate) requestWithCookie(method, target, auth string, body []byte, heade
 func main() { os.Exit(realMain()) }
 func realMain() int {
 	outputDir := flag.String("output-dir", "", "private directory for the acceptance receipt")
+	catalogPath := flag.String("catalog", "", "validated candidate catalog")
 	flag.Parse()
 	if *outputDir == "" || flag.NArg() != 0 {
 		fmt.Fprintln(os.Stderr, "vertical fixture gate failed: output directory required")
@@ -1317,6 +1331,14 @@ func realMain() int {
 	}
 	defer os.RemoveAll(dir)
 	g := &gate{project: "news-fixture-" + hex.EncodeToString(nonce[:]), dir: dir, compose: filepath.Join(dir, "compose.yml")}
+	if *catalogPath != "" {
+		c, err := corerelease.ReadCatalog(*catalogPath)
+		if err != nil {
+			fmt.Fprintln(os.Stderr, "vertical fixture gate failed: invalid catalog")
+			return 1
+		}
+		g.catalog = &c
+	}
 	if e = prepare(g); e == nil {
 		e = g.run()
 	}
@@ -1328,7 +1350,12 @@ func realMain() int {
 		fmt.Fprintln(os.Stderr, "vertical fixture gate failed: temporary cleanup failed")
 		return 1
 	}
-	if e = fixturegate.WriteReceipt(*outputDir, g.accepted); e != nil {
+	if g.catalog != nil {
+		e = fixturegate.WriteCatalogReceipt(*outputDir, g.accepted, *g.catalog)
+	} else {
+		e = fixturegate.WriteReceipt(*outputDir, g.accepted)
+	}
+	if e != nil {
 		fmt.Fprintln(os.Stderr, "vertical fixture gate failed: acceptance receipt unavailable")
 		return 1
 	}

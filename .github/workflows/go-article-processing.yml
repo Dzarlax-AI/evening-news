@@ -21,7 +21,28 @@ permissions:
   contents: read
 
 jobs:
+  impact:
+    runs-on: ubuntu-latest
+    outputs:
+      check_processing: ${{ steps.select.outputs.check_processing }}
+      modules: ${{ steps.select.outputs.modules }}
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          ref: ${{ github.event.pull_request.head.sha || github.sha }}
+          fetch-depth: 0
+          persist-credentials: false
+      - uses: actions/setup-go@v5
+        with:
+          go-version-file: go-tools/go.mod
+          cache-dependency-path: go-tools/go.sum
+      - name: Select impacted checks
+        id: select
+        run: scripts/ci-impact.sh
+
   processing:
+    needs: impact
+    if: ${{ always() && (needs.impact.result != 'success' || needs.impact.outputs.check_processing == 'true') }}
     runs-on: ubuntu-latest
     timeout-minutes: 25
     strategy:
@@ -52,6 +73,9 @@ jobs:
       ARTICLE_PROCESSING_TOKEN: fixture-only-processing-token
       ARTICLE_AI_TOKEN: fixture-only-ai-token
     steps:
+      - name: Fail if impact selection failed
+        if: ${{ needs.impact.result != 'success' }}
+        run: exit 1
       - uses: actions/checkout@v4
         with:
           persist-credentials: false
@@ -59,12 +83,10 @@ jobs:
         with:
           go-version-file: go-processing/go.mod
           cache-dependency-path: go-processing/go.sum
-      - name: Go checks and Linux architecture builds
+      - name: Verify module dependencies and build supported Linux architectures
         working-directory: go-processing
         run: |
           go mod verify
-          go test -race -count=1 ./...
-          go vet ./...
           CGO_ENABLED=0 GOOS=linux GOARCH=amd64 go build -o /tmp/news-processing-amd64 ./cmd/news-processing
           CGO_ENABLED=0 GOOS=linux GOARCH=arm64 go build -o /tmp/news-processing-arm64 ./cmd/news-processing
       - uses: actions/setup-go@v5
@@ -72,6 +94,7 @@ jobs:
           go-version-file: go-domain/go.mod
           cache-dependency-path: go-domain/go.sum
       - name: Native callback, migration and role-boundary checks
+        if: ${{ !contains(fromJSON(needs.impact.outputs.modules), 'go-domain') }}
         working-directory: go-domain
         run: |
           go test -race -count=1 -p=1 ./callbacks ./migration ./learning

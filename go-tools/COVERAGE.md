@@ -18,7 +18,7 @@ Paths below are relative to `go-tools/` unless a repository-root path is explici
 | --- | --- |
 | Manual runtime env generation | `cmd/prepare-runtime-env`, `runtimeenv`: original render goldens, quoting, private output, non-overwrite and secret-safe audit |
 | Immutable registry tag guard | `cmd/check-ghcr-tag-absent`, `registryguard`: repository scopes, authenticated absence, redirects and fail-closed errors |
-| Core image publication | `cmd/core-image-release`, `corerelease`: all images inspected before publishing; mismatched revisions rejected |
+| Selective core image publication | `cmd/core-image-release`, `corerelease`: schema-v2 full catalog, per-image revisions and fingerprints, exact mixed-image receipt, selected-target publishing, fresh baseline resolution and registry reconciliation |
 | Core runtime inventory | `cmd/check-core-image-inventory`: rejects Python/pip and retired helpers in application images |
 | Extraction replay parity | `cmd/compare-extraction-replays`, `replaycheck`: frozen reports, changed fingerprints, missing cycles and content/media mismatch |
 | Extractor comparison and smoke | `extractorcompare`, `extractorsmoke`: bounded requests, authentication, private URL denial, anchors and safe reports |
@@ -26,7 +26,10 @@ Paths below are relative to `go-tools/` unless a repository-root path is explici
 | Schedule export/import | `schedulerbridge`: revision drift, active leases, private output and rollback inventory |
 | Synthetic HTTP/provider services | `cmd/fixture-services`, `cmd/fixture-origin`: RSS encodings, Telegram, CSS Page Monitor, delivery failures, shutdown and counters |
 | Fixture source seeding | `cmd/seed-fixture-sources`: explicit fixture opt-in, isolated DB and repeatable eight-source inventory |
-| Image revision identity | `fixturegate`: separate image IDs, shared revision and replacement detection |
+| Image identity and acceptance receipts | `fixturegate`: exact image ID/platform/revision checks against either a complete mixed-revision catalog or the legacy shared-revision receipt |
+| Change impact planning | `ciimpact`, `cmd/ci-impact`: tracked base/head snapshots, selected module/image/check outputs, source fingerprints, conservative fallback and failure on incomplete history or unresolved imports |
+| CI artifact trust | `ciartifact`, `cmd/ci-artifacts`: trusted run/repository/workflow/event/SHA checks, ancestry, archive digest verification, safe extraction, baseline lookup and narrowly scoped current-PR gate access |
+| CI orchestration | repository `scripts/ci-core.py`, `scripts/test_ci_core.py`, `scripts/test_ci_impact.py`: baseline planning, candidate build/reuse, gate lookup, full acceptance, selective publication and event-to-SHA routing |
 | Browser contracts and isolation | `browsercontract`, `cloakfixture`: browser image/Compose contracts and isolated native Cloak checks; fixture acceptance does not authorize changing a shared live browser |
 | Configuration inventory | `configcatalog`: code-discovered keys, valid source locations, deployment inputs, full example and managed-role boundaries |
 | Managed setup/adoption | `managedsetup`, `cmd/managed-adoption-gate`, repository-root `go-domain/cmd/newsctl`: installation, native attachment, role boundaries, preservation and supported recovery profiles |
@@ -54,6 +57,58 @@ Paths in this table are relative to the repository root.
 ## Running checks
 
 Run `make test` and `make vet` for the News modules, or use focused `go test ./...`, `go test -race ./...`, `go vet ./...` and `go mod verify` inside a module. PostgreSQL integration tests require an explicitly isolated loopback test database. Image and browser fixture workflows have their own isolated infrastructure; unit tests alone do not establish full-stack acceptance.
+
+## Selective CI routing and release artifacts
+
+The root `.github/workflows/docker-build-push.yml` workflow runs on every pull
+request and every push to `main`, including docs-only changes. Its `impact`
+job checks out the full head SHA with complete history and invokes
+`scripts/ci-core.py plan`. Pull requests use their merge base; main runs resolve
+the latest trusted published catalog through `ci-artifacts baseline`. The plan
+records selected modules, core targets, extractor fixture target, fingerprints
+and full-integration requirement. Unknown inputs, missing history or
+unavailable/untrusted baselines fail closed. An empty selection is explicit,
+and the stable `Core checks` job validates that no selected job was
+unexpectedly skipped.
+
+Selected Go modules run race tests, vet and `go mod verify` on PostgreSQL 16
+and 17; selected image targets are cross-built for ARM64. The web module also
+builds its TypeScript assets. The CI tooling tests run when `go-tools` is
+selected. Secondary workflows retain offline extraction replay, browser
+contracts, API/frontend behavior, callback and migration checks, scheduler
+registry guard and platform compilation, extractor smoke, and native Cloak
+concurrency. They skip module-wide or focused Go race/vet work when the root
+selected-module matrix already covers that module. See
+[`core-image-build-and-release.md`](../docs/core-image-build-and-release.md)
+for candidate, gate and publication details.
+
+The root workflow publishes no image on PR or push. Main candidate images and
+catalogs are saved as exact-SHA artifacts. `ci-artifacts` verifies the
+originating run, repository, workflow path, event, SHA, artifact archive digest
+and ancestry before lookup or extraction. The in-progress PR exception is
+limited to reading a candidate for its own isolated gate; it cannot be used
+for publication. `ci-core.py` coordinates candidate reuse only when both the
+impact plan and baseline match.
+
+The separate `core-integration.yml` workflow tests the exact mixed core image
+set on PostgreSQL 16 and 17, runs managed adoption on both versions, and runs
+managed recovery on both versions. It reuses extractor fixture artifacts by
+source fingerprint. A missing fixture requires the explicit bootstrap input.
+The final accepted gate artifact is emitted only after the acceptance and
+recovery jobs pass; gates are reusable for the same catalog key.
+
+Manual core publication requires `workflow_dispatch` on exact `main` with
+`publish=true` and a successful gate for the candidate catalog. It publishes
+only newly built targets, preserves reused image revisions and digests, and
+does not rebuild accepted images. The publisher runs under a global
+cross-SHA lock, re-resolves the baseline before pushing and before writing the
+final catalog, and has package-write permission only in its job. Extractor
+and browser builds have their own input fingerprints and separate manual
+publishers; an explicit manual publish on `main` is a rebuild exception for
+that standalone image.
+
+Local parser, lint and unit-test results are not GitHub Actions evidence. No
+live CI run or image publication is claimed here.
 
 ## Explicit limits
 

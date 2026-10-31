@@ -26,39 +26,43 @@ permissions:
   contents: read
 
 jobs:
+  impact:
+    runs-on: ubuntu-latest
+    outputs:
+      check_scheduler: ${{ steps.select.outputs.check_scheduler }}
+      modules: ${{ steps.select.outputs.modules }}
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          ref: ${{ github.event.pull_request.head.sha || github.sha }}
+          fetch-depth: 0
+          persist-credentials: false
+      - uses: actions/setup-go@v5
+        with:
+          go-version-file: go-tools/go.mod
+          cache-dependency-path: go-tools/go.sum
+      - name: Select impacted checks
+        id: select
+        run: scripts/ci-impact.sh
+
   scheduler-tests:
+    needs: impact
+    if: ${{ always() && (needs.impact.result != 'success' || needs.impact.outputs.check_scheduler == 'true') }}
     runs-on: ubuntu-latest
     timeout-minutes: 15
-    services:
-      postgres:
-        image: postgres:16-alpine
-        env:
-          POSTGRES_USER: fixture_admin
-          POSTGRES_PASSWORD: fixture-only
-          POSTGRES_DB: scheduler_tests
-        ports:
-          - 5432:5432
-        options: >-
-          --health-cmd "pg_isready -h 127.0.0.1 -U fixture_admin -d scheduler_tests"
-          --health-interval 5s
-          --health-timeout 5s
-          --health-retries 10
     steps:
+      - name: Fail if impact selection failed
+        if: ${{ needs.impact.result != 'success' }}
+        run: exit 1
       - uses: actions/checkout@v4
       - uses: actions/setup-go@v5
         with:
           go-version-file: go-scheduler/go.mod
           cache-dependency-path: go-scheduler/go.sum
       - name: Test fail-closed GHCR SHA tag guard
+        if: ${{ !contains(fromJSON(needs.impact.outputs.modules), 'go-tools') }}
         working-directory: go-tools
         run: go test -race ./registryguard ./cmd/check-ghcr-tag-absent
-      - name: Unit, race, PostgreSQL, and static checks
-        working-directory: go-scheduler
-        env:
-          SCHEDULER_TEST_DATABASE_URL: postgres://fixture_admin:fixture-only@127.0.0.1:5432/scheduler_tests
-        run: |
-          go test -race ./...
-          go vet ./...
       - name: Compile Linux amd64 and macOS ARM64
         working-directory: go-scheduler
         run: |
