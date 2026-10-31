@@ -19,8 +19,7 @@ type registry struct{ run corerelease.Runner }
 func (r registry) lookup(tag string) (string, bool, error) {
 	out, err := r.run("buildx", "imagetools", "inspect", tag)
 	if err != nil {
-		s := strings.ToLower(out)
-		if strings.Contains(s, "manifest unknown") || strings.Contains(s, "no such manifest") {
+		if missingRegistryReference(out, tag) {
 			return "", false, nil
 		}
 		return "", false, errors.New("registry_lookup_failed")
@@ -30,6 +29,32 @@ func (r registry) lookup(tag string) (string, bool, error) {
 		return "", false, errors.New("registry_digest_invalid")
 	}
 	return matches[0][1], true, nil
+}
+
+// A missing tag is safe only when the output is a complete known absence
+// response. A different reference or a transport error must fail closed.
+func missingRegistryReference(output, tag string) bool {
+	if tag == "" || strings.ContainsAny(tag, "\r\n") {
+		return false
+	}
+	message := strings.TrimSpace(output)
+	message = strings.TrimPrefix(message, "ERROR: ")
+	message = strings.TrimPrefix(message, "failed to solve: ")
+	if strings.ContainsAny(message, "\r\n") {
+		return false
+	}
+	if strings.EqualFold(message, "manifest unknown") || strings.EqualFold(message, "no such manifest") {
+		return true
+	}
+	for _, candidate := range []string{
+		"reference " + tag + " not found", tag + ": not found",
+		tag + ": manifest unknown", tag + ": no such manifest",
+	} {
+		if message == candidate {
+			return true
+		}
+	}
+	return false
 }
 func (r registry) reconcile(tag, digest string, want corerelease.CatalogImage) error {
 	if !shaDigest.MatchString(digest) || !strings.HasPrefix(tag, "ghcr.io/"+want.Repository+":sha-") {

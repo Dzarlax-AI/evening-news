@@ -26,17 +26,25 @@ if event_name == "pull_request":
     pull = event.get("pull_request", {})
     head = pull.get("head", {}).get("sha", "")
     base = pull.get("base", {}).get("sha", "")
+    default_branch = event.get("repository", {}).get("default_branch", "")
 elif event_name == "push":
     head = event.get("after", "")
     base = event.get("before", "")
+    default_branch = event.get("repository", {}).get("default_branch", "")
 else:
     head = ""
     base = ""
-print(head + "\t" + base)
+    default_branch = ""
+print((head or "-") + "\t" + (base or "-") + "\t" + (default_branch or "-"))
 PYTHON
 )"
 event_head="${event_values%%$'\t'*}"
-event_base="${event_values#*$'\t'}"
+event_rest="${event_values#*$'\t'}"
+event_base="${event_rest%%$'\t'*}"
+event_default_branch="${event_rest#*$'\t'}"
+[[ "$event_head" == "-" ]] && event_head=""
+[[ "$event_base" == "-" ]] && event_base=""
+[[ "$event_default_branch" == "-" ]] && event_default_branch=""
   [[ -n "$head_sha" ]] || head_sha="$event_head"
   [[ -n "$base_sha" ]] || base_sha="$event_base"
 fi
@@ -71,6 +79,37 @@ if [[ -z "$base_sha" ]]; then
       exit 2
       ;;
   esac
+fi
+
+if [[ "$event_name" == "push" && -z "${CI_IMPACT_BASE:-}" ]]; then
+  before_sha="${event_base:-}"
+  before_is_ancestor=false
+  if [[ "$before_sha" =~ ^[0-9a-f]{40}$ ]] && [[ ! "$before_sha" =~ ^0+$ ]]; then
+    if git merge-base --is-ancestor "$before_sha" "$head_sha" 2>/dev/null; then
+      before_is_ancestor=true
+    fi
+  fi
+  if [[ "$before_is_ancestor" != true ]]; then
+    if [[ -z "${event_default_branch:-}" ]] || ! git check-ref-format --branch "$event_default_branch" >/dev/null 2>&1; then
+      echo "CI impact: default branch is missing or invalid for push fallback" >&2
+      exit 2
+    fi
+    default_ref="refs/remotes/origin/$event_default_branch"
+    default_sha="$(git rev-parse --verify "$default_ref^{commit}" 2>/dev/null || true)"
+    if [[ ! "$default_sha" =~ ^[0-9a-f]{40}$ ]]; then
+      default_ref="refs/heads/$event_default_branch"
+      default_sha="$(git rev-parse --verify "$default_ref^{commit}" 2>/dev/null || true)"
+    fi
+    if [[ ! "$default_sha" =~ ^[0-9a-f]{40}$ ]]; then
+      echo "CI impact: declared default branch is unavailable locally" >&2
+      exit 2
+    fi
+    base_sha="$(git merge-base "$default_sha" "$head_sha" 2>/dev/null || true)"
+    if [[ ! "$base_sha" =~ ^[0-9a-f]{40}$ || "$base_sha" == "$head_sha" ]]; then
+      echo "CI impact: default branch merge-base is unavailable or empty" >&2
+      exit 2
+    fi
+  fi
 fi
 
 if [[ ! "$base_sha" =~ ^[0-9a-f]{40}$ ]]; then

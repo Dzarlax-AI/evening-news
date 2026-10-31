@@ -50,11 +50,14 @@ Secondary workflows retain specialized replay, browser, API, callback, native
 browser, and standalone architecture checks; they skip package-level race/vet
 work when the root matrix already covers that module.
 
-For a pull request that requires full integration, the candidate job builds
-all three core images at the pull request head and the extractor fixture. The
-full mixed-version gate needs a concrete complete core image set and does not
-use a publication baseline for an untrusted PR. PR candidate artifacts can be
-read only by that isolated gate; they are never eligible for publication.
+For a pull request that requires full integration, the candidate job first
+attempts a mixed catalog using a trusted main publication baseline, independently
+of the merge-base used for PR tests. It builds the selected targets and verifies
+reused registry identities before use. If baseline metadata or registry access
+is unavailable, the PR alone falls back to building all three core images and
+the extractor fixture in an isolated legacy bundle. Main never uses this
+fallback. PR candidates can be read only by their isolated gate and are never
+eligible for publication.
 
 On `main`, the plan compares the head with the latest trusted published
 catalog. It builds only core targets whose source fingerprints changed and
@@ -68,8 +71,8 @@ the gate unless `bootstrap_fixture` was explicitly requested.
 
 The reviewed-main exact-SHA candidate contains the impact plan, raw and
 normalized baseline, catalog, metadata and saved image archive. A PR candidate
-uses the three locally built core images and fixture in a legacy gate bundle;
-it is not a publication catalog and has no trusted baseline. Candidate lookup
+contains either the verified mixed catalog or the complete isolated legacy
+bundle. Its origin remains a PR and cannot authorize publication. Candidate lookup
 verifies artifact provenance and reuses a main candidate only when the plan
 and baseline still match. The root workflow uses an exact-SHA concurrency
 group to prevent duplicate candidate lifecycles for the same head.
@@ -84,16 +87,17 @@ targets retain their prior revision, digest and image identity. The catalog
 also records its baseline revision.
 
 The main full acceptance gate consumes that exact candidate catalog and key.
-For a pull request, it consumes the isolated legacy candidate bundle bound to
-the head SHA and all three built image identities. The gate runs the vertical
+For a pull request, it consumes either the verified mixed catalog or an isolated
+legacy bundle bound to the head SHA and all three built image identities. The gate runs the vertical
 image fixture on PostgreSQL 16 and 17, managed-adoption acceptance on
 PostgreSQL 16 and 17, and managed settings-recovery fixtures on
 PostgreSQL 16 and 17. The vertical fixture captures every component identity
 before and after the test. The final receipt is accepted only after all gate
 and recovery jobs pass and both vertical receipts agree. For main, the receipt
 key binds the catalog, which binds the complete tested image combination,
-including reused images. The isolated PR receipt binds its head SHA and the
-three locally built image identities without creating a publication catalog.
+including reused images. A legacy PR receipt binds its head SHA and the three
+locally built image identities. Artifact provenance prevents a PR receipt from
+authorizing publication in either mode.
 
 `.github/workflows/core-integration.yml` is reusable and manually callable.
 Workflow calls provide `head_sha`, `candidate_run_id`, `candidate_artifact`,
@@ -114,6 +118,18 @@ fixture.
 verifies repository identity, workflow path, event, run status, head SHA,
 artifact metadata digest and commit ancestry. It rejects expired, incomplete,
 truncated or ambiguous artifact history and safely extracts downloaded ZIPs.
+
+The release manifest artifact has a requested retention of 90 days; repository
+policy can shorten it, and deletion can remove it earlier. Artifact discovery
+is bounded at 20 pages of 100 repository-wide artifacts, including unrelated
+workflows. If the authoritative baseline expires, is deleted, or cannot be
+resolved within that bound, both main impact planning and publication stop.
+There is currently no implemented core-baseline bootstrap or durable catalog
+store. Recovery requires a separately reviewed procedure that restores trusted
+provenance and verifies all image identities; it must not fall back to older
+or untrusted metadata. `bootstrap_fixture` only restores the auxiliary extractor
+fixture and cannot recover a core baseline.
+
 Only a successful reviewed-main publication workflow can provide the trusted
 baseline. The narrow in-progress PR candidate exception is limited to reading
 that candidate for its own isolated gate.

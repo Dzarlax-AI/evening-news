@@ -7,6 +7,15 @@ import unittest
 
 
 HELPER = Path(__file__).with_name("ci-impact.sh").resolve()
+SECONDARY_WORKFLOWS = (
+    "go-prototype.yml",
+    "go-article-ingestion.yml",
+    "go-article-processing.yml",
+    "go-scheduler.yml",
+    "web-api.yml",
+    "extractor-service.yml",
+    "shared-browser.yml",
+)
 
 
 class CIImpactHelperTest(unittest.TestCase):
@@ -35,6 +44,7 @@ class CIImpactHelperTest(unittest.TestCase):
         self.git("add", ".")
         self.git("commit", "-qm", "main advance")
         self.base_advance = self.git("rev-parse", "HEAD")
+        self.git("checkout", "--detach", "-q")
         self.git("merge", "--no-ff", "-qm", "synthetic PR merge", "feature")
         self.synthetic_merge = self.git("rev-parse", "HEAD")
         self.git("switch", "-q", "feature")
@@ -99,7 +109,10 @@ class CIImpactHelperTest(unittest.TestCase):
                 "pull_request": {
                     "head": {"sha": self.head},
                     "base": {"sha": self.base_advance},
-                }
+                },
+                # A synchronize event may carry a stale before value. PR
+                # selection must use base/head merge-base instead.
+                "before": self.base_advance,
             },
             github_sha=self.synthetic_merge,
             github_ref="refs/pull/7/merge",
@@ -110,12 +123,44 @@ class CIImpactHelperTest(unittest.TestCase):
     def test_push_uses_event_before_and_after(self):
         result = self.run_helper(
             "push",
-            {"before": self.base, "after": self.base_advance},
+            {
+                "before": self.base,
+                "after": self.base_advance,
+                "repository": {"default_branch": "main"},
+            },
             github_sha=self.base_advance,
             github_ref="refs/heads/main",
         )
         self.assertEqual(result.returncode, 0, result.stderr)
         self.assertEqual(self.selected_pair(), (self.base, self.base_advance))
+
+    def test_branch_creation_uses_declared_default_branch_merge_base(self):
+        result = self.run_helper(
+            "push",
+            {
+                "before": "0" * 40,
+                "after": self.head,
+                "repository": {"default_branch": "main"},
+            },
+            github_sha=self.head,
+            github_ref="refs/heads/feature",
+        )
+        self.assertEqual(result.returncode, 0, result.stderr)
+        self.assertEqual(self.selected_pair(), (self.base, self.head))
+
+    def test_force_push_uses_declared_default_branch_merge_base(self):
+        result = self.run_helper(
+            "push",
+            {
+                "before": self.base_advance,
+                "after": self.head,
+                "repository": {"default_branch": "main"},
+            },
+            github_sha=self.head,
+            github_ref="refs/heads/feature",
+        )
+        self.assertEqual(result.returncode, 0, result.stderr)
+        self.assertEqual(self.selected_pair(), (self.base, self.head))
 
     def test_main_manual_publish_uses_parent_as_baseline(self):
         result = self.run_helper(
@@ -130,13 +175,23 @@ class CIImpactHelperTest(unittest.TestCase):
     def test_missing_push_baseline_fails_without_running_planner(self):
         result = self.run_helper(
             "push",
-            {"before": "", "after": self.base_advance},
+            {
+                "before": "0" * 40,
+                "after": self.base_advance,
+                "repository": {"default_branch": "unavailable"},
+            },
             github_sha=self.base_advance,
             github_ref="refs/heads/main",
         )
         self.assertNotEqual(result.returncode, 0)
-        self.assertIn("base must be a full commit SHA", result.stderr)
+        self.assertIn("declared default branch is unavailable locally", result.stderr)
         self.assertFalse(self.capture.exists())
+
+    def test_secondary_workflows_do_not_override_event_baseline(self):
+        workflows = HELPER.parents[1] / ".github" / "workflows"
+        for name in SECONDARY_WORKFLOWS:
+            with self.subTest(workflow=name):
+                self.assertNotIn("CI_IMPACT_BASE:", (workflows / name).read_text())
 
 
 if __name__ == "__main__":

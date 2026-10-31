@@ -56,7 +56,6 @@ jobs:
         id: select
         env:
           CI_IMPACT_HEAD: ${{ github.event.pull_request.head.sha || github.sha }}
-          CI_IMPACT_BASE: ${{ github.event.before }}
         run: scripts/ci-impact.sh
 
   verify:

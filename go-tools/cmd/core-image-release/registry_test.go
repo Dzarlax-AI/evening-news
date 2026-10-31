@@ -70,3 +70,44 @@ func TestRegistryLookupFailsClosed(t *testing.T) {
 		t.Fatal(err)
 	}
 }
+
+func TestRegistryLookupMissingReference(t *testing.T) {
+	tag := "ghcr.io/example/news:sha-1234567890abcdef1234567890abcdef12345678"
+	cases := []struct {
+		name, output string
+		missing      bool
+	}{
+		{"reference", "reference " + tag + " not found", true},
+		{"colon", tag + ": not found", true},
+		{"docker prefix", "ERROR: failed to solve: " + tag + ": not found", true},
+		{"legacy manifest", "manifest unknown", true},
+		{"legacy no manifest", "no such manifest", true},
+		{"other reference", "reference " + tag + "-other not found", false},
+		{"other colon", tag + "-other: not found", false},
+		{"auth", "unauthorized: " + tag + ": not found", false},
+		{"auth and missing", "unauthorized\nreference " + tag + " not found", false},
+		{"network", "dial tcp: network unreachable", false},
+		{"network and missing", "dial tcp: reference " + tag + " not found", false},
+		{"unrelated marker", "unauthorized: manifest unknown", false},
+	}
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			r := registry{run: func(args ...string) (string, error) {
+				if args[len(args)-1] != tag {
+					t.Fatal("lookup used wrong reference")
+				}
+				return tc.output, errors.New("registry secret")
+			}}
+			_, exists, err := r.lookup(tag)
+			if exists {
+				t.Fatal("unexpected existing tag")
+			}
+			if tc.missing && err != nil {
+				t.Fatalf("missing tag rejected: %v", err)
+			}
+			if !tc.missing && (err == nil || err.Error() != "registry_lookup_failed") {
+				t.Fatalf("error must fail closed, got %v", err)
+			}
+		})
+	}
+}
