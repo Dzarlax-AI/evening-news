@@ -186,7 +186,7 @@ jobs:
 
   publish:
     needs: [impact, contracts, verify, native-cloak-concurrency]
-    if: ${{ github.event_name == 'workflow_dispatch' && inputs.publish && github.ref == 'refs/heads/main' && (needs.contracts.result == 'success' || (needs.contracts.result == 'skipped' && contains(fromJSON(needs.impact.outputs.modules), 'go-tools'))) && needs.verify.result == 'success' && (needs.native-cloak-concurrency.result == 'success' || needs.native-cloak-concurrency.result == 'skipped') }}
+    if: ${{ !cancelled() && github.event_name == 'workflow_dispatch' && inputs.publish && github.ref == 'refs/heads/main' && needs.impact.result == 'success' && needs.contracts.result == 'success' && needs.verify.result == 'success' && (needs.native-cloak-concurrency.result == 'success' || (needs.native-cloak-concurrency.result == 'skipped' && needs.impact.outputs.check_browser == 'false')) }}
     runs-on: ubuntu-latest
     timeout-minutes: 15
     permissions:
