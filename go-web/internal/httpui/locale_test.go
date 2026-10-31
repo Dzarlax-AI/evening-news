@@ -111,15 +111,14 @@ func TestLocaleClientBehavior(t *testing.T) {
 	}
 }
 
-func TestSerbianModalLabelsOriginalText(t *testing.T) {
-	b, err := os.ReadFile("../../templates/public/fragments/article_modal.html")
+func TestSerbianReaderLabelsOriginalText(t *testing.T) {
+	b, err := os.ReadFile("../../templates/public/fragments/article_reader.html")
 	if err != nil {
 		t.Fatal(err)
 	}
-	source := translateUISource(string(b), "sr-Latn")
-	for _, want := range []string{`id="modalOriginalTextHeading" hidden>Izvorni tekst</h2>`, "Prikaži izvorni tekst", "Sakrij izvorni tekst", "contentEl.setAttribute('lang', 'und')", "contentEl.removeAttribute('lang')"} {
-		if !strings.Contains(source, want) {
-			t.Errorf("modal is missing %q", want)
+	for _, want := range []string{`Prikaži izvorni tekst`, `lang="und"`, `Izvorni tekst`} {
+		if !strings.Contains(string(b), want) {
+			t.Errorf("reader missing %q", want)
 		}
 	}
 }

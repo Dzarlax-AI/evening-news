@@ -66,16 +66,40 @@ type LegacyDigestArticle struct {
 	Source     DigestSourceView
 }
 
+type ArticleMediaView struct {
+	Thumbnail string
+	Kind      string
+	URL       string
+	Label     string
+}
+
+type ArticleCategoryView struct {
+	Color      string
+	TextColor  string
+	Name       string
+	Confidence int
+}
+
 type ArticleView struct {
-	ID           string
-	Title        string
-	Summary      string
-	Content      string
-	SourceName   string
-	SourceURL    string
-	Category     string
-	PublishedAt  string
-	PublishedISO string
+	FallbackImage     string
+	Categories        []ArticleCategoryView
+	AICategories      []ArticleCategoryView
+	IsAdvertisement   bool
+	AdReasoning       string
+	AdMarkers         []string
+	Images            []ArticleMediaView
+	OtherMedia        []ArticleMediaView
+	ID                string
+	Title             string
+	Summary           string
+	Content           string
+	SourceName        string
+	SourceURL         string
+	Category          string
+	CategoryColor     string
+	CategoryTextColor string
+	PublishedAt       string
+	PublishedISO      string
 }
 
 func buildEditorialDigestView(date time.Time, edition *repositories.EditorialDigestEdition) EditorialDigestView {
@@ -290,6 +314,101 @@ func russianCount(count int, one, few, many string) string {
 
 func buildArticleView(id int64, article map[string]any) ArticleView {
 	view := ArticleView{ID: strconv.FormatInt(id, 10), Title: stringField(article, "title"), Summary: stringField(article, "summary"), Content: stringField(article, "content"), SourceName: stringField(article, "source_name"), SourceURL: safeExternalURL(stringField(article, "url")), Category: stringField(article, "category"), PublishedISO: stringField(article, "published_at")}
+
+	view.IsAdvertisement, _ = article["is_advertisement"].(bool)
+	view.AdReasoning = stringField(article, "ad_reasoning")
+	if markers, ok := article["ad_markers"].([]any); ok {
+		for _, marker := range markers {
+			if text, ok := marker.(string); ok {
+				view.AdMarkers = append(view.AdMarkers, text)
+			}
+		}
+	}
+	for _, pair := range []struct {
+		key    string
+		target *[]ArticleCategoryView
+		ai     bool
+	}{{"categories", &view.Categories, false}, {"ai_categories", &view.AICategories, true}} {
+		if list, ok := article[pair.key].([]any); ok {
+			for _, raw := range list {
+				if item, ok := raw.(map[string]any); ok {
+					name := stringField(item, "display_name")
+					if pair.ai {
+						name = stringField(item, "ai_category")
+					}
+					if name == "" {
+						name = stringField(item, "name")
+					}
+					if name == "" {
+						name = stringField(item, "category")
+					}
+					if pair.ai {
+						if mapped := stringField(item, "mapped_to"); mapped != "" {
+							name += " → " + mapped
+						}
+					}
+					confidence, _ := item["confidence"].(float64)
+					if name != "" {
+						color, textColor := categoryColors(stringField(item, "color"))
+						*pair.target = append(*pair.target, ArticleCategoryView{Name: name, Confidence: int(confidence*100 + 0.5), Color: color, TextColor: textColor})
+					}
+				}
+			}
+		}
+	}
+	view.CategoryColor, view.CategoryTextColor = categoryColors("")
+	if len(view.Categories) > 0 {
+		view.Category = view.Categories[0].Name
+		view.CategoryColor, view.CategoryTextColor = view.Categories[0].Color, view.Categories[0].TextColor
+	}
+	for _, key := range []string{"image_url", "primary_image"} {
+		if u := safeExternalURL(stringField(article, key)); u != "" {
+			view.FallbackImage = u
+			break
+		}
+	}
+	seen := map[string]bool{}
+	if media, ok := article["media_files"].([]any); ok {
+		for _, raw := range media {
+			item, ok := raw.(map[string]any)
+			if !ok {
+				continue
+			}
+			kind := stringField(item, "type")
+			u := safeExternalURL(stringField(item, "url"))
+			if u == "" || seen[u] {
+				continue
+			}
+			label := stringField(item, "filename")
+			if label == "" {
+				label = kind
+			}
+			switch kind {
+			case "image":
+				thumbnail := safeExternalURL(stringField(item, "thumbnail_url"))
+				if thumbnail == "" {
+					thumbnail = safeExternalURL(stringField(item, "thumbnail"))
+				}
+				if thumbnail == "" {
+					thumbnail = u
+				}
+				view.Images = append(view.Images, ArticleMediaView{URL: u, Label: label, Thumbnail: thumbnail})
+			case "video", "audio", "document", "gif", "sticker", "animated_sticker":
+				view.OtherMedia = append(view.OtherMedia, ArticleMediaView{URL: u, Label: label, Kind: playableMediaKind(kind, u)})
+			default:
+				continue
+			}
+			seen[u] = true
+		}
+	}
+	if len(view.Images) == 0 {
+		for _, key := range []string{"image_url", "primary_image"} {
+			if u := safeExternalURL(stringField(article, key)); u != "" {
+				view.Images = append(view.Images, ArticleMediaView{URL: u, Label: "Image", Thumbnail: u})
+				break
+			}
+		}
+	}
 	for _, layout := range []string{time.RFC3339Nano, "2006-01-02T15:04:05.999999", "2006-01-02T15:04:05"} {
 		if published, err := time.Parse(layout, view.PublishedISO); err == nil {
 			view.PublishedISO = published.UTC().Format(time.RFC3339)
@@ -298,6 +417,43 @@ func buildArticleView(id int64, article map[string]any) ArticleView {
 		}
 	}
 	return view
+}
+
+func categoryColors(value string) (string, string) {
+	if len(value) != 7 || value[0] != '#' {
+		value = "#6c757d"
+	}
+	for _, c := range value[1:] {
+		if !strings.ContainsRune("0123456789abcdefABCDEF", c) {
+			value = "#6c757d"
+			break
+		}
+	}
+	rgb, err := strconv.ParseUint(value[1:], 16, 24)
+	if err != nil {
+		value = "#6c757d"
+		rgb = 0x6c757d
+	}
+	r, g, b := (rgb>>16)&255, (rgb>>8)&255, rgb&255
+	if (299*r + 587*g + 114*b) > 127500 {
+		return value, "#000000"
+	}
+	return value, "#ffffff"
+}
+
+func playableMediaKind(kind, raw string) string {
+	u, err := url.Parse(raw)
+	if err != nil {
+		return ""
+	}
+	path := strings.ToLower(u.Path)
+	extensions := map[string][]string{"video": {".mp4", ".webm", ".ogg"}, "audio": {".mp3", ".wav", ".m4a", ".ogg", ".opus"}}
+	for _, ext := range extensions[kind] {
+		if strings.HasSuffix(path, ext) {
+			return kind
+		}
+	}
+	return ""
 }
 
 func stringField(values map[string]any, key string) string {

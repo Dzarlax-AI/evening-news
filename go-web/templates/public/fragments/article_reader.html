@@ -1,0 +1,72 @@
+{{define "article-reader"}}
+<div data-article-reader data-fallback-image="{{.Article.FallbackImage}}">
+  <div class="modal-header">
+    <div id="modalCategory" class="modal-category" style="background:{{.Article.CategoryColor}};color:{{.Article.CategoryTextColor}}">{{.Article.Category}}</div>
+  </div>
+  <div class="modal-header-info">
+    <div id="modalAdBadge" class="modal-ad-badge"{{if not .Article.IsAdvertisement}} style="display:none"{{end}}>
+      🚨 {{if eq .Locale "sr-Latn"}}OGLAS{{else}}РЕКЛАМА{{end}}
+    </div>
+    <div id="modalAdReasoning" class="modal-ad-reasoning"{{if not (and .Article.IsAdvertisement .Article.AdReasoning)}} style="display:none"{{end}}>
+      <p id="modalAdReasoningText">{{.Article.AdReasoning}}</p>
+    </div>
+    <div id="modalAdMarkers"{{if not (and .Article.IsAdvertisement .Article.AdReasoning .Article.AdMarkers)}} style="display:none"{{end}}><ul id="modalAdMarkersList">{{range .Article.AdMarkers}}<li>{{.}}</li>{{end}}</ul></div>
+    <div id="modalFinalCategories" class="modal-final-categories">
+      {{range .Article.Categories}}
+      <span class="modal-final-category" style="background:{{.Color}};color:{{.TextColor}};border-color:{{.Color}}">{{.Name}} · {{.Confidence}}%</span>
+      {{end}}
+    </div>
+  </div>
+  <div id="modalGallery" class="modal-gallery"{{if not .Article.Images}} style="display:none"{{end}}>
+    <div class="gallery-container">
+      <div class="gallery-images" id="galleryImages">
+        {{range $i, $m := .Article.Images}}
+        <img class="gallery-image{{if eq $i 0}} active{{end}}" src="{{$m.URL}}" alt="{{$m.Label}}"{{if ne $i 0}} loading="lazy"{{end}}>
+        {{end}}
+      </div>
+      <div class="gallery-thumbnails" id="galleryThumbnails">
+        {{range $i, $m := .Article.Images}}
+        <button type="button" class="gallery-thumbnail{{if eq $i 0}} active{{end}}" data-image-index="{{$i}}" aria-label="{{$m.Label}}">
+          <img src="{{$m.Thumbnail}}" alt="" loading="lazy">
+        </button>
+        {{end}}
+      </div>
+      <button type="button" class="gallery-fullscreen" aria-label="{{if eq .Locale "sr-Latn"}}Ceo ekran{{else}}На весь экран{{end}}">⛶</button>
+    </div>
+  </div>
+  <p id="articleImageError" hidden>{{if eq .Locale "sr-Latn"}}Slika nije dostupna{{else}}Изображение недоступно{{end}}</p>
+  <div class="article-media-links" id="articleMediaLinks">
+    {{range .Article.OtherMedia}}
+      {{if eq .Kind "video"}}
+      <video controls preload="none" src="{{.URL}}"><a href="{{.URL}}" target="_blank" rel="noopener noreferrer">{{.Label}}</a></video>
+      {{else if eq .Kind "audio"}}
+      <audio controls preload="none" src="{{.URL}}"><a href="{{.URL}}" target="_blank" rel="noopener noreferrer">{{.Label}}</a></audio>
+      {{else}}
+      <a href="{{.URL}}" target="_blank" rel="noopener noreferrer">{{.Label}}</a>
+      {{end}}
+    {{end}}
+  </div>
+  <div class="modal-body">
+    <h1 id="modalTitle" class="modal-title">{{.Article.Title}}</h1>
+    <div class="modal-meta">
+      <span id="modalSource" class="modal-source">{{.Article.SourceName}}</span>
+      <time id="modalDate" datetime="{{.Article.PublishedISO}}">{{.Article.PublishedAt}}</time>
+    </div>
+    <div id="modalSummary" class="modal-summary">{{if .Article.Summary}}<p>{{.Article.Summary}}</p>{{end}}</div>
+    <details id="modalContentSpoiler" class="modal-content-spoiler"{{if not .Article.Content}} style="display:none"{{end}}>
+      <summary class="spoiler-toggle">{{if eq .Locale "sr-Latn"}}Prikaži izvorni tekst{{else}}Показать полный текст статьи{{end}}</summary>
+      {{if eq .Locale "sr-Latn"}}<h2>Izvorni tekst</h2>{{end}}
+      <div id="modalContent" class="modal-content-text"{{if eq .Locale "sr-Latn"}} lang="und"{{end}}>{{range paragraphs .Article.Content}}<p>{{.}}</p>{{end}}</div>
+    </details>
+    <div id="modalOriginalCategories" class="modal-original-categories"{{if not .Article.AICategories}} style="display:none"{{end}}>
+      <h4 class="categories-title">🤖 {{if eq .Locale "sr-Latn"}}Originalne AI kategorije{{else}}Оригинальные AI категории{{end}}</h4>
+      <div id="originalCategoriesList" class="categories-list">
+        {{range .Article.AICategories}}<span class="category-item">{{.Name}} · {{.Confidence}}%</span>{{end}}
+      </div>
+    </div>
+    <p id="readerSourceLink">
+      {{if .Article.SourceURL}}<a href="{{.Article.SourceURL}}" target="_blank" rel="noopener noreferrer">{{if eq .Locale "sr-Latn"}}Otvori original{{else}}Открыть оригинал{{end}}</a>{{end}}
+    </p>
+  </div>
+</div>
+{{end}}

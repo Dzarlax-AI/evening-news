@@ -758,10 +758,13 @@ func (h *Handler) loadTemplate(name string, adminPage bool, locale string) (*tem
 	path := filepath.Join(h.cfg.TemplatesDir, name)
 	base := filepath.Join(h.cfg.TemplatesDir, "base.html")
 	paths := []string{base, path}
+	if name == "public/article.html" {
+		paths = append(paths, filepath.Join(h.cfg.TemplatesDir, "public/fragments/article_reader.html"))
+	}
 	if adminPage {
 		paths = []string{filepath.Join(h.cfg.TemplatesDir, "admin", "admin_base.html"), path}
 	}
-	funcs := template.FuncMap{"paragraphs": func(s string) []string {
+	funcs := template.FuncMap{"addOne": func(i int) int { return i + 1 }, "paragraphs": func(s string) []string {
 		parts := strings.Split(s, "\n")
 		out := make([]string, 0, len(parts))
 		for _, p := range parts {
@@ -802,7 +805,23 @@ func (h *Handler) pageFragments(locale string) (PageFragments, error) {
 		if err != nil {
 			return PageFragments{}, err
 		}
-		*targets[i] = template.HTML(translateUISource(string(b), locale))
+		source := translateUISource(string(b), locale)
+		if path == "public/fragments/article_modal.html" {
+			reader, err := os.ReadFile(filepath.Join(h.cfg.TemplatesDir, "public/fragments/article_reader.html"))
+			if err != nil {
+				return PageFragments{}, err
+			}
+			t, err := template.New("reader").Funcs(template.FuncMap{"paragraphs": func(s string) []string { return strings.Split(s, "\n") }, "addOne": func(i int) int { return i + 1 }}).Parse(translateUISource(string(reader), locale))
+			if err != nil {
+				return PageFragments{}, err
+			}
+			var rendered bytes.Buffer
+			if err = t.ExecuteTemplate(&rendered, "article-reader", map[string]any{"Locale": locale, "Article": buildArticleView(0, map[string]any{})}); err != nil {
+				return PageFragments{}, err
+			}
+			source = strings.Replace(source, "{{READER_CONTENT}}", rendered.String(), 1)
+		}
+		*targets[i] = template.HTML(source)
 	}
 	return out, nil
 }

@@ -85,3 +85,4 @@ scripts/restore.sh
 /web/node_modules/
 /web/static/js/locale.js
 /web/static/js/viber-settings.js
+/web/static/js/article-reader.js

@@ -77,6 +77,7 @@ COPY --from=go-web-build /out/news-web /news-web
 COPY go-web/templates/ ./templates/
 COPY go-web/contracts/ ./contracts/
 COPY web/static/ /app/web/static/
+COPY --from=web-assets /src/web/static/js/article-reader.js /app/web/static/js/article-reader.js
 COPY --from=web-assets /src/web/static/js/locale.js /app/web/static/js/locale.js
 COPY --from=web-assets /src/web/static/js/viber-settings.js /app/web/static/js/viber-settings.js
 USER 65532:65532
