@@ -1,6 +1,7 @@
 # One build graph for the three core runtime images. Keep the standalone
 # extractor and browser Dockerfiles outside this graph.
 ARG GO_BUILD_IMAGE=golang:1.25.6-alpine
+ARG GO_WEB_BUILD_IMAGE=golang:1.26.10-alpine
 ARG GO_DOMAIN_BUILD_IMAGE=golang:1.26.10-alpine
 ARG NODE_BUILD_IMAGE=node:22.15.1-alpine
 
@@ -11,7 +12,7 @@ RUN npm ci --ignore-scripts --no-audit --no-fund
 COPY web/static/ts/ ./static/ts/
 RUN npm run build
 
-FROM --platform=$BUILDPLATFORM ${GO_BUILD_IMAGE} AS go-web-build
+FROM --platform=$BUILDPLATFORM ${GO_WEB_BUILD_IMAGE} AS go-web-build
 WORKDIR /src/go-web
 COPY go-tools/go.mod go-tools/go.sum /src/go-tools/
 COPY go-tools/runtimeconfig/ /src/go-tools/runtimeconfig/
