@@ -14,6 +14,15 @@ import (
 	"github.com/jackc/pgx/v5/pgxpool"
 )
 
+func TestManagedPasswordHashCompatibility(t *testing.T) {
+	// Generated using x/crypto v0.49.0 with the existing Argon2id parameters.
+	const encoded = "$argon2id$v=19$m=19456,t=2,p=1$AAECAwQFBgcICQoLDA0ODw$FqU+hRA/bSoPXlG36+2Ti55VoGRYj5i3m1Rx4FoXh6I"
+	store := NewManagedStore(nil, "fixture")
+	if !store.check("fixture password", encoded) || store.check("wrong password", encoded) {
+		t.Fatal("existing password hash verification failed")
+	}
+}
+
 func TestManagedClaimRaceAndRevocation(t *testing.T) {
 	dsn := os.Getenv("TEST_DATABASE_URL")
 	if dsn == "" {

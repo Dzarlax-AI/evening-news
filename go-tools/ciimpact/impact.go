@@ -49,7 +49,7 @@ var sharedInputs = map[string][]string{
 	"docs/extraction-golden-cases.json":                   {"go-tools"},
 }
 var reviewedRecipes = map[string][]string{
-	"docker/Dockerfile":           {"d24c0c0ff5fbb335944742b2f4e855f7bd5185b6957cc3d19831f1f2bffb9d3e"},
+	"docker/Dockerfile":           {"d24c0c0ff5fbb335944742b2f4e855f7bd5185b6957cc3d19831f1f2bffb9d3e", "9ac3e9e40785d9f6e9d39340a228c071962f084a0275bfdfa9c2669208d94ddf"},
 	"docker/Dockerfile.extractor": {"04f832b3cde6aefef5f7179330498dcb49975fd6520f74523ff60573efe4b09f"},
 	"docker/Dockerfile.browser":   {"37368cf07b34d01be992c25675c0fdde00ee06bfb89b9214c6c2fb9408893066"},
 }

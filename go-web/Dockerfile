@@ -5,7 +5,7 @@ RUN npm ci --ignore-scripts --no-audit --no-fund
 COPY web/static/ts/ ./static/ts/
 RUN npm run build
 
-FROM golang:1.25.6-alpine AS build
+FROM golang:1.26.10-alpine AS build
 WORKDIR /src/go-web
 COPY go-tools/go.mod go-tools/go.sum /src/go-tools/
 COPY go-tools/runtimeconfig/ /src/go-tools/runtimeconfig/
