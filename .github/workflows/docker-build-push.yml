@@ -196,7 +196,7 @@ jobs:
 
   candidate:
     needs: [impact, core-checks]
-    if: ${{ needs.core-checks.result == 'success' && needs.impact.outputs.candidate_required == 'true' }}
+    if: ${{ !cancelled() && needs.impact.result == 'success' && needs.core-checks.result == 'success' && needs.impact.outputs.candidate_required == 'true' }}
     runs-on: ubuntu-latest
     timeout-minutes: 40
     permissions:
@@ -254,6 +254,7 @@ jobs:
 
   gate-reuse:
     needs: [impact, candidate]
+    if: ${{ !cancelled() && needs.impact.result == 'success' && needs.candidate.result == 'success' }}
     runs-on: ubuntu-latest
     outputs:
       found: ${{ steps.find.outputs.found }}
@@ -289,7 +290,7 @@ jobs:
 
   full-integration:
     needs: [impact, candidate, gate-reuse]
-    if: ${{ needs.gate-reuse.outputs.found != 'true' && (inputs.publish || inputs.full_integration || needs.impact.outputs.integration_required == 'true') }}
+    if: ${{ !cancelled() && needs.impact.result == 'success' && needs.candidate.result == 'success' && needs.gate-reuse.result == 'success' && needs.gate-reuse.outputs.found != 'true' && (inputs.publish || inputs.full_integration || needs.impact.outputs.integration_required == 'true') }}
     uses: ./.github/workflows/core-integration.yml
     permissions:
       contents: read
