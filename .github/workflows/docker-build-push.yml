@@ -306,7 +306,7 @@ jobs:
 
   publish-reviewed-main:
     needs: [impact, core-checks, candidate, gate-reuse, full-integration]
-    if: ${{ always() && github.event_name == 'workflow_dispatch' && inputs.publish && github.ref == 'refs/heads/main' && needs.impact.result == 'success' && needs.core-checks.result == 'success' && needs.candidate.result == 'success' && needs.impact.outputs.targets != '[]' && (needs.gate-reuse.outputs.found == 'true' || needs.full-integration.result == 'success') }}
+    if: ${{ !cancelled() && github.event_name == 'workflow_dispatch' && inputs.publish && github.ref == 'refs/heads/main' && needs.impact.result == 'success' && needs.core-checks.result == 'success' && needs.candidate.result == 'success' && needs.impact.outputs.targets != '[]' && (needs.gate-reuse.outputs.found == 'true' || needs.full-integration.result == 'success') }}
     runs-on: ubuntu-latest
     timeout-minutes: 30
     permissions:
