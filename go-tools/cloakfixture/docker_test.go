@@ -113,3 +113,51 @@ func TestCleanupUsesFreshContextAfterCancellation(t *testing.T) {
 		t.Fatalf("cleanup ordering: %v", actions)
 	}
 }
+
+type runtimeDocker struct{ fakeDocker }
+
+// Run returns deterministic lifecycle state for owned-container evidence tests.
+func (f *runtimeDocker) Run(ctx context.Context, args ...string) (string, error) {
+	if len(args) > 2 && args[0] == "inspect" && strings.Contains(args[2], "ExitCode") {
+		f.calls = append(f.calls, args)
+		return "false 0 true 137", nil
+	}
+	return f.fakeDocker.Run(ctx, args...)
+}
+
+// TestRuntimeStatesAreFiniteAndOwned excludes foreign containers while retaining owned OOM and
+// exit evidence.
+func TestRuntimeStatesAreFiniteAndOwned(t *testing.T) {
+	f := &runtimeDocker{fakeDocker{labels: map[string]string{"run-origin": "right", "run-foreign": "other"}}}
+	g := &dockerGate{docker: f, id: "right", prefix: "run", containers: []string{"run-origin", "run-foreign"}}
+	states := g.runtimeStates(context.Background())
+	if len(states) != 1 || states[0].Role != "origin" || !states[0].OOMKilled || states[0].Running || states[0].ExitCode != 137 {
+		t.Fatalf("invalid bounded OOM receipt: %+v", states)
+	}
+	for _, args := range f.calls {
+		if len(args) > 2 && strings.Contains(args[2], "ExitCode") && args[len(args)-1] == "run-foreign" {
+			t.Fatal("inspected foreign runtime")
+		}
+	}
+}
+
+// TestDesktopContainerPreservesIsolationWithoutMemoryOrCPUCaps checks that removing local
+// compute caps preserves namespace and process isolation.
+func TestDesktopContainerPreservesIsolationWithoutMemoryOrCPUCaps(t *testing.T) {
+	f := &fakeDocker{labels: map[string]string{"run-cloak": "right"}}
+	g := &dockerGate{docker: f, id: "right", prefix: "run", namespaceImage: "fixture-nft:local"}
+	if err := g.container(context.Background(), "cloak", cloakImage, "control", "172.29.20.2", "768m", "0.5", "256", nil, nil, nil, []string{"/browser"}); err != nil {
+		t.Fatal(err)
+	}
+	args := strings.Join(f.calls[0], " ")
+	for _, forbidden := range []string{"--memory", "--memory-swap", "--cpus"} {
+		if strings.Contains(args, forbidden) {
+			t.Fatalf("local cap retained: %s", forbidden)
+		}
+	}
+	for _, required := range []string{"--network run-control", "--cap-drop=ALL", "--read-only", "--security-opt=no-new-privileges:true", "--pids-limit 256", ownerKey + "=right"} {
+		if !strings.Contains(args, required) {
+			t.Fatalf("isolation boundary lost: %s", required)
+		}
+	}
+}

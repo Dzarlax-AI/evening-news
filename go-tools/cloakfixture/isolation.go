@@ -57,7 +57,13 @@ func nftPolicy(role string, ips map[string]string) (string, error) {
 	}
 	return "table inet news_fixture {\nchain output { type filter hook output priority -150; policy drop;\nmeta nfproto ipv6 counter drop\nct state invalid counter drop\n" + out + "counter drop\n}\nchain input { type filter hook input priority -150; policy drop;\nmeta nfproto ipv6 counter drop\nct state invalid counter drop\n" + in + "counter drop\n}\nchain forward { type filter hook forward priority -150; policy drop; }\n}\n", nil
 }
+
+// namespace selects the scoped helper or existing namespace controller after ownership
+// validation.
 func (g *dockerGate) namespace(ctx context.Context, name string, input string, args ...string) (string, error) {
+	if g.namespaceImage != "" {
+		return g.scopedNamespace(ctx, name, input, args...)
+	}
 	if e := g.verify(ctx, name, false); e != nil {
 		return "", e
 	}
@@ -136,19 +142,34 @@ func probeAccepted(target, result string, before, after uint64) bool {
 	}
 	return target == "10.254.254.254:80" && result == "network_unreachable" && after == before
 }
+
+// probeDrops requires both a denied synthetic dial and an increased firewall counter.
 func (g *dockerGate) probeDrops(ctx context.Context, role string, targets []string) error {
 	name := g.prefix + "-" + role
-	for _, target := range targets {
+	for index, target := range targets {
 		before, e := g.dropCount(ctx, name)
 		if e != nil {
 			return e
 		}
 		result, e := g.docker.Run(ctx, "exec", name, "/fixture", "netprobe", "--target", target)
 		if e != nil {
+			g.probeFailure = map[string]any{"role": role, "target_index": index, "result": "execution_failed", "before": before}
+			if result == "dial_succeeded" {
+				g.probeFailure["result"] = result
+			}
+			var execution *dockerExecutionFailure
+			if errors.As(e, &execution) {
+				g.probeFailure["exit_code"] = execution.exitCode
+			}
 			return errors.New("namespace_bypass_gate_failed")
 		}
 		after, e := g.dropCount(ctx, name)
 		if e != nil || !probeAccepted(target, result, before, after) {
+			safeResult := "unexpected"
+			if result == "blocked" || result == "network_unreachable" {
+				safeResult = result
+			}
+			g.probeFailure = map[string]any{"role": role, "target_index": index, "result": safeResult, "before": before, "after": after}
 			return errors.New("namespace_bypass_gate_failed")
 		}
 	}

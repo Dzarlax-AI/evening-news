@@ -20,13 +20,32 @@ import (
 	"github.com/gobwas/ws/wsutil"
 )
 
+type nativeFixtureCommand struct{ method, session string }
+
 type nativeFixture struct {
+	budgetMu                                                                                                           sync.Mutex
+	budgetNext                                                                                                         int
+	budgetRevokeDelay                                                                                                  time.Duration
+	budgetReceipts                                                                                                     map[string]nativeBudgetReceipt
+	responsePolicy, failResponse, stallResponse                                                                        bool
+	responseParams                                                                                                     map[string]any
+	responseSessions                                                                                                   []string
+	childGuardFail, childRequestURL, childDetach                                                                       string
+	childWire, childRequestBurst, childResumes                                                                         int
+	childNested                                                                                                        bool
+	commands                                                                                                           []nativeFixtureCommand
 	mu                                                                                                                 sync.Mutex
 	contexts, targets                                                                                                  map[string]bool
 	methods                                                                                                            []string
 	proxyAuth                                                                                                          map[string]any
 	status                                                                                                             int
 	childStatus                                                                                                        int
+	childEvents                                                                                                        []nativeFixtureChild
+	pendingChildRequests, failChildClose, denyChildClose, keepChildOnClose                                             bool
+	invalidChildReceipt                                                                                                bool
+	closedChildTargets                                                                                                 []string
+	childEventsAtRuntime, leakChild                                                                                    bool
+	unsafeEvent                                                                                                        string
 	downloadFrame                                                                                                      string
 	navigateDownload, statusAfterFailure, sameRequestNoFrame                                                           bool
 	navigationError, loadingFailure, loadingFailureType, loadingFailureFrame                                           string
@@ -71,10 +90,17 @@ type nativeFixture struct {
 	server                                                                                                             *httptest.Server
 }
 
+// newNativeFixture emulates CDP lifecycle and a separate budget control plane while retaining a
+// foreign sentinel.
 func newNativeFixture(t *testing.T) *nativeFixture {
 	t.Helper()
 	f := &nativeFixture{contexts: map[string]bool{}, targets: map[string]bool{"foreign-sentinel": true}, status: 200, navigated: make(chan struct{}), navigateStarts: make(chan struct{}, 16), discoveryID: "native"}
 	f.server = httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if strings.HasPrefix(r.URL.Path, "/v1/render-budgets") {
+			f.serveBudget(w, r)
+			return
+		}
+
 		if r.URL.Path == "/json/version" {
 			f.mu.Lock()
 			unavailable := f.discoveryUnavailable
@@ -108,6 +134,61 @@ func newNativeFixture(t *testing.T) *nativeFixture {
 		}
 		id := f.resourceIDs.Add(1)
 		contextID, targetID, sessionID := fmt.Sprintf("owned-context-%d", id), fmt.Sprintf("owned-target-%d", id), "owned-session"
+		var childTargets []string
+		childSessions := map[string]string{}
+		childKinds := map[string]string{}
+		nestedEmitted := false
+		childrenEmitted := false
+		emitChildren := func() bool {
+			if childrenEmitted {
+				return true
+			}
+			childrenEmitted = true
+			for i, child := range f.childEvents {
+				childContext, childTarget, childSession := contextID, fmt.Sprintf("child-target-%d-%d", id, i), fmt.Sprintf("child-session-%d", i)
+				if child.context != "" {
+					childContext = child.context
+				}
+				if child.target != "" {
+					childTarget = child.target
+				}
+				if child.session != "" {
+					childSession = child.session
+				}
+				params := map[string]any{"sessionId": childSession, "waitingForDebugger": child.paused,
+					"targetInfo": map[string]any{"targetId": childTarget, "type": child.kind, "browserContextId": childContext}}
+				if child.malformed {
+					delete(params, "sessionId")
+				}
+				if childContext == contextID && child.envelope == "" && childTarget != targetID {
+					f.targets[childTarget] = true
+					childTargets = append(childTargets, childTarget)
+					childSessions[childSession] = childTarget
+					childKinds[childSession] = child.kind
+				}
+				envelope := sessionID
+				if child.envelope != "" {
+					envelope = child.envelope
+				}
+				if f.pendingChildRequests && child.kind == "iframe" {
+					write(map[string]any{"method": "Network.requestWillBeSent", "sessionId": sessionID, "params": map[string]string{"requestId": childTarget, "type": "Document", "frameId": childTarget}})
+				}
+				if !write(map[string]any{"method": "Target.attachedToTarget", "sessionId": envelope, "params": params}) {
+					return false
+				}
+				if child.activity != "" && !write(map[string]any{"method": child.activity, "sessionId": childSession, "params": map[string]any{}}) {
+					return false
+				}
+			}
+			return true
+		}
+		emitResponse := func(childSession, id string) bool {
+			if !f.responsePolicy {
+				return true
+			}
+			return write(map[string]any{"method": "Fetch.requestPaused", "sessionId": childSession, "params": map[string]any{"requestId": id, "networkId": id, "resourceType": "Document", "request": map[string]string{"url": "https://origin.example/"}, "responseStatusCode": 200, "responseStatusText": "OK", "responseHeaders": []map[string]string{{"name": "Content-Type", "value": "text/html"}, {"name": "Content-Security-Policy", "value": "default-src 'self'"}}}})
+		}
+
 		emittedRequests := 0
 		emitPaused := func(id string) bool {
 			requestURL := f.requestURL
@@ -141,6 +222,7 @@ func newNativeFixture(t *testing.T) *nativeFixture {
 			}
 			f.mu.Lock()
 			f.methods = append(f.methods, msg.Method)
+			f.commands = append(f.commands, nativeFixtureCommand{msg.Method, msg.Session})
 			result := map[string]any{}
 			reply := true
 			protocolErr := false
@@ -165,7 +247,11 @@ func newNativeFixture(t *testing.T) *nativeFixture {
 				result["sessionId"] = sessionID
 				protocolErr = f.failAttach
 			case "Page.getFrameTree":
-				result["frameTree"] = map[string]any{"frame": map[string]string{"id": "main-frame"}}
+				frame := "main-frame"
+				if childSessions[msg.Session] != "" {
+					frame = childSessions[msg.Session]
+				}
+				result["frameTree"] = map[string]any{"frame": map[string]string{"id": frame}}
 			case "Target.disposeBrowserContext":
 				for i := 0; i < f.cleanupEventFlood; i++ {
 					if !write(map[string]any{"method": "Network.dataReceived", "sessionId": sessionID, "params": map[string]any{"requestId": fmt.Sprint(i), "encodedDataLength": 0}}) {
@@ -179,6 +265,11 @@ func newNativeFixture(t *testing.T) *nativeFixture {
 				} else {
 					delete(f.contexts, contextID)
 					delete(f.targets, targetID)
+					if !f.leakChild {
+						for _, child := range childTargets {
+							delete(f.targets, child)
+						}
+					}
 				}
 			case "Page.stopLoading":
 				protocolErr = f.failStopLoading
@@ -189,7 +280,25 @@ func newNativeFixture(t *testing.T) *nativeFixture {
 				if msg.Params["targetId"] == "foreign-sentinel" {
 					t.Error("foreign target closed")
 				}
-				delete(f.targets, fmt.Sprint(msg.Params["targetId"]))
+				closing := fmt.Sprint(msg.Params["targetId"])
+				isChild := false
+				for _, child := range childTargets {
+					if child == closing {
+						isChild = true
+					}
+				}
+				result["success"] = true
+				if isChild {
+					f.closedChildTargets = append(f.closedChildTargets, closing)
+					protocolErr = f.failChildClose
+					result["success"] = !f.denyChildClose
+				}
+				if !isChild || (!f.failChildClose && !f.denyChildClose && !f.keepChildOnClose && !f.leakChild) {
+					delete(f.targets, closing)
+					if isChild && f.pendingChildRequests {
+						write(map[string]any{"method": "Network.loadingFailed", "sessionId": sessionID, "params": map[string]string{"requestId": closing, "errorText": "net::ERR_ABORTED"}})
+					}
+				}
 			case "Target.getBrowserContexts":
 				responseDelay = f.contextsDelay
 				protocolErr = f.failContextReceipt
@@ -207,7 +316,21 @@ func newNativeFixture(t *testing.T) *nativeFixture {
 					infos = append(infos, map[string]string{"targetId": id})
 				}
 				result["targetInfos"] = infos
+				if f.invalidChildReceipt && len(f.closedChildTargets) > 0 {
+					delete(result, "targetInfos")
+				}
 			case "Page.navigate":
+				if !emitResponse(sessionID, "main-response") {
+					f.mu.Unlock()
+					return
+				}
+				if !f.childEventsAtRuntime && !emitChildren() {
+					f.mu.Unlock()
+					return
+				}
+				if f.unsafeEvent != "" {
+					write(map[string]any{"method": f.unsafeEvent, "sessionId": sessionID, "params": map[string]any{}})
+				}
 				protocolErr = f.failNavigate
 				responseDelay = f.navigateDelay
 				select {
@@ -355,7 +478,31 @@ func newNativeFixture(t *testing.T) *nativeFixture {
 					write(map[string]any{"method": "Target.detachedFromTarget", "sessionId": envelope, "params": params})
 					f.detachAfterPaused = false
 				}
+			case "Fetch.takeResponseBodyAsStream":
+				result["stream"] = "owned-body-stream"
+			case "IO.read":
+				result["data"] = "<html><body>Original synthetic document</body></html>"
+				result["eof"] = true
+			case "Fetch.fulfillRequest", "Fetch.continueResponse":
+				f.responseParams = msg.Params
+				f.responseSessions = append(f.responseSessions, msg.Session)
+				protocolErr = f.failResponse
+				reply = !f.stallResponse
 			case "Fetch.continueRequest":
+				if target := childSessions[msg.Session]; target != "" {
+					if f.childDetach != "" {
+						if f.childDetach == "gone" || f.childDetach == "gone-root" {
+							delete(f.targets, target)
+						}
+						envelope := sessionID
+						if f.childDetach == "gone-root" {
+							envelope = ""
+						}
+						write(map[string]any{"method": "Target.detachedFromTarget", "sessionId": envelope, "params": map[string]string{"sessionId": msg.Session}})
+					} else {
+						write(map[string]any{"method": "Network.loadingFinished", "sessionId": msg.Session, "params": map[string]any{"requestId": msg.Params["requestId"], "encodedDataLength": 0}})
+					}
+				}
 				responseDelay = f.continueDelay
 				protocolErr = f.failContinueRequest
 				f.failContinueRequest = false
@@ -387,7 +534,59 @@ func newNativeFixture(t *testing.T) *nativeFixture {
 				}
 			case "Fetch.failRequest":
 				responseDelay = f.policyRPCDelay
+			case "Runtime.runIfWaitingForDebugger":
+				if !emitResponse(msg.Session, "child-response") {
+					f.mu.Unlock()
+					return
+				}
+				target := childSessions[msg.Session]
+				if target == "" || childKinds[msg.Session] != "iframe" {
+					t.Error("resumed a non-frame target")
+					protocolErr = true
+					break
+				}
+				for _, required := range []string{"Page.enable", "Network.enable", "Network.setBlockedURLs", "Fetch.enable", "Target.setAutoAttach"} {
+					found := false
+					for _, c := range f.commands {
+						if c.session == msg.Session && c.method == required {
+							found = true
+						}
+					}
+					if !found {
+						t.Errorf("frame resumed before %s", required)
+					}
+				}
+				f.childResumes++
+				write(map[string]any{"method": "Network.requestWillBeSent", "sessionId": msg.Session, "params": map[string]string{"requestId": target, "frameId": target, "type": "Document"}})
+				write(map[string]any{"method": "Network.responseReceived", "sessionId": msg.Session, "params": map[string]any{"requestId": target, "frameId": target, "type": "Document", "response": map[string]any{"status": 404, "headers": map[string]string{}}}})
+				write(map[string]any{"method": "Network.loadingFinished", "sessionId": msg.Session, "params": map[string]any{"requestId": target, "encodedDataLength": 0}})
+				if f.childWire > 0 {
+					write(map[string]any{"method": "Network.dataReceived", "sessionId": msg.Session, "params": map[string]any{"requestId": target, "encodedDataLength": f.childWire}})
+				}
+				for n := 0; n < f.childRequestBurst; n++ {
+					write(map[string]any{"method": "Network.requestWillBeSent", "sessionId": msg.Session, "params": map[string]string{"requestId": fmt.Sprintf("child-burst-%d", n), "frameId": target, "type": "Fetch"}})
+				}
+				req := target + "-fetch"
+				raw := f.childRequestURL
+				if raw == "" {
+					raw = "https://origin.example/frame-resource"
+				}
+				write(map[string]any{"method": "Network.requestWillBeSent", "sessionId": msg.Session, "params": map[string]string{"requestId": req, "frameId": target, "type": "Fetch"}})
+				write(map[string]any{"method": "Fetch.requestPaused", "sessionId": msg.Session, "params": map[string]any{"requestId": req, "request": map[string]string{"url": raw}}})
+				if f.childNested && !nestedEmitted {
+					nestedEmitted = true
+					nt, ns := "nested-"+target, "nested-session"
+					f.targets[nt] = true
+					childTargets = append(childTargets, nt)
+					childSessions[ns] = nt
+					childKinds[ns] = "iframe"
+					write(map[string]any{"method": "Target.attachedToTarget", "sessionId": msg.Session, "params": map[string]any{"sessionId": ns, "waitingForDebugger": true, "targetInfo": map[string]string{"targetId": nt, "browserContextId": contextID, "type": "iframe"}}})
+				}
 			case "Runtime.evaluate":
+				if f.childEventsAtRuntime && !emitChildren() {
+					f.mu.Unlock()
+					return
+				}
 				protocolErr = f.failEvaluate
 				if f.disconnect {
 					f.mu.Unlock()
@@ -463,8 +662,11 @@ func newNativeFixture(t *testing.T) *nativeFixture {
 					result["exceptionDetails"] = map[string]any{"text": "JS_CANARY", "exception": map[string]any{"description": "EXCEPTION_CANARY"}}
 				}
 				authBurst, f.authEventBurst = f.authEventBurst, 0
-			case "Fetch.fulfillRequest", "Network.setUserAgentOverride", "Emulation.setDeviceMetricsOverride", "Browser.close":
+			case "Fetch.getResponseBody", "Network.setUserAgentOverride", "Emulation.setDeviceMetricsOverride", "Browser.close":
 				t.Errorf("native path changed browser identity/body or closed browser: %s", msg.Method)
+			}
+			if childSessions[msg.Session] != "" && msg.Method == f.childGuardFail {
+				protocolErr = true
 			}
 			f.mu.Unlock()
 			if reply {
@@ -496,9 +698,11 @@ func newNativeFixture(t *testing.T) *nativeFixture {
 	return f
 }
 
+// worker constructs a native controller against this fixture and bounds concurrent render
+// admission.
 func (f *nativeFixture) worker(t *testing.T) *NativeBrowser {
 	t.Helper()
-	w, err := NewNativeBrowser(NativeBrowserConfig{Endpoint: f.server.URL, ProxyURL: "http://gateway.test:3128", ProxyToken: "sixteen-byte-token", NetworkIsolationVerified: true})
+	w, err := NewNativeBrowser(NativeBrowserConfig{Endpoint: f.server.URL, BudgetEndpoint: f.server.URL, ProxyURL: "http://gateway.test:3128", ProxyToken: "sixteen-byte-token", NetworkIsolationVerified: true})
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -524,7 +728,9 @@ func TestNativeBrowserConfigurationAndInitialReadiness(t *testing.T) {
 	}
 }
 
-func TestNativeLifecycleAuthAndNoFulfill(t *testing.T) {
+// TestNativeLifecycleUsesScopedProxyAuth checks scoped proxy authentication, owned cleanup and
+// preservation of the foreign sentinel.
+func TestNativeLifecycleUsesScopedProxyAuth(t *testing.T) {
 	f := newNativeFixture(t)
 	w := f.worker(t)
 	if err := w.Probe(context.Background()); err != nil {
@@ -543,7 +749,7 @@ func TestNativeLifecycleAuthAndNoFulfill(t *testing.T) {
 	}
 	f.mu.Lock()
 	defer f.mu.Unlock()
-	if f.proxyAuth["username"] != "extractor" || f.proxyAuth["password"] != "sixteen-byte-token" {
+	if f.proxyAuth["username"] != "extractor" || f.proxyAuth["password"] == "sixteen-byte-token" || len(fmt.Sprint(f.proxyAuth["password"])) != 64 {
 		t.Fatal("proxy credentials not provided")
 	}
 	if len(f.contexts) != 0 || len(f.targets) != 1 || !f.targets["foreign-sentinel"] {
@@ -568,6 +774,42 @@ func TestNativeSlowContextReceiptCompletesOwnedCleanup(t *testing.T) {
 	}
 	if len(f.methods) == 0 || f.methods[len(f.methods)-1] != "Target.getTargets" {
 		t.Fatalf("cleanup did not complete target verification: %v", f.methods)
+	}
+}
+
+// TestNativeSlowBrowserCleanupLeavesIndependentRevokeBudget exercises confirmed
+// browser cleanup near its deadline without weakening either cleanup receipt.
+func TestNativeSlowBrowserCleanupLeavesIndependentRevokeBudget(t *testing.T) {
+	for _, invalidBrowserReceipt := range []bool{false, true} {
+		t.Run(fmt.Sprint(invalidBrowserReceipt), func(t *testing.T) {
+			f := newNativeFixture(t)
+			w := f.worker(t)
+			if err := w.Probe(context.Background()); err != nil {
+				t.Fatal(err)
+			}
+			f.mu.Lock()
+			f.contextsDelay = 4500 * time.Millisecond
+			f.failTargetReceipt = invalidBrowserReceipt
+			f.mu.Unlock()
+			f.budgetMu.Lock()
+			f.budgetRevokeDelay = 800 * time.Millisecond
+			f.budgetMu.Unlock()
+			doc, err := w.Fetch(context.Background(), "https://origin.example/", NativeBrowserOptions{})
+			if invalidBrowserReceipt {
+				if !errors.Is(err, ErrNativeOwnershipLost) || len(doc.HTML) != 0 || w.Ready() {
+					t.Fatal("unconfirmed browser cleanup escaped ownership fencing")
+				}
+			} else if err != nil || doc.StatusCode != 200 || !w.Ready() {
+				t.Fatalf("confirmed browser cleanup consumed revoke deadline: %v", err)
+			}
+			f.budgetMu.Lock()
+			defer f.budgetMu.Unlock()
+			for _, receipt := range f.budgetReceipts {
+				if !receipt.Revoked {
+					t.Fatal("budget was not revoked")
+				}
+			}
+		})
 	}
 }
 
@@ -1496,9 +1738,11 @@ func TestNativeBusyAndCloseDrainOwnedJob(t *testing.T) {
 	}
 }
 
+// TestNativeBrowserConcurrentRendersUseIndependentTargets keeps overlapping renders in distinct
+// contexts without sharing target state.
 func TestNativeBrowserConcurrentRendersUseIndependentTargets(t *testing.T) {
 	f := newNativeFixture(t)
-	w, err := NewNativeBrowser(NativeBrowserConfig{Endpoint: f.server.URL, ProxyURL: "http://gateway.test:3128", ProxyToken: "sixteen-byte-token", NetworkIsolationVerified: true, MaxConcurrent: 2, MaxWaiters: 1})
+	w, err := NewNativeBrowser(NativeBrowserConfig{Endpoint: f.server.URL, BudgetEndpoint: f.server.URL, ProxyURL: "http://gateway.test:3128", ProxyToken: "sixteen-byte-token", NetworkIsolationVerified: true, MaxConcurrent: 2, MaxWaiters: 1})
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -1565,9 +1809,11 @@ func TestNativeBrowserConcurrentRendersUseIndependentTargets(t *testing.T) {
 	}
 }
 
+// TestNativeBrowserWaiterIsBoundedAndCancelable prevents queued work from exceeding admission
+// capacity or surviving cancellation.
 func TestNativeBrowserWaiterIsBoundedAndCancelable(t *testing.T) {
 	f := newNativeFixture(t)
-	w, err := NewNativeBrowser(NativeBrowserConfig{Endpoint: f.server.URL, ProxyURL: "http://gateway.test:3128", ProxyToken: "sixteen-byte-token", NetworkIsolationVerified: true, MaxConcurrent: 1, MaxWaiters: 1})
+	w, err := NewNativeBrowser(NativeBrowserConfig{Endpoint: f.server.URL, BudgetEndpoint: f.server.URL, ProxyURL: "http://gateway.test:3128", ProxyToken: "sixteen-byte-token", NetworkIsolationVerified: true, MaxConcurrent: 1, MaxWaiters: 1})
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -1621,9 +1867,11 @@ func TestNativeBrowserWaiterIsBoundedAndCancelable(t *testing.T) {
 	}
 }
 
+// TestNativeBrowserAdmissionDeadlineDoesNotCreateTarget ensures timed-out admission never
+// allocates browser resources.
 func TestNativeBrowserAdmissionDeadlineDoesNotCreateTarget(t *testing.T) {
 	f := newNativeFixture(t)
-	w, err := NewNativeBrowser(NativeBrowserConfig{Endpoint: f.server.URL, ProxyURL: "http://gateway.test:3128", ProxyToken: "sixteen-byte-token", NetworkIsolationVerified: true, MaxConcurrent: 1, MaxWaiters: 1})
+	w, err := NewNativeBrowser(NativeBrowserConfig{Endpoint: f.server.URL, BudgetEndpoint: f.server.URL, ProxyURL: "http://gateway.test:3128", ProxyToken: "sixteen-byte-token", NetworkIsolationVerified: true, MaxConcurrent: 1, MaxWaiters: 1})
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -1668,9 +1916,11 @@ func TestNativeBrowserAdmissionDeadlineDoesNotCreateTarget(t *testing.T) {
 	}
 }
 
+// TestNativeBrowserGenerationTaintCancelsEveryActiveOperation fences all operations when the
+// shared browser generation loses trust.
 func TestNativeBrowserGenerationTaintCancelsEveryActiveOperation(t *testing.T) {
 	f := newNativeFixture(t)
-	w, err := NewNativeBrowser(NativeBrowserConfig{Endpoint: f.server.URL, ProxyURL: "http://gateway.test:3128", ProxyToken: "sixteen-byte-token", NetworkIsolationVerified: true, MaxConcurrent: 2})
+	w, err := NewNativeBrowser(NativeBrowserConfig{Endpoint: f.server.URL, BudgetEndpoint: f.server.URL, ProxyURL: "http://gateway.test:3128", ProxyToken: "sixteen-byte-token", NetworkIsolationVerified: true, MaxConcurrent: 2})
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -2443,4 +2693,47 @@ func TestNativeFrameFallbackDoesNotTreatSubresourceAsDocument(t *testing.T) {
 			}
 		})
 	}
+}
+
+// This control-plane fake is independent of the CDP mutex, so slow publisher
+// events cannot fabricate a failed budget status read.
+func (f *nativeFixture) serveBudget(w http.ResponseWriter, r *http.Request) {
+	if r.Header.Get("Authorization") != "Bearer sixteen-byte-token" {
+		w.WriteHeader(401)
+		return
+	}
+	f.budgetMu.Lock()
+	defer f.budgetMu.Unlock()
+	if f.budgetReceipts == nil {
+		f.budgetReceipts = map[string]nativeBudgetReceipt{}
+	}
+	if r.Method == "POST" {
+		var in struct {
+			Limit int64 `json:"wire_limit_bytes"`
+			TTL   int64 `json:"ttl_ms"`
+		}
+		if json.NewDecoder(r.Body).Decode(&in) != nil {
+			w.WriteHeader(400)
+			return
+		}
+		f.budgetNext++
+		id := fmt.Sprintf("%032x", f.budgetNext)
+		token := fmt.Sprintf("%064x", f.budgetNext)
+		f.budgetReceipts[id] = nativeBudgetReceipt{Version: "1", ID: id, Limit: in.Limit}
+		w.WriteHeader(201)
+		json.NewEncoder(w).Encode(map[string]any{"contract_version": "1", "budget_id": id, "proxy_token": token, "wire_limit_bytes": in.Limit, "ttl_ms": in.TTL})
+		return
+	}
+	id := strings.TrimPrefix(r.URL.Path, "/v1/render-budgets/")
+	receipt, ok := f.budgetReceipts[id]
+	if !ok {
+		w.WriteHeader(404)
+		return
+	}
+	if r.Method == "DELETE" {
+		time.Sleep(f.budgetRevokeDelay)
+		receipt.Revoked = true
+		f.budgetReceipts[id] = receipt
+	}
+	json.NewEncoder(w).Encode(receipt)
 }

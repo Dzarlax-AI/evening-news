@@ -3,6 +3,7 @@ package egress
 import (
 	"bufio"
 	"context"
+	"crypto/sha256"
 	"crypto/tls"
 	"crypto/x509"
 	"encoding/base64"
@@ -33,15 +34,24 @@ func (f dialerFunc) DialContext(ctx context.Context, network, address string) (n
 	return f(ctx, network, address)
 }
 
+// newGateway constructs a test gateway with separate control credentials and a synthetic scoped
+// tunnel budget.
 func newGateway(t *testing.T, cfg Config) (*Gateway, *httptest.Server) {
 	t.Helper()
 	if cfg.Token == "" {
 		cfg.Token = testToken
 	}
+	cfg.Token = "control:" + cfg.Token
 	g, err := New(cfg)
 	if err != nil {
 		t.Fatal(err)
 	}
+
+	// Existing tunnel tests use one pre-registered synthetic credential. Control
+	// API/auth/lifecycle coverage uses newRenderGateway and real allocation.
+	b := &renderBudget{id: strings.Repeat("a", 32), hash: sha256.Sum256([]byte(testToken)), limit: 5 * 1024 * 1024, remaining: 5 * 1024 * 1024, ops: map[*operation]struct{}{}, expires: time.Now().Add(time.Minute)}
+	g.budgets[b.id] = b
+	g.budgetTokens[b.hash] = b
 	server := httptest.NewServer(g)
 	t.Cleanup(func() {
 		ctx, cancel := context.WithCancel(context.Background())

@@ -110,3 +110,24 @@ func TestPeerRejectsMissingForeignTarget(t *testing.T) {
 	client.Close()
 	<-done
 }
+
+// TestPeerCommandTimeoutHasFiniteReason ensures a stalled sentinel command returns a bounded
+// diagnostic classification.
+func TestPeerCommandTimeoutHasFiniteReason(t *testing.T) {
+	client, server := net.Pipe()
+	defer client.Close()
+	defer server.Close()
+	p := &CDPPeer{conn: client, reader: wsutil.NewClientSideReader(client)}
+	read := make(chan struct{})
+	go func() {
+		_, _, _ = wsutil.ReadClientData(server)
+		close(read)
+	}()
+	ctx, cancel := context.WithTimeout(context.Background(), 50*time.Millisecond)
+	defer cancel()
+	err := p.command(ctx, "Runtime.evaluate", nil, "synthetic-session", nil)
+	<-read
+	if err == nil || err.Error() != "cdp_command_timeout" {
+		t.Fatalf("unexpected finite deadline reason: %v", err)
+	}
+}

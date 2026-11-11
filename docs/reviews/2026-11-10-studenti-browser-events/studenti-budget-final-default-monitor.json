@@ -1,0 +1,75 @@
+{
+  "schema_version": 1,
+  "mode": "scoped_budget_native_prototype_no_news_service",
+  "state": "passed",
+  "direct_network_denied": true,
+  "pinned_browser_verified": true,
+  "browser": {
+    "controller_closed": true,
+    "diagnostics": {
+      "events/iframe_guarded": 2,
+      "events/worker_policy_applied": 4,
+      "events/worker_policy_header_seen": 2
+    },
+    "direct_fetch": {
+      "dom_bytes": 905058,
+      "final_url": "https://studenti.org.rs/vesti/",
+      "http_status": 200,
+      "ready_after_cleanup": true
+    },
+    "direct_fetch_elapsed_ms": 3940,
+    "mode": "standalone_native_and_default_page_monitor",
+    "page_monitor": {
+      "article_links_under_vesti": 19,
+      "article_sample_link": "https://studenti.org.rs/vesti/dez_konj/",
+      "article_sample_title": "Одговор ДезИнформеру",
+      "default_empty_config": true,
+      "defaults_owner": "go-ingestion:applyPageMonitorSelectorDefaults",
+      "error": "",
+      "fetch_method": "native_browser",
+      "first_link": "https://studenti.org.rs/vesti/",
+      "first_title": "Најновија вест",
+      "item_count": 20,
+      "outcome": "success",
+      "ready_after_cleanup": true
+    },
+    "probe_succeeded": true,
+    "public_admission_succeeded": true,
+    "schema_version": 1,
+    "state": "passed"
+  },
+  "browser_cleanup": {
+    "contexts_restored": true,
+    "targets_restored": true,
+    "independent_sentinel_preserved": true,
+    "sentinel_cleanup_succeeded": true
+  },
+  "browser_policy_unchanged": true,
+  "runtime_states": [
+    {
+      "role": "browser-anchor",
+      "running": true,
+      "restarts": 0,
+      "oom": false,
+      "memory_cap": 0,
+      "cpu_cap": 0
+    },
+    {
+      "role": "egress",
+      "running": true,
+      "restarts": 0,
+      "oom": false,
+      "memory_cap": 0,
+      "cpu_cap": 0
+    },
+    {
+      "role": "cloak",
+      "running": true,
+      "restarts": 0,
+      "oom": false,
+      "memory_cap": 0,
+      "cpu_cap": 0
+    }
+  ],
+  "cleanup_succeeded": true
+}

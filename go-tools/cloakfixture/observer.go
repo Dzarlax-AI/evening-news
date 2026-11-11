@@ -13,9 +13,13 @@ import (
 var commandName = regexp.MustCompile(`^[0-9a-f]{32}\.json$`)
 var observerErrors = map[string]bool{"fixture_evidence_invalid": true, "fixture_arrival_timeout": true, "origin_state_unavailable": true, "worker_unavailable": true, "worker_response_invalid": true, "client_timeout": true, "one_slot_overlap_detected": true, "two_slot_barrier_or_third_waiter_invalid": true, "synthetic_article_request_failed": true, "cancellation_isolation_failed": true, "upstream_error_classification_invalid": true, "peer_target_or_context_lost": true, "peer_session_probe_failed": true, "news_browser_resource_leak": true, "cdp_connection_closed": true, "cdp_command_failed": true, "fixture_release_failed": true}
 
-func privateJSON(path string, value any) error {
+func privateJSON(path string, value any) error { return privateJSONLimit(path, value, 4096) }
+
+// privateJSONLimit writes private evidence only when its serialized JSON fits the caller's
+// bound.
+func privateJSONLimit(path string, value any, limit int) error {
 	b, e := json.Marshal(value)
-	if e != nil || len(b) > 4096 {
+	if e != nil || len(b) > limit {
 		return errors.New("receipt_invalid")
 	}
 	f, e := os.OpenFile(path, os.O_WRONLY|os.O_CREATE|os.O_EXCL, 0600)
@@ -35,6 +39,8 @@ func privateJSON(path string, value any) error {
 	}
 	return nil
 }
+
+// atomicReceipt publishes an observer receipt by rename so readers cannot accept partial JSON.
 func atomicReceipt(dir, name string, value any) error {
 	temp, e := os.CreateTemp(dir, ".receipt-")
 	if e != nil {
@@ -44,7 +50,11 @@ func atomicReceipt(dir, name string, value any) error {
 	temp.Close()
 	os.Remove(path)
 	defer os.Remove(path)
-	if e = privateJSON(path, value); e != nil {
+	limit := 4096
+	if filepath.Base(dir) == "results" {
+		limit = 16 * 1024
+	}
+	if e = privateJSONLimit(path, value, limit); e != nil {
 		return e
 	}
 	if e = os.Rename(path, filepath.Join(dir, name)); e != nil {
@@ -52,6 +62,9 @@ func atomicReceipt(dir, name string, value any) error {
 	}
 	return nil
 }
+
+// RunObserver processes isolated stand commands and publishes bounded, correlated result
+// receipts.
 func RunObserver(ctx context.Context, p *Profiles, peer *CDPPeer, commandDir, resultDir string) error {
 	if e := os.MkdirAll(resultDir, 0700); e != nil {
 		return errors.New("observer_error")
@@ -97,6 +110,10 @@ func RunObserver(ctx context.Context, p *Profiles, peer *CDPPeer, commandDir, re
 				result, e = p.Worker.SuppliedContentRequest(ctx)
 			case "page_monitor":
 				result, e = p.Worker.PageMonitorRequest(ctx)
+			case "budget_isolation":
+				result, e = p.BudgetIsolation(ctx)
+			case "browser_events":
+				result, e = p.BrowserEvents(ctx)
 			case "cancellation":
 				result, e = p.Cancellation(ctx)
 			case "upstream_error":
@@ -112,6 +129,9 @@ func RunObserver(ctx context.Context, p *Profiles, peer *CDPPeer, commandDir, re
 			}
 			receipt := map[string]any{"command_id": id, "ok": e == nil}
 			if e != nil {
+				if command.Action == "browser_events" || command.Action == "budget_isolation" {
+					receipt["result"] = result
+				}
 				code := e.Error()
 				if !observerErrors[code] {
 					code = "client_gate_failed"

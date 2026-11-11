@@ -446,9 +446,13 @@ func safePageMonitorStage(value string) bool {
 	}
 }
 
+// safePageMonitorNativeReason admits only finite native-browser reason codes into source
+// diagnostics.
 func safePageMonitorNativeReason(value string) bool {
 	switch value {
 	case "context_timeout", "context_cancelled", "event_overflow", "ownership_loss", "unsupported", "browser_busy", "resource_limit",
+		"child_target_close_unsupported", "child_target_close_missing", "child_target_close_rejected", "child_target_close_unconfirmed", "child_target_close_failed", "child_target_invalid", "child_target_unpaused", "child_target_unsupported", "child_target_activity", "websocket_denied", "popup_denied", "download_denied",
+		"response_policy_invalid", "response_policy_failed", "worker_policy_header_seen", "worker_policy_applied", "child_frame_guard_failed", "child_detach_unconfirmed", "iframe_guarded", "child_frame_unsupported", "child_page_denied",
 		"client_disconnected", "malformed_detach", "owned_detach", "target_crashed", "protocol_error",
 		"transport_error", "operation_failed", "navigation_failed", "evaluation_failed", "navigation_dns",
 		"navigation_connection", "navigation_tls", "navigation_aborted", "navigation_http", "navigation_proxy", "navigation_redirect", "navigation_empty_response", "navigation_other":

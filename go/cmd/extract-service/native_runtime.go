@@ -63,6 +63,8 @@ func nativeBrowserReadiness(native *transport.NativeBrowser) (ready, available f
 	return ready, native.Ready
 }
 
+// nativeDiagnosticLogger emits opt-in allowlisted diagnostics without publisher URLs, bodies or
+// credentials.
 func nativeDiagnosticLogger(enabled bool) func(stage, reason string) {
 	if !enabled {
 		return nil
@@ -71,6 +73,12 @@ func nativeDiagnosticLogger(enabled bool) func(stage, reason string) {
 		"create_context": true, "create_target": true, "attach_target": true,
 		"configure": true, "navigate": true, "dom": true, "cleanup": true}
 	reasons := map[string]bool{"context_timeout": true, "context_cancelled": true,
+		"child_target_invalid": true, "child_target_unpaused": true, "child_target_unsupported": true, "child_target_activity": true,
+		"response_policy_invalid": true, "response_policy_failed": true, "worker_policy_header_seen": true, "worker_policy_applied": true, "child_frame_guard_failed": true, "child_detach_unconfirmed": true, "iframe_guarded": true, "child_frame_unsupported": true, "child_page_denied": true,
+		"child_target_close_unsupported": true, "child_target_close_missing": true, "child_target_close_rejected": true, "child_target_close_unconfirmed": true, "child_target_close_failed": true, "worker_closed": true, "shared_worker_closed": true, "service_worker_closed": true,
+		"worker_paused": true, "shared_worker_paused": true, "service_worker_paused": true,
+		"paused_worker_dom_ready": true, "paused_worker_dom_unready": true, "paused_worker_requests_pending": true,
+		"websocket_denied": true, "popup_denied": true, "download_denied": true,
 		"event_overflow": true, "ownership_loss": true, "unsupported": true,
 		"client_disconnected": true, "malformed_detach": true, "owned_detach": true, "target_crashed": true,
 		"protocol_error": true, "transport_error": true, "operation_failed": true}

@@ -56,7 +56,7 @@ func NativeResourceLimitReason(err error) string {
 	var limit *NativeResourceLimitError
 	if errors.As(err, &limit) {
 		switch limit.Reason {
-		case "wire_bytes", "dom_output", "frame_count", "auth_event_count", "request_count", "event_rpc_admission":
+		case "wire_bytes", "dom_output", "frame_count", "auth_event_count", "request_count", "event_rpc_admission", "child_target_count":
 			return limit.Reason
 		}
 	}
@@ -82,6 +82,7 @@ func nativeAdmissionWaitError(err error) error {
 // NetworkIsolationVerified attests an independently verified network namespace:
 // this library cannot establish firewall/UDP/DNS isolation using CDP alone.
 type NativeBrowserConfig struct {
+	BudgetEndpoint           string // Optional trusted control endpoint; defaults to ProxyURL, never a source option.
 	Endpoint                 string
 	ProxyURL                 string
 	ProxyToken               string
@@ -102,6 +103,7 @@ type nativeEventRPCResult struct {
 	err            error
 	terminal       error
 	ignoreRPCError bool
+	afterSuccess   func()
 }
 
 // nativeEventRPCs bounds continuation commands while keeping policy and
@@ -118,6 +120,12 @@ func newNativeEventRPCs(limit int) *nativeEventRPCs {
 }
 
 func (r *nativeEventRPCs) submit(call func() error, terminal error, ignoreRPCError bool) bool {
+	return r.submitAfter(call, terminal, ignoreRPCError, nil)
+}
+
+// submitAfter bounds asynchronous event RPCs and defers successful state changes to the event
+// consumer.
+func (r *nativeEventRPCs) submitAfter(call func() error, terminal error, ignoreRPCError bool, afterSuccess func()) bool {
 	for {
 		current := r.pending.Load()
 		if current >= r.limit {
@@ -130,7 +138,7 @@ func (r *nativeEventRPCs) submit(call func() error, terminal error, ignoreRPCErr
 	r.wg.Add(1)
 	go func() {
 		defer r.wg.Done()
-		result := nativeEventRPCResult{err: call(), terminal: terminal, ignoreRPCError: ignoreRPCError}
+		result := nativeEventRPCResult{err: call(), terminal: terminal, ignoreRPCError: ignoreRPCError, afterSuccess: afterSuccess}
 		// The result buffer is the same size as the admission cap, so every
 		// admitted call can publish exactly one completion during cancellation.
 		r.results <- result
@@ -221,8 +229,11 @@ func (w *NativeBrowser) Ready() bool {
 	return w.ready && !w.tainted && !w.closed
 }
 
+// nativeDiagnosticReason maps native errors to finite reasons suitable for private diagnostics.
 func nativeDiagnosticReason(err error) string {
 	switch {
+	case nativeEventReason(err) != "":
+		return nativeEventReason(err)
 	case errors.Is(err, ErrNativeBusy):
 		return "browser_busy"
 	case NativeResourceLimitReason(err) != "":
@@ -299,9 +310,17 @@ func nativeCrashCancellation(err, cause error, crashed bool) bool {
 	return crashed && errors.Is(cause, ErrNativeTargetCrashed) && err == context.Canceled
 }
 
+// reportDiagnostic reports bounded lifecycle reasons and numeric protocol codes without
+// publisher metadata.
 func (w *NativeBrowser) reportDiagnostic(stage string, err error) {
 	if w.cfg.Diagnostic != nil && err != nil {
 		w.cfg.Diagnostic(stage, nativeDiagnosticReason(err))
+		if strings.HasPrefix(nativeEventReason(err), "child_target_close_") {
+			var protocolErr *cdproto.Error
+			if errors.As(err, &protocolErr) && protocolErr.Code >= -999999 && protocolErr.Code <= 999999 {
+				w.cfg.Diagnostic(stage, fmt.Sprintf("protocol_error_%d", protocolErr.Code))
+			}
+		}
 	}
 }
 
@@ -582,7 +601,7 @@ func (w *NativeBrowser) Probe(ctx context.Context) error {
 	defer done()
 	ctx, cancel := context.WithTimeout(ctx, 5*time.Second)
 	defer cancel()
-	resources, err := w.open(ctx)
+	resources, err := w.open(ctx, MaxPageBytes)
 	if err != nil {
 		return err
 	}
@@ -634,14 +653,18 @@ func (w *NativeBrowser) stopAdmissionLocked() {
 }
 
 type nativeResources struct {
+	budget                         *nativeRenderBudget
 	client                         *browserCDP
 	diagnostic                     func(string, error)
 	contextID, targetID, sessionID string
 	mainFrameID                    string
 	generation                     string
+	pausedTargets                  *nativePausedTargets
 }
 
-func (w *NativeBrowser) open(ctx context.Context) (res *nativeResources, err error) {
+// openCDP allocates and records one owned context, target and session with cleanup on partial
+// failure.
+func (w *NativeBrowser) openCDP(ctx context.Context) (res *nativeResources, err error) {
 	ws, err := nativeBrowserEndpoint(ctx, w.cfg.Endpoint)
 	if err != nil {
 		w.unavailable()
@@ -774,7 +797,11 @@ func (r *nativeResources) cleanupWithConnectionState(skipStopLoading bool) (bool
 		errs = append(errs, err)
 	} else {
 		for _, t := range targets.Infos {
-			if t.ID == r.targetID || (r.contextID != "" && t.ContextID == r.contextID) {
+			paused := false
+			if r.pausedTargets != nil {
+				_, paused = r.pausedTargets.targets[t.ID]
+			}
+			if t.ID == r.targetID || paused || (r.contextID != "" && t.ContextID == r.contextID) {
 				errs = append(errs, ErrNativeOwnershipLost)
 			}
 		}
@@ -787,7 +814,25 @@ func (r *nativeResources) cleanupWithConnectionState(skipStopLoading bool) (bool
 	if err := r.client.eventError(); err != nil {
 		errs = append(errs, err)
 	}
+
+	var budgetFailure error
+	if r.budget != nil {
+		revokeCtx, cancelRevoke := context.WithTimeout(context.Background(), 3*time.Second)
+		receipt, budgetErr := r.budget.revoke(revokeCtx)
+		cancelRevoke()
+		if budgetErr != nil {
+			errs = append(errs, budgetErr)
+		} else if receipt.Exhausted {
+			budgetFailure = nativeResourceLimit("wire_bytes", extractor.ErrWireLimit)
+		} else if receipt.Expired {
+			budgetFailure = context.DeadlineExceeded
+		}
+	}
 	joined := errors.Join(errs...)
+	if joined == nil && budgetFailure != nil {
+		return connectionHealthy, budgetFailure
+	}
+
 	if joined != nil && r.diagnostic != nil {
 		r.diagnostic("cleanup", joined)
 	}
@@ -865,6 +910,8 @@ func (w *NativeBrowser) verifyCrashRecovery(generation string) error {
 	return nil
 }
 
+// configure installs frame, request, proxy-auth and download guards before any publisher
+// navigation.
 func (r *nativeResources) configure(ctx context.Context) error {
 	for _, command := range []struct {
 		method string
@@ -875,7 +922,7 @@ func (r *nativeResources) configure(ctx context.Context) error {
 		{"Network.setBlockedURLs", map[string]any{"urls": []string{"http://*", "ws://*", "wss://*", "file://*", "ftp://*"}}},
 		{"Browser.setDownloadBehavior", map[string]any{"behavior": "deny", "browserContextId": r.contextID, "eventsEnabled": true}},
 		{"Target.setAutoAttach", map[string]any{"autoAttach": true, "waitForDebuggerOnStart": true, "flatten": true}},
-		{"Fetch.enable", map[string]any{"handleAuthRequests": true, "patterns": []any{map[string]any{"urlPattern": "*", "requestStage": "Request"}}}},
+		{"Fetch.enable", map[string]any{"handleAuthRequests": true, "patterns": nativeFetchPatterns()}},
 	} {
 		session := r.sessionID
 		if command.method == "Browser.setDownloadBehavior" {
@@ -970,7 +1017,7 @@ func (w *NativeBrowser) Fetch(ctx context.Context, raw string, opts NativeBrowse
 	defer done()
 	ctx, cancel := context.WithTimeout(ctx, timeout)
 	defer cancel()
-	res, err := w.open(ctx)
+	res, err := w.open(ctx, wireLimit)
 	if err != nil {
 		return doc, err
 	}
@@ -979,6 +1026,12 @@ func (w *NativeBrowser) Fetch(ctx context.Context, raw string, opts NativeBrowse
 	diagnosticReason := ""
 	defer func() {
 		connected, cleanupErr := res.cleanupWithConnectionState(targetCrashed.Load())
+
+		if cleanupErr != nil && (errors.Is(cleanupErr, extractor.ErrWireLimit) || errors.Is(cleanupErr, context.DeadlineExceeded)) && !errors.Is(err, ErrNativeOwnershipLost) && !errors.Is(cleanupErr, ErrNativeOwnershipLost) {
+			doc = RenderedDocument{}
+			err = cleanupErr
+			return
+		}
 		if cleanupErr != nil {
 			w.taint()
 			doc = RenderedDocument{}
@@ -1002,23 +1055,45 @@ func (w *NativeBrowser) Fetch(ctx context.Context, raw string, opts NativeBrowse
 		}
 	}()
 	client, session := res.client, res.sessionID
+	res.pausedTargets = newNativePausedTargets(res.contextID, res.targetID, session)
 	if err = res.configure(ctx); err != nil {
 		w.taint()
 		return doc, errors.Join(ErrNativeNotReady, err)
 	}
 	diagnosticStage = "navigate"
 	work, stop := context.WithCancelCause(ctx)
+	budgetWatch := res.budget.watch(work, stop)
+	defer func() { stop(nil); <-budgetWatch }()
 	var status atomic.Int64
 	var mainFrame atomic.Value
 	mainFrame.Store(res.mainFrameID)
 	var lastActivity atomic.Int64
 	lastActivity.Store(time.Now().UnixNano())
 	var activeRequests atomic.Int64
+	var decodedRemaining atomic.Int64
+	decodedRemaining.Store(domLimit)
+	var readyDOM atomic.Bool
 	eventsDone := make(chan struct{})
 	// The reader enqueues events before delivering the corresponding command reply.
 	// A private FIFO marker waits until those events have been handled.
-	barrier := &cdproto.Message{}
-	barrierDone := make(chan struct{})
+	var fences sync.Map
+	eventFence := func() error {
+		marker := &cdproto.Message{}
+		done := make(chan struct{})
+		fences.Store(marker, done)
+		defer fences.Delete(marker)
+		select {
+		case client.events <- marker:
+		case <-work.Done():
+			return context.Cause(work)
+		}
+		select {
+		case <-done:
+			return nil
+		case <-work.Done():
+			return context.Cause(work)
+		}
+	}
 	var documentFailure atomic.Value
 	documentFailure.Store("")
 	eventRPCs := newNativeEventRPCs(nativeEventRPCMaxInFlight)
@@ -1037,6 +1112,9 @@ func (w *NativeBrowser) Fetch(ctx context.Context, raw string, opts NativeBrowse
 		handleRPCResult := func(result nativeEventRPCResult) bool {
 			if result.err != nil && !result.ignoreRPCError {
 				stop(result.err)
+				if errors.Is(result.err, ErrNativeOwnershipLost) {
+					w.taint()
+				}
 				eventRPCs.complete()
 				return true
 			}
@@ -1045,11 +1123,17 @@ func (w *NativeBrowser) Fetch(ctx context.Context, raw string, opts NativeBrowse
 				eventRPCs.complete()
 				return true
 			}
+			if result.err == nil && result.afterSuccess != nil {
+				result.afterSuccess()
+			}
 			eventRPCs.complete()
 			return false
 		}
 		var wire float64
+		replayed := map[string]bool{}
 		requests := map[string]bool{}
+		requestOwners := map[string]map[string]bool{}
+		requestFrames := map[string]string{}
 		documentFrames := map[string]string{}
 		encodedByRequest := map[string]float64{}
 		ownedFrames := map[string]bool{res.mainFrameID: true}
@@ -1081,9 +1165,9 @@ func (w *NativeBrowser) Fetch(ctx context.Context, raw string, opts NativeBrowse
 				w.taint()
 				return
 			case message := <-client.events:
-				if message == barrier {
+				if value, ok := fences.LoadAndDelete(message); ok {
 					if !terminalPending {
-						close(barrierDone)
+						close(value.(chan struct{}))
 					}
 					continue
 				}
@@ -1104,14 +1188,64 @@ func (w *NativeBrowser) Fetch(ctx context.Context, raw string, opts NativeBrowse
 					var event struct {
 						FrameID string `json:"frameId"`
 					}
-					if json.Unmarshal(message.Params, &event) == nil && (ownedFrames[event.FrameID] || event.FrameID == mainFrame.Load().(string)) {
-						stop(ErrNativeUnsupported)
+					if json.Unmarshal(message.Params, &event) == nil && (ownedFrames[event.FrameID] || event.FrameID == mainFrame.Load().(string) || res.pausedTargets.ownsFrame(event.FrameID)) {
+						stop(&nativeEventFailure{"download_denied", ErrNativeUnsupported})
 						return
 					}
 				}
-				if string(message.SessionID) != session {
+				eventSession := string(message.SessionID)
+				childSession := res.pausedTargets.sessions[eventSession]
+				if eventSession != session && childSession == nil && !(eventSession == "" && method == "Target.detachedFromTarget") {
 					continue
 				}
+				if method == "Target.detachedFromTarget" {
+					var detached struct {
+						Session string `json:"sessionId"`
+					}
+					if json.Unmarshal(message.Params, &detached) != nil || detached.Session == "" {
+						stop(errors.Join(ErrNativePolicy, ErrNativeOwnershipLost, errNativeMalformedDetach))
+						w.taint()
+						return
+					}
+					if child := res.pausedTargets.sessions[detached.Session]; child != nil {
+						if eventSession != child.parent && eventSession != "" {
+							stop(ErrNativeOwnershipLost)
+							w.taint()
+							return
+						}
+						if child.detaching || child.gone {
+							continue
+						}
+						child.detaching = true
+						if !eventRPCs.submitAfter(func() error { return child.confirmGone(work, client) }, nil, false, func() {
+							child.gone = true
+							for id, owners := range requestOwners {
+								if requestFrames[id] == child.frameID() && child.frameID() != "" || owners[child.session] && len(owners) == 1 {
+									if requests[id] {
+										delete(requests, id)
+										activeRequests.Add(-1)
+									}
+									delete(requestOwners, id)
+									delete(encodedByRequest, id)
+								}
+							}
+						}) {
+							stopForLimit("event_rpc_admission")
+							return
+						}
+						continue
+					}
+				}
+				if childSession != nil && childSession.kind == "service_worker" {
+					switch method {
+					case "Network.requestWillBeSent", "Network.dataReceived", "Network.loadingFinished", "Network.loadingFailed", "Network.responseReceived", "Fetch.authRequired", "Fetch.requestPaused", "Network.webSocketCreated", "Page.windowOpen", "Target.attachedToTarget":
+						stop(&nativeEventFailure{"child_target_activity", errors.Join(ErrNativePolicy, ErrNativeOwnershipLost)})
+						w.taint()
+						return
+					}
+					continue
+				}
+
 				lastActivity.Store(time.Now().UnixNano())
 				switch method {
 				case "Page.frameAttached":
@@ -1134,6 +1268,10 @@ func (w *NativeBrowser) Fetch(ctx context.Context, raw string, opts NativeBrowse
 						} `json:"frame"`
 					}
 					if json.Unmarshal(message.Params, &event) == nil && event.Frame.ID != "" && event.Frame.Parent == "" {
+						if eventSession != session {
+							ownedFrames[event.Frame.ID] = true
+							continue
+						}
 						mainFrame.Store(event.Frame.ID)
 						ownedFrames[event.Frame.ID] = true
 					}
@@ -1159,10 +1297,10 @@ func (w *NativeBrowser) Fetch(ctx context.Context, raw string, opts NativeBrowse
 						return
 					}
 					response := map[string]any{"response": "CancelAuth"}
-					allowed := event.Challenge.Source == "Proxy" && nativeProxyChallenge(event.Challenge.Origin, w.cfg) && !authenticated[event.ID]
+					allowed := event.Challenge.Source == "Proxy" && nativeProxyChallenge(event.Challenge.Origin, w.cfg) && !authenticated[eventSession+"\x00"+event.ID]
 					if allowed {
-						response = map[string]any{"response": "ProvideCredentials", "username": "extractor", "password": w.cfg.ProxyToken}
-						authenticated[event.ID] = true
+						response = map[string]any{"response": "ProvideCredentials", "username": "extractor", "password": res.budget.token}
+						authenticated[eventSession+"\x00"+event.ID] = true
 					}
 					var terminal error
 					if !allowed {
@@ -1175,18 +1313,13 @@ func (w *NativeBrowser) Fetch(ctx context.Context, raw string, opts NativeBrowse
 						terminalPending = true
 					}
 					if !eventRPCs.submit(func() error {
-						return client.call(work, session, "Fetch.continueWithAuth", map[string]any{"requestId": event.ID, "authChallengeResponse": response}, nil)
+						return client.call(work, eventSession, "Fetch.continueWithAuth", map[string]any{"requestId": event.ID, "authChallengeResponse": response}, nil)
 					}, terminal, false) {
 						stopForLimit("event_rpc_admission")
 						return
 					}
 				case "Fetch.requestPaused":
-					var event struct {
-						ID      string `json:"requestId"`
-						Request struct {
-							URL string `json:"url"`
-						} `json:"request"`
-					}
+					var event nativeFetchPaused
 					if json.Unmarshal(message.Params, &event) != nil {
 						stop(ErrNativePolicy)
 						return
@@ -1195,15 +1328,65 @@ func (w *NativeBrowser) Fetch(ctx context.Context, raw string, opts NativeBrowse
 						terminalErr = policyErr
 						terminalPending = true
 						if !eventRPCs.submit(func() error {
-							return client.call(work, session, "Fetch.failRequest", map[string]any{"requestId": event.ID, "errorReason": "BlockedByClient"}, nil)
+							return client.call(work, eventSession, "Fetch.failRequest", map[string]any{"requestId": event.ID, "errorReason": "BlockedByClient"}, nil)
 						}, policyErr, true) {
 							stopForLimit("event_rpc_admission")
 							return
 						}
 						continue
 					}
+					if event.ResponseErrorReason != "" {
+						if !eventRPCs.submit(func() error {
+							return client.call(work, eventSession, "Fetch.continueResponse", map[string]any{"requestId": event.ID}, nil)
+						}, errors.New("native_browser_response_failed"), true) {
+							stopForLimit("event_rpc_admission")
+							return
+						}
+						continue
+					}
+					if event.ResponseStatusCode != nil {
+						if *event.ResponseStatusCode >= 300 && *event.ResponseStatusCode < 400 || *event.ResponseStatusCode == 204 || *event.ResponseStatusCode == 205 {
+							if *event.ResponseStatusCode == 304 {
+								stop(ErrNativePolicy)
+								return
+							}
+							if !eventRPCs.submit(func() error {
+								return client.call(work, eventSession, "Fetch.continueResponse", map[string]any{"requestId": event.ID}, nil)
+							}, nil, false) {
+								stopForLimit("event_rpc_admission")
+								return
+							}
+							continue
+						}
+						params, policyErr := nativeWorkerPolicyParams(event)
+						if policyErr != nil {
+							stop(policyErr)
+							w.taint()
+							return
+						}
+						if event.NetworkID == "" || len(event.NetworkID) > 256 {
+							stop(ErrNativeOwnershipLost)
+							return
+						}
+						replayed[event.NetworkID] = true
+						if !eventRPCs.submitAfter(func() error {
+							if err := nativeReplayResponse(work, client, eventSession, event, params, &decodedRemaining); err != nil {
+								w.reportDiagnostic("events", err)
+								return &nativeEventFailure{"response_policy_failed", err}
+							}
+							return nil
+						}, nil, false, func() {
+							if w.cfg.Diagnostic != nil {
+								w.cfg.Diagnostic("events", "worker_policy_applied")
+							}
+						}) {
+							stopForLimit("event_rpc_admission")
+							return
+						}
+						continue
+					}
 					if !eventRPCs.submit(func() error {
-						return client.call(work, session, "Fetch.continueRequest", map[string]any{"requestId": event.ID}, nil)
+						return client.call(work, eventSession, "Fetch.continueRequest", map[string]any{"requestId": event.ID}, nil)
 					}, nil, false) {
 						stopForLimit("event_rpc_admission")
 						return
@@ -1225,6 +1408,21 @@ func (w *NativeBrowser) Fetch(ctx context.Context, raw string, opts NativeBrowse
 						} else {
 							delete(documentFrames, event.ID)
 						}
+						if previous := requestFrames[event.ID]; requests[event.ID] && previous != "" && event.FrameID != "" && previous != event.FrameID {
+							stop(ErrNativeOwnershipLost)
+							w.taint()
+							return
+						}
+						if !requests[event.ID] {
+							requestFrames[event.ID] = ""
+						}
+						if event.FrameID != "" {
+							requestFrames[event.ID] = event.FrameID
+						}
+						if requestOwners[event.ID] == nil {
+							requestOwners[event.ID] = map[string]bool{}
+						}
+						requestOwners[event.ID][eventSession] = true
 						if requests[event.ID] {
 							continue
 						}
@@ -1242,16 +1440,25 @@ func (w *NativeBrowser) Fetch(ctx context.Context, raw string, opts NativeBrowse
 						ErrorText string  `json:"errorText"`
 					}
 					if json.Unmarshal(message.Params, &event) == nil && requests[event.ID] {
+						owns := requestOwners[event.ID][eventSession]
+						if !owns && !(childSession != nil && childSession.kind == "iframe" && childSession.frameID() != "" && requestFrames[event.ID] == childSession.frameID()) {
+							stop(ErrNativeOwnershipLost)
+							w.taint()
+							return
+						}
 						if method == "Network.loadingFailed" && documentFrames[event.ID] != "" && documentFrames[event.ID] == mainFrame.Load().(string) {
 							documentFailure.Store(nativeNavigationReason(event.ErrorText))
 						}
-						wire += max(0, event.Encoded-encodedByRequest[event.ID])
+						if !replayed[event.ID] {
+							wire += max(0, event.Encoded-encodedByRequest[event.ID])
+						}
 						delete(encodedByRequest, event.ID)
 						if wire > float64(wireLimit) {
 							stopForLimit("wire_bytes")
 							return
 						}
 						delete(requests, event.ID)
+						delete(requestOwners, event.ID)
 						// Keep bounded document correlation until this ID is reused.
 						// A response can arrive after the loading event without a frame ID.
 						activeRequests.Add(-1)
@@ -1262,8 +1469,10 @@ func (w *NativeBrowser) Fetch(ctx context.Context, raw string, opts NativeBrowse
 						Encoded float64 `json:"encodedDataLength"`
 					}
 					if json.Unmarshal(message.Params, &event) == nil {
-						wire += event.Encoded
-						encodedByRequest[event.ID] += event.Encoded
+						if !replayed[event.ID] {
+							wire += event.Encoded
+							encodedByRequest[event.ID] += event.Encoded
+						}
 						if wire > float64(wireLimit) {
 							stopForLimit("wire_bytes")
 							return
@@ -1287,7 +1496,12 @@ func (w *NativeBrowser) Fetch(ctx context.Context, raw string, opts NativeBrowse
 					if frameID == "" {
 						frameID = documentFrames[event.ID]
 					}
-					if event.Type == "Document" && frameID != "" && frameID == mainFrame.Load().(string) {
+					if eventSession == session && event.Type == "Document" && frameID != "" && frameID == mainFrame.Load().(string) {
+						for name, value := range event.Response.Headers {
+							if strings.EqualFold(name, "Content-Security-Policy") && strings.Contains(fmt.Sprint(value), nativeWorkerPolicy) && w.cfg.Diagnostic != nil {
+								w.cfg.Diagnostic("events", "worker_policy_header_seen")
+							}
+						}
 						status.Store(int64(event.Response.Status))
 						var retry *int
 						for name, value := range event.Response.Headers {
@@ -1300,10 +1514,45 @@ func (w *NativeBrowser) Fetch(ctx context.Context, raw string, opts NativeBrowse
 							return
 						}
 					}
-				case "Network.webSocketCreated", "Page.windowOpen", "Target.attachedToTarget":
-					stop(ErrNativeUnsupported)
+				case "Target.attachedToTarget":
+					child, childErr := res.pausedTargets.admit(message)
+					if childErr != nil {
+						stop(childErr)
+						if errors.Is(childErr, ErrNativeOwnershipLost) {
+							w.taint()
+						}
+						return
+					}
+					if child.kind == "service_worker" {
+						if w.cfg.Diagnostic != nil {
+							w.cfg.Diagnostic("events", "service_worker_paused")
+						}
+						continue
+					}
+					frame := mainFrame.Load().(string)
+					if !eventRPCs.submitAfter(func() error { return child.configureFrame(work, client, frame) }, nil, false, func() {
+						child.active = true
+						ownedFrames[child.frameID()] = true
+						if w.cfg.Diagnostic != nil {
+							w.cfg.Diagnostic("events", "iframe_guarded")
+						}
+					}) {
+						stopForLimit("event_rpc_admission")
+						return
+					}
+
+				case "Network.webSocketCreated":
+					stop(&nativeEventFailure{"websocket_denied", ErrNativeUnsupported})
+					return
+				case "Page.windowOpen":
+					stop(&nativeEventFailure{"popup_denied", ErrNativeUnsupported})
 					return
 				case "Inspector.targetCrashed":
+					if eventSession != session {
+						stop(ErrNativeOwnershipLost)
+						w.taint()
+						return
+					}
 					targetCrashed.Store(true)
 					w.unavailable()
 					stop(ErrNativeTargetCrashed)
@@ -1317,6 +1566,9 @@ func (w *NativeBrowser) Fetch(ctx context.Context, raw string, opts NativeBrowse
 		<-eventsDone
 		for _, result := range eventRPCs.join() {
 			if result.err != nil && !result.ignoreRPCError {
+				if errors.Is(result.err, ErrNativeOwnershipLost) {
+					w.taint()
+				}
 				if targetCrashed.Load() {
 					if !nativeCrashCancellation(result.err, context.Cause(work), true) {
 						err = errors.Join(err, result.err)
@@ -1356,6 +1608,16 @@ func (w *NativeBrowser) Fetch(ctx context.Context, raw string, opts NativeBrowse
 			}
 		}
 		w.reportDiagnostic(stage, err)
+		if errors.Is(err, context.DeadlineExceeded) && len(res.pausedTargets.targets) > 0 && w.cfg.Diagnostic != nil {
+			if readyDOM.Load() {
+				w.cfg.Diagnostic("dom", "paused_worker_dom_ready")
+			} else {
+				w.cfg.Diagnostic("dom", "paused_worker_dom_unready")
+			}
+			if activeRequests.Load() > 0 {
+				w.cfg.Diagnostic("dom", "paused_worker_requests_pending")
+			}
+		}
 	}()
 	var navigation struct {
 		Error      string `json:"errorText"`
@@ -1366,17 +1628,10 @@ func (w *NativeBrowser) Fetch(ctx context.Context, raw string, opts NativeBrowse
 		return doc, browserClientCause(work, client, err)
 	}
 	if navigation.IsDownload {
-		return doc, ErrNativeUnsupported
+		return doc, &nativeEventFailure{"download_denied", ErrNativeUnsupported}
 	}
 	if navigation.Error != "" {
-		select {
-		case client.events <- barrier:
-			select {
-			case <-barrierDone:
-			case <-work.Done():
-			}
-		case <-work.Done():
-		}
+		_ = eventFence()
 		if ctx.Err() != nil {
 			return doc, ctx.Err()
 		}
@@ -1432,6 +1687,7 @@ func (w *NativeBrowser) Fetch(ctx context.Context, raw string, opts NativeBrowse
 			return doc, errors.New("native_browser_evaluation_failed")
 		}
 		value := evaluated.Result.Value
+		readyDOM.Store(value.Ready)
 		if value.Ready {
 			if cause := client.eventError(); cause != nil {
 				stop(cause)
@@ -1450,8 +1706,14 @@ func (w *NativeBrowser) Fetch(ctx context.Context, raw string, opts NativeBrowse
 			}
 			minimumWait := max(500*time.Millisecond, opts.MinSettle)
 			if time.Since(started) >= minimumWait && time.Since(stableSince) >= 250*time.Millisecond && time.Since(time.Unix(0, lastActivity.Load())) >= 250*time.Millisecond && activeRequests.Load() == 0 && eventRPCs.pending.Load() == 0 && status.Load() == 200 {
+				// Process events already queued before a child-close receipt or the
+				// final DOM reply before accepting the captured page.
+				_ = eventFence()
 				if cause := context.Cause(work); cause != nil {
 					return doc, cause
+				}
+				if activeRequests.Load() != 0 || eventRPCs.pending.Load() != 0 || time.Since(time.Unix(0, lastActivity.Load())) < 250*time.Millisecond {
+					continue
 				}
 				return RenderedDocument{Document: Document{HTML: []byte(value.HTML), URL: value.URL, StatusCode: 200, Encoding: "utf-8"}, DOMBytes: value.Bytes}, nil
 			}

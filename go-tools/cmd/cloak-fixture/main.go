@@ -19,16 +19,23 @@ import (
 	"github.com/Dzarlax-AI/evening-news/go-tools/cloakfixture"
 )
 
+// main dispatches the fixture mode and emits only a terminal command error on failure.
 func main() {
 	if len(os.Args) < 2 {
 		fmt.Fprintln(os.Stderr, "fixture_mode_required")
 		os.Exit(2)
 	}
 	if err := run(os.Args[1], os.Args[2:]); err != nil {
+		switch err.Error() {
+		case "cdp_discovery_invalid", "cdp_handshake_rejected", "peer_context_create_failed", "peer_target_create_failed", "peer_attach_failed", "peer_session_probe_failed", "cdp_connection_closed", "cdp_command_failed", "cdp_command_timeout":
+			fmt.Fprintln(os.Stderr, "fixture_peer_failure reason="+err.Error())
+		}
 		fmt.Fprintln(os.Stderr, "fixture_failed")
 		os.Exit(1)
 	}
 }
+
+// run validates mode-specific arguments before running the isolated fixture or network probe.
 func run(mode string, args []string) error {
 	if mode == "netprobe" {
 		f := flag.NewFlagSet("netprobe", flag.ContinueOnError)
@@ -43,6 +50,7 @@ func run(mode string, args []string) error {
 		c, err := net.DialTimeout("tcp", *target, 400*time.Millisecond)
 		if err == nil {
 			c.Close()
+			fmt.Println("dial_succeeded")
 			return fmt.Errorf("namespace_bypass_gate_failed")
 		}
 		if errors.Is(err, syscall.ENETUNREACH) {
@@ -61,6 +69,7 @@ func run(mode string, args []string) error {
 		x11 := f.String("x11-script", "", "protected X11 shim")
 		output := f.String("output", "", "new private receipt")
 		stage := f.String("stage-parent", os.TempDir(), "private stage parent")
+		namespaceImage := f.String("namespace-image", "", "optional nft helper image for Docker Desktop; no host PID or socket access")
 		if err := f.Parse(args); err != nil {
 			return err
 		}
@@ -69,7 +78,7 @@ func run(mode string, args []string) error {
 		}
 		ctx, stop := gateSignalContext()
 		defer stop()
-		return cloakfixture.RunGate(ctx, cloakfixture.GateConfig{Worker: *worker, Egress: *egress, Fixture: *fixture, Relay: *relay, X11: *x11, Output: *output, StageParent: *stage})
+		return cloakfixture.RunGate(ctx, cloakfixture.GateConfig{Worker: *worker, Egress: *egress, Fixture: *fixture, Relay: *relay, X11: *x11, Output: *output, StageParent: *stage, NamespaceImage: *namespaceImage})
 	}
 	if mode == "probe" {
 		f := flag.NewFlagSet("probe", flag.ContinueOnError)
