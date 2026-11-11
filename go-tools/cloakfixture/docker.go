@@ -23,15 +23,36 @@ type DockerRunner interface {
 }
 type systemDocker struct{}
 
+type dockerExecutionFailure struct{ exitCode int }
+
+func (e *dockerExecutionFailure) Error() string { return "docker_operation_failed" }
+
 func (systemDocker) Run(ctx context.Context, args ...string) (string, error) {
+	return runDocker(ctx, nil, args...)
+}
+
+func (systemDocker) RunInput(ctx context.Context, input string, args ...string) (string, error) {
+	return runDocker(ctx, strings.NewReader(input), args...)
+}
+
+func runDocker(ctx context.Context, input io.Reader, args ...string) (string, error) {
 	ctx, cancel := context.WithTimeout(ctx, 30*time.Second)
 	defer cancel()
 	cmd := exec.CommandContext(ctx, "docker", args...)
+	cmd.Stdin = input
 	var b bytes.Buffer
 	cmd.Stdout = &limitedWriter{writer: &b, left: 65536}
 	cmd.Stderr = io.Discard
+	if len(args) > 0 && args[0] == "logs" {
+		cmd.Stderr = cmd.Stdout
+	}
 	if err := cmd.Run(); err != nil {
-		return "", errors.New("docker_operation_failed")
+		code := -1
+		var exit *exec.ExitError
+		if errors.As(err, &exit) {
+			code = exit.ExitCode()
+		}
+		return strings.TrimSpace(b.String()), &dockerExecutionFailure{code}
 	}
 	return strings.TrimSpace(b.String()), nil
 }
@@ -57,6 +78,37 @@ type dockerGate struct {
 	docker               DockerRunner
 	id, prefix           string
 	containers, networks []string
+	namespaceImage       string
+	namespaceSequence    int
+	probeFailure         map[string]any
+}
+
+type runtimeState struct {
+	Role      string `json:"role"`
+	Running   bool   `json:"running"`
+	Restarts  int    `json:"restarts"`
+	OOMKilled bool   `json:"oom_killed"`
+	ExitCode  int    `json:"exit_code"`
+}
+
+func (g *dockerGate) runtimeStates(ctx context.Context) []runtimeState {
+	var states []runtimeState
+	for _, name := range g.containers {
+		if g.verify(ctx, name, false) != nil {
+			continue
+		}
+		out, err := g.docker.Run(ctx, "inspect", "--format", "{{.State.Running}} {{.RestartCount}} {{.State.OOMKilled}} {{.State.ExitCode}}", name)
+		var state runtimeState
+		if err != nil {
+			continue
+		}
+		if n, err := fmt.Sscanf(out, "%t %d %t %d", &state.Running, &state.Restarts, &state.OOMKilled, &state.ExitCode); err != nil || n != 4 {
+			continue
+		}
+		state.Role = strings.TrimPrefix(name, g.prefix+"-")
+		states = append(states, state)
+	}
+	return states
 }
 
 func newDockerGate(d DockerRunner) (*dockerGate, error) {
@@ -92,6 +144,9 @@ func (g *dockerGate) container(ctx context.Context, role, image, network, ip, me
 	name := g.prefix + "-" + role
 	g.containers = append(g.containers, name)
 	args := []string{"run", "--pull=never", "-d", "--name", name, "--label", ownerClass, "--label", g.label(), "--restart=no", "--cap-drop=ALL", "--security-opt=no-new-privileges:true", "--platform=linux/amd64", "--memory", memory, "--memory-swap", memory, "--cpus", cpu, "--pids-limit", pids, "--read-only", "--tmpfs", "/tmp:rw,nosuid,nodev,noexec,size=256m"}
+	if g.namespaceImage != "" {
+		args = withoutResourceCaps(args)
+	}
 	if strings.HasPrefix(network, "@") {
 		args = append(args, "--network", "container:"+g.prefix+"-"+strings.TrimPrefix(network, "@"))
 	} else {
@@ -110,6 +165,19 @@ func (g *dockerGate) container(ctx context.Context, role, image, network, ip, me
 		return e
 	}
 	return g.verify(ctx, name, false)
+}
+
+func withoutResourceCaps(args []string) []string {
+	var out []string
+	for i := 0; i < len(args); i++ {
+		switch args[i] {
+		case "--memory", "--memory-swap", "--cpus":
+			i++
+		default:
+			out = append(out, args[i])
+		}
+	}
+	return out
 }
 func (g *dockerGate) alive(ctx context.Context) error {
 	for _, name := range g.containers {

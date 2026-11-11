@@ -57,18 +57,23 @@ type Stats struct {
 }
 
 type Gateway struct {
-	cfg      Config
-	authHash [32]byte
-	mu       sync.Mutex
-	draining bool
-	active   map[*operation]struct{}
-	wg       sync.WaitGroup
-	tunnels  atomic.Uint64
-	denied   atomic.Uint64
-	bytes    atomic.Uint64
+	controlHash  [32]byte
+	budgetMu     sync.Mutex
+	budgets      map[string]*renderBudget
+	budgetTokens map[[32]byte]*renderBudget
+	cfg          Config
+	authHash     [32]byte
+	mu           sync.Mutex
+	draining     bool
+	active       map[*operation]struct{}
+	wg           sync.WaitGroup
+	tunnels      atomic.Uint64
+	denied       atomic.Uint64
+	bytes        atomic.Uint64
 }
 
 type operation struct {
+	budget      *renderBudget
 	ctx         context.Context
 	cancel      context.CancelFunc
 	mu          sync.Mutex
@@ -137,9 +142,10 @@ func New(cfg Config) (*Gateway, error) {
 	if cfg.Dialer == nil {
 		cfg.Dialer = &net.Dialer{Timeout: cfg.DialTimeout, KeepAlive: -1}
 	}
+	controlHash := sha256.Sum256([]byte(cfg.Token))
 	hash := sha256.Sum256([]byte("extractor:" + cfg.Token))
 	cfg.Token = ""
-	return &Gateway{cfg: cfg, authHash: hash, active: make(map[*operation]struct{})}, nil
+	return &Gateway{controlHash: controlHash, budgets: map[string]*renderBudget{}, budgetTokens: map[[32]byte]*renderBudget{}, cfg: cfg, authHash: hash, active: make(map[*operation]struct{})}, nil
 }
 
 // destination accepts only an authority with an explicit HTTPS port.
@@ -223,14 +229,18 @@ func (g *Gateway) authorized(r *http.Request) bool {
 	return subtle.ConstantTimeCompare(hash[:], g.authHash[:]) == 1
 }
 
-func (g *Gateway) begin(ctx context.Context) (*operation, bool) {
+func (g *Gateway) begin(ctx context.Context, budget *renderBudget) (*operation, bool) {
 	g.mu.Lock()
 	defer g.mu.Unlock()
 	if g.draining || len(g.active) >= g.cfg.MaxConcurrent {
 		return nil, false
 	}
 	ctx, cancel := context.WithTimeout(ctx, g.cfg.MaxLifetime)
-	op := &operation{ctx: ctx, cancel: cancel}
+	op := &operation{ctx: ctx, cancel: cancel, budget: budget}
+	if !budget.attach(op) {
+		cancel()
+		return nil, false
+	}
 	g.active[op] = struct{}{}
 	g.wg.Add(1)
 	return op, true
@@ -242,6 +252,7 @@ func (g *Gateway) end(op *operation) {
 	g.mu.Lock()
 	delete(g.active, op)
 	g.mu.Unlock()
+	op.budget.detach(op)
 	g.wg.Done()
 }
 
@@ -257,7 +268,19 @@ func (g *Gateway) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 		w.WriteHeader(http.StatusOK)
 		return
 	}
-	if !g.authorized(r) {
+	if strings.HasPrefix(r.URL.Path, "/v1/render-budgets") {
+		g.serveBudgets(w, r)
+		return
+	}
+	g.mu.Lock()
+	draining := g.draining
+	g.mu.Unlock()
+	if draining {
+		http.Error(w, "draining", 503)
+		return
+	}
+	budget := g.scopedBudget(r)
+	if budget == nil {
 		w.Header().Set("Proxy-Authenticate", `Basic realm="extractor-egress"`)
 		http.Error(w, "proxy_authentication_required", http.StatusProxyAuthRequired)
 		return
@@ -266,7 +289,7 @@ func (g *Gateway) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 		http.Error(w, "connect_required", http.StatusBadRequest)
 		return
 	}
-	op, ok := g.begin(r.Context())
+	op, ok := g.begin(r.Context(), budget)
 	if !ok {
 		w.Header().Set("Retry-After", "1")
 		http.Error(w, "egress_busy", http.StatusServiceUnavailable)
@@ -321,8 +344,8 @@ func (g *Gateway) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 	var remaining atomic.Int64
 	remaining.Store(g.cfg.MaxTunnelBytes)
 	done := make(chan struct{}, 2)
-	go func() { g.copyTunnel(upstream, buffered, &remaining); done <- struct{}{} }()
-	go func() { g.copyTunnel(client, upstream, &remaining); done <- struct{}{} }()
+	go func() { g.copyScopedTunnel(upstream, buffered, &remaining, budget); done <- struct{}{} }()
+	go func() { g.copyScopedTunnel(client, upstream, &remaining, budget); done <- struct{}{} }()
 	<-done
 	op.cancel()
 	op.close()
@@ -377,6 +400,7 @@ func (g *Gateway) Drain(ctx context.Context) error {
 	go func() { g.wg.Wait(); close(done) }()
 	select {
 	case <-done:
+		g.stopRenderBudgets()
 		return nil
 	case <-ctx.Done():
 		g.mu.Lock()
@@ -385,6 +409,7 @@ func (g *Gateway) Drain(ctx context.Context) error {
 			op.close()
 		}
 		g.mu.Unlock()
+		g.stopRenderBudgets()
 		return ctx.Err()
 	}
 }

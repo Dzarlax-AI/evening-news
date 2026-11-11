@@ -28,6 +28,7 @@ type RequestResult struct {
 }
 type PageMonitorRequestResult struct {
 	Name        string `json:"name"`
+	Error       string `json:"error,omitempty"`
 	Outcome     string `json:"outcome"`
 	FetchMethod string `json:"fetch_method"`
 	ItemCount   int    `json:"item_count"`
@@ -147,13 +148,17 @@ func (c *WorkerClient) SuppliedContentRequest(ctx context.Context) (RequestResul
 // the isolated synthetic origin. The returned receipt contains no request
 // credentials or captured page body.
 func (c *WorkerClient) PageMonitorRequest(ctx context.Context) (PageMonitorRequestResult, error) {
+	return c.pageMonitorRequest(ctx, "page-monitor")
+}
+
+func (c *WorkerClient) pageMonitorRequest(ctx context.Context, route string) (PageMonitorRequestResult, error) {
 	var out PageMonitorRequestResult
 	useBrowser, waitForJS := true, false
 	payload := map[string]any{
 		"contract_version":  "1",
 		"request_id":        "cloak-page-monitor-acceptance",
 		"operation":         "fetch",
-		"url":               "https://native-fixture.test/page-monitor",
+		"url":               "https://native-fixture.test/" + route,
 		"source_name":       "Synthetic Cloak Fixture",
 		"budget_ms":         12000,
 		"limit":             5,
@@ -183,6 +188,36 @@ func (c *WorkerClient) PageMonitorRequest(ctx context.Context) (PageMonitorReque
 		return out, errors.New("worker_response_invalid")
 	}
 	return PageMonitorRequestResult{Name: "native_page_monitor", Outcome: value.Outcome, FetchMethod: value.FetchMethod, ItemCount: len(value.Items), Title: value.Items[0].Title}, nil
+}
+
+// pageMonitorRejected requires an explicit failed extraction, never empty success.
+func (c *WorkerClient) pageMonitorRejected(ctx context.Context, route string) (PageMonitorRequestResult, error) {
+	payload := map[string]any{"contract_version": "1", "request_id": "cloak-child-rejection", "operation": "fetch", "url": "https://native-fixture.test/" + route, "source_name": "Synthetic Cloak Fixture", "budget_ms": 12000, "use_browser": true, "article_selectors": []string{"article"}, "title_selectors": []string{"h2"}, "link_selectors": []string{"a"}}
+	raw, status, err := c.post(ctx, "/v1/page-monitor/extract", payload)
+	if err != nil || status != http.StatusOK {
+		return PageMonitorRequestResult{}, errors.New("worker_response_invalid")
+	}
+	var value struct {
+		Contract    string            `json:"contract_version"`
+		ID          string            `json:"request_id"`
+		Outcome     string            `json:"outcome"`
+		FetchMethod string            `json:"fetch_method"`
+		Items       []json.RawMessage `json:"items"`
+		Error       *struct {
+			Code string `json:"code"`
+		} `json:"error"`
+	}
+	if json.Unmarshal(raw, &value) != nil || value.Contract != "1" || value.ID != payload["request_id"] {
+		return PageMonitorRequestResult{}, errors.New("worker_response_invalid")
+	}
+	out := PageMonitorRequestResult{Outcome: value.Outcome, FetchMethod: value.FetchMethod, ItemCount: len(value.Items)}
+	if value.Error != nil && finiteCode.MatchString(value.Error.Code) {
+		out.Error = value.Error.Code
+	}
+	if out.Outcome != "failed" || out.ItemCount != 0 || out.Error == "" {
+		return out, errors.New("worker_response_invalid")
+	}
+	return out, nil
 }
 
 func (c *WorkerClient) post(ctx context.Context, path string, payload any) ([]byte, int, error) {

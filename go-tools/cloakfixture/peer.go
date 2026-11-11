@@ -126,6 +126,9 @@ func (p *CDPPeer) command(ctx context.Context, method string, params any, sessio
 	for {
 		hdr, e := p.reader.NextFrame()
 		if e != nil {
+			if timeout, ok := e.(net.Error); ok && timeout.Timeout() {
+				return errors.New("cdp_command_timeout")
+			}
 			return errors.New("cdp_connection_closed")
 		}
 		if hdr.OpCode == ws.OpClose {
@@ -202,7 +205,10 @@ func (p *CDPPeer) probe(ctx context.Context) error {
 			Value int `json:"value"`
 		} `json:"result"`
 	}
-	if p.command(ctx, "Runtime.evaluate", map[string]any{"expression": "1 + 1", "returnByValue": true}, p.sessionID, &v) != nil || v.Result.Value != 2 {
+	if err := p.command(ctx, "Runtime.evaluate", map[string]any{"expression": "1 + 1", "returnByValue": true}, p.sessionID, &v); err != nil {
+		return err
+	}
+	if v.Result.Value != 2 {
 		return errors.New("peer_session_probe_failed")
 	}
 	return nil

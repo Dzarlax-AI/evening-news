@@ -1,12 +1,17 @@
 # Native browser CONNECT gateway
 
-Build from `go/` with `go build ./cmd/extract-egress`. The command accepts only
+Build from `go/` with `go build ./cmd/extract-egress`. The proxy accepts only
 HTTP/1 CONNECT to an explicit `hostname:443` or public literal IP on port 443.
 It checks every DNS answer, rejects mixed public/private answers, and dials the
 selected numeric IP. It never resolves the hostname again at connection time.
 Each new CONNECT repeats admission; an established tunnel remains pinned.
 
-The proxy requires `Proxy-Authorization: Basic <base64(extractor:TOKEN)>` and
+The controller first allocates a render budget through the authenticated control
+API on the same private listener. Each render gets a random, short-lived proxy
+token; all its tunnels share one byte allowance. `EGRESS_TOKEN` authenticates only
+the control API and is never supplied to Chrome or accepted for CONNECT.
+
+The proxy requires `Proxy-Authorization: Basic <base64(extractor:SCOPED_TOKEN)>` and
 responds with a Basic `Proxy-Authenticate` challenge when credentials are absent.
 The browser controller must answer proxy authentication challenges only for this
 configured proxy, never send the proxy token as origin credentials. Proxy
@@ -23,6 +28,39 @@ encrypted end to end. The gateway does not install a CA or terminate TLS.
 | `EGRESS_MAX_LIFETIME_SECONDS` | `35`, range 1–60; includes DNS/dial and tunnel lifetime |
 | `EGRESS_TEST_MODE` | `false`; isolated fixture stand only |
 | `EGRESS_TEST_ALLOWLIST` | Unset; test-only JSON object mapping exact hostname to exact IP, maximum 16 entries |
+
+Control requests use `Authorization: Bearer <EGRESS_TOKEN>`, HTTP/1, no query or
+escaped path, and JSON bodies/replies of at most 1024 bytes. Version 1 requires
+every declared field exactly once; unknown fields, aliases, duplicates, nulls,
+trailing data and incompatible receipts are rejected by the native controller.
+
+| Endpoint | Request / response |
+| --- | --- |
+| `POST /v1/render-budgets` | Required `contract_version: "1"`, `wire_limit_bytes` (1–5242880), `ttl_ms` (1–35000). HTTP 201 returns those fields, `budget_id` and random `proxy_token`; TTL is also bounded by gateway lifetime. |
+| `GET /v1/render-budgets/{budget_id}` | HTTP 200 reports version, ID, limit, `wire_bytes`, `exhausted`, `expired`, `revoked`, `active_tunnels`. The controller polls while rendering. |
+| `DELETE /v1/render-budgets/{budget_id}` | Revokes only this budget, closes and waits for its tunnels, then returns a frozen receipt with `active_tunnels: 0`. Repeated DELETE returns the same receipt during retention. |
+
+The per-render limit counts encrypted bytes forwarded in **both directions**,
+including TLS overhead, across all connections using its scoped credential.
+Reservations are shared before writes and never refunded; short writes tighten
+the bound. The existing per-tunnel limit remains an additional guard. Exhaustion
+or expiry closes only that render's tunnels. Revoked/expired tokens cannot open
+new tunnels; scoped tokens cannot access the control API. Registry size is
+bounded by `max(128, EGRESS_MAX_CONCURRENT * 8)` and old receipts become eligible
+for removal five seconds after their original expiry.
+
+The native worker allocates before browser-context creation, supplies the scoped
+credential only to verified proxy challenges, disposes its context and confirms
+target absence before final revocation. An exhausted budget returns an empty
+`resource_limit` result. Unknown cleanup or receipt outcomes fence the worker.
+Decoded document replay and DOM output retain their separate shared bounds.
+HTML replay preserves decoded publisher bytes and existing headers/policies,
+normalizes compression/framing headers, and adds CSP `worker-src 'none';
+connect-src https:` to prevent worker startup and prohibited WebSocket handshakes.
+
+Native worker and egress must be released together. Older gateways lacking the
+control API fail readiness before navigation; there is no legacy-token fallback.
+Environment variable names and network isolation requirements are unchanged.
 
 The fixture allowlist requires explicit test mode. For example,
 `{"fixture.example.com":"172.30.0.2"}` pins only that hostname to that IP without

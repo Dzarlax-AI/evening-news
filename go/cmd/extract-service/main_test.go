@@ -19,6 +19,7 @@ import (
 	"testing"
 	"time"
 
+	"github.com/Dzarlax-AI/evening-news/go/egress"
 	"github.com/Dzarlax-AI/evening-news/go/extractor"
 	"github.com/Dzarlax-AI/evening-news/go/pipeline"
 	"github.com/Dzarlax-AI/evening-news/go/service"
@@ -324,6 +325,18 @@ type nativeServiceProcess struct {
 }
 
 func startNativeServiceProcess(t *testing.T, browserEndpoint string) *nativeServiceProcess {
+	gateway, err := egress.New(egress.Config{Token: "synthetic-lifecycle-token"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	proxy := httptest.NewServer(gateway)
+	t.Cleanup(func() {
+		ctx, cancel := context.WithCancel(context.Background())
+		cancel()
+		gateway.Drain(ctx)
+		proxy.Close()
+	})
+
 	t.Helper()
 	listener, err := net.Listen("tcp", "127.0.0.1:0")
 	if err != nil {
@@ -344,7 +357,7 @@ func startNativeServiceProcess(t *testing.T, browserEndpoint string) *nativeServ
 		"EXTRACTOR_HTTP_ONLY":               "false",
 		"EXTRACTOR_BROWSER_BACKEND":         "native",
 		"CHROME_ENDPOINT":                   browserEndpoint,
-		"EXTRACTOR_NATIVE_PROXY_URL":        "http://127.0.0.1:3128",
+		"EXTRACTOR_NATIVE_PROXY_URL":        proxy.URL,
 		"EXTRACTOR_NATIVE_PROXY_TOKEN":      "synthetic-lifecycle-token",
 		"EXTRACTOR_NATIVE_NETWORK_ISOLATED": "true",
 		"EXTRACTOR_SERVICE_TOKEN":           "synthetic-service-token",

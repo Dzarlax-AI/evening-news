@@ -1,0 +1,276 @@
+{
+  "acceptance_limit": "synthetic CDP compatibility; not production isolation proof",
+  "browser_events": {
+    "blocked_actions": {
+      "iframe-ws": 1
+    },
+    "probe_encoded_bytes": 12584338,
+    "probe_decoded_bytes": 2058,
+    "server_policy_prevents_workers": true,
+    "forbidden_requests": 0,
+    "publisher_auth_headers": 0,
+    "executions_by_worker_kind": null,
+    "counters_observed": true,
+    "requests": [
+      {
+        "name": "server-policy",
+        "outcome": "success",
+        "fetch_method": "native_browser",
+        "item_count": 1,
+        "title": "Synthetic PageMonitor story"
+      },
+      {
+        "name": "service-worker",
+        "outcome": "success",
+        "fetch_method": "native_browser",
+        "item_count": 1,
+        "title": "Synthetic PageMonitor story"
+      },
+      {
+        "name": "iframe",
+        "outcome": "success",
+        "fetch_method": "native_browser",
+        "item_count": 1,
+        "title": "Synthetic PageMonitor story"
+      },
+      {
+        "name": "nested-iframe",
+        "outcome": "success",
+        "fetch_method": "native_browser",
+        "item_count": 1,
+        "title": "Synthetic PageMonitor story"
+      },
+      {
+        "name": "worker",
+        "outcome": "success",
+        "fetch_method": "native_browser",
+        "item_count": 1,
+        "title": "Synthetic PageMonitor story"
+      },
+      {
+        "name": "shared-worker",
+        "outcome": "success",
+        "fetch_method": "native_browser",
+        "item_count": 1,
+        "title": "Synthetic PageMonitor story"
+      },
+      {
+        "name": "service-worker-large",
+        "outcome": "success",
+        "fetch_method": "native_browser",
+        "item_count": 1,
+        "title": "Synthetic PageMonitor story"
+      },
+      {
+        "name": "wire-gzip-fixed",
+        "error": "resource_limit",
+        "outcome": "failed",
+        "fetch_method": "",
+        "item_count": 0
+      },
+      {
+        "name": "wire-gzip-chunked",
+        "error": "resource_limit",
+        "outcome": "failed",
+        "fetch_method": "",
+        "item_count": 0
+      },
+      {
+        "name": "iframe-private",
+        "error": "public_url_denied",
+        "outcome": "failed",
+        "fetch_method": "",
+        "item_count": 0
+      },
+      {
+        "name": "iframe-loopback",
+        "error": "public_url_denied",
+        "outcome": "failed",
+        "fetch_method": "",
+        "item_count": 0
+      },
+      {
+        "name": "iframe-metadata",
+        "error": "public_url_denied",
+        "outcome": "failed",
+        "fetch_method": "",
+        "item_count": 0
+      },
+      {
+        "name": "iframe-http",
+        "outcome": "success",
+        "fetch_method": "native_browser",
+        "item_count": 1
+      },
+      {
+        "name": "iframe-ws",
+        "outcome": "success",
+        "fetch_method": "native_browser",
+        "item_count": 1
+      },
+      {
+        "name": "iframe-popup",
+        "error": "transport_failed",
+        "outcome": "failed",
+        "fetch_method": "",
+        "item_count": 0
+      },
+      {
+        "name": "iframe-download",
+        "error": "unavailable",
+        "outcome": "failed",
+        "fetch_method": "",
+        "item_count": 0
+      },
+      {
+        "name": "iframe-wire",
+        "error": "resource_limit",
+        "outcome": "failed",
+        "fetch_method": "",
+        "item_count": 0
+      },
+      {
+        "name": "encoded",
+        "outcome": "success",
+        "fetch_method": "native_browser",
+        "item_count": 1,
+        "title": "Synthetic PageMonitor story"
+      },
+      {
+        "name": "redirect",
+        "outcome": "success",
+        "fetch_method": "native_browser",
+        "item_count": 1,
+        "title": "Synthetic PageMonitor story"
+      },
+      {
+        "name": "inherited-blank",
+        "outcome": "success",
+        "fetch_method": "native_browser",
+        "item_count": 1,
+        "title": "Synthetic PageMonitor story"
+      },
+      {
+        "name": "inherited-blob",
+        "outcome": "success",
+        "fetch_method": "native_browser",
+        "item_count": 1,
+        "title": "Synthetic PageMonitor story"
+      }
+    ],
+    "initial_script_requests": null,
+    "worker_execution_requests": 0,
+    "frame_execution_requests": 13
+  },
+  "browser_generation_reused_for_both_profiles": true,
+  "budget_isolation": {
+    "cleanup_confirmed": true,
+    "fresh_fetch_outcome": "success",
+    "neighbor_arrival_confirmed": true,
+    "neighbor_outcome": "success",
+    "neighbor_pending_after_exhaustion": true,
+    "oversized_error": "resource_limit",
+    "oversized_outcome": "failed"
+  },
+  "cancellation": [
+    {
+      "name": "cancelled",
+      "elapsed_ms": 6023.579,
+      "outcome": "failed",
+      "error": "native_browser_timeout",
+      "content_chars": 0
+    },
+    {
+      "name": "survivor",
+      "elapsed_ms": 6572.098,
+      "outcome": "success",
+      "content_chars": 511
+    }
+  ],
+  "guarded_iframe_events": 11,
+  "managed_probes": {
+    "page_monitor": {
+      "name": "native_page_monitor",
+      "outcome": "success",
+      "fetch_method": "native_browser",
+      "item_count": 1,
+      "title": "Synthetic PageMonitor story"
+    },
+    "supplied_content": {
+      "name": "supplied_content",
+      "elapsed_ms": 0,
+      "outcome": "success",
+      "content_chars": 487
+    }
+  },
+  "managed_runtime_file": {
+    "conflicting_environment_values": "ignored",
+    "egress": "passed",
+    "extractor": "passed"
+  },
+  "network_scope": "isolated_internal_docker_networks_with_no_published_ports",
+  "paused_worker_events": {
+    "service_worker_paused": 0,
+    "shared_worker_paused": 0,
+    "worker_paused": 0
+  },
+  "profiles": {
+    "one": {
+      "limit": 1,
+      "max_origin_active": 1,
+      "requests": [
+        {
+          "name": "one",
+          "elapsed_ms": 2076.46,
+          "outcome": "success",
+          "content_chars": 509
+        },
+        {
+          "name": "two",
+          "elapsed_ms": 2524.981,
+          "outcome": "success",
+          "content_chars": 510
+        }
+      ]
+    },
+    "two": {
+      "limit": 2,
+      "max_origin_active": 2,
+      "requests": [
+        {
+          "name": "one",
+          "elapsed_ms": 2636.957,
+          "outcome": "success",
+          "content_chars": 503
+        },
+        {
+          "name": "two",
+          "elapsed_ms": 1899.385,
+          "outcome": "success",
+          "content_chars": 503
+        },
+        {
+          "name": "three",
+          "elapsed_ms": 2390.375,
+          "outcome": "success",
+          "content_chars": 505
+        }
+      ]
+    }
+  },
+  "render_budget_probe": {
+    "counters_observed": false,
+    "receipt_validation": "native_controller"
+  },
+  "schema_version": 1,
+  "state": "passed",
+  "upstream_error": {
+    "name": "upstream-error",
+    "elapsed_ms": 743.483,
+    "outcome": "rejected",
+    "error": "native_browser_http_rejected",
+    "upstream_status": 503,
+    "content_chars": 0
+  },
+  "worker_policy_responses": 39
+}

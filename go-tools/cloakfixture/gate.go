@@ -31,7 +31,7 @@ func workerAnchorExtra() []string {
 	return []string{"--add-host", "native-fixture.test:" + fixtureAdmissionIP}
 }
 
-type GateConfig struct{ Worker, Egress, Fixture, Relay, X11, Output, StageParent string }
+type GateConfig struct{ Worker, Egress, Fixture, Relay, X11, Output, StageParent, NamespaceImage string }
 type browserMetadata struct {
 	Path string   `json:"path"`
 	Args []string `json:"args"`
@@ -54,7 +54,11 @@ func hostBudget() error {
 	if e != nil {
 		return errors.New("host_budget_unavailable")
 	}
-	for _, line := range strings.Split(string(b), "\n") {
+	return memoryBudget(string(b))
+}
+
+func memoryBudget(meminfo string) error {
+	for _, line := range strings.Split(meminfo, "\n") {
 		var k string
 		var kb int64
 		if _, e := fmt.Sscanf(line, "%s %d kB", &k, &kb); e == nil && k == "MemAvailable:" {
@@ -76,7 +80,7 @@ func certFiles(dir string) (string, string, string, error) {
 		return "", "", "", errors.New("certificate_failed")
 	}
 	now := time.Now()
-	tmpl := x509.Certificate{SerialNumber: serial, Subject: pkix.Name{CommonName: "native-fixture.test"}, DNSNames: []string{"native-fixture.test"}, IPAddresses: []net.IP{net.ParseIP("127.0.0.1")}, NotBefore: now.Add(-time.Minute), NotAfter: now.Add(48 * time.Hour), KeyUsage: x509.KeyUsageDigitalSignature | x509.KeyUsageKeyEncipherment, ExtKeyUsage: []x509.ExtKeyUsage{x509.ExtKeyUsageServerAuth}, BasicConstraintsValid: true}
+	tmpl := x509.Certificate{SerialNumber: serial, Subject: pkix.Name{CommonName: "native-fixture.test"}, DNSNames: []string{"native-fixture.test", "native-frame.test", "native-nested.test"}, IPAddresses: []net.IP{net.ParseIP("127.0.0.1")}, NotBefore: now.Add(-time.Minute), NotAfter: now.Add(48 * time.Hour), KeyUsage: x509.KeyUsageDigitalSignature | x509.KeyUsageKeyEncipherment, ExtKeyUsage: []x509.ExtKeyUsage{x509.ExtKeyUsageServerAuth}, BasicConstraintsValid: true}
 	der, e := x509.CreateCertificate(rand.Reader, &tmpl, &tmpl, &key.PublicKey, key)
 	if e != nil {
 		return "", "", "", errors.New("certificate_failed")
@@ -110,7 +114,12 @@ func (g *dockerGate) discover(ctx context.Context) (browserMetadata, error) {
 	var v browserMetadata
 	name := g.prefix + "-discovery"
 	g.containers = append(g.containers, name)
-	out, e := g.docker.Run(ctx, "run", "--rm", "--name", name, "--label", ownerClass, "--label", g.label(), "--pull=never", "--network", "none", "--platform=linux/amd64", "--memory", "256m", "--memory-swap", "256m", "--cpus", "0.5", "--pids-limit", "64", "--cap-drop=ALL", "--security-opt=no-new-privileges:true", "-e", "CLOAKBROWSER_AUTO_UPDATE=false", "--entrypoint", "python", cloakImage, "-c", discoverCode)
+	args := []string{"run", "--rm", "--name", name, "--label", ownerClass, "--label", g.label(), "--pull=never", "--network", "none", "--platform=linux/amd64", "--memory", "256m", "--memory-swap", "256m", "--cpus", "0.5", "--pids-limit", "64", "--cap-drop=ALL", "--security-opt=no-new-privileges:true", "-e", "CLOAKBROWSER_AUTO_UPDATE=false", "--entrypoint", "python"}
+	if g.namespaceImage != "" {
+		args = withoutResourceCaps(args)
+	}
+	args = append(args, cloakImage, "-c", discoverCode)
+	out, e := g.docker.Run(ctx, args...)
 	if e == nil {
 		g.containers = g.containers[:len(g.containers)-1]
 	}
@@ -163,7 +172,7 @@ func (g *dockerGate) send(ctx context.Context, dir, action string) (json.RawMess
 	path := filepath.Join(dir, "results", name)
 	readReceipt := func() bool {
 		i, err := os.Lstat(path)
-		if err != nil || !i.Mode().IsRegular() || i.Size() > 4096 || i.Mode().Perm()&0077 != 0 {
+		if err != nil || !i.Mode().IsRegular() || i.Size() > 16*1024 || i.Mode().Perm()&0077 != 0 {
 			return false
 		}
 		b, err := os.ReadFile(path)
@@ -182,7 +191,7 @@ func (g *dockerGate) send(ctx context.Context, dir, action string) (json.RawMess
 		}
 	}
 	if response.ID != strings.TrimSuffix(name, ".json") || !response.Ok || len(result) == 0 {
-		return nil, errors.New("client_gate_failed")
+		return result, errors.New("client_gate_failed")
 	}
 	return result, nil
 }
@@ -205,8 +214,10 @@ func (g *dockerGate) stopOwnedContainer(ctx context.Context, name string) error 
 
 // RunGate executes the disposable synthetic gate, with private finite evidence.
 func RunGate(ctx context.Context, cfg GateConfig) (err error) {
-	if err = hostBudget(); err != nil {
-		return err
+	if cfg.NamespaceImage == "" {
+		if err = hostBudget(); err != nil {
+			return err
+		}
 	}
 	for _, p := range []*string{&cfg.Worker, &cfg.Egress, &cfg.Fixture} {
 		*p, err = checkedFile(*p, true)
@@ -245,11 +256,33 @@ func RunGate(ctx context.Context, cfg GateConfig) (err error) {
 	if e != nil {
 		return e
 	}
+	g.namespaceImage = cfg.NamespaceImage
 	phase := "preflight"
 	report := map[string]any{"schema_version": 1, "state": "failed"}
 	defer func() {
 		cleanCtx, stop := context.WithTimeout(context.Background(), 45*time.Second)
 		defer stop()
+		if err != nil {
+			report["runtime_states"] = g.runtimeStates(cleanCtx)
+			if g.verify(cleanCtx, g.prefix+"-observer", false) == nil {
+				if logs, logErr := g.docker.Run(cleanCtx, "logs", "--tail", "20", g.prefix+"-observer"); logErr == nil {
+					for _, reason := range []string{"cdp_discovery_invalid", "cdp_handshake_rejected", "peer_context_create_failed", "peer_target_create_failed", "peer_attach_failed", "peer_session_probe_failed", "cdp_connection_closed", "cdp_command_failed", "cdp_command_timeout"} {
+						if strings.Contains(logs+"\n", "fixture_peer_failure reason="+reason+"\n") {
+							report["peer_failure_reason"] = reason
+						}
+					}
+				}
+			}
+		}
+		if err != nil && g.verify(cleanCtx, g.prefix+"-worker", false) == nil {
+			if logs, logErr := g.docker.Run(cleanCtx, "logs", "--tail", "150", g.prefix+"-worker"); logErr == nil {
+				report["native_failure_reasons"] = nativeFailureReceipts(logs)
+				report["replay_probe"] = replayProbeReceipts(logs)
+				report["render_budget_probe"] = renderBudgetProbeReceipts(logs)
+				report["paused_worker_events"] = pausedWorkerReceipts(logs)
+				report["closed_worker_events"] = closedWorkerReceipts(logs)
+			}
+		}
 		if e := g.cleanup(cleanCtx); e != nil {
 			if err == nil {
 				err = e
@@ -259,20 +292,42 @@ func RunGate(ctx context.Context, cfg GateConfig) (err error) {
 		if err != nil {
 			report["failure_code"] = "gate_failed"
 			report["phase"] = phase
+			if g.probeFailure != nil {
+				report["isolation_probe"] = g.probeFailure
+			}
+			switch err.Error() {
+			case "namespace_invalid", "namespace_operation_failed", "namespace_bypass_gate_failed",
+				"docker_operation_failed", "ownership_mismatch", "isolation_policy_invalid",
+				"isolation_counter_unavailable", "browser_events_unobserved", "client_gate_failed",
+				"browser_metadata_invalid", "image_platform_invalid", "host_budget_insufficient",
+				"runtime_stopped_restarted_or_oom", "container_oom_event_detected", "oom_metrics_unavailable", "fixture_readiness_timeout":
+				report["failure_detail"] = err.Error()
+			}
 		} else {
 			report["state"] = "passed"
 		}
-		if e := privateJSON(cfg.Output, report); e != nil {
+		if e := privateJSONLimit(cfg.Output, report, 32*1024); e != nil {
 			err = e
 		}
 	}()
+	if cfg.NamespaceImage != "" {
+		meminfo, e := g.docker.Run(ctx, "run", "--rm", "--network", "none", "--cap-drop=ALL",
+			"--security-opt=no-new-privileges:true", "--read-only", "--pids-limit", "16",
+			"--entrypoint", "cat", cfg.NamespaceImage, "/proc/meminfo")
+		if e != nil {
+			return e
+		}
+		if e = memoryBudget(meminfo); e != nil {
+			return e
+		}
+	}
 	// Validate immutable source image and launcher metadata without network access.
 	meta, e := g.discover(ctx)
 	if e != nil {
 		return e
 	}
 	for _, image := range []string{cloakImage, alpineImage} {
-		out, e := g.docker.Run(ctx, "image", "inspect", "--format", "{{.Os}}/{{.Architecture}}", image)
+		out, e := g.docker.Run(ctx, "image", "inspect", "--platform", "linux/amd64", "--format", "{{.Os}}/{{.Architecture}}", image)
 		if e != nil || out != "linux/amd64" {
 			return errors.New("image_platform_invalid")
 		}
@@ -353,7 +408,7 @@ func RunGate(ctx context.Context, cfg GateConfig) (err error) {
 	egressValues := map[string]string{
 		"EGRESS_LISTEN_ADDR": ip(5) + ":8081", "EGRESS_TOKEN": token, "EGRESS_MAX_CONCURRENT": "4",
 		"EGRESS_MAX_LIFETIME_SECONDS": "35", "EGRESS_TEST_MODE": "true",
-		"EGRESS_TEST_ALLOWLIST": `{"native-fixture.test":"11.203.254.242"}`,
+		"EGRESS_TEST_ALLOWLIST": `{"native-fixture.test":"11.203.254.242","native-frame.test":"11.203.254.242","native-nested.test":"11.203.254.242"}`,
 	}
 	extractorValues := map[string]string{
 		"LISTEN_ADDR": "0.0.0.0:8080", "EXTRACTOR_HTTP_ONLY": "false", "EXTRACTOR_MAX_CONCURRENT": "5",
@@ -495,6 +550,37 @@ func RunGate(ctx context.Context, cfg GateConfig) (err error) {
 	if e != nil {
 		return e
 	}
+	phase = "budget_isolation"
+	budgetIsolation, e := g.send(ctx, stage, "budget_isolation")
+	report["budget_isolation"] = budgetIsolation
+	if e != nil {
+		return e
+	}
+	phase = "browser_events"
+	browserEvents, e := g.send(ctx, stage, "browser_events")
+	report["browser_events"] = browserEvents
+	if e != nil {
+		return e
+	}
+	if e = g.verify(ctx, g.prefix+"-worker", false); e != nil {
+		return e
+	}
+	logs, e := g.docker.Run(ctx, "logs", "--tail", "150", g.prefix+"-worker")
+	if e != nil {
+		return e
+	}
+	paused := pausedWorkerReceipts(logs)
+	report["paused_worker_events"] = paused
+	guarded := strings.Count(logs+"\n", "native_browser_diagnostic stage=events reason=iframe_guarded\n")
+
+	policy := strings.Count(logs+"\n", "native_browser_diagnostic stage=events reason=worker_policy_applied\n")
+	report["guarded_iframe_events"] = guarded
+	report["worker_policy_responses"] = policy
+	report["render_budget_probe"] = renderBudgetProbeReceipts(logs)
+	if guarded < 3 || policy < 9 {
+		return errors.New("browser_events_unobserved")
+	}
+
 	phase = "cancellation"
 	cancellation, e := g.send(ctx, stage, "cancellation")
 	if e != nil {

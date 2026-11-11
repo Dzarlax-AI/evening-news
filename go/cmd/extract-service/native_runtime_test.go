@@ -61,7 +61,12 @@ func TestNativeDiagnosticLoggerIsOptInAndAllowlisted(t *testing.T) {
 	}
 	callback := nativeDiagnosticLogger(true)
 	callback("events", "protocol_error_-32603")
-	for _, reason := range []string{"client_disconnected", "malformed_detach", "owned_detach", "target_crashed"} {
+	for _, reason := range []string{"client_disconnected", "malformed_detach", "owned_detach", "target_crashed",
+		"child_target_invalid", "child_target_unpaused", "child_target_unsupported", "child_target_activity",
+		"response_policy_invalid", "response_policy_failed", "worker_policy_header_seen", "worker_policy_applied", "child_frame_guard_failed", "child_detach_unconfirmed", "iframe_guarded", "child_frame_unsupported", "child_page_denied", "websocket_denied", "popup_denied", "download_denied",
+		"child_target_close_unsupported", "child_target_close_missing", "child_target_close_rejected", "child_target_close_unconfirmed", "child_target_close_failed", "worker_closed", "shared_worker_closed", "service_worker_closed",
+		"worker_paused", "shared_worker_paused", "service_worker_paused",
+		"paused_worker_dom_ready", "paused_worker_dom_unready", "paused_worker_requests_pending"} {
 		callback("events", reason)
 		if !strings.Contains(output.String(), "stage=events reason="+reason) {
 			t.Fatalf("finite diagnostic was discarded: %s", reason)

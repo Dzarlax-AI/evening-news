@@ -24,12 +24,22 @@ type arrival struct {
 	At   float64 `json:"at"`
 }
 type snapshot struct {
-	Version   int       `json:"schema_version"`
-	Active    int       `json:"active"`
-	MaxActive int       `json:"max_active"`
-	Arrivals  []arrival `json:"arrivals"`
-	Completed int       `json:"completed"`
-	Errors    int       `json:"errors"`
+	BlockedActions       map[string]int `json:"blocked_actions,omitempty"`
+	ForbiddenProbes      map[string]int `json:"forbidden_probes,omitempty"`
+	ProbeEncodedBytes    int            `json:"probe_encoded_bytes"`
+	ProbeDecodedBytes    int            `json:"probe_decoded_bytes"`
+	ForbiddenRequests    int            `json:"forbidden_requests"`
+	PublisherAuthHeaders int            `json:"publisher_auth_headers"`
+	Version              int            `json:"schema_version"`
+	Active               int            `json:"active"`
+	MaxActive            int            `json:"max_active"`
+	Arrivals             []arrival      `json:"arrivals"`
+	Completed            int            `json:"completed"`
+	Errors               int            `json:"errors"`
+	EventScripts         map[string]int `json:"event_scripts,omitempty"`
+	WorkerExecutions     map[string]int `json:"worker_executions,omitempty"`
+	FrameExecutions      int            `json:"frame_executions"`
+	EventExecutions      int            `json:"event_executions"`
 }
 
 // Origin exposes only synthetic article routes and persists bounded barrier state.
@@ -44,7 +54,7 @@ func NewOrigin(dir string) (*Origin, error) {
 	if err := os.MkdirAll(dir, 0700); err != nil {
 		return nil, fmt.Errorf("origin_state_unavailable")
 	}
-	o := &Origin{dir: dir, started: time.Now(), state: snapshot{Version: 1, Arrivals: []arrival{}}}
+	o := &Origin{dir: dir, started: time.Now(), state: snapshot{Version: 1, Arrivals: []arrival{}, EventScripts: map[string]int{}, WorkerExecutions: map[string]int{}}}
 	if err := o.persist(); err != nil {
 		return nil, err
 	}
@@ -114,10 +124,37 @@ func (o *Origin) released(c string) bool {
 	return e == nil && i.Mode().IsRegular() && i.Size() <= 32
 }
 func (o *Origin) ServeHTTP(w http.ResponseWriter, r *http.Request) {
+	if r.URL.Path == "/forbidden" || r.Header.Get("Proxy-Authorization") != "" || r.Header.Get("Authorization") != "" {
+		o.mu.Lock()
+		if r.URL.Path == "/forbidden" {
+			o.state.ForbiddenRequests++
+			if o.state.ForbiddenProbes == nil {
+				o.state.ForbiddenProbes = map[string]int{}
+			}
+			probe := r.URL.Query().Get("probe")
+			if !browserEventKind(probe) {
+				probe = "unknown"
+			}
+			o.state.ForbiddenProbes[probe]++
+		}
+		if r.Header.Get("Proxy-Authorization") != "" || r.Header.Get("Authorization") != "" {
+			o.state.PublisherAuthHeaders++
+		}
+		err := o.persist()
+		o.mu.Unlock()
+		if err != nil {
+			http.Error(w, "fixture state unavailable", 503)
+			return
+		}
+	}
+
 	w.Header().Set("Cache-Control", "no-store")
 	w.Header().Set("Connection", "close")
 	if r.Method != http.MethodGet {
 		http.Error(w, "fixture route rejected", 404)
+		return
+	}
+	if o.browserEventRoute(w, r) {
 		return
 	}
 	if r.URL.Path == "/page-monitor" {
