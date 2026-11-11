@@ -25,12 +25,15 @@ type EditorialDigestView struct {
 }
 
 type DigestStoryView struct {
-	ID         string
-	Title      string
-	Summary    string
-	ArticleURL string
-	Sources    []DigestSourceView
-	Category   string
+	ID               string
+	Title            string
+	Summary          string
+	ArticleURL       string
+	Sources          []DigestSourceView
+	Category         string
+	CategoryID       string
+	PrimaryArticleID string
+	ArticleIDs       []string
 }
 
 type DigestSourceView struct {
@@ -121,7 +124,7 @@ func buildEditorialDigestView(date time.Time, edition *repositories.EditorialDig
 	briefStories := make([]DigestStoryView, 0)
 	seenMainStories := make(map[string]bool)
 	for _, story := range edition.Edition.Stories {
-		viewStory, ids, ok := editorialStoryView(story, articles)
+		viewStory, ids, ok := editorialStoryView(story, articles, edition.Locale)
 		if !ok {
 			continue
 		}
@@ -200,7 +203,7 @@ func buildEditorialDigestView(date time.Time, edition *repositories.EditorialDig
 	return view
 }
 
-func editorialStoryView(story repositories.EditorialDigestStory, articles map[string]repositories.EditorialDigestArticle) (DigestStoryView, []string, bool) {
+func editorialStoryView(story repositories.EditorialDigestStory, articles map[string]repositories.EditorialDigestArticle, locale string) (DigestStoryView, []string, bool) {
 	if story.Kind != "main" && story.Kind != "brief" {
 		return DigestStoryView{}, nil, false
 	}
@@ -221,7 +224,17 @@ func editorialStoryView(story repositories.EditorialDigestStory, articles map[st
 			}
 		}
 	}
-	view := DigestStoryView{ID: story.ID, Title: story.Title, Summary: story.Summary, ArticleURL: "/article/" + story.PrimaryArticleID, Category: primary.CategoryName}
+	categoryID, categoryName := strings.TrimSpace(primary.CategoryID), strings.TrimSpace(primary.CategoryName)
+	if categoryID == "" {
+		categoryID = "other"
+	}
+	if categoryName == "" {
+		categoryName = "Другие темы"
+		if locale == "sr-Latn" {
+			categoryName = "Ostale teme"
+		}
+	}
+	view := DigestStoryView{ID: story.ID, Title: story.Title, Summary: story.Summary, ArticleURL: "/article/" + story.PrimaryArticleID, Category: categoryName, CategoryID: categoryID, PrimaryArticleID: story.PrimaryArticleID, ArticleIDs: append([]string(nil), ids...)}
 	seenSources := make(map[string]bool)
 	for _, id := range ids {
 		article := articles[id]

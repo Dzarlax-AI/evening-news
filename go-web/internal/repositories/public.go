@@ -100,6 +100,25 @@ type EditorialDigestCounterpartReader interface {
 	EditorialDigestCounterpart(context.Context, time.Time, string, string, string) (string, error)
 }
 
+// PublicDigestCatalogReader is an optional read-only capability for listing
+// immutable editorial editions without widening the legacy PublicReader.
+type PublicDigestCatalogReader interface {
+	EditorialDigestCatalog(context.Context, string, string, time.Time) (EditorialDigestCatalog, error)
+}
+
+type EditorialDigestCatalog struct {
+	Month        string
+	EarliestDate string
+	LatestDate   string
+	LatestID     string
+	Issues       []EditorialDigestIssue
+}
+
+type EditorialDigestIssue struct {
+	Date string
+	ID   string
+}
+
 type EditorialDigestEdition struct {
 	ID           string                  `json:"id"`
 	Date         string                  `json:"date"`
