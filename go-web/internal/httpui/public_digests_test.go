@@ -107,6 +107,13 @@ func TestPublicDigestDetailRejectsMalformedOrMismatchedData(t *testing.T) {
 	if w.Code != 503 || !strings.Contains(w.Body.String(), "digest_unavailable") {
 		t.Fatalf("corrupt empty projection status=%d body=%s", w.Code, w.Body)
 	}
+	fake.edition.Snapshot.Articles = []repositories.EditorialDigestArticle{{ID: "42"}}
+	fake.edition.Edition.Stories = append(fake.edition.Edition.Stories, repositories.EditorialDigestStory{ID: "valid", Kind: "main", Title: "Valid saved story", PrimaryArticleID: "42", ArticleIDs: []string{"42"}})
+	w = request(mux, "GET", "/api/public/digests/2026-11-10?locale=ru&edition="+id)
+	if w.Code != 503 {
+		t.Fatalf("partially corrupt edition status=%d, want 503", w.Code)
+	}
+	fake.edition.Edition.Stories = fake.edition.Edition.Stories[1:]
 	fake.edition.Date = "2026-11-09"
 	w = request(mux, "GET", "/api/public/digests/2026-11-10?locale=ru&edition="+id)
 	if w.Code != 503 {

@@ -4,6 +4,7 @@ import (
 	"context"
 	"crypto/rand"
 	"encoding/hex"
+	"net"
 	"net/url"
 	"os"
 	"testing"
@@ -31,6 +32,9 @@ func TestPostgresEditorialDigestCatalogSnapshot(t *testing.T) {
 	adminCfg, err := pgxpool.ParseConfig(dsn)
 	if err != nil {
 		t.Fatal(err)
+	}
+	if !digestCatalogFixtureIsLoopback(adminCfg) {
+		t.Fatal("refusing non-loopback effective TEST_DATABASE_URL host")
 	}
 	admin, err := pgxpool.NewWithConfig(ctx, adminCfg)
 	if err != nil {
@@ -194,5 +198,46 @@ func TestPostgresEditorialDigestCatalogSnapshot(t *testing.T) {
 	unavailable.Close()
 	if _, err = unavailable.EditorialDigestCatalog(ctx, "ru", "", time.Now()); err == nil {
 		t.Fatal("closed database pool unexpectedly succeeded")
+	}
+}
+
+func digestCatalogFixtureIsLoopback(cfg *pgxpool.Config) bool {
+	loopback := func(host string) bool {
+		if host == "localhost" {
+			return true
+		}
+		ip := net.ParseIP(host)
+		return ip != nil && ip.IsLoopback()
+	}
+	if !loopback(cfg.ConnConfig.Host) {
+		return false
+	}
+	for _, fallback := range cfg.ConnConfig.Fallbacks {
+		if !loopback(fallback.Host) {
+			return false
+		}
+	}
+	return true
+}
+
+func TestDigestCatalogFixtureChecksEffectiveHosts(t *testing.T) {
+	for _, tc := range []struct {
+		dsn  string
+		want bool
+	}{
+		{"postgres://localhost/fixture", true},
+		{"postgres://127.0.0.1/fixture", true},
+		{"postgres://localhost/fixture?host=127.0.0.1,localhost", true},
+		{"postgres://localhost/fixture?host=remote.example", false},
+		{"postgres://localhost/fixture?host=127.0.0.1,remote.example", false},
+		{"postgres://localhost/fixture?host=/tmp", false},
+	} {
+		cfg, err := pgxpool.ParseConfig(tc.dsn)
+		if err != nil {
+			t.Fatal(err)
+		}
+		if got := digestCatalogFixtureIsLoopback(cfg); got != tc.want {
+			t.Errorf("effective destination check for %q = %v, want %v", tc.dsn, got, tc.want)
+		}
 	}
 }

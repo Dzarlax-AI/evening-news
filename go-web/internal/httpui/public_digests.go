@@ -154,6 +154,18 @@ func (h *Handler) publicDigestDetail(w http.ResponseWriter, r *http.Request) {
 		writeDigestAPIError(w, 503, "digest_unavailable")
 		return
 	}
+	articles := make(map[string]repositories.EditorialDigestArticle, len(edition.Snapshot.Articles))
+	for _, article := range edition.Snapshot.Articles {
+		if validArticleID(article.ID) {
+			articles[article.ID] = article
+		}
+	}
+	for _, story := range edition.Edition.Stories {
+		if _, _, valid := editorialStoryView(story, articles, edition.Locale); !valid {
+			writeDigestAPIError(w, 503, "digest_unavailable")
+			return
+		}
+	}
 	view := buildEditorialDigestView(date, edition)
 	if len(edition.Edition.Stories) > 0 && view.MainCount+view.BriefCount == 0 {
 		writeDigestAPIError(w, 503, "digest_unavailable")
