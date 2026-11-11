@@ -13,6 +13,8 @@ type nativeFixtureChild struct {
 	paused, malformed                                  bool
 }
 
+// TestNativePausedWorkersPreserveMainPageAndCleanup keeps worker code paused while enforcing
+// unchanged main-page readiness and owned cleanup.
 func TestNativePausedWorkersPreserveMainPageAndCleanup(t *testing.T) {
 	for _, kind := range []string{"service_worker"} {
 		for _, late := range []bool{false, true} {
@@ -39,6 +41,8 @@ func TestNativePausedWorkersPreserveMainPageAndCleanup(t *testing.T) {
 	}
 }
 
+// assertNativeChildrenNeverResumed checks that held worker sessions never receive a resume
+// command.
 func assertNativeChildrenNeverResumed(t *testing.T, f *nativeFixture) {
 	t.Helper()
 	f.mu.Lock()
@@ -54,6 +58,8 @@ func assertNativeChildrenNeverResumed(t *testing.T, f *nativeFixture) {
 	}
 }
 
+// TestNativeChildTargetsFailClosed rejects ambiguous child identity, pause state and unsupported
+// target kinds.
 func TestNativeChildTargetsFailClosed(t *testing.T) {
 	cases := []struct {
 		name, reason string
@@ -95,6 +101,8 @@ func TestNativeChildTargetsFailClosed(t *testing.T) {
 	}
 }
 
+// TestNativePausedChildCountIsBounded prevents publisher-created children from exceeding the
+// render target allowance.
 func TestNativePausedChildCountIsBounded(t *testing.T) {
 	f := newNativeFixture(t)
 	w := f.worker(t)
@@ -113,6 +121,8 @@ func TestNativePausedChildCountIsBounded(t *testing.T) {
 	assertNativeChildrenNeverResumed(t, f)
 }
 
+// TestNativePausedChildLeakFencesWorker requires every owned child to disappear before the
+// controller remains ready.
 func TestNativePausedChildLeakFencesWorker(t *testing.T) {
 	f := newNativeFixture(t)
 	w := f.worker(t)
@@ -129,6 +139,8 @@ func TestNativePausedChildLeakFencesWorker(t *testing.T) {
 	}
 }
 
+// TestNativeForeignChildEventDoesNotAffectPage ignores unrelated session events without mutating
+// foreign browser state.
 func TestNativeForeignChildEventDoesNotAffectPage(t *testing.T) {
 	f := newNativeFixture(t)
 	w := f.worker(t)
@@ -144,6 +156,8 @@ func TestNativeForeignChildEventDoesNotAffectPage(t *testing.T) {
 	assertNativeChildrenNeverResumed(t, f)
 }
 
+// TestNativePausedChildActivityFencesWorker treats unexpected activity from a held worker as
+// lost ownership.
 func TestNativePausedChildActivityFencesWorker(t *testing.T) {
 	for _, method := range []string{"Network.requestWillBeSent", "Fetch.requestPaused", "Network.webSocketCreated", "Target.attachedToTarget"} {
 		t.Run(method, func(t *testing.T) {
@@ -164,6 +178,8 @@ func TestNativePausedChildActivityFencesWorker(t *testing.T) {
 	}
 }
 
+// TestNativeWebSocketsAndPopupsRemainDenied preserves existing unsupported-operation policy for
+// owned page events.
 func TestNativeWebSocketsAndPopupsRemainDenied(t *testing.T) {
 	for method, reason := range map[string]string{"Network.webSocketCreated": "websocket_denied", "Page.windowOpen": "popup_denied"} {
 		t.Run(method, func(t *testing.T) {
@@ -186,6 +202,8 @@ func TestNativeWebSocketsAndPopupsRemainDenied(t *testing.T) {
 	}
 }
 
+// TestNativeGuardedIframeAndHeldServiceWorker permits guarded frame execution while keeping
+// admitted service workers paused.
 func TestNativeGuardedIframeAndHeldServiceWorker(t *testing.T) {
 	for _, nested := range []bool{false, true} {
 		t.Run(map[bool]string{false: "single", true: "nested"}[nested], func(t *testing.T) {
@@ -224,6 +242,8 @@ func TestNativeGuardedIframeAndHeldServiceWorker(t *testing.T) {
 	}
 }
 
+// TestNativeFrameGuardFailureNeverResumes prevents child execution when any required frame guard
+// cannot be confirmed.
 func TestNativeFrameGuardFailureNeverResumes(t *testing.T) {
 	for _, method := range []string{"Page.enable", "Network.enable", "Network.setBlockedURLs", "Fetch.enable", "Target.setAutoAttach", "Page.getFrameTree"} {
 		t.Run(method, func(t *testing.T) {
@@ -251,6 +271,8 @@ func TestNativeFrameGuardFailureNeverResumes(t *testing.T) {
 	}
 }
 
+// TestNativeFrameSharesPolicyAndBudgets applies the parent URL and resource restrictions to
+// child-frame traffic.
 func TestNativeFrameSharesPolicyAndBudgets(t *testing.T) {
 	for _, mode := range []string{"private", "http", "websocket", "wire", "requests"} {
 		t.Run(mode, func(t *testing.T) {
@@ -288,6 +310,8 @@ func TestNativeFrameSharesPolicyAndBudgets(t *testing.T) {
 	}
 }
 
+// TestNativeFrameDetachRequiresTargetAbsence releases child request state only after confirming
+// that its target is gone.
 func TestNativeFrameDetachRequiresTargetAbsence(t *testing.T) {
 	for _, mode := range []string{"gone", "gone-root", "live"} {
 		t.Run(mode, func(t *testing.T) {

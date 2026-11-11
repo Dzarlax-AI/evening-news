@@ -10,6 +10,8 @@ import (
 	"testing"
 )
 
+// TestNativeBudgetRejectsAmbiguousOrForeignReceipt requires exact budget ownership and complete
+// unambiguous final accounting.
 func TestNativeBudgetRejectsAmbiguousOrForeignReceipt(t *testing.T) {
 	id := strings.Repeat("a", 32)
 	valid := `{"contract_version":"1","budget_id":"` + id + `","wire_limit_bytes":1024,"wire_bytes":12,"exhausted":false,"expired":false,"revoked":true,"active_tunnels":0}`
@@ -37,6 +39,8 @@ func TestNativeBudgetRejectsAmbiguousOrForeignReceipt(t *testing.T) {
 	}
 }
 
+// TestNativeReplaySharesDecodedBudgetAndClosesBothStreams charges successive documents to one
+// decoded allowance and closes rejected streams too.
 func TestNativeReplaySharesDecodedBudgetAndClosesBothStreams(t *testing.T) {
 	f := newNativeFixture(t)
 	w := f.worker(t)

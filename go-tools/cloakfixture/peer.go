@@ -106,6 +106,9 @@ func NewPeer(ctx context.Context, browser, proxy string) (*CDPPeer, error) {
 	success = true
 	return p, nil
 }
+
+// command correlates CDP replies while handling events and returning finite transport failure
+// reasons.
 func (p *CDPPeer) command(ctx context.Context, method string, params any, session string, out any) error {
 	deadline := time.Now().Add(5 * time.Second)
 	if d, ok := ctx.Deadline(); ok && d.Before(deadline) {
@@ -188,6 +191,8 @@ func (p *CDPPeer) ids(ctx context.Context, contexts bool) (map[string]bool, erro
 	}
 	return out, nil
 }
+
+// probe verifies the independent sentinel session remains responsive before or after extraction.
 func (p *CDPPeer) probe(ctx context.Context) error {
 	t, e := p.ids(ctx, false)
 	if e != nil {

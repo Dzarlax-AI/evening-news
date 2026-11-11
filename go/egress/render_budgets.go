@@ -40,6 +40,8 @@ type renderReceipt struct {
 	Active    int    `json:"active_tunnels"`
 }
 
+// attach registers an operation only while this render budget is live and has remaining
+// allowance.
 func (b *renderBudget) attach(op *operation) bool {
 	b.mu.Lock()
 	defer b.mu.Unlock()
@@ -56,6 +58,9 @@ func (b *renderBudget) detach(op *operation) {
 	b.mu.Unlock()
 	b.wg.Done()
 }
+
+// stop freezes the budget state and closes only its owned operations without holding the budget
+// lock.
 func (b *renderBudget) stop(exhausted, expired bool) {
 	b.mu.Lock()
 	if b.closed {
@@ -83,6 +88,8 @@ func (b *renderBudget) receipt() renderReceipt {
 	defer b.mu.Unlock()
 	return renderReceipt{"1", b.id, b.limit, b.used, b.exhausted, b.expired, b.closed, len(b.ops)}
 }
+
+// controlAuthorized accepts one bounded bearer credential matching the hashed control secret.
 func (g *Gateway) controlAuthorized(r *http.Request) bool {
 	values := r.Header.Values("Authorization")
 	if len(values) != 1 || len(values[0]) > 512 || !strings.HasPrefix(values[0], "Bearer ") {
@@ -91,6 +98,9 @@ func (g *Gateway) controlAuthorized(r *http.Request) bool {
 	hash := sha256.Sum256([]byte(strings.TrimPrefix(values[0], "Bearer ")))
 	return subtle.ConstantTimeCompare(hash[:], g.controlHash[:]) == 1
 }
+
+// scopedBudget resolves a bounded proxy credential only to its own unexpired, unrevoked render
+// budget.
 func (g *Gateway) scopedBudget(r *http.Request) *renderBudget {
 	values := r.Header.Values("Proxy-Authorization")
 	if len(values) != 1 || len(values[0]) > 512 {
@@ -125,6 +135,9 @@ func budgetJSON(w http.ResponseWriter, status int, value any) {
 	w.WriteHeader(status)
 	json.NewEncoder(w).Encode(value)
 }
+
+// serveBudgets authenticates bounded versioned control requests and allocates, inspects or
+// revokes render budgets.
 func (g *Gateway) serveBudgets(w http.ResponseWriter, r *http.Request) {
 	if !g.controlAuthorized(r) {
 		http.Error(w, "control_authentication_required", 401)
@@ -274,6 +287,8 @@ func (g *Gateway) copyScopedTunnel(dst io.Writer, src io.Reader, tunnel *atomic.
 	}
 }
 
+// stopRenderBudgets revokes registered budgets after releasing the registry lock to avoid lock
+// inversion.
 func (g *Gateway) stopRenderBudgets() {
 	g.budgetMu.Lock()
 	all := make([]*renderBudget, 0, len(g.budgets))

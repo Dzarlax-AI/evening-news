@@ -275,4 +275,16 @@ body{margin:0;background:#f5f3ed;color:#292a28;font:16px/1.55 system-ui,sans-ser
 <p>Решение не содержит условий для домена Studenti и покрывает обычные/nested/inherited frames и три worker типа. Сайты, которым для построения полезного DOM обязательно нужен worker, могут не пройти; это не универсальное обещание для любого сайта. Новый 5 MiB budget включает TLS overhead и оба направления и потому консервативно строже старого CDP accounting. Deployment отдельно не разрешён.</p>
 </section>
 
+
+<section><h2>18. PR #62 · Review follow-up · 11 ноября 2026</h2>
+<p>При проверке исходного head <code>70dbe23</code> все GitHub checks завершились: 29 success, 8 skipped, failures=0. Codex code review завершён без findings. CodeRabbit оставил два подтверждённых inline замечания и отдельное предупреждение Docstring Coverage (7.50% при пороге 80%).</p>
+<ul>
+<li>Оба запуска namespace helper (meminfo preflight и nft helper) теперь требуют <code>--pull=never</code>, как остальные fixture containers. Недостающий локальный image не даёт разрешения на registry pull. Ownership, NET_ADMIN только внутри своего network namespace и прочие guards сохранены.</li>
+<li>После browser cleanup окончательный egress revoke получает отдельный background context ≤3 s; существующий HTTP timeout ≤2 s остаётся. Медленная, но подтверждённая очистка браузера не расходует время revoke. Ошибки browser receipts и неизвестный revoke outcome по-прежнему означают ownership loss; эти отказы не игнорируются.</li>
+<li>Новая regression-проба: browser absence receipt задержан на 4.5 s, revoke на 0.8 s. До исправления healthy fetch терял результат и taint-ил worker; после — success и Ready. Отдельный вариант с неверным browser receipt остаётся fenced. Pull-never assertion также упал до исправления и прошёл после.</li>
+<li>Добавлены английские комментарии о поведении и инвариантах затронутых функций и test helpers; локальная AST-проверка находит комментарии у 127 из 127 затронутых функций со сложностью ≥2. Это локальная оценка, не результат повторного CodeRabbit check.</li>
+</ul>
+<p id="pr62-followup-validation">Race/vet тех же затронутых Go packages прошли; свежие Linux builds успешны. Полный pinned Cloak <code>synthetic-gate-36-review.json</code> прошёл: 0 worker execution/initial requests, 0 forbidden origin requests, 0 publisher credential leaks; exhausted job изолирован, сосед и fresh fetch успешны, cleanup подтверждён. Token-level сравнение Go исходников подтверждает, что поведение изменилось только в двух целевых product/fixture путях и их regression tests; остальные Go изменения — документация. Повторный GitHub CI запускается отправкой follow-up commit. Дополнительные commit/push в текущий открытый PR разрешены запросом пользователя исправить CI/review. Merge/deploy не выполняются.</p>
+</section>
+
 </main></body></html>

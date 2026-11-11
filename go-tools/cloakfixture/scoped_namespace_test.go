@@ -12,6 +12,7 @@ type scopedDocker struct {
 	inputs   int
 }
 
+// Run returns the fixed container identity used to verify scoped namespace ownership.
 func (d *scopedDocker) Run(ctx context.Context, args ...string) (string, error) {
 	if len(args) > 2 && args[0] == "inspect" && args[2] == "{{.Id}}" {
 		return d.identity, nil
@@ -19,6 +20,7 @@ func (d *scopedDocker) Run(ctx context.Context, args ...string) (string, error) 
 	return d.fakeDocker.Run(ctx, args...)
 }
 
+// RunInput records the owned helper label before forwarding the simulated nft invocation.
 func (d *scopedDocker) RunInput(ctx context.Context, input string, args ...string) (string, error) {
 	d.inputs++
 	for i, arg := range args {
@@ -29,6 +31,8 @@ func (d *scopedDocker) RunInput(ctx context.Context, input string, args ...strin
 	return d.fakeDocker.Run(ctx, args...)
 }
 
+// TestScopedNamespaceHasOnlyOwnedNetworkAdministration requires a local image and only NET_ADMIN
+// in the verified container network namespace.
 func TestScopedNamespaceHasOnlyOwnedNetworkAdministration(t *testing.T) {
 	id := strings.Repeat("a", 64)
 	d := &scopedDocker{fakeDocker: fakeDocker{labels: map[string]string{"anchor": "right", id: "right"}}, identity: id}
@@ -49,7 +53,7 @@ func TestScopedNamespaceHasOnlyOwnedNetworkAdministration(t *testing.T) {
 				t.Fatalf("namespace helper gained broad access: %s", forbidden)
 			}
 		}
-		for _, required := range []string{"--network container:" + id, "--cap-drop=ALL", "--cap-add=NET_ADMIN", "--read-only"} {
+		for _, required := range []string{"--pull=never", "--network container:" + id, "--cap-drop=ALL", "--cap-add=NET_ADMIN", "--read-only"} {
 			if !strings.Contains(joined, required) {
 				t.Fatalf("namespace helper lost boundary: %s", required)
 			}
@@ -57,6 +61,8 @@ func TestScopedNamespaceHasOnlyOwnedNetworkAdministration(t *testing.T) {
 	}
 }
 
+// TestScopedNamespaceRejectsForeignIdentityAndArbitraryCommands blocks foreign namespaces and
+// commands outside the nft allowlist.
 func TestScopedNamespaceRejectsForeignIdentityAndArbitraryCommands(t *testing.T) {
 	id := strings.Repeat("a", 64)
 	d := &scopedDocker{fakeDocker: fakeDocker{labels: map[string]string{"anchor": "right", id: "foreign"}}, identity: id}

@@ -18,6 +18,8 @@ import (
 	"time"
 )
 
+// testRenderBudget allocates a real control-API budget and validates its opaque ID and scoped
+// token.
 func testRenderBudget(t *testing.T, server, token string, limit int64, ttl int) (string, string) {
 	t.Helper()
 	body := fmt.Sprintf(`{"contract_version":"1","wire_limit_bytes":%d,"ttl_ms":%d}`, limit, ttl)
@@ -40,6 +42,8 @@ func testRenderBudget(t *testing.T, server, token string, limit int64, ttl int) 
 	}
 	return value.ID, value.Token
 }
+
+// testRevokeBudget revokes a known test budget and decodes its final control receipt.
 func testRevokeBudget(t *testing.T, server, id string) renderReceipt {
 	t.Helper()
 	req, _ := http.NewRequest("DELETE", server+"/v1/render-budgets/"+id, nil)
@@ -55,6 +59,9 @@ func testRevokeBudget(t *testing.T, server, id string) renderReceipt {
 	}
 	return value
 }
+
+// testScopedConnect opens an authenticated synthetic CONNECT and returns the socket, buffered
+// reader and status.
 func testScopedConnect(t *testing.T, server, token string) (net.Conn, *bufio.Reader, int) {
 	t.Helper()
 	c, err := net.Dial("tcp", strings.TrimPrefix(server, "http://"))
@@ -72,6 +79,9 @@ func testScopedConnect(t *testing.T, server, token string) (net.Conn, *bufio.Rea
 	}
 	return c, reader, response.StatusCode
 }
+
+// TestRenderBudgetScopedBudgetAggregatesAndPreservesNeighbor exhausts multiple tunnels of one
+// render while preserving another render and its accounting.
 func TestRenderBudgetScopedBudgetAggregatesAndPreservesNeighbor(t *testing.T) {
 	_, server := newRenderGateway(t, Config{Dialer: dialerFunc(func(_ context.Context, _, _ string) (net.Conn, error) {
 		a, b := net.Pipe()
@@ -119,6 +129,9 @@ func TestRenderBudgetScopedBudgetAggregatesAndPreservesNeighbor(t *testing.T) {
 		t.Fatal("revoke not idempotent")
 	}
 }
+
+// TestRenderBudgetControlAndProxyCredentialsAreSeparate rejects master credentials for CONNECT,
+// scoped credentials for control and revoked credentials for reuse.
 func TestRenderBudgetControlAndProxyCredentialsAreSeparate(t *testing.T) {
 	_, server := newRenderGateway(t, Config{})
 	c, _, status := testScopedConnect(t, server.URL, testToken)
@@ -144,6 +157,9 @@ func TestRenderBudgetControlAndProxyCredentialsAreSeparate(t *testing.T) {
 		t.Fatal("revoked token accepted")
 	}
 }
+
+// TestRenderBudgetExpiredBudgetCannotOpenTunnel retains expiry evidence and refuses new tunnels
+// after credential lifetime ends.
 func TestRenderBudgetExpiredBudgetCannotOpenTunnel(t *testing.T) {
 	_, server := newRenderGateway(t, Config{})
 	id, token := testRenderBudget(t, server.URL, testToken, 1024, 10)
@@ -159,6 +175,8 @@ func TestRenderBudgetExpiredBudgetCannotOpenTunnel(t *testing.T) {
 	}
 }
 
+// newRenderGateway runs a real gateway in an isolated HTTP test server and drains owned
+// operations on cleanup.
 func newRenderGateway(t *testing.T, cfg Config) (*Gateway, *httptest.Server) {
 	t.Helper()
 	if cfg.Token == "" {
@@ -178,6 +196,8 @@ func newRenderGateway(t *testing.T, cfg Config) (*Gateway, *httptest.Server) {
 	return g, server
 }
 
+// TestRenderBudgetRejectsMalformedRegistrationAndDrain ensures invalid grants cannot allocate
+// state or cross the drain admission fence.
 func TestRenderBudgetRejectsMalformedRegistrationAndDrain(t *testing.T) {
 	g, server := newRenderGateway(t, Config{})
 	valid := `{"contract_version":"1","wire_limit_bytes":1024,"ttl_ms":1000}`
@@ -229,6 +249,8 @@ func (w blockedBudgetWriter) Write(p []byte) (int, error) {
 	return 1, io.ErrShortWrite
 }
 
+// TestRenderBudgetReservationExhaustsBeforeBlockedShortWrite makes exhaustion observable before
+// a stalled write completes and forbids allowance refunds.
 func TestRenderBudgetReservationExhaustsBeforeBlockedShortWrite(t *testing.T) {
 	g, _ := newRenderGateway(t, Config{})
 	b := &renderBudget{limit: 4, remaining: 4, ops: map[*operation]struct{}{}}
@@ -251,6 +273,8 @@ func TestRenderBudgetReservationExhaustsBeforeBlockedShortWrite(t *testing.T) {
 	}
 }
 
+// TestRenderBudgetFinalReceiptSurvivesLateExpiry keeps a revoked receipt stable when a timer or
+// copy races after revocation.
 func TestRenderBudgetFinalReceiptSurvivesLateExpiry(t *testing.T) {
 	b := &renderBudget{limit: 4, remaining: 4, ops: map[*operation]struct{}{}}
 	b.stop(false, false)
@@ -267,6 +291,8 @@ func TestRenderBudgetFinalReceiptSurvivesLateExpiry(t *testing.T) {
 	}
 }
 
+// TestRenderBudgetRegistryBoundsAndReclaimsReceipts bounds retained grants and reclaims only
+// receipts past their retention window.
 func TestRenderBudgetRegistryBoundsAndReclaimsReceipts(t *testing.T) {
 	g, server := newRenderGateway(t, Config{MaxConcurrent: 1})
 	for i := 0; i < 128; i++ {

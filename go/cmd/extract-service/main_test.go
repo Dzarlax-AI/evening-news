@@ -324,6 +324,8 @@ type nativeServiceProcess struct {
 	waitErr error
 }
 
+// startNativeServiceProcess launches a disposable service with fake CDP and a real private
+// budget API for lifecycle tests.
 func startNativeServiceProcess(t *testing.T, browserEndpoint string) *nativeServiceProcess {
 	gateway, err := egress.New(egress.Config{Token: "synthetic-lifecycle-token"})
 	if err != nil {

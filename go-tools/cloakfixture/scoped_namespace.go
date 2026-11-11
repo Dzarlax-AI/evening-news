@@ -41,7 +41,7 @@ func (g *dockerGate) scopedNamespace(ctx context.Context, name, input string, ar
 	g.namespaceSequence++
 	helper := fmt.Sprintf("%s-namespace-%d", g.prefix, g.namespaceSequence)
 	g.containers = append(g.containers, helper)
-	argv := []string{"run", "--name", helper, "--label", ownerClass, "--label", g.label(),
+	argv := []string{"run", "--pull=never", "--name", helper, "--label", ownerClass, "--label", g.label(),
 		"--network", "container:" + id, "--cap-drop=ALL", "--cap-add=NET_ADMIN",
 		"--security-opt=no-new-privileges:true", "--read-only",
 		"--pids-limit", "32", "-i", "--entrypoint", "nft", g.namespaceImage}

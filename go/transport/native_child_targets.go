@@ -22,6 +22,7 @@ type nativeEventFailure struct {
 func (e *nativeEventFailure) Error() string { return e.cause.Error() }
 func (e *nativeEventFailure) Unwrap() error { return e.cause }
 
+// nativeEventReason recovers a finite event classification from a wrapped native failure.
 func nativeEventReason(err error) string {
 	var event *nativeEventFailure
 	if errors.As(err, &event) {
@@ -44,6 +45,7 @@ type nativeChildTarget struct {
 	active, detaching, gone   bool
 }
 
+// frameID reads the frame identity published after guarded child-session setup.
 func (t *nativeChildTarget) frameID() string {
 	if value := t.frame.Load(); value != nil {
 		return value.(string)
@@ -51,6 +53,8 @@ func (t *nativeChildTarget) frameID() string {
 	return ""
 }
 
+// configureFrame installs recursive request guards and verifies frame ownership before resuming
+// the paused frame.
 func (t *nativeChildTarget) configureFrame(ctx context.Context, client *browserCDP, mainFrame string) error {
 	failure := func(err error) error {
 		return &nativeEventFailure{"child_frame_guard_failed", errors.Join(ErrNativePolicy, ErrNativeOwnershipLost, err)}
@@ -89,6 +93,8 @@ func (t *nativeChildTarget) configureFrame(ctx context.Context, client *browserC
 	return nil
 }
 
+// confirmGone requires target absence before a detached child can release its pending request
+// accounting.
 func (t *nativeChildTarget) confirmGone(ctx context.Context, client *browserCDP) error {
 	ctx, cancel := context.WithTimeout(ctx, time.Second)
 	defer cancel()
@@ -131,6 +137,7 @@ func newNativePausedTargets(context, target, session string) *nativePausedTarget
 	return &nativePausedTargets{context: context, target: target, session: session, targets: make(map[string]*nativeChildTarget), sessions: make(map[string]*nativeChildTarget)}
 }
 
+// ownsFrame recognizes only frames belonging to admitted child sessions of this render.
 func (p *nativePausedTargets) ownsFrame(id string) bool {
 	if id == "" {
 		return false
@@ -143,6 +150,8 @@ func (p *nativePausedTargets) ownsFrame(id string) bool {
 	return false
 }
 
+// admit validates paused child ownership and bounded target counts, refusing unsupported target
+// activity.
 func (p *nativePausedTargets) admit(message *cdproto.Message) (*nativeChildTarget, error) {
 	var event struct {
 		Session string `json:"sessionId"`

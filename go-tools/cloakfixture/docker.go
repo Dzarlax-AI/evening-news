@@ -35,6 +35,7 @@ func (systemDocker) RunInput(ctx context.Context, input string, args ...string) 
 	return runDocker(ctx, strings.NewReader(input), args...)
 }
 
+// runDocker bounds command time and captured output while preserving finite Docker exit status.
 func runDocker(ctx context.Context, input io.Reader, args ...string) (string, error) {
 	ctx, cancel := context.WithTimeout(ctx, 30*time.Second)
 	defer cancel()
@@ -91,6 +92,8 @@ type runtimeState struct {
 	ExitCode  int    `json:"exit_code"`
 }
 
+// runtimeStates collects finite lifecycle evidence only for containers whose ownership is
+// confirmed.
 func (g *dockerGate) runtimeStates(ctx context.Context) []runtimeState {
 	var states []runtimeState
 	for _, name := range g.containers {
@@ -140,6 +143,8 @@ func (g *dockerGate) verify(ctx context.Context, name string, network bool) erro
 	}
 	return nil
 }
+
+// container starts an owned isolated container from a local image and verifies its run label.
 func (g *dockerGate) container(ctx context.Context, role, image, network, ip, memory, cpu, pids string, mounts, env, extra, command []string) error {
 	name := g.prefix + "-" + role
 	g.containers = append(g.containers, name)
@@ -167,6 +172,8 @@ func (g *dockerGate) container(ctx context.Context, role, image, network, ip, me
 	return g.verify(ctx, name, false)
 }
 
+// withoutResourceCaps removes only local RAM and CPU arguments, preserving the remaining
+// isolation controls.
 func withoutResourceCaps(args []string) []string {
 	var out []string
 	for i := 0; i < len(args); i++ {

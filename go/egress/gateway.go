@@ -99,6 +99,8 @@ func (op *operation) close() {
 	}
 }
 
+// New validates gateway bounds and fixture exceptions, hashes credentials and initializes
+// isolated budget registries.
 func New(cfg Config) (*Gateway, error) {
 	if len(cfg.Token) < 16 || len(cfg.Token) > 256 {
 		return nil, errors.New("egress token must contain 16 to 256 bytes")
@@ -229,6 +231,8 @@ func (g *Gateway) authorized(r *http.Request) bool {
 	return subtle.ConstantTimeCompare(hash[:], g.authHash[:]) == 1
 }
 
+// begin admits a tunnel only when gateway capacity, drain state and its scoped budget all permit
+// it.
 func (g *Gateway) begin(ctx context.Context, budget *renderBudget) (*operation, bool) {
 	g.mu.Lock()
 	defer g.mu.Unlock()
@@ -256,6 +260,8 @@ func (g *Gateway) end(op *operation) {
 	g.wg.Done()
 }
 
+// ServeHTTP routes private control requests and admits only authenticated, pinned HTTPS CONNECT
+// tunnels.
 func (g *Gateway) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 	if r.Method == http.MethodGet && r.URL.Path == "/health/ready" {
 		g.mu.Lock()

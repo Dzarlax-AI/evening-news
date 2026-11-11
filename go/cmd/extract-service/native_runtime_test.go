@@ -48,6 +48,8 @@ func TestNativeBackendRequiresExplicitIsolationAndSelection(t *testing.T) {
 	}
 }
 
+// TestNativeDiagnosticLoggerIsOptInAndAllowlisted prevents disabled or unrecognized diagnostics
+// from leaking into service logs.
 func TestNativeDiagnosticLoggerIsOptInAndAllowlisted(t *testing.T) {
 	var output bytes.Buffer
 	previous := log.Writer()

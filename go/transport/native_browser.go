@@ -123,6 +123,8 @@ func (r *nativeEventRPCs) submit(call func() error, terminal error, ignoreRPCErr
 	return r.submitAfter(call, terminal, ignoreRPCError, nil)
 }
 
+// submitAfter bounds asynchronous event RPCs and defers successful state changes to the event
+// consumer.
 func (r *nativeEventRPCs) submitAfter(call func() error, terminal error, ignoreRPCError bool, afterSuccess func()) bool {
 	for {
 		current := r.pending.Load()
@@ -227,6 +229,7 @@ func (w *NativeBrowser) Ready() bool {
 	return w.ready && !w.tainted && !w.closed
 }
 
+// nativeDiagnosticReason maps native errors to finite reasons suitable for private diagnostics.
 func nativeDiagnosticReason(err error) string {
 	switch {
 	case nativeEventReason(err) != "":
@@ -307,6 +310,8 @@ func nativeCrashCancellation(err, cause error, crashed bool) bool {
 	return crashed && errors.Is(cause, ErrNativeTargetCrashed) && err == context.Canceled
 }
 
+// reportDiagnostic reports bounded lifecycle reasons and numeric protocol codes without
+// publisher metadata.
 func (w *NativeBrowser) reportDiagnostic(stage string, err error) {
 	if w.cfg.Diagnostic != nil && err != nil {
 		w.cfg.Diagnostic(stage, nativeDiagnosticReason(err))
@@ -657,6 +662,8 @@ type nativeResources struct {
 	pausedTargets                  *nativePausedTargets
 }
 
+// openCDP allocates and records one owned context, target and session with cleanup on partial
+// failure.
 func (w *NativeBrowser) openCDP(ctx context.Context) (res *nativeResources, err error) {
 	ws, err := nativeBrowserEndpoint(ctx, w.cfg.Endpoint)
 	if err != nil {
@@ -810,7 +817,9 @@ func (r *nativeResources) cleanupWithConnectionState(skipStopLoading bool) (bool
 
 	var budgetFailure error
 	if r.budget != nil {
-		receipt, budgetErr := r.budget.revoke(ctx)
+		revokeCtx, cancelRevoke := context.WithTimeout(context.Background(), 3*time.Second)
+		receipt, budgetErr := r.budget.revoke(revokeCtx)
+		cancelRevoke()
 		if budgetErr != nil {
 			errs = append(errs, budgetErr)
 		} else if receipt.Exhausted {
@@ -901,6 +910,8 @@ func (w *NativeBrowser) verifyCrashRecovery(generation string) error {
 	return nil
 }
 
+// configure installs frame, request, proxy-auth and download guards before any publisher
+// navigation.
 func (r *nativeResources) configure(ctx context.Context) error {
 	for _, command := range []struct {
 		method string

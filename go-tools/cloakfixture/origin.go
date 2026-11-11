@@ -50,6 +50,8 @@ type Origin struct {
 	started time.Time
 }
 
+// NewOrigin initializes the synthetic HTTPS origin and its private counters without external
+// dependencies.
 func NewOrigin(dir string) (*Origin, error) {
 	if err := os.MkdirAll(dir, 0700); err != nil {
 		return nil, fmt.Errorf("origin_state_unavailable")
@@ -123,6 +125,9 @@ func (o *Origin) released(c string) bool {
 	i, e := os.Lstat(p)
 	return e == nil && i.Mode().IsRegular() && i.Size() <= 32
 }
+
+// ServeHTTP serves synthetic routes and persists counters without accepting publisher
+// credentials.
 func (o *Origin) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 	if r.URL.Path == "/forbidden" || r.Header.Get("Proxy-Authorization") != "" || r.Header.Get("Authorization") != "" {
 		o.mu.Lock()

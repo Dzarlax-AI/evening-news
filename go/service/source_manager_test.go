@@ -598,6 +598,8 @@ func TestSourceBatchOverridesShortServerWriteTimeout(t *testing.T) {
 	}
 }
 
+// TestSafePageMonitorNavigationReasons allows only finite navigation and child-target
+// classifications in source diagnostics.
 func TestSafePageMonitorNavigationReasons(t *testing.T) {
 	for _, reason := range []string{"navigation_http", "navigation_proxy", "navigation_redirect", "navigation_empty_response",
 		"child_target_close_unsupported", "child_target_close_missing", "child_target_close_rejected", "child_target_close_unconfirmed", "child_target_close_failed", "child_target_invalid", "child_target_unpaused", "child_target_unsupported", "child_target_activity", "websocket_denied", "popup_denied", "download_denied",

@@ -19,6 +19,7 @@ import (
 	"github.com/Dzarlax-AI/evening-news/go-tools/cloakfixture"
 )
 
+// main dispatches the fixture mode and emits only a terminal command error on failure.
 func main() {
 	if len(os.Args) < 2 {
 		fmt.Fprintln(os.Stderr, "fixture_mode_required")
@@ -33,6 +34,8 @@ func main() {
 		os.Exit(1)
 	}
 }
+
+// run validates mode-specific arguments before running the isolated fixture or network probe.
 func run(mode string, args []string) error {
 	if mode == "netprobe" {
 		f := flag.NewFlagSet("netprobe", flag.ContinueOnError)

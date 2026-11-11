@@ -34,6 +34,8 @@ func (f dialerFunc) DialContext(ctx context.Context, network, address string) (n
 	return f(ctx, network, address)
 }
 
+// newGateway constructs a test gateway with separate control credentials and a synthetic scoped
+// tunnel budget.
 func newGateway(t *testing.T, cfg Config) (*Gateway, *httptest.Server) {
 	t.Helper()
 	if cfg.Token == "" {

@@ -2,6 +2,8 @@ package jsonsingle
 
 import "testing"
 
+// TestDecodeObjectRequiresUnambiguousFields rejects missing, duplicate, aliased, null and
+// incorrectly typed contract fields.
 func TestDecodeObjectRequiresUnambiguousFields(t *testing.T) {
 	for _, raw := range []string{
 		`null`, `[]`, `{}`, `{"value":null}`, `{"Value":"ok"}`,

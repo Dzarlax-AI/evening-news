@@ -15,6 +15,8 @@ var observerErrors = map[string]bool{"fixture_evidence_invalid": true, "fixture_
 
 func privateJSON(path string, value any) error { return privateJSONLimit(path, value, 4096) }
 
+// privateJSONLimit writes private evidence only when its serialized JSON fits the caller's
+// bound.
 func privateJSONLimit(path string, value any, limit int) error {
 	b, e := json.Marshal(value)
 	if e != nil || len(b) > limit {
@@ -37,6 +39,8 @@ func privateJSONLimit(path string, value any, limit int) error {
 	}
 	return nil
 }
+
+// atomicReceipt publishes an observer receipt by rename so readers cannot accept partial JSON.
 func atomicReceipt(dir, name string, value any) error {
 	temp, e := os.CreateTemp(dir, ".receipt-")
 	if e != nil {
@@ -58,6 +62,9 @@ func atomicReceipt(dir, name string, value any) error {
 	}
 	return nil
 }
+
+// RunObserver processes isolated stand commands and publishes bounded, correlated result
+// receipts.
 func RunObserver(ctx context.Context, p *Profiles, peer *CDPPeer, commandDir, resultDir string) error {
 	if e := os.MkdirAll(resultDir, 0700); e != nil {
 		return errors.New("observer_error")

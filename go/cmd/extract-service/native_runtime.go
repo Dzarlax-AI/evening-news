@@ -63,6 +63,8 @@ func nativeBrowserReadiness(native *transport.NativeBrowser) (ready, available f
 	return ready, native.Ready
 }
 
+// nativeDiagnosticLogger emits opt-in allowlisted diagnostics without publisher URLs, bodies or
+// credentials.
 func nativeDiagnosticLogger(enabled bool) func(stage, reason string) {
 	if !enabled {
 		return nil

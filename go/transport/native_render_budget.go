@@ -37,6 +37,8 @@ type nativeBudgetReceipt struct {
 	Active    int    `json:"active_tunnels"`
 }
 
+// nativeBudgetHTTP makes bounded authenticated control requests without proxying or following
+// redirects and strictly decodes replies.
 func nativeBudgetHTTP(ctx context.Context, method, url, token string, payload any, out any, fields ...string) error {
 	var body io.Reader
 	if payload != nil {
@@ -81,6 +83,9 @@ func nativeBudgetHTTP(ctx context.Context, method, url, token string, payload an
 	}
 	return nil
 }
+
+// nativeAcquireBudget allocates a scoped credential bounded by the render deadline and validates
+// the issued grant.
 func nativeAcquireBudget(ctx context.Context, cfg NativeBrowserConfig, limit int64) (*nativeRenderBudget, error) {
 	ttl := 35 * time.Second
 	if deadline, ok := ctx.Deadline(); ok {
@@ -111,6 +116,8 @@ func nativeAcquireBudget(ctx context.Context, cfg NativeBrowserConfig, limit int
 	}
 	return &nativeRenderBudget{receipt.ID, receipt.Token, url + "/" + receipt.ID, cfg.ProxyToken, limit}, nil
 }
+
+// revoke requires a frozen receipt for this exact budget with no remaining active tunnels.
 func (b *nativeRenderBudget) revoke(ctx context.Context) (nativeBudgetReceipt, error) {
 	var receipt nativeBudgetReceipt
 	if err := nativeBudgetHTTP(ctx, "DELETE", b.url, b.control, nil, &receipt, nativeReceiptFields...); err != nil {
@@ -122,6 +129,9 @@ func (b *nativeRenderBudget) revoke(ctx context.Context) (nativeBudgetReceipt, e
 
 	return receipt, nil
 }
+
+// open allocates the render budget before CDP resources and revokes it if browser allocation
+// fails.
 func (w *NativeBrowser) open(ctx context.Context, limit int64) (*nativeResources, error) {
 	budget, err := nativeAcquireBudget(ctx, w.cfg, limit)
 	if err != nil {
@@ -143,6 +153,8 @@ func (w *NativeBrowser) open(ctx context.Context, limit int64) (*nativeResources
 	return resources, nil
 }
 
+// nativeReplayResponse preserves decoded publisher bytes and policies while normalizing framing
+// and adding the worker guard.
 func nativeReplayResponse(ctx context.Context, client *browserCDP, session string, event nativeFetchPaused, params map[string]any, remaining *atomic.Int64) error {
 	body, err := nativeBoundedReplayBody(ctx, client, session, event.ID, remaining)
 	if err != nil {
@@ -167,6 +179,9 @@ func nativeReplayResponse(ctx context.Context, client *browserCDP, session strin
 	}
 	return nil
 }
+
+// nativeBoundedReplayBody charges every stream chunk to the shared decoded allowance and always
+// confirms stream closure.
 func nativeBoundedReplayBody(ctx context.Context, client *browserCDP, session, id string, remaining *atomic.Int64) (body []byte, err error) {
 	var stream struct {
 		ID string `json:"stream"`
@@ -224,6 +239,8 @@ func nativeBoundedReplayBody(ctx context.Context, client *browserCDP, session, i
 	}
 }
 
+// watch polls only this budget and cancels its render on exhaustion, expiry or untrusted control
+// outcomes.
 func (b *nativeRenderBudget) watch(ctx context.Context, stop context.CancelCauseFunc) <-chan struct{} {
 	done := make(chan struct{})
 	go func() {

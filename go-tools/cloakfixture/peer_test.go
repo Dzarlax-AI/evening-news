@@ -111,6 +111,8 @@ func TestPeerRejectsMissingForeignTarget(t *testing.T) {
 	<-done
 }
 
+// TestPeerCommandTimeoutHasFiniteReason ensures a stalled sentinel command returns a bounded
+// diagnostic classification.
 func TestPeerCommandTimeoutHasFiniteReason(t *testing.T) {
 	client, server := net.Pipe()
 	defer client.Close()

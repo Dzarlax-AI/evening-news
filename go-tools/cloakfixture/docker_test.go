@@ -116,6 +116,7 @@ func TestCleanupUsesFreshContextAfterCancellation(t *testing.T) {
 
 type runtimeDocker struct{ fakeDocker }
 
+// Run returns deterministic lifecycle state for owned-container evidence tests.
 func (f *runtimeDocker) Run(ctx context.Context, args ...string) (string, error) {
 	if len(args) > 2 && args[0] == "inspect" && strings.Contains(args[2], "ExitCode") {
 		f.calls = append(f.calls, args)
@@ -124,6 +125,8 @@ func (f *runtimeDocker) Run(ctx context.Context, args ...string) (string, error)
 	return f.fakeDocker.Run(ctx, args...)
 }
 
+// TestRuntimeStatesAreFiniteAndOwned excludes foreign containers while retaining owned OOM and
+// exit evidence.
 func TestRuntimeStatesAreFiniteAndOwned(t *testing.T) {
 	f := &runtimeDocker{fakeDocker{labels: map[string]string{"run-origin": "right", "run-foreign": "other"}}}
 	g := &dockerGate{docker: f, id: "right", prefix: "run", containers: []string{"run-origin", "run-foreign"}}
@@ -138,6 +141,8 @@ func TestRuntimeStatesAreFiniteAndOwned(t *testing.T) {
 	}
 }
 
+// TestDesktopContainerPreservesIsolationWithoutMemoryOrCPUCaps checks that removing local
+// compute caps preserves namespace and process isolation.
 func TestDesktopContainerPreservesIsolationWithoutMemoryOrCPUCaps(t *testing.T) {
 	f := &fakeDocker{labels: map[string]string{"run-cloak": "right"}}
 	g := &dockerGate{docker: f, id: "right", prefix: "run", namespaceImage: "fixture-nft:local"}

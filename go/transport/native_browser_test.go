@@ -25,6 +25,7 @@ type nativeFixtureCommand struct{ method, session string }
 type nativeFixture struct {
 	budgetMu                                                                                                           sync.Mutex
 	budgetNext                                                                                                         int
+	budgetRevokeDelay                                                                                                  time.Duration
 	budgetReceipts                                                                                                     map[string]nativeBudgetReceipt
 	responsePolicy, failResponse, stallResponse                                                                        bool
 	responseParams                                                                                                     map[string]any
@@ -89,6 +90,8 @@ type nativeFixture struct {
 	server                                                                                                             *httptest.Server
 }
 
+// newNativeFixture emulates CDP lifecycle and a separate budget control plane while retaining a
+// foreign sentinel.
 func newNativeFixture(t *testing.T) *nativeFixture {
 	t.Helper()
 	f := &nativeFixture{contexts: map[string]bool{}, targets: map[string]bool{"foreign-sentinel": true}, status: 200, navigated: make(chan struct{}), navigateStarts: make(chan struct{}, 16), discoveryID: "native"}
@@ -695,6 +698,8 @@ func newNativeFixture(t *testing.T) *nativeFixture {
 	return f
 }
 
+// worker constructs a native controller against this fixture and bounds concurrent render
+// admission.
 func (f *nativeFixture) worker(t *testing.T) *NativeBrowser {
 	t.Helper()
 	w, err := NewNativeBrowser(NativeBrowserConfig{Endpoint: f.server.URL, BudgetEndpoint: f.server.URL, ProxyURL: "http://gateway.test:3128", ProxyToken: "sixteen-byte-token", NetworkIsolationVerified: true})
@@ -723,6 +728,8 @@ func TestNativeBrowserConfigurationAndInitialReadiness(t *testing.T) {
 	}
 }
 
+// TestNativeLifecycleUsesScopedProxyAuth checks scoped proxy authentication, owned cleanup and
+// preservation of the foreign sentinel.
 func TestNativeLifecycleUsesScopedProxyAuth(t *testing.T) {
 	f := newNativeFixture(t)
 	w := f.worker(t)
@@ -767,6 +774,42 @@ func TestNativeSlowContextReceiptCompletesOwnedCleanup(t *testing.T) {
 	}
 	if len(f.methods) == 0 || f.methods[len(f.methods)-1] != "Target.getTargets" {
 		t.Fatalf("cleanup did not complete target verification: %v", f.methods)
+	}
+}
+
+// TestNativeSlowBrowserCleanupLeavesIndependentRevokeBudget exercises confirmed
+// browser cleanup near its deadline without weakening either cleanup receipt.
+func TestNativeSlowBrowserCleanupLeavesIndependentRevokeBudget(t *testing.T) {
+	for _, invalidBrowserReceipt := range []bool{false, true} {
+		t.Run(fmt.Sprint(invalidBrowserReceipt), func(t *testing.T) {
+			f := newNativeFixture(t)
+			w := f.worker(t)
+			if err := w.Probe(context.Background()); err != nil {
+				t.Fatal(err)
+			}
+			f.mu.Lock()
+			f.contextsDelay = 4500 * time.Millisecond
+			f.failTargetReceipt = invalidBrowserReceipt
+			f.mu.Unlock()
+			f.budgetMu.Lock()
+			f.budgetRevokeDelay = 800 * time.Millisecond
+			f.budgetMu.Unlock()
+			doc, err := w.Fetch(context.Background(), "https://origin.example/", NativeBrowserOptions{})
+			if invalidBrowserReceipt {
+				if !errors.Is(err, ErrNativeOwnershipLost) || len(doc.HTML) != 0 || w.Ready() {
+					t.Fatal("unconfirmed browser cleanup escaped ownership fencing")
+				}
+			} else if err != nil || doc.StatusCode != 200 || !w.Ready() {
+				t.Fatalf("confirmed browser cleanup consumed revoke deadline: %v", err)
+			}
+			f.budgetMu.Lock()
+			defer f.budgetMu.Unlock()
+			for _, receipt := range f.budgetReceipts {
+				if !receipt.Revoked {
+					t.Fatal("budget was not revoked")
+				}
+			}
+		})
 	}
 }
 
@@ -1695,6 +1738,8 @@ func TestNativeBusyAndCloseDrainOwnedJob(t *testing.T) {
 	}
 }
 
+// TestNativeBrowserConcurrentRendersUseIndependentTargets keeps overlapping renders in distinct
+// contexts without sharing target state.
 func TestNativeBrowserConcurrentRendersUseIndependentTargets(t *testing.T) {
 	f := newNativeFixture(t)
 	w, err := NewNativeBrowser(NativeBrowserConfig{Endpoint: f.server.URL, BudgetEndpoint: f.server.URL, ProxyURL: "http://gateway.test:3128", ProxyToken: "sixteen-byte-token", NetworkIsolationVerified: true, MaxConcurrent: 2, MaxWaiters: 1})
@@ -1764,6 +1809,8 @@ func TestNativeBrowserConcurrentRendersUseIndependentTargets(t *testing.T) {
 	}
 }
 
+// TestNativeBrowserWaiterIsBoundedAndCancelable prevents queued work from exceeding admission
+// capacity or surviving cancellation.
 func TestNativeBrowserWaiterIsBoundedAndCancelable(t *testing.T) {
 	f := newNativeFixture(t)
 	w, err := NewNativeBrowser(NativeBrowserConfig{Endpoint: f.server.URL, BudgetEndpoint: f.server.URL, ProxyURL: "http://gateway.test:3128", ProxyToken: "sixteen-byte-token", NetworkIsolationVerified: true, MaxConcurrent: 1, MaxWaiters: 1})
@@ -1820,6 +1867,8 @@ func TestNativeBrowserWaiterIsBoundedAndCancelable(t *testing.T) {
 	}
 }
 
+// TestNativeBrowserAdmissionDeadlineDoesNotCreateTarget ensures timed-out admission never
+// allocates browser resources.
 func TestNativeBrowserAdmissionDeadlineDoesNotCreateTarget(t *testing.T) {
 	f := newNativeFixture(t)
 	w, err := NewNativeBrowser(NativeBrowserConfig{Endpoint: f.server.URL, BudgetEndpoint: f.server.URL, ProxyURL: "http://gateway.test:3128", ProxyToken: "sixteen-byte-token", NetworkIsolationVerified: true, MaxConcurrent: 1, MaxWaiters: 1})
@@ -1867,6 +1916,8 @@ func TestNativeBrowserAdmissionDeadlineDoesNotCreateTarget(t *testing.T) {
 	}
 }
 
+// TestNativeBrowserGenerationTaintCancelsEveryActiveOperation fences all operations when the
+// shared browser generation loses trust.
 func TestNativeBrowserGenerationTaintCancelsEveryActiveOperation(t *testing.T) {
 	f := newNativeFixture(t)
 	w, err := NewNativeBrowser(NativeBrowserConfig{Endpoint: f.server.URL, BudgetEndpoint: f.server.URL, ProxyURL: "http://gateway.test:3128", ProxyToken: "sixteen-byte-token", NetworkIsolationVerified: true, MaxConcurrent: 2})
@@ -2680,6 +2731,7 @@ func (f *nativeFixture) serveBudget(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	if r.Method == "DELETE" {
+		time.Sleep(f.budgetRevokeDelay)
 		receipt.Revoked = true
 		f.budgetReceipts[id] = receipt
 	}

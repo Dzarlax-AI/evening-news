@@ -10,6 +10,8 @@ import (
 	"time"
 )
 
+// TestNativeWorkerPolicyPreservesResponse retains publisher status, headers and policies when
+// constructing the added worker restriction.
 func TestNativeWorkerPolicyPreservesResponse(t *testing.T) {
 	status := 200
 	headers := []nativeResponseHeader{{"Content-Type", "text/html; charset=utf-8"}, {"Content-Encoding", "gzip"}, {"Content-Length", "1234"}, {"Set-Cookie", "first=one"}, {"Set-Cookie", "second=two"}, {"Content-Security-Policy", "default-src 'self'"}}
@@ -35,6 +37,8 @@ func TestNativeWorkerPolicyPreservesResponse(t *testing.T) {
 	}
 }
 
+// TestNativeWorkerPolicyRejectsAmbiguousResponse refuses malformed response metadata before
+// bounded body replay.
 func TestNativeWorkerPolicyRejectsAmbiguousResponse(t *testing.T) {
 	for _, mode := range []string{"no_status", "no_headers", "wrong_type", "header_name", "header_value", "header_count", "phrase", "failed_response"} {
 		t.Run(mode, func(t *testing.T) {
@@ -65,6 +69,8 @@ func TestNativeWorkerPolicyRejectsAmbiguousResponse(t *testing.T) {
 	}
 }
 
+// TestNativeResponsePolicyContinuationMustComplete requires confirmed policy installation before
+// returning a document and fences protocol failure.
 func TestNativeResponsePolicyContinuationMustComplete(t *testing.T) {
 	for _, mode := range []string{"success", "failure", "stalled"} {
 		t.Run(mode, func(t *testing.T) {
@@ -106,6 +112,9 @@ func TestNativeResponsePolicyContinuationMustComplete(t *testing.T) {
 		})
 	}
 }
+
+// TestNativeIframeReceivesResponsePolicy routes child-document policy installation through the
+// child session.
 func TestNativeIframeReceivesResponsePolicy(t *testing.T) {
 	f := newNativeFixture(t)
 	w := f.worker(t)
@@ -133,6 +142,8 @@ func TestNativeIframeReceivesResponsePolicy(t *testing.T) {
 	}
 }
 
+// TestNativeHTTP2ResponseHasNoEmptyPhraseOverride omits an invalid empty reason-phrase override
+// for HTTP/2 responses.
 func TestNativeHTTP2ResponseHasNoEmptyPhraseOverride(t *testing.T) {
 	status := 200
 	params, err := nativeWorkerPolicyParams(nativeFetchPaused{ID: "h2-document", ResourceType: "Document", ResponseStatusCode: &status, ResponseHeaders: []nativeResponseHeader{}})

@@ -446,6 +446,8 @@ func safePageMonitorStage(value string) bool {
 	}
 }
 
+// safePageMonitorNativeReason admits only finite native-browser reason codes into source
+// diagnostics.
 func safePageMonitorNativeReason(value string) bool {
 	switch value {
 	case "context_timeout", "context_cancelled", "event_overflow", "ownership_loss", "unsupported", "browser_busy", "resource_limit",

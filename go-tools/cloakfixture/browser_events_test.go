@@ -11,6 +11,8 @@ import (
 	"testing"
 )
 
+// TestBrowserEventOriginDistinguishesInitialScriptFromWorkerExecution keeps script download
+// counters separate from proof of executed worker code.
 func TestBrowserEventOriginDistinguishesInitialScriptFromWorkerExecution(t *testing.T) {
 	o, err := NewOrigin(t.TempDir())
 	if err != nil {
@@ -45,6 +47,8 @@ func TestBrowserEventOriginDistinguishesInitialScriptFromWorkerExecution(t *test
 	}
 }
 
+// TestBrowserEventReceiptsIncludeFinalTrimmedLogLine prevents a missing terminal newline from
+// hiding the last diagnostic witness.
 func TestBrowserEventReceiptsIncludeFinalTrimmedLogLine(t *testing.T) {
 	logs := "native_browser_diagnostic stage=events reason=worker_paused\n" +
 		"native_browser_diagnostic stage=events reason=service_worker_paused"
@@ -58,6 +62,8 @@ func TestBrowserEventReceiptsIncludeFinalTrimmedLogLine(t *testing.T) {
 	}
 }
 
+// TestClosedWorkerReceiptsAndProtocolCodesAreFinite rejects metadata appended to finite worker
+// and protocol-error witnesses.
 func TestClosedWorkerReceiptsAndProtocolCodesAreFinite(t *testing.T) {
 	logs := "native_browser_diagnostic stage=events reason=worker_closed"
 	if closedWorkerReceipts(logs)["worker_closed"] != 1 {
@@ -69,6 +75,8 @@ func TestClosedWorkerReceiptsAndProtocolCodesAreFinite(t *testing.T) {
 	}
 }
 
+// TestPaddedGzipSeparatesEncodedAndDecodedBudgets demonstrates that valid tiny decoded content
+// can exceed the encoded byte allowance.
 func TestPaddedGzipSeparatesEncodedAndDecodedBudgets(t *testing.T) {
 	body := []byte("<html>Synthetic tiny document</html>")
 	encoded := paddedFixtureGzip(body, 6*1024*1024)
@@ -84,6 +92,9 @@ func TestPaddedGzipSeparatesEncodedAndDecodedBudgets(t *testing.T) {
 		t.Fatalf("invalid encoded probe: %v", err)
 	}
 }
+
+// TestReplayProbeReceiptsExcludeUntrustedMetadata keeps prototype evidence limited to validated
+// counters and booleans.
 func TestReplayProbeReceiptsExcludeUntrustedMetadata(t *testing.T) {
 	rows := replayProbeReceipts("native_replay_probe {\"event\":\"stream\",\"decoded\":20,\"url\":\"CANARY\",\"body\":\"CANARY\"}\nnative_replay_probe {\"event\":\"CANARY\"}")
 	raw, _ := json.Marshal(rows)

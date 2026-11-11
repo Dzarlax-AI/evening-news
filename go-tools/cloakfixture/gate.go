@@ -49,6 +49,8 @@ func checkedFile(path string, executable bool) (string, error) {
 	}
 	return p, nil
 }
+
+// hostBudget reads host memory availability before starting the bounded synthetic stand.
 func hostBudget() error {
 	b, e := os.ReadFile("/proc/meminfo")
 	if e != nil {
@@ -57,6 +59,8 @@ func hostBudget() error {
 	return memoryBudget(string(b))
 }
 
+// memoryBudget requires a valid MemAvailable measurement and enough memory to run the browser
+// stand.
 func memoryBudget(meminfo string) error {
 	for _, line := range strings.Split(meminfo, "\n") {
 		var k string
@@ -70,6 +74,8 @@ func memoryBudget(meminfo string) error {
 	}
 	return errors.New("host_budget_unavailable")
 }
+
+// certFiles creates short-lived synthetic TLS credentials and returns their paths and SPKI pin.
 func certFiles(dir string) (string, string, string, error) {
 	key, e := rsa.GenerateKey(rand.Reader, 2048)
 	if e != nil {
@@ -110,6 +116,7 @@ with open(p,'rb') as f:
   h.update(b)
 print(json.dumps({'path':p,'args':a,'sha256':h.hexdigest()},separators=(',',':')))`
 
+// discover validates pinned browser image and launcher metadata before any fixture navigation.
 func (g *dockerGate) discover(ctx context.Context) (browserMetadata, error) {
 	var v browserMetadata
 	name := g.prefix + "-discovery"
@@ -154,6 +161,8 @@ func (g *dockerGate) wait(ctx context.Context, fn func() bool, timeout time.Dura
 		}
 	}
 }
+
+// send dispatches one bounded observer command and validates its correlated terminal receipt.
 func (g *dockerGate) send(ctx context.Context, dir, action string) (json.RawMessage, error) {
 	var id [16]byte
 	if _, e := rand.Read(id[:]); e != nil {
@@ -311,7 +320,7 @@ func RunGate(ctx context.Context, cfg GateConfig) (err error) {
 		}
 	}()
 	if cfg.NamespaceImage != "" {
-		meminfo, e := g.docker.Run(ctx, "run", "--rm", "--network", "none", "--cap-drop=ALL",
+		meminfo, e := g.docker.Run(ctx, "run", "--rm", "--pull=never", "--network", "none", "--cap-drop=ALL",
 			"--security-opt=no-new-privileges:true", "--read-only", "--pids-limit", "16",
 			"--entrypoint", "cat", cfg.NamespaceImage, "/proc/meminfo")
 		if e != nil {

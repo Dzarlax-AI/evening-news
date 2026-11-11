@@ -21,6 +21,8 @@ var browserEventKinds = []string{"server-policy", "service-worker", "iframe", "n
 func pausedWorkerReceipts(logs string) map[string]int { return workerStateReceipts(logs, "paused") }
 func closedWorkerReceipts(logs string) map[string]int { return workerStateReceipts(logs, "closed") }
 
+// workerStateReceipts counts only finite worker-kind and lifecycle-state witnesses in controller
+// logs.
 func workerStateReceipts(logs, state string) map[string]int {
 	logs += "\n"
 	out := make(map[string]int)
@@ -31,6 +33,8 @@ func workerStateReceipts(logs, state string) map[string]int {
 	return out
 }
 
+// nativeFailureReceipts extracts allowlisted failure reasons without retaining publisher
+// metadata.
 func nativeFailureReceipts(logs string) []string {
 	logs += "\n"
 	var out []string
@@ -48,6 +52,7 @@ func nativeFailureReceipts(logs string) []string {
 	return out
 }
 
+// browserEventKind restricts synthetic origin routes to the declared browser-policy scenarios.
 func browserEventKind(kind string) bool {
 	for _, k := range browserEventKinds {
 		if kind == k {
@@ -57,6 +62,8 @@ func browserEventKind(kind string) bool {
 	return false
 }
 
+// browserEventRoute serves isolated worker, frame, compression and forbidden-network probes with
+// separate execution counters.
 func (o *Origin) browserEventRoute(w http.ResponseWriter, r *http.Request) bool {
 	parts := strings.Split(strings.TrimPrefix(r.URL.Path, "/"), "/")
 	if len(parts) != 2 || !browserEventKind(parts[1]) {
@@ -224,6 +231,8 @@ type BrowserEventsResult struct {
 	FrameExecutions             int                        `json:"frame_execution_requests"`
 }
 
+// BrowserEvents runs browser-policy scenarios and rejects worker execution, forbidden requests
+// or credential leakage.
 func (p *Profiles) BrowserEvents(ctx context.Context) (BrowserEventsResult, error) {
 	var out BrowserEventsResult
 	for _, kind := range browserEventKinds {
@@ -383,6 +392,8 @@ func replayProbeReceipts(logs string) map[string]any {
 	return out
 }
 
+// renderBudgetProbeReceipts summarizes validated prototype counters and distinguishes absent
+// instrumentation from zero traffic.
 func renderBudgetProbeReceipts(logs string) map[string]any {
 	count, exhausted := 0, 0
 	var maxBytes, maxLimit, maxActive float64

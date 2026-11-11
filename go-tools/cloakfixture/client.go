@@ -151,6 +151,8 @@ func (c *WorkerClient) PageMonitorRequest(ctx context.Context) (PageMonitorReque
 	return c.pageMonitorRequest(ctx, "page-monitor")
 }
 
+// pageMonitorRequest extracts the synthetic article through the public Page Monitor contract and
+// validates its result.
 func (c *WorkerClient) pageMonitorRequest(ctx context.Context, route string) (PageMonitorRequestResult, error) {
 	var out PageMonitorRequestResult
 	useBrowser, waitForJS := true, false
