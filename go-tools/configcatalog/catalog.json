@@ -175,7 +175,7 @@
     "migration": "preserve effective value and consuming role during adoption; verify managed parity before switching",
     "precedence": "selected role manifest takes precedence without environment fallback; legacy environment when no file is selected; component default if absent",
     "sources": [
-      "go-domain/cmd/news-domain/main.go:266",
+      "go-domain/cmd/news-domain/main.go:268",
       "go-domain/cmd/news-domain/runtime_config.go:25",
       "go-domain/cmd/news-migrate/main.go:26"
     ],
@@ -197,7 +197,7 @@
     "sources": [
       "go-background/cmd/news-background/runtime_config.go:13",
       "go-background/cmd/news-background/runtime_config.go:14",
-      "go-domain/cmd/news-domain/main.go:159",
+      "go-domain/cmd/news-domain/main.go:161",
       "go-domain/cmd/news-domain/runtime_config.go:25",
       "go-domain/cmd/news-domain/runtime_config.go:26",
       "go-processing/runner/runner.go:94"
@@ -470,7 +470,7 @@
     "migration": "preserve effective value and consuming role during adoption; verify managed parity before switching",
     "precedence": "selected role manifest takes precedence without environment fallback; legacy environment when no file is selected; component default if absent",
     "sources": [
-      "go-domain/cmd/news-domain/main.go:272",
+      "go-domain/cmd/news-domain/main.go:274",
       "go-domain/cmd/news-domain/runtime_config.go:25",
       "go-web/internal/config/config.go:139",
       "go-web/internal/config/config.go:50"
@@ -798,7 +798,7 @@
     "migration": "preserve effective value and consuming role during adoption; verify managed parity before switching",
     "precedence": "selected role manifest takes precedence without environment fallback; legacy environment when no file is selected; component default if absent",
     "sources": [
-      "go-domain/cmd/news-domain/main.go:61",
+      "go-domain/cmd/news-domain/main.go:63",
       "go-domain/cmd/news-domain/runtime_config.go:25"
     ],
     "class": "runtime",
@@ -833,7 +833,7 @@
     "migration": "preserve effective value and consuming role during adoption; verify managed parity before switching",
     "precedence": "selected role manifest takes precedence without environment fallback; legacy environment when no file is selected; component default if absent",
     "sources": [
-      "go-domain/cmd/news-domain/main.go:55",
+      "go-domain/cmd/news-domain/main.go:57",
       "go-domain/cmd/news-domain/runtime_config.go:25"
     ],
     "class": "runtime",
@@ -1051,7 +1051,7 @@
     "key": "EGRESS_TOKEN",
     "owner": "egress",
     "type": "secret string",
-    "default": "empty; required (16\u2013256 bytes)",
+    "default": "empty; required (16–256 bytes)",
     "secret": true,
     "store": "legacy process environment; managed role manifest for egress",
     "reload": "process startup; restart or recreate after changing environment",
@@ -1263,7 +1263,7 @@
     "migration": "preserve effective value and consuming role during adoption; verify managed parity before switching",
     "precedence": "selected role manifest takes precedence without environment fallback; legacy environment when no file is selected; component default if absent",
     "sources": [
-      "go-domain/cmd/news-domain/main.go:163",
+      "go-domain/cmd/news-domain/main.go:165",
       "go-domain/cmd/news-domain/runtime_config.go:25"
     ],
     "class": "runtime",
@@ -1319,7 +1319,7 @@
     "precedence": "selected role manifest takes precedence without environment fallback; legacy environment when no file is selected; component default if absent",
     "sources": [
       "go-background/cmd/news-background/runtime_config.go:13",
-      "go-domain/cmd/news-domain/main.go:390",
+      "go-domain/cmd/news-domain/main.go:398",
       "go-domain/cmd/news-domain/runtime_config.go:25",
       "go-processing/runner/runner.go:120"
     ],
@@ -1422,7 +1422,7 @@
     "sources": [
       "go-background/cmd/news-background/runtime_config.go:13",
       "go-background/cmd/news-background/runtime_config.go:14",
-      "go-domain/cmd/news-domain/main.go:251",
+      "go-domain/cmd/news-domain/main.go:253",
       "go-domain/cmd/news-domain/runtime_config.go:25",
       "go-domain/cmd/news-domain/runtime_config.go:26",
       "go-ingestion/runner/runner.go:47",
@@ -1465,7 +1465,7 @@
     "precedence": "selected role manifest takes precedence without environment fallback; legacy environment when no file is selected; component default if absent",
     "sources": [
       "go-background/cmd/news-background/runtime_config.go:13",
-      "go-domain/cmd/news-domain/main.go:251",
+      "go-domain/cmd/news-domain/main.go:253",
       "go-domain/cmd/news-domain/runtime_config.go:25",
       "go-domain/cmd/news-domain/runtime_config.go:26",
       "go-ingestion/runner/runner.go:46",
@@ -1489,7 +1489,7 @@
     "precedence": "selected role manifest takes precedence without environment fallback; legacy environment when no file is selected; component default if absent",
     "sources": [
       "go-background/cmd/news-background/runtime_config.go:13",
-      "go-domain/cmd/news-domain/main.go:378",
+      "go-domain/cmd/news-domain/main.go:386",
       "go-domain/cmd/news-domain/runtime_config.go:25",
       "go-processing/runner/runner.go:119"
     ],
@@ -1955,7 +1955,7 @@
     "migration": "preserve effective value and consuming role during adoption; verify managed parity before switching",
     "precedence": "selected role manifest takes precedence without environment fallback; legacy environment when no file is selected; component default if absent",
     "sources": [
-      "go-domain/cmd/news-domain/main.go:313",
+      "go-domain/cmd/news-domain/main.go:321",
       "go-domain/cmd/news-domain/runtime_config.go:25"
     ],
     "class": "runtime",
@@ -1994,7 +1994,7 @@
     "precedence": "selected role manifest takes precedence without environment fallback; legacy environment when no file is selected; component default if absent",
     "sources": [
       "go-domain/cmd/news-domain/healthcheck.go:31",
-      "go-domain/cmd/news-domain/main.go:317",
+      "go-domain/cmd/news-domain/main.go:325",
       "go-domain/cmd/news-domain/runtime_config.go:25"
     ],
     "class": "runtime",
@@ -2036,7 +2036,7 @@
       "go-background/cmd/news-background/runtime_config.go:14",
       "go-background/internal/config/config.go:81",
       "go-domain/cmd/news-domain/healthcheck.go:27",
-      "go-domain/cmd/news-domain/main.go:159",
+      "go-domain/cmd/news-domain/main.go:161",
       "go-domain/cmd/news-domain/runtime_config.go:25",
       "go-domain/cmd/news-domain/runtime_config.go:26",
       "go-ingestion/runner/runner.go:49",
@@ -3930,7 +3930,7 @@
     "migration": "preserve effective value and consuming role during adoption; verify managed parity before switching",
     "precedence": "selected role manifest takes precedence without environment fallback; legacy environment when no file is selected; component default if absent",
     "sources": [
-      "go-domain/cmd/news-domain/main.go:288",
+      "go-domain/cmd/news-domain/main.go:296",
       "go-domain/cmd/news-domain/runtime_config.go:25",
       "go-domain/cmd/news-domain/runtime_config.go:26",
       "go-web/internal/backend/backend.go:113",
@@ -4108,6 +4108,40 @@
     "precedence": "persisted application setting; no process environment fallback",
     "sources": [
       "go-domain/appsettings/viber.go:44"
+    ],
+    "class": "database_setting",
+    "managed_roles": []
+  },
+  {
+    "key": "apns",
+    "owner": "domain",
+    "type": "JSON containing key_id, team_id and P-256 PKCS#8 private_key",
+    "default": "absent; APNs sender disabled",
+    "secret": true,
+    "store": "news.integration_credentials provider apns; authenticated encryption with the managed domain credential key",
+    "reload": "credential revision checked by the bounded domain delivery loop; provider JWT and connections are scoped to the selected credential",
+    "migration": "additive migration 021 extends the provider constraint; configure through the authenticated credential API and verify a controlled device before enabling readiness delivery",
+    "precedence": "encrypted domain credential store only; no process environment or client fallback",
+    "sources": [
+      "go-domain/credentialstore/store.go:37",
+      "go-domain/cmd/news-domain/push_loop.go:31"
+    ],
+    "class": "database_setting",
+    "managed_roles": []
+  },
+  {
+    "key": "push_cutover",
+    "owner": "domain",
+    "type": "database singleton with enabled and sender_enabled booleans",
+    "default": "enabled=false; sender_enabled=false",
+    "secret": false,
+    "store": "news.push_cutover; private operator configuration, separate from Telegram and Viber settings",
+    "reload": "checked at readiness insertion and each bounded sender/fanout pass",
+    "migration": "migration 021 creates disabled gates without historical readiness backfill; disable sender for rollback and preserve subscriptions, outbox and delivery receipts",
+    "precedence": "persisted domain-owned flags; no process environment fallback",
+    "sources": [
+      "go-domain/apnspush/delivery.go:78",
+      "go-domain/migration/sql/021.sql:94"
     ],
     "class": "database_setting",
     "managed_roles": []

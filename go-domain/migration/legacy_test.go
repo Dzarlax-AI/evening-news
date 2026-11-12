@@ -121,19 +121,29 @@ func TestBootstrapAndRerun(t *testing.T) {
 		id, _ := item["id"].(string)
 		migrationIDs[id] = true
 	}
-	for _, id := range []string{"009_background_jobs", "010_scheduled_job_metadata", "012_article_ingestion", "013_article_processing", "014_editorial_digest", "015_digest_delivery", "016_managed_configuration", "017_localizations", "018_editorial_localizations", "019_serbian_digest_retry", "020_viber_digest_delivery"} {
+	for _, id := range []string{"009_background_jobs", "010_scheduled_job_metadata", "012_article_ingestion", "013_article_processing", "014_editorial_digest", "015_digest_delivery", "016_managed_configuration", "017_localizations", "018_editorial_localizations", "019_serbian_digest_retry", "020_viber_digest_delivery", "021_apns_digest_push"} {
 		if !migrationIDs[id] {
 			t.Fatalf("required migration %s did not run", id)
 		}
 	}
 	if migrationIDs["006_feed_performance_optimization"] {
-		if len(migrationIDs) != 12 {
+		if len(migrationIDs) != 13 {
 			t.Fatalf("unexpected migration set: %+v", first.MigrationsRun)
 		}
-	} else if len(migrationIDs) != 11 {
+	} else if len(migrationIDs) != 12 {
 		// A sibling schema can disappear after the legacy global index lookup.
 		// Verify the migration set without racing that sibling's test cleanup.
 		t.Fatalf("unexpected migration set after legacy 006 skip: %+v", first.MigrationsRun)
+	}
+	var pushEnabled, senderEnabled bool
+	if err = pool.QueryRow(ctx, `SELECT enabled,sender_enabled FROM push_cutover WHERE id=1`).Scan(&pushEnabled, &senderEnabled); err != nil || pushEnabled || senderEnabled {
+		t.Fatalf("APNs cutover must default off: enabled=%v sender_enabled=%v err=%v", pushEnabled, senderEnabled, err)
+	}
+	for _, table := range []string{"push_installations", "push_challenges", "push_readiness_events", "push_deliveries", "push_rate_buckets", "push_cutover"} {
+		var exists bool
+		if err = pool.QueryRow(ctx, `SELECT to_regclass(current_schema()||'.'||$1) IS NOT NULL`, table).Scan(&exists); err != nil || !exists {
+			t.Fatalf("migration omitted %s: exists=%v err=%v", table, exists, err)
+		}
 	}
 
 	second, err := Run(ctx, pool, true, false)

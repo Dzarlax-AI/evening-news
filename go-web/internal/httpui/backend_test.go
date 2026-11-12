@@ -7,6 +7,7 @@ import (
 	"fmt"
 	"io"
 	"mime/multipart"
+	"net"
 	"net/http"
 	"net/http/httptest"
 	"net/textproto"
@@ -15,6 +16,7 @@ import (
 
 	"github.com/Dzarlax-AI/evening-news/go-web/internal/auth"
 	"github.com/Dzarlax-AI/evening-news/go-web/internal/backend"
+	"github.com/Dzarlax-AI/evening-news/go-web/internal/transport"
 )
 
 type fakeBackendOps struct {
@@ -23,6 +25,22 @@ type fakeBackendOps struct {
 	err              error
 	download         *backend.Download
 	uploadReaderType string
+}
+type fakePushOps struct {
+	*fakeBackendOps
+	capability, clientIP, operation string
+	body                            json.RawMessage
+	method                          string
+	status                          int
+}
+
+func (f *fakePushOps) Push(_ context.Context, method, operation, capability, clientIP string, body json.RawMessage) (json.RawMessage, int, error) {
+	f.method = method
+	f.operation = operation
+	f.capability = capability
+	f.clientIP = clientIP
+	f.body = body
+	return f.raw, f.status, nil
 }
 
 func (f *fakeBackendOps) result() (json.RawMessage, error) {
@@ -81,6 +99,97 @@ func TestBackendRoutesRequireAdminBeforeCallingOperation(t *testing.T) {
 	mux.ServeHTTP(resp, httptest.NewRequest(http.MethodPost, "/api/v1/telegram/test", nil))
 	if resp.Code != http.StatusUnauthorized || ops.calls != 0 {
 		t.Fatalf("status=%d backend calls=%d", resp.Code, ops.calls)
+	}
+}
+
+func TestPublicPushForwardsOnlyCapabilityAndTrustedCanonicalIP(t *testing.T) {
+	_, proxy, _ := net.ParseCIDR("10.0.0.0/8")
+	ops := &fakePushOps{fakeBackendOps: &fakeBackendOps{raw: json.RawMessage(`{"installation_id":"11111111-1111-4111-8111-111111111111","state":"pending","subscription_version":1}`)}, status: http.StatusAccepted}
+	mux := http.NewServeMux()
+	RegisterBackend(mux, auth.New(auth.Config{Username: "admin", Password: "secret", JWTSecret: "test-signing-key"}), ops, []string{"10.0.0.0/8"})
+	wrapped, err := (transport.Policy{TrustedProxies: []*net.IPNet{proxy}, PublicOrigin: "https://news.test", Development: true}).Wrap(mux)
+	if err != nil {
+		t.Fatal(err)
+	}
+	body := `{"installation_id":"11111111-1111-4111-8111-111111111111","device_token":"aabb","locale":"ru","environment":"sandbox"}`
+	req := httptest.NewRequest(http.MethodPost, "https://news.test/api/public/push/installations", strings.NewReader(body))
+	req.RemoteAddr = "10.0.0.3:1234"
+	req.Header.Set("X-Forwarded-Proto", "https")
+	req.Header.Set("X-Forwarded-For", "198.51.100.8")
+	req.Header.Set("Authorization", "Bearer AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA")
+	req.Header.Set("X-Push-Capability", "spoofed")
+	req.Header.Set("X-Canonical-Client-IP", "192.0.2.1")
+	resp := httptest.NewRecorder()
+	wrapped.ServeHTTP(resp, req)
+	if resp.Code != http.StatusAccepted || ops.capability != "AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA" || ops.clientIP != "198.51.100.8" || ops.operation != "/push/installations" || ops.method != http.MethodPost || string(ops.body) != body {
+		t.Fatalf("status=%d cap=%q ip=%q op=%q body=%s", resp.Code, ops.capability, ops.clientIP, ops.operation, ops.body)
+	}
+}
+
+func TestPublicPushRejectsMalformedRegistrationBeforePrivateCall(t *testing.T) {
+	ops := &fakePushOps{fakeBackendOps: &fakeBackendOps{raw: json.RawMessage(`{}`)}}
+	mux := http.NewServeMux()
+	RegisterBackend(mux, auth.New(auth.Config{Username: "a", Password: "b", JWTSecret: "signing-key"}), ops)
+	req := httptest.NewRequest(http.MethodPost, "https://news.test/api/public/push/installations", strings.NewReader(`{"installation_id":null,"device_token":"aabb","locale":"ru","environment":"sandbox"}`))
+	req.RemoteAddr = "127.0.0.1:1234"
+	req.Header.Set("Authorization", "Bearer AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA")
+	wrapped, err := (transport.Policy{Development: true}).Wrap(mux)
+	if err != nil {
+		t.Fatal(err)
+	}
+	resp := httptest.NewRecorder()
+	wrapped.ServeHTTP(resp, req)
+	if resp.Code != 400 || ops.method != "" {
+		t.Fatalf("status=%d backend method=%q", resp.Code, ops.method)
+	}
+}
+
+func TestPublicPushReconcilesSafeConflictThroughRealPrivateClient(t *testing.T) {
+	const id = "11111111-1111-4111-8111-111111111111"
+	privateStatus := http.StatusConflict
+	privateBody := `{"installation_id":"` + id + `","state":"active","subscription_version":2}`
+	private := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if r.URL.Path != "/internal/web/v1/push/installations/"+id || r.Method != http.MethodPut || r.Header.Get("Authorization") != "Bearer web-backend-secret" || r.Header.Get("X-Push-Capability") != "AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA" || r.Header.Get("X-Canonical-Client-IP") != "127.0.0.1" {
+			t.Errorf("private request %s %s headers=%v", r.Method, r.URL.Path, r.Header)
+		}
+		w.Header().Set("Content-Type", "application/json")
+		w.WriteHeader(privateStatus)
+		_, _ = io.WriteString(w, privateBody)
+	}))
+	defer private.Close()
+	client, err := backend.NewClient(backend.Config{BaseURL: private.URL, Token: "web-backend-secret"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	mux := http.NewServeMux()
+	RegisterBackend(mux, auth.New(auth.Config{Username: "admin", Password: "secret", JWTSecret: "test-signing-key"}), client)
+	wrapped, err := (transport.Policy{Development: true}).Wrap(mux)
+	if err != nil {
+		t.Fatal(err)
+	}
+	call := func() *httptest.ResponseRecorder {
+		req := httptest.NewRequest(http.MethodPut, "https://news.test/api/public/push/installations/"+id, strings.NewReader(`{"expected_version":1,"device_token":"aabb","locale":"ru","environment":"sandbox"}`))
+		req.RemoteAddr = "127.0.0.1:1234"
+		req.Header.Set("Authorization", "Bearer AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA")
+		w := httptest.NewRecorder()
+		wrapped.ServeHTTP(w, req)
+		return w
+	}
+	resp := call()
+	if resp.Code != http.StatusConflict || !strings.Contains(resp.Body.String(), `"subscription_version":2`) || !strings.Contains(resp.Body.String(), `"state":"active"`) {
+		t.Fatalf("safe conflict not forwarded: %d %s", resp.Code, resp.Body.String())
+	}
+	privateStatus = http.StatusUnauthorized
+	privateBody = `{"installation_id":"` + id + `","state":"active","subscription_version":2}`
+	resp = call()
+	if resp.Code != http.StatusUnauthorized || strings.Contains(resp.Body.String(), `"subscription_version"`) || strings.Contains(resp.Body.String(), `"state"`) {
+		t.Fatalf("unauthorized private response leaked state: %d %s", resp.Code, resp.Body.String())
+	}
+	privateStatus = http.StatusConflict
+	privateBody = `{"installation_id":"22222222-2222-4222-8222-222222222222","state":"active","subscription_version":2}`
+	resp = call()
+	if resp.Code != http.StatusConflict || strings.Contains(resp.Body.String(), `"subscription_version"`) || strings.Contains(resp.Body.String(), `"state"`) {
+		t.Fatalf("mismatched private status was not hidden: %d %s", resp.Code, resp.Body.String())
 	}
 }
 

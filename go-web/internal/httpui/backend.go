@@ -6,6 +6,7 @@ import (
 	"errors"
 	"io"
 	"mime"
+	"net"
 	"net/http"
 	"strconv"
 	"strings"
@@ -20,8 +21,17 @@ const maxBackupUpload = 64 << 20
 // RegisterBackend wires the explicitly supported private-backend operations.
 // Job-owned backup creation and Telegram digest delivery are registered by the
 // durable job lane and deliberately do not appear here.
-func RegisterBackend(mux *http.ServeMux, service *auth.Service, ops backend.Operations) {
-	h := &backendHandler{ops: ops}
+func RegisterBackend(mux *http.ServeMux, service *auth.Service, ops backend.Operations, proxyCIDRs ...[]string) {
+	var proxies []*net.IPNet
+	if len(proxyCIDRs) > 0 {
+		for _, raw := range proxyCIDRs[0] {
+			_, block, err := net.ParseCIDR(raw)
+			if err == nil {
+				proxies = append(proxies, block)
+			}
+		}
+	}
+	h := &backendHandler{ops: ops, trustedProxies: proxies}
 	admin := func(pattern string, fn http.HandlerFunc) { mux.Handle(pattern, RequireAPIAdmin(service, fn)) }
 	admin("GET /api/v1/ai/settings", h.aiSettingsGet)
 	admin("PUT /api/v1/ai/settings", h.aiSettingsPut)
@@ -53,9 +63,17 @@ func RegisterBackend(mux *http.ServeMux, service *auth.Service, ops backend.Oper
 	admin("GET /api/v1/system/process-monitor", h.processMonitor)
 	admin("POST /api/v1/system/process-monitor/cleanup", h.cleanupProcesses)
 	admin("POST /api/v1/system/migrations/run", h.runMigrations)
+	admin("POST /api/v1/push/canary", h.pushCanary)
+	mux.HandleFunc("POST /api/public/push/installations", h.push)
+	mux.HandleFunc("PUT /api/public/push/installations/{id}", h.push)
+	mux.HandleFunc("DELETE /api/public/push/installations/{id}", h.push)
+	mux.HandleFunc("POST /api/public/push/installations/{id}/activate", h.push)
 }
 
-type backendHandler struct{ ops backend.Operations }
+type backendHandler struct {
+	ops            backend.Operations
+	trustedProxies []*net.IPNet
+}
 
 func (h *backendHandler) configuration(w http.ResponseWriter, r *http.Request) {
 	ops, ok := h.ops.(backend.ConfigurationOperations)
@@ -86,7 +104,7 @@ func (h *backendHandler) credential(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	provider := r.PathValue("provider")
-	if provider != "gemini" && provider != "openai" && provider != "telegram" && provider != "viber" {
+	if provider != "gemini" && provider != "openai" && provider != "telegram" && provider != "viber" && provider != "apns" {
 		writeProblem(w, 422, "Invalid provider")
 		return
 	}

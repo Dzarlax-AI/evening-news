@@ -2,7 +2,13 @@ package credentialstore
 
 import (
 	"context"
+	"crypto/ecdsa"
+	"crypto/elliptic"
+	"crypto/x509"
+	"encoding/json"
+	"encoding/pem"
 	"errors"
+	"io"
 	"strings"
 
 	"github.com/jackc/pgx/v5"
@@ -28,7 +34,7 @@ type Store struct {
 }
 
 func validProvider(p string) bool {
-	return p == "gemini" || p == "openai" || p == "telegram" || p == "viber"
+	return p == "gemini" || p == "openai" || p == "telegram" || p == "viber" || p == "apns"
 }
 func (s *Store) valid(provider string) bool {
 	return s != nil && s.Pool != nil && len(s.Key) == 32 && s.KeyID != "" && s.InstallationID != "" && validProvider(provider)
@@ -100,11 +106,111 @@ func (s *Store) Put(ctx context.Context, provider string, expected int64, secret
 	if expected < 0 || len(secret) == 0 || len(secret) > 8192 || strings.TrimSpace(string(secret)) == "" {
 		return Metadata{}, ErrInvalid
 	}
+	if provider == "apns" {
+		if !validAPNsCredential(secret) {
+			return Metadata{}, ErrInvalid
+		}
+	}
 	envelope, err := Seal(s.Key, s.KeyID, s.InstallationID, provider, secret)
 	if err != nil {
 		return Metadata{}, ErrUnavailable
 	}
 	return s.update(ctx, provider, expected, &envelope)
+}
+
+func validAPNsCredential(raw []byte) bool {
+	var in struct {
+		KeyID      string `json:"key_id"`
+		TeamID     string `json:"team_id"`
+		PrivateKey string `json:"private_key"`
+	}
+	if len(raw) == 0 || len(raw) > 8192 {
+		return false
+	}
+	var values map[string]json.RawMessage
+	if json.Unmarshal(raw, &values) != nil || values == nil || len(values) != 3 {
+		return false
+	}
+	for _, k := range []string{"key_id", "team_id", "private_key"} {
+		v, ok := values[k]
+		if !ok || strings.TrimSpace(string(v)) == "null" {
+			return false
+		}
+	}
+	if hasDuplicateCredentialKey(raw) {
+		return false
+	}
+	d := json.NewDecoder(strings.NewReader(string(raw)))
+	d.DisallowUnknownFields()
+	if d.Decode(&in) != nil || d.Decode(new(any)) != io.EOF || !validAPNsID(in.KeyID) || !validAPNsID(in.TeamID) {
+		return false
+	}
+	b, rest := pem.Decode([]byte(in.PrivateKey))
+	if b == nil || b.Type != "PRIVATE KEY" || len(b.Headers) != 0 || len(strings.TrimSpace(string(rest))) != 0 {
+		return false
+	}
+	k, err := x509.ParsePKCS8PrivateKey(b.Bytes)
+	if err != nil {
+		return false
+	}
+	e, ok := k.(*ecdsa.PrivateKey)
+	return ok && e.Curve == elliptic.P256() && e.D != nil && e.D.Sign() > 0 && e.D.Cmp(e.Params().N) < 0
+}
+
+func validAPNsID(s string) bool {
+	if len(s) != 10 {
+		return false
+	}
+	for _, c := range s {
+		if !(c >= 'A' && c <= 'Z' || c >= '0' && c <= '9') {
+			return false
+		}
+	}
+	return true
+}
+func hasDuplicateCredentialKey(raw []byte) bool {
+	d := json.NewDecoder(strings.NewReader(string(raw)))
+	var walk func() bool
+	walk = func() bool {
+		t, e := d.Token()
+		if e != nil {
+			return false
+		}
+		del, ok := t.(json.Delim)
+		if !ok {
+			return false
+		}
+		switch del {
+		case '{':
+			seen := map[string]bool{}
+			for d.More() {
+				k, e := d.Token()
+				if e != nil {
+					return true
+				}
+				key, ok := k.(string)
+				if !ok || seen[key] {
+					return true
+				}
+				seen[key] = true
+				if walk() {
+					return true
+				}
+			}
+			_, e = d.Token()
+			return e != nil
+		case '[':
+			for d.More() {
+				if walk() {
+					return true
+				}
+			}
+			_, e = d.Token()
+			return e != nil
+		}
+		return false
+	}
+	return walk()
 }
 
 // Delete retains a revisioned tombstone to prevent stale recreation.

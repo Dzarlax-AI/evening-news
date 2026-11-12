@@ -43,3 +43,24 @@ func TestSecureRequestRequiresTLSOrTrustedProxy(t *testing.T) {
 		})
 	}
 }
+
+func TestCanonicalClientIPUsesOnlyTrustedProxyChain(t *testing.T) {
+	_, proxy, _ := net.ParseCIDR("10.0.0.0/8")
+	tests := []struct {
+		name, remote, xff, want string
+		ok                      bool
+	}{{"direct ignores spoof", "203.0.113.9:44", "198.51.100.8", "203.0.113.9", true}, {"trusted chain", "10.0.0.2:44", "198.51.100.8, 10.1.1.3", "198.51.100.8", true}, {"trusted malformed", "10.0.0.2:44", "garbage", "", false}}
+	for _, tc := range tests {
+		t.Run(tc.name, func(t *testing.T) {
+			r := httptest.NewRequest("GET", "https://news.test", nil)
+			r.RemoteAddr = tc.remote
+			if tc.xff != "" {
+				r.Header.Set("X-Forwarded-For", tc.xff)
+			}
+			got, ok := CanonicalClientIP(r, []*net.IPNet{proxy})
+			if ok != tc.ok || ok && got.String() != tc.want {
+				t.Fatalf("got %v ok=%v, want %q %v", got, ok, tc.want, tc.ok)
+			}
+		})
+	}
+}

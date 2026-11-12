@@ -2,6 +2,13 @@ package credentialstore
 
 import (
 	"bytes"
+	"crypto/ecdsa"
+	"crypto/elliptic"
+	"crypto/rand"
+	"crypto/x509"
+	"encoding/json"
+	"encoding/pem"
+	"strings"
 	"testing"
 )
 
@@ -38,6 +45,28 @@ func TestSealOpenAndBindings(t *testing.T) {
 	a.Ciphertext[0] ^= 1
 	if _, err := Open(key, "key-1", "install-1", "gemini", a); err == nil {
 		t.Fatal("accepted altered ciphertext")
+	}
+}
+
+func TestAPNsCredentialRequiresStrictP256Object(t *testing.T) {
+	key, err := ecdsa.GenerateKey(elliptic.P256(), rand.Reader)
+	if err != nil {
+		t.Fatal(err)
+	}
+	der, err := x509.MarshalPKCS8PrivateKey(key)
+	if err != nil {
+		t.Fatal(err)
+	}
+	priv := string(pem.EncodeToMemory(&pem.Block{Type: "PRIVATE KEY", Bytes: der}))
+	valid, _ := json.Marshal(map[string]string{"key_id": "ABCDEFGHIJ", "team_id": "1234567890", "private_key": priv})
+	if !validAPNsCredential(valid) {
+		t.Fatal("valid P-256 key rejected")
+	}
+	bad := []string{strings.Replace(string(valid), `"key_id":"ABCDEFGHIJ"`, `"key_id":"ABCDEFGHIJ","key_id":"KLMNOPQRST"`, 1), strings.Replace(string(valid), `"team_id":"1234567890"`, `"team_id":null`, 1), strings.TrimSuffix(string(valid), "}") + `,"extra":true}`, string(valid) + " trailing", strings.Replace(string(valid), "ABCDEFGHIJ", "invalid-id", 1)}
+	for _, raw := range bad {
+		if validAPNsCredential([]byte(raw)) {
+			t.Fatalf("accepted invalid APNs key envelope")
+		}
 	}
 }
 func TestRejectInvalidKeyAndNonce(t *testing.T) {

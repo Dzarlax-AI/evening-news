@@ -6,6 +6,7 @@ import (
 	"encoding/json"
 	"fmt"
 	"github.com/Dzarlax-AI/evening-news/go-domain/airuntime"
+	"github.com/Dzarlax-AI/evening-news/go-domain/apnspush"
 	"github.com/Dzarlax-AI/evening-news/go-domain/credentialstore"
 	"github.com/Dzarlax-AI/evening-news/go-domain/migration"
 	"github.com/Dzarlax-AI/evening-news/go-domain/privateapi"
@@ -30,6 +31,7 @@ type Server struct {
 	BackupRoot, TelegramToken, ChatID, ServiceChatID string
 	ViberSiteBase                                    string
 	ViberClient                                      *http.Client
+	Push                                             *apnspush.Handler
 }
 
 func (s *Server) Handler() http.Handler {
@@ -68,6 +70,13 @@ func (s *Server) Handler() http.Handler {
 	mux.HandleFunc("POST /internal/web/v1/backups/upload", s.upload)
 	mux.HandleFunc("POST /internal/web/v1/backups/restore", s.restore)
 	mux.HandleFunc("POST /internal/web/v1/backups/cleanup", s.cleanup)
+	if s.Push != nil {
+		mux.Handle("POST /internal/web/v1/push/installations", s.Push)
+		mux.Handle("PUT /internal/web/v1/push/installations/{id}", s.Push)
+		mux.Handle("DELETE /internal/web/v1/push/installations/{id}", s.Push)
+		mux.Handle("POST /internal/web/v1/push/installations/{id}/activate", s.Push)
+		mux.Handle("POST /internal/web/v1/push/canary", s.Push)
+	}
 	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		if s.Guard == nil || s.Guard.Check(r.Context()) != nil {
 			reject(w, 503, "Executor instance is not the database owner")

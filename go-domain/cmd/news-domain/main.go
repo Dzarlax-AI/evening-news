@@ -3,6 +3,7 @@ package main
 
 import (
 	"context"
+	"crypto/sha256"
 	"crypto/subtle"
 	"encoding/json"
 	"errors"
@@ -19,6 +20,7 @@ import (
 	"time"
 
 	"github.com/Dzarlax-AI/evening-news/go-domain/airuntime"
+	"github.com/Dzarlax-AI/evening-news/go-domain/apnspush"
 	"github.com/Dzarlax-AI/evening-news/go-domain/authority"
 	"github.com/Dzarlax-AI/evening-news/go-domain/backup"
 	"github.com/Dzarlax-AI/evening-news/go-domain/callbacks"
@@ -271,6 +273,12 @@ func run() error {
 	}
 	worker := source.get("BACKGROUND_EXECUTION_MODE") != "embedded"
 	web := &webbackend.Server{Credentials: credentials, Guard: guard, Pool: pool, Runtime: runtime, Worker: worker, AllowCreateAll: allowCreateAll, TelegramToken: config.TelegramToken, ChatID: config.TelegramMain, ServiceChatID: config.TelegramService, ViberSiteBase: config.SiteBase}
+	if source.managed {
+		ipKey := sha256.Sum256(append([]byte("push-ip-hmac-v1"), source.key...))
+		pushService := &apnspush.Service{Pool: pool, Key: source.key, KeyID: source.keyID, InstallationID: source.installation, IPHashKey: ipKey[:]}
+		web.Push = &apnspush.Handler{Service: pushService, Token: source.get("WEB_BACKEND_TOKEN")}
+		go runPushLoop(appCtx, pushService, credentials, guard)
+	}
 	mux.HandleFunc("GET /internal/v1/runtime-configuration", func(w http.ResponseWriter, r *http.Request) {
 		expected := "Bearer " + jobToken
 		given := r.Header.Get("Authorization")
