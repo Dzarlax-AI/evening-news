@@ -193,7 +193,7 @@ func safeResult(raw json.RawMessage) (json.RawMessage, error) {
 	if !ok || m == nil {
 		return nil, ErrInvalidPayload
 	}
-	allowed := map[string]bool{"status": true, "success": true, "settled": true, "retryable": true, "articles_fetched": true, "articles_processed": true, "articles_summarized": true, "articles_categorized": true, "articles_requeued": true, "articles_rejected": true, "articles_retrying": true, "articles_exhausted": true, "total_candidates": true, "found_candidates": true, "processed": true, "improved": true, "summaries_generated": true, "parts_sent": true, "errors_count": true, "duration_seconds": true, "backup_bytes": true, "requeued_count": true, "dry_run": true, "connection_ok": true, "article_outcomes": true, "article_outcomes_total": true, "article_outcomes_omitted": true}
+	allowed := map[string]bool{"status": true, "failure_reason": true, "success": true, "settled": true, "retryable": true, "articles_fetched": true, "articles_processed": true, "articles_summarized": true, "articles_categorized": true, "articles_requeued": true, "articles_rejected": true, "articles_retrying": true, "articles_exhausted": true, "total_candidates": true, "found_candidates": true, "processed": true, "improved": true, "summaries_generated": true, "parts_sent": true, "errors_count": true, "duration_seconds": true, "backup_bytes": true, "requeued_count": true, "dry_run": true, "connection_ok": true, "article_outcomes": true, "article_outcomes_total": true, "article_outcomes_omitted": true}
 	if err := validateArticleOutcomes(m); err != nil {
 		return nil, err
 	}
@@ -204,6 +204,13 @@ func safeResult(raw json.RawMessage) (json.RawMessage, error) {
 		if k == "status" {
 			var st string
 			if json.Unmarshal(v, &st) != nil || !strings.Contains("|success|warning|deferred|dry_run|completed|rejected|exhausted|retry_wait|incomplete|settled|busy|", "|"+st+"|") {
+				return nil, ErrInvalidPayload
+			}
+			continue
+		}
+		if k == "failure_reason" {
+			var reason string
+			if json.Unmarshal(v, &reason) != nil || !safeFailureCode(reason) {
 				return nil, ErrInvalidPayload
 			}
 			continue
@@ -234,6 +241,16 @@ func safeResult(raw json.RawMessage) (json.RawMessage, error) {
 		}
 	}
 	return raw, nil
+}
+
+func safeFailureCode(code string) bool {
+	switch code {
+	case "digest_domain_status_failed", "digest_processing_failed", "digest_operational_settings_failed", "digest_operational_settings_invalid_failed", "digest_summary_status_failed", "digest_summary_status_result_failed", "digest_summaries_generate_failed", "digest_summaries_generate_result_failed", "digest_prepare_failed", "digest_prepare_result_failed", "digest_publish_failed", "digest_publish_result_failed",
+		"serbian_category_translation_missing", "serbian_article_translation_missing", "serbian_source_stale", "serbian_attempts_exhausted", "serbian_provider_failed", "serbian_delivery_rejected", "telegram_delivery_rejected", "serbian_edition_missing", "editorial_not_ready", "editorial_provider_timeout", "editorial_provider_unavailable", "editorial_invalid_result", "editorial_resource_limit", "telegram_configuration_incomplete", "prepared_digest_missing":
+		return true
+	default:
+		return false
+	}
 }
 
 // strictRawObject decodes one JSON object while rejecting duplicate keys and

@@ -52,6 +52,8 @@ type fakeServices struct {
 	rateLimitPosts          int
 	domainOperationGets     int
 	postRequests            []domainRequest
+	operationResults        map[string]any
+	operationFailures       map[string]string
 }
 
 func newFakeServer(t *testing.T, f *fakeServices) *httptest.Server {
@@ -102,7 +104,12 @@ func newFakeServer(t *testing.T, f *fakeServices) *httptest.Server {
 		f.calls = append(f.calls, req.Operation)
 		key := opKey(req.Envelope.JobID, req.Envelope.AttemptGeneration, req.Operation, req.OperationID)
 		result := domainResult(req.Operation, req.Input)
-		if req.Operation == f.failOperation {
+		if custom, ok := f.operationResults[req.Operation]; ok {
+			result = custom
+		}
+		if code := f.operationFailures[req.Operation]; code != "" {
+			f.ops[key] = fakeDomainOperation{req: req, state: "failed", errCode: stringPtr(code)}
+		} else if req.Operation == f.failOperation {
 			f.ops[key] = fakeDomainOperation{req: req, state: "failed", errCode: stringPtr("domain_operation_failed")}
 		} else if req.Operation == "media_refresh" && f.failMedia {
 			f.ops[key] = fakeDomainOperation{req: req, state: "failed", errCode: stringPtr("provider_timeout")}
@@ -210,6 +217,40 @@ func newFakeServer(t *testing.T, f *fakeServices) *httptest.Server {
 		json.NewEncoder(w).Encode(map[string]any{"id": r.PathValue("id"), "job_id": testJob, "attempt_generation": 1, "state": "cancelled", "result": map[string]any{}})
 	})
 	return httptest.NewServer(mux)
+}
+
+func TestSerbianIncompleteMarkerFailsOnlyAfterConfirmedRussianPublish(t *testing.T) {
+	f := &fakeServices{operationResults: map[string]any{
+		"summary_status":     map[string]any{"summaries_count": 0},
+		"summaries_generate": map[string]any{"summaries_generated": 1, "serbian_status": "incomplete", "serbian_error_code": "serbian_category_translation_missing"},
+		"digest_prepare":     map[string]any{"prepared_token": "50000000-0000-4000-8000-000000000005"},
+		"digest_publish":     map[string]any{"success": true, "parts_sent": 1, "parts_total": 1, "rich_message": false, "serbian_delivery": map[string]any{"success": false, "status": "incomplete", "error_code": "serbian_category_translation_missing"}},
+	}}
+	p := testPipeline(t, f)
+	_, err := p.Execute(context.Background(), testFence(), "telegram_digest", json.RawMessage(`{}`))
+	if err == nil {
+		t.Fatal("required Serbian edition incomplete but parent succeeded")
+	}
+	if execution.DeliveryOutcomeUnknown("telegram_digest", json.RawMessage(`{}`), err) {
+		t.Fatal("confirmed Russian receipt was classified as an unknown send")
+	}
+	if got := execution.SafeExecutionFailureReason(err); got != "serbian_category_translation_missing" {
+		t.Fatalf("failure reason=%q", got)
+	}
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	if !reflect.DeepEqual(f.calls, []string{"summary_status", "summaries_generate", "digest_prepare", "digest_publish"}) {
+		t.Fatalf("operations=%v", f.calls)
+	}
+}
+
+func TestPreparedDigestMissingRemainsUnknown(t *testing.T) {
+	f := &fakeServices{operationFailures: map[string]string{"digest_publish": "prepared_digest_missing"}}
+	p := testPipeline(t, f)
+	_, err := p.Execute(context.Background(), testFence(), "telegram_digest", json.RawMessage(`{}`))
+	if err == nil || !execution.DeliveryOutcomeUnknown("telegram_digest", json.RawMessage(`{}`), err) {
+		t.Fatalf("missing prepared token must remain ambiguous: err=%v", err)
+	}
 }
 
 func foreignOperation(op fakeDomainOperation) fakeDomainOperation {

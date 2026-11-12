@@ -71,7 +71,13 @@ func (s *Server) runAttempt(ctx context.Context, key attemptKey, e Envelope, kin
 			logExecutionFailure("pipeline_execute", "context_ended", nil)
 		}
 		state, code = pipelineFailureDisposition(kind, payload, runErr, execCtx.Err())
-		result = Result{Value: json.RawMessage(`{"status":"warning"}`)}
+		failure := SafeExecutionFailureReason(runErr)
+		if failure != "handler_failed" && safeFailureCode(failure) {
+			boundedFailure, _ := json.Marshal(map[string]string{"status": "warning", "failure_reason": failure})
+			result = Result{Value: boundedFailure}
+		} else {
+			result = Result{Value: json.RawMessage(`{"status":"warning"}`)}
+		}
 	}
 	bounded, berr := safeResult(result.Value)
 	if berr != nil {

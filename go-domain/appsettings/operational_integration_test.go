@@ -41,6 +41,8 @@ func TestOperationalPostgresCASAndImmutableAttemptSnapshot(t *testing.T) {
 	for _, statement := range []string{
 		"CREATE TABLE " + quoted + ".settings(key text PRIMARY KEY,value jsonb NOT NULL,updated_at timestamptz NOT NULL DEFAULT now())",
 		"CREATE TABLE " + quoted + ".background_jobs(id uuid PRIMARY KEY,state text NOT NULL,attempt_generation integer NOT NULL)",
+		"CREATE TABLE " + quoted + ".categories(id integer PRIMARY KEY)",
+		"CREATE TABLE " + quoted + ".category_localizations(category_id integer,locale text,display_name text)",
 		"INSERT INTO " + quoted + ".background_jobs(id,state,attempt_generation) VALUES('20000000-0000-4000-8000-000000000002','running',1)",
 	} {
 		if _, err := admin.Exec(ctx, statement); err != nil {
@@ -62,6 +64,23 @@ func TestOperationalPostgresCASAndImmutableAttemptSnapshot(t *testing.T) {
 	initial, err := store.Operational(ctx)
 	if err != nil || initial.Revision != 0 || initial.LimitsEnabled || initial.MaxArticles != 50 || initial.PerSource != 50 || initial.Days != 1 || !initial.ProcessingEnabled || !initial.DeliveryEnabled {
 		t.Fatalf("initial defaults=%+v err=%v", initial, err)
+	}
+	if _, err = pool.Exec(ctx, `INSERT INTO categories VALUES(1)`); err != nil {
+		t.Fatal(err)
+	}
+	enableSerbian := operationalUpdate(0, 50)
+	enableSerbian.SerbianEnabled = true
+	if _, err = store.UpdateOperational(ctx, enableSerbian); !errors.Is(err, ErrSerbianCategoryMissing) {
+		t.Fatalf("enabled Serbian without category names: %v", err)
+	}
+	if _, err = pool.Exec(ctx, `INSERT INTO category_localizations VALUES(1,'sr-Latn','   ')`); err != nil {
+		t.Fatal(err)
+	}
+	if _, err = store.UpdateOperational(ctx, enableSerbian); !errors.Is(err, ErrSerbianCategoryMissing) {
+		t.Fatalf("enabled Serbian with blank category name: %v", err)
+	}
+	if _, err = pool.Exec(ctx, `UPDATE category_localizations SET display_name='Vesti'`); err != nil {
+		t.Fatal(err)
 	}
 
 	updates := []OperationalUpdate{operationalUpdate(0, 11), operationalUpdate(0, 22)}
@@ -140,6 +159,10 @@ func TestOperationalPostgresCASAndImmutableAttemptSnapshot(t *testing.T) {
 	newAttempt, err := store.PinOperational(ctx, jobID, 2)
 	if err != nil || newAttempt.Settings.Revision != 2 || newAttempt.Settings.MaxArticles != updated.MaxArticles {
 		t.Fatalf("new attempt snapshot=%+v err=%v", newAttempt, err)
+	}
+	enableSerbian.ExpectedRevision = 2
+	if value, err := store.UpdateOperational(ctx, enableSerbian); err != nil || !value.SerbianEnabled || value.Revision != 3 {
+		t.Fatalf("complete category names should allow Serbian activation: %+v %v", value, err)
 	}
 }
 

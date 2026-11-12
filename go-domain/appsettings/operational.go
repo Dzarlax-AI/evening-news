@@ -15,6 +15,8 @@ import (
 
 const operationalRevisionKey = "operational_settings_revision"
 
+var ErrSerbianCategoryMissing = errors.New("Serbian category names are incomplete")
+
 var canonicalJobID = regexp.MustCompile(`^[0-9a-f]{8}-[0-9a-f]{4}-[1-8][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$`)
 
 // Operational contains only user-facing, non-secret job controls. Keep its
@@ -113,6 +115,15 @@ func (s Store) UpdateOperational(ctx context.Context, in OperationalUpdate) (Ope
 	}
 	if rev != in.ExpectedRevision {
 		return Operational{}, ErrConflict
+	}
+	if v.SerbianEnabled {
+		var missing bool
+		if err = tx.QueryRow(ctx, `SELECT EXISTS(SELECT 1 FROM categories c WHERE NOT EXISTS(SELECT 1 FROM category_localizations l WHERE l.category_id=c.id AND l.locale='sr-Latn' AND NULLIF(btrim(l.display_name),'') IS NOT NULL))`).Scan(&missing); err != nil {
+			return Operational{}, err
+		}
+		if missing {
+			return Operational{}, ErrSerbianCategoryMissing
+		}
 	}
 	previous, err := operationalInTx(ctx, tx)
 	if err != nil {

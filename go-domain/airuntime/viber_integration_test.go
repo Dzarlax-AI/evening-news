@@ -471,3 +471,204 @@ func TestViberRuntimeWithRealFence(t *testing.T) {
 		t.Fatal("executor fence loss not detected", e)
 	}
 }
+
+func TestSerbianRetryReadinessAndDefiniteRejectionAreNotSuccessful(t *testing.T) {
+	for _, tc := range []struct {
+		name             string
+		withSerbianIssue bool
+		parent           bool
+		unknownRU        bool
+		deliveryDisabled bool
+		wantErr          error
+		wantPosts        int32
+	}{
+		{name: "missing_issue", wantErr: digestworkflow.ErrNotReady},
+		{name: "disabled_delivery_missing_issue", deliveryDisabled: true, wantErr: digestworkflow.ErrNotReady},
+		{name: "disabled_delivery_ready_issue", deliveryDisabled: true, withSerbianIssue: true},
+		{name: "definite_telegram_rejection", withSerbianIssue: true, wantErr: digestworkflow.ErrSerbianDeliveryRejected, wantPosts: 1},
+		{name: "parent_ru_complete_serbian_incomplete", parent: true, wantPosts: 1},
+		{name: "parent_ru_unknown_send_dominates", parent: true, unknownRU: true, wantErr: telegramdelivery.ErrUnknown, wantPosts: 1},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			dsn := os.Getenv("TEST_DATABASE_URL")
+			if dsn == "" {
+				t.Skip("isolated PostgreSQL unavailable")
+			}
+			if validateLoopbackTestDatabaseDSN(dsn) != nil {
+				t.Fatal("loopback required")
+			}
+			ctx, cancel := context.WithTimeout(context.Background(), 30*time.Second)
+			defer cancel()
+			admin, err := pgx.Connect(ctx, dsn)
+			if err != nil {
+				t.Fatal("fixture database unavailable")
+			}
+			defer admin.Close(context.Background())
+			schema := fmt.Sprintf("serbian_retry_%d", time.Now().UnixNano())
+			q := pgx.Identifier{schema}.Sanitize()
+			if _, err = admin.Exec(ctx, "CREATE SCHEMA "+q); err != nil {
+				t.Fatal(err)
+			}
+			defer admin.Exec(context.Background(), "DROP SCHEMA "+q+" CASCADE")
+			cfg, err := pgxpool.ParseConfig(dsn)
+			if err != nil {
+				t.Fatal(err)
+			}
+			cfg.ConnConfig.RuntimeParams["search_path"] = schema
+			pool, err := pgxpool.NewWithConfig(ctx, cfg)
+			if err != nil {
+				t.Fatal(err)
+			}
+			defer pool.Close()
+			if _, err = migration.Run(ctx, pool, true, false); err != nil {
+				t.Fatal("migration fixture", err)
+			}
+			connect := func() *pgx.Conn {
+				conn, e := pgx.ConnectConfig(ctx, cfg.ConnConfig)
+				if e != nil {
+					t.Fatal(e)
+				}
+				return conn
+			}
+			worker, executor := connect(), connect()
+			defer worker.Close(context.Background())
+			defer executor.Close(context.Background())
+			var workerPID, executorPID int
+			if err = worker.QueryRow(ctx, `SELECT pg_advisory_lock(hashtext(current_database()),hashtext(current_schema())),pg_backend_pid()`).Scan(new(any), &workerPID); err != nil {
+				t.Fatal(err)
+			}
+			if err = executor.QueryRow(ctx, `SELECT pg_advisory_lock(hashtext(current_database()),hashtext(current_schema()) # 1162757938),pg_backend_pid()`).Scan(new(any), &executorPID); err != nil {
+				t.Fatal(err)
+			}
+			const job = "10000000-0000-4000-8000-000000000021"
+			const owner = "10000000-0000-4000-8000-000000000022"
+			const executorID = "10000000-0000-4000-8000-000000000023"
+			const domainID = "10000000-0000-4000-8000-000000000024"
+			const ruID = "10000000-0000-4000-8000-000000000025"
+			srID := digestworkflow.SerbianEditionID(ruID)
+			kind := "serbian_digest_retry"
+			payload := json.RawMessage(`{"russian_edition_id":"10000000-0000-4000-8000-000000000025"}`)
+			if tc.parent {
+				kind = "telegram_digest"
+				payload = json.RawMessage(`{}`)
+			}
+			deadline := time.Now().UTC().Add(2 * time.Minute).Truncate(time.Microsecond)
+			if _, err = pool.Exec(ctx, `UPDATE background_worker_status SET owner_id=$1,generation=1,status='running',lock_backend_pid=$2,heartbeat_at=clock_timestamp() AT TIME ZONE 'UTC' WHERE id=1`, owner, workerPID); err != nil {
+				t.Fatal(err)
+			}
+			if _, err = pool.Exec(ctx, `INSERT INTO background_jobs(id,kind,payload,idempotency_key,state,owner_generation,attempt_generation) VALUES($1,$2,$3,'fixture-serbian-retry','running',1,1)`, job, kind, payload); err != nil {
+				t.Fatal(err)
+			}
+			if _, err = pool.Exec(ctx, `INSERT INTO background_job_executions(job_id,attempt_generation,envelope_sha256,executor_instance_id,owner_id,worker_generation,deadline_at,state) VALUES($1,1,$2,$3,$4,1,$5,'running')`, job, strings.Repeat("a", 64), executorID, owner, deadline); err != nil {
+				t.Fatal(err)
+			}
+			fence := authority.Fence{Pool: pool, JobID: job, OwnerID: owner, ExecutorInstanceID: executorID, Kind: kind, AttemptGeneration: 1, Generation: 1, WorkerBackendPID: workerPID, ExecutorBackendPID: executorPID, Deadline: deadline, Payload: payload}
+			if err = fence.Check(ctx); err != nil {
+				t.Fatal("real fence rejected", err)
+			}
+			date := time.Now().UTC().Format("2006-01-02")
+			for _, item := range []struct{ id, locale, text string }{{ruID, "ru", "Подтвержденная новость"}} {
+				insertDigestFixtureEdition(t, ctx, pool, item.id, item.locale, item.text, date, job)
+			}
+			if tc.withSerbianIssue {
+				insertDigestFixtureEdition(t, ctx, pool, srID, "sr-Latn", "Potvrđena vest", date, job)
+			}
+			if _, err = pool.Exec(ctx, `INSERT INTO editorial_serbian_retry(russian_edition_id,destination,delivery_enabled,publication_pinned,publication_attempted,last_job_id) VALUES($1,'synthetic-destination',$3,true,true,$2)`, ruID, job, !tc.deliveryDisabled); err != nil {
+				t.Fatal(err)
+			}
+			var credentials *credentialstore.Store
+			if tc.parent {
+				if _, err = pool.Exec(ctx, `INSERT INTO installation_state(id,installation_id) VALUES(1,'digest-test-installation')`); err != nil {
+					t.Fatal(err)
+				}
+				credentials = &credentialstore.Store{Pool: pool, Key: bytes.Repeat([]byte{5}, 32), KeyID: "fixture-key", InstallationID: "digest-test-installation"}
+				if _, err = credentials.Put(ctx, "telegram", 0, []byte("fixture-token")); err != nil {
+					t.Fatal(err)
+				}
+				settings := appsettings.Store{Pool: pool}
+				if _, err = settings.UpdateOperational(ctx, appsettings.OperationalUpdate{ExpectedRevision: 0, MaxArticles: 50, PerSource: 50, Days: 1, ProcessingEnabled: true, DeliveryEnabled: true, SerbianEnabled: true}); err != nil {
+					t.Fatal(err)
+				}
+				if _, err = settings.UpdateTelegram(ctx, appsettings.TelegramUpdate{ExpectedRevision: 0, ChatID: "synthetic-ru", ServiceChatID: "synthetic-service", SerbianChatID: "synthetic-destination", SerbianDeliveryEnabled: true}); err != nil {
+					t.Fatal(err)
+				}
+				if _, err = settings.PinOperational(ctx, job, 1); err != nil {
+					t.Fatal(err)
+				}
+			}
+			var posts atomic.Int32
+			client := &http.Client{Transport: viberFixtureRoundTrip(func(r *http.Request) (*http.Response, error) {
+				posts.Add(1)
+				if tc.parent && !tc.unknownRU {
+					return &http.Response{StatusCode: http.StatusOK, Header: make(http.Header), Body: io.NopCloser(strings.NewReader(`{"ok":true,"result":{"message_id":1}}`)), Request: r}, nil
+				}
+				if tc.parent && tc.unknownRU {
+					return &http.Response{StatusCode: http.StatusInternalServerError, Header: make(http.Header), Body: io.NopCloser(strings.NewReader(`{"ok":false,"error_code":500}`)), Request: r}, nil
+				}
+				return &http.Response{StatusCode: http.StatusBadRequest, Header: make(http.Header), Body: io.NopCloser(strings.NewReader(`{"ok":false,"error_code":400}`)), Request: r}, nil
+			})}
+			server := &Server{db: pool, credentials: credentials, client: client, limiter: NewSlidingWindow(3), config: Config{TelegramToken: "fixture-token", TelegramMain: "synthetic-ru", TelegramService: "synthetic-service", TelegramEndpoint: "https://telegram.fixture", SiteBase: "https://news.fixture"}, digest: &digestRegistry{entries: make(map[string]*digestReceipt)}}
+			v := digestInput{Operation: "serbian_digest_retry", OperationID: "20000000-0000-4000-8000-000000000027", DomainInstanceID: domainID, Envelope: digestEnvelope{JobID: job, Attempt: 1, Deadline: deadline.Format(time.RFC3339Nano)}, Kind: kind, Payload: payload}
+			var result map[string]any
+			if tc.parent {
+				v.Operation = "digest_prepare"
+				prepared, prepErr := server.executeDigest(ctx, v, fence)
+				if prepErr != nil {
+					t.Fatal("prepare parent digest", prepErr)
+				}
+				v.Operation = "digest_publish"
+				v.Input, _ = json.Marshal(map[string]string{"prepared_token": prepared["prepared_token"].(string), "serbian_incomplete_code": "serbian_category_translation_missing"})
+				result, err = server.executeDigest(ctx, v, fence)
+			} else {
+				result, err = server.executeDigest(ctx, v, fence)
+			}
+			if tc.parent && !tc.unknownRU {
+				incomplete, _ := result["serbian_delivery"].(map[string]any)
+				if err != nil || result["success"] != true || incomplete["status"] != "incomplete" || incomplete["error_code"] != "serbian_category_translation_missing" || posts.Load() != tc.wantPosts {
+					t.Fatalf("parent result=%#v err=%v posts=%d", result, err, posts.Load())
+				}
+			} else if !errors.Is(err, tc.wantErr) || posts.Load() != tc.wantPosts {
+				t.Fatalf("retry err=%v posts=%d", err, posts.Load())
+			}
+			if tc.deliveryDisabled && tc.withSerbianIssue {
+				if result["status"] != "success" || result["parts_sent"] != 0 {
+					t.Fatalf("ready issue with delivery disabled result=%#v", result)
+				}
+			}
+			if tc.withSerbianIssue && !tc.deliveryDisabled {
+				if code := DigestErrorCode(err); code != "serbian_delivery_rejected" {
+					t.Fatalf("rejection code=%q", code)
+				}
+			}
+			if tc.parent {
+				var srCount, ruCompleted int
+				if err := pool.QueryRow(ctx, `SELECT count(*) FILTER (WHERE e.locale='sr-Latn'),count(*) FILTER (WHERE d.state='completed' AND e.locale='ru') FROM editorial_digest_editions e LEFT JOIN digest_delivery_intents d ON d.edition_id=e.id`).Scan(&srCount, &ruCompleted); err != nil {
+					t.Fatal(err)
+				}
+				if srCount != 0 || (!tc.unknownRU && ruCompleted != 1) {
+					t.Fatalf("SR editions=%d completed RU intents=%d", srCount, ruCompleted)
+				}
+			}
+		})
+	}
+}
+
+func insertDigestFixtureEdition(t *testing.T, ctx context.Context, pool *pgxpool.Pool, id, locale, text, date, job string) {
+	t.Helper()
+	snapshot := editorial.Snapshot{Date: date, CutoffUTC: time.Now().UTC().Truncate(time.Second), SiteBaseURL: "https://news.fixture", EditionURL: "https://news.fixture/digest/" + date, Articles: []editorial.Article{{ID: "101", Title: text, Summary: text, Content: text, SourceName: "Fixture", URL: "https://source.fixture/101", CategoryID: "4", CategoryName: "Tech"}}}
+	story := editorial.Story{Kind: "main", Title: text, Summary: text, PrimaryArticleID: "101", ArticleIDs: []string{"101"}, Evidence: []editorial.Evidence{{ArticleID: "101", Quote: text, Locale: locale}}}
+	edition, err := editorial.FinalizeEdition(snapshot, locale, []editorial.Story{story}, nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+	snapshotJSON, _ := json.Marshal(snapshot)
+	editionJSON, _ := json.Marshal(edition)
+	rendered, err := editorial.Render(snapshot, locale, edition)
+	if err != nil {
+		t.Fatal(err)
+	}
+	renderedJSON, _ := json.Marshal(rendered)
+	if _, err = pool.Exec(ctx, `INSERT INTO editorial_digest_editions(id,edition_date,locale,policy_version,snapshot_hash,snapshot,edition,rendered,job_id,attempt_generation) VALUES($1,$2,$3,'bilingual-v1',$4,$5,$6,$7,$8,1)`, id, date, locale, edition.SourceSnapshotHash, snapshotJSON, editionJSON, renderedJSON, job); err != nil {
+		t.Fatal("save digest fixture", err)
+	}
+}

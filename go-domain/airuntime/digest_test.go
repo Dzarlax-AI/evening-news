@@ -2,6 +2,8 @@ package airuntime
 
 import (
 	"bytes"
+	"crypto/sha256"
+	"encoding/hex"
 	"encoding/json"
 	"net/http"
 	"net/http/httptest"
@@ -31,6 +33,37 @@ func TestDigestAcceptIdentityAndConflict(t *testing.T) {
 	req.Input.DomainInstanceID = "00000000-0000-0000-0000-000000000006"
 	if code := invoke(req); code != 409 {
 		t.Fatalf("conflict %d", code)
+	}
+}
+
+func TestDigestPublishAcceptsOnlyOptionalBoundedSerbianMarker(t *testing.T) {
+	deadline := time.Now().UTC().Add(time.Minute).Truncate(time.Microsecond).Format(time.RFC3339Nano)
+	v := digestInput{Operation: "digest_publish", OperationID: "00000000-0000-0000-0000-000000000003", DomainInstanceID: "00000000-0000-0000-0000-000000000004", Envelope: digestEnvelope{Version: 1, JobID: "00000000-0000-0000-0000-000000000001", Attempt: 1, OwnerID: "00000000-0000-0000-0000-000000000002", Generation: 1, BackendPID: 1, ExecutorID: "00000000-0000-0000-0000-000000000005", Deadline: deadline}, Kind: "telegram_digest", Payload: json.RawMessage(`{}`), ExecutorBackendPID: 2}
+	for _, tc := range []struct {
+		input string
+		valid bool
+	}{
+		{`{"prepared_token":"10000000-0000-4000-8000-000000000001"}`, true},
+		{`{"prepared_token":"10000000-0000-4000-8000-000000000001","serbian_incomplete_code":""}`, true},
+		{`{"prepared_token":"10000000-0000-4000-8000-000000000001","serbian_incomplete_code":"serbian_category_translation_missing"}`, true},
+		{`{"prepared_token":"10000000-0000-4000-8000-000000000001","serbian_incomplete_code":"raw error"}`, false},
+		{`{"prepared_token":"10000000-0000-4000-8000-000000000001","extra":"value"}`, false},
+	} {
+		v.Input = json.RawMessage(tc.input)
+		var canonical map[string]any
+		if err := json.Unmarshal(v.Input, &canonical); err != nil {
+			t.Fatal(err)
+		}
+		compact, err := json.Marshal(canonical)
+		if err != nil {
+			t.Fatal(err)
+		}
+		sum := sha256.Sum256(compact)
+		v.Fingerprint = hex.EncodeToString(sum[:])
+		_, valid := validDigest(v)
+		if valid != tc.valid {
+			t.Errorf("input %s valid=%v want %v", tc.input, valid, tc.valid)
+		}
 	}
 }
 

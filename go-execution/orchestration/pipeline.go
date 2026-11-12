@@ -33,11 +33,29 @@ type Pipeline struct {
 type digestStageError struct {
 	stage            string
 	deliveryMayStart bool
+	failureReason    string
 }
 
 func (e digestStageError) Error() string                { return "digest_" + e.stage + "_failed" }
 func (e digestStageError) DeliveryMayHaveStarted() bool { return e.deliveryMayStart }
-func (e digestStageError) SafeFailureReason() string    { return "digest_" + e.stage + "_failed" }
+func (e digestStageError) SafeFailureReason() string {
+	if e.failureReason != "" {
+		return e.failureReason
+	}
+	return "digest_" + e.stage + "_failed"
+}
+
+func safeSerbianRetryCode(code string) bool {
+	switch code {
+	case "editorial_not_ready", "serbian_category_translation_missing", "serbian_article_translation_missing",
+		"serbian_source_stale", "serbian_attempts_exhausted", "serbian_provider_failed",
+		"editorial_provider_timeout", "editorial_provider_unavailable", "editorial_invalid_result",
+		"editorial_resource_limit", "telegram_configuration_incomplete", "serbian_delivery_rejected", "telegram_delivery_rejected", "serbian_edition_missing":
+		return true
+	default:
+		return false
+	}
+}
 
 func NewPipeline(cfg Config) (*Pipeline, error) {
 	if cfg.HTTPClient != nil {
@@ -153,6 +171,14 @@ func (p *Pipeline) Execute(ctx context.Context, f execution.ExecutionContext, ki
 		}
 	case "summaries_generate":
 		result, err = call("summaries_generate", "summaries_generate", map[string]any{})
+		if err != nil {
+			var domainErr *DomainOperationError
+			if errors.As(err, &domainErr) && safeSerbianRetryCode(domainErr.Code) {
+				err = digestStageError{stage: "summaries_generate", failureReason: domainErr.Code}
+			} else {
+				err = digestStageError{stage: "summaries_generate"}
+			}
+		}
 	case "viber_digest_delivery":
 		result, err = call("viber_digest_delivery", "viber_digest_delivery", map[string]any{})
 		if err != nil {
@@ -161,7 +187,12 @@ func (p *Pipeline) Execute(ctx context.Context, f execution.ExecutionContext, ki
 	case "serbian_digest_retry":
 		result, err = call("serbian_digest_retry", "serbian_digest_retry", map[string]any{})
 		if err != nil {
-			err = digestStageError{stage: "publish", deliveryMayStart: true}
+			var domainErr *DomainOperationError
+			if errors.As(err, &domainErr) && safeSerbianRetryCode(domainErr.Code) {
+				err = digestStageError{stage: "serbian_retry", failureReason: domainErr.Code}
+			} else {
+				err = digestStageError{stage: "publish", deliveryMayStart: true}
+			}
 		}
 	case "backup":
 		result, err = call("backup", "backup", map[string]any{})
@@ -284,9 +315,18 @@ func (p *Pipeline) digest(ctx context.Context, f execution.ExecutionContext, cal
 	if !ok {
 		return 0, digestStageError{stage: "summary_status_result"}
 	}
+	serbianIncomplete := ""
 	if count == 0 {
-		if _, err = call("summaries_generate", "summaries_generate", map[string]any{}); err != nil {
+		generated, generateErr := call("summaries_generate", "summaries_generate", map[string]any{})
+		if generateErr != nil {
 			return 0, digestStageError{stage: "summaries_generate"}
+		}
+		if status, _ := generated["serbian_status"].(string); status == "incomplete" {
+			code, _ := generated["serbian_error_code"].(string)
+			if !safeSerbianGenerationCode(code) {
+				return 0, digestStageError{stage: "summaries_generate_result"}
+			}
+			serbianIncomplete = code
 		}
 	}
 	prepared, err := call("digest_prepare", "digest_prepare", map[string]any{})
@@ -297,8 +337,12 @@ func (p *Pipeline) digest(ctx context.Context, f execution.ExecutionContext, cal
 	if !ok || !canonicalUUID(token) {
 		return 0, digestStageError{stage: "prepare_result"}
 	}
-	published, err := call("digest_publish", "digest_publish", map[string]any{"prepared_token": token})
+	published, err := call("digest_publish", "digest_publish", map[string]any{"prepared_token": token, "serbian_incomplete_code": serbianIncomplete})
 	if err != nil {
+		var domainErr *DomainOperationError
+		if errors.As(err, &domainErr) && safePreSendPublishCode(domainErr.Code) {
+			return 0, digestStageError{stage: "publish", failureReason: domainErr.Code}
+		}
 		return 0, digestStageError{stage: "publish", deliveryMayStart: true}
 	}
 	if success, ok := published["success"].(bool); !ok || !success {
@@ -310,7 +354,36 @@ func (p *Pipeline) digest(ctx context.Context, f execution.ExecutionContext, cal
 	if !ok || !totalOK || total < parts || !richOK {
 		return 0, digestStageError{stage: "publish_result", deliveryMayStart: true}
 	}
+	if incomplete, ok := published["serbian_delivery"].(map[string]any); ok {
+		status, _ := incomplete["status"].(string)
+		code, _ := incomplete["error_code"].(string)
+		if status == "incomplete" && safeSerbianRetryCode(code) {
+			return parts, digestStageError{stage: "serbian_retry", failureReason: code}
+		}
+		if status == "incomplete" || code != "" {
+			return parts, digestStageError{stage: "publish_result", deliveryMayStart: true}
+		}
+	}
 	return parts, nil
+}
+
+func safePreSendPublishCode(code string) bool {
+	switch code {
+	case "telegram_configuration_incomplete", "telegram_delivery_rejected":
+		return true
+	default:
+		return false
+	}
+}
+
+func safeSerbianGenerationCode(code string) bool {
+	switch code {
+	case "editorial_not_ready", "serbian_category_translation_missing", "serbian_article_translation_missing",
+		"serbian_source_stale", "serbian_attempts_exhausted", "serbian_provider_failed":
+		return true
+	default:
+		return false
+	}
 }
 
 func boundedProjection(kind string, v map[string]any) map[string]any {

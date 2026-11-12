@@ -20,6 +20,7 @@ func EditionIDLocale(job string, attempt int, operation, locale string) string {
 	return EditionID(job, attempt, operation+":"+locale)
 }
 func serbianEditionID(russianID string) string { return EditionID(russianID, 1, "sr-Latn") }
+func SerbianEditionID(russianID string) string { return serbianEditionID(russianID) }
 
 func (w Workflow) localizedSnapshot(ctx context.Context, ru editorial.Snapshot, id string) (editorial.Snapshot, error) {
 	sr := ru
@@ -45,13 +46,26 @@ func (w Workflow) localizedSnapshot(ctx context.Context, ru editorial.Snapshot, 
 		var title, summary, currentTitle, currentSummary, label string
 		err = tx.QueryRow(ctx, `SELECT l.title,l.summary,COALESCE(a.title,''),COALESCE(a.summary,''),COALESCE(c.display_name,'') FROM article_localizations l JOIN articles a ON a.id=l.article_id LEFT JOIN category_localizations c ON c.category_id=$2 AND c.locale='sr-Latn' WHERE l.article_id=$1 AND l.locale='sr-Latn' AND l.status='completed'`, aid, cid).Scan(&title, &summary, &currentTitle, &currentSummary, &label)
 		if errors.Is(err, pgx.ErrNoRows) {
-			return sr, ErrNotReady
+			var categoryExists bool
+			if e := tx.QueryRow(ctx, `SELECT EXISTS(SELECT 1 FROM category_localizations WHERE category_id=$1 AND locale='sr-Latn' AND display_name<>'')`, cid).Scan(&categoryExists); e != nil {
+				return sr, e
+			}
+			if !categoryExists {
+				return sr, ErrCategoryTranslationMissing
+			}
+			return sr, ErrArticleTranslationMissing
 		}
 		if err != nil {
 			return sr, err
 		}
-		if currentTitle != article.Title || currentSummary != article.Summary || title == "" || summary == "" || label == "" {
-			return sr, ErrNotReady
+		if currentTitle != article.Title || currentSummary != article.Summary {
+			return sr, ErrSerbianSourceStale
+		}
+		if title == "" || summary == "" {
+			return sr, ErrArticleTranslationMissing
+		}
+		if label == "" {
+			return sr, ErrCategoryTranslationMissing
 		}
 		sr.Articles[i].Title = title
 		sr.Articles[i].Summary = summary
@@ -65,6 +79,11 @@ func (w Workflow) localizedSnapshot(ctx context.Context, ru editorial.Snapshot, 
 		return sr, ErrNotReady
 	}
 	return sr, nil
+}
+
+func isSerbianReadinessError(err error) bool {
+	return errors.Is(err, ErrNotReady) || errors.Is(err, ErrCategoryTranslationMissing) ||
+		errors.Is(err, ErrArticleTranslationMissing) || errors.Is(err, ErrSerbianSourceStale)
 }
 
 func (w Workflow) persistLocalizedEdition(ctx context.Context, id, job string, attempt int, snapshot editorial.Snapshot, e editorial.Edition, usage editorial.ProviderUsage, account bool) error {
@@ -208,7 +227,7 @@ func (w Workflow) serbianDone(ctx context.Context, id string, ready bool) error 
 	}
 	return tx.Commit(ctx)
 }
-func (w Workflow) hasSerbian(ctx context.Context, id string) (bool, error) {
+func (w Workflow) HasSerbian(ctx context.Context, id string) (bool, error) {
 	tx, err := w.Pool.Begin(ctx)
 	if err != nil {
 		return false, err
@@ -220,6 +239,22 @@ func (w Workflow) hasSerbian(ctx context.Context, id string) (bool, error) {
 	var found bool
 	err = tx.QueryRow(ctx, `SELECT EXISTS(SELECT 1 FROM editorial_digest_editions WHERE id=$1 AND locale='sr-Latn')`, id).Scan(&found)
 	if err != nil {
+		return false, err
+	}
+	return found, tx.Commit(ctx)
+}
+
+func (w Workflow) HasLocalizedInput(ctx context.Context, id string) (bool, error) {
+	tx, err := w.Pool.Begin(ctx)
+	if err != nil {
+		return false, err
+	}
+	defer tx.Rollback(ctx)
+	if err = w.Fence.Validate(ctx, tx); err != nil {
+		return false, err
+	}
+	var found bool
+	if err = tx.QueryRow(ctx, `SELECT EXISTS(SELECT 1 FROM editorial_locale_inputs WHERE russian_edition_id=$1)`, id).Scan(&found); err != nil {
 		return false, err
 	}
 	return found, tx.Commit(ctx)
@@ -308,7 +343,7 @@ func (w Workflow) generateLocalized(ctx context.Context, job string, attempt int
 	}
 	srID := serbianEditionID(id)
 	if existing {
-		ready, e := w.hasSerbian(ctx, srID)
+		ready, e := w.HasSerbian(ctx, srID)
 		if e != nil {
 			return 1, e
 		}
@@ -320,7 +355,7 @@ func (w Workflow) generateLocalized(ctx context.Context, job string, attempt int
 	var sr *editorial.Snapshot
 	if srErr == nil {
 		sr = &srValue
-	} else if !errors.Is(srErr, ErrNotReady) {
+	} else if !isSerbianReadinessError(srErr) {
 		return 0, srErr
 	}
 	ru, sr, err = w.freezeInputs(ctx, id, ru, sr)
@@ -328,12 +363,18 @@ func (w Workflow) generateLocalized(ctx context.Context, job string, attempt int
 		return 0, err
 	}
 	if existing && sr == nil {
-		return 1, nil
+		return 1, srErr
 	}
 	provider := w.Provider
 	if w.ResolveProvider != nil {
 		provider, err = w.ResolveProvider(ctx)
 		if err != nil {
+			if existing {
+				if doneErr := w.serbianDone(ctx, id, false); doneErr != nil {
+					return 1, doneErr
+				}
+				return 1, fmt.Errorf("%w: provider configuration unavailable", ErrSerbianProviderFailed)
+			}
 			return 0, err
 		}
 	}
@@ -345,7 +386,14 @@ func (w Workflow) generateLocalized(ctx context.Context, job string, attempt int
 		}
 	}
 	if existing && !admitted {
-		return 1, nil
+		var attempts int
+		if err = w.Pool.QueryRow(ctx, `SELECT attempts FROM editorial_locale_inputs WHERE russian_edition_id=$1`, id).Scan(&attempts); err != nil {
+			return 1, err
+		}
+		if attempts >= 3 {
+			return 1, ErrSerbianAttemptsExhausted
+		}
+		return 1, ErrNotReady
 	}
 	providerCtx, cancel := generationContext(ctx)
 	defer cancel()
@@ -365,6 +413,9 @@ func (w Workflow) generateLocalized(ctx context.Context, job string, attempt int
 		if e = w.serbianDone(ctx, id, result.Serbian != nil); e != nil {
 			return 1, e
 		}
+		if result.Serbian == nil {
+			return 1, ErrSerbianProviderFailed
+		}
 		return 1, nil
 	}
 	if !existing {
@@ -375,6 +426,9 @@ func (w Workflow) generateLocalized(ctx context.Context, job string, attempt int
 		if e = w.persistLocalizedEdition(ctx, id, job, attempt, ru, result.Edition, result.Usage, true); e != nil {
 			return 0, e
 		}
+		if srErr != nil {
+			return 1, srErr
+		}
 		return 1, nil
 	}
 	result, e := editorial.GenerateForPlan(providerCtx, *sr, plan, provider)
@@ -382,7 +436,7 @@ func (w Workflow) generateLocalized(ctx context.Context, job string, attempt int
 		if err = w.serbianDone(ctx, id, false); err != nil {
 			return 1, err
 		}
-		return 1, nil
+		return 1, fmt.Errorf("%w: %v", ErrSerbianProviderFailed, e)
 	}
 	// The Serbian edition is paired with the original Russian job identity.
 	var originalJob *string

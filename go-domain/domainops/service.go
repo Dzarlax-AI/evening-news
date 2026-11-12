@@ -314,7 +314,7 @@ func (s *Service) run(ctx context.Context, k string, rec *record) {
 		if errors.Is(err, context.Canceled) || errors.Is(ctx.Err(), context.Canceled) {
 			code = "stale_fence"
 		}
-		if req.Operation == "digest_publish" || req.Operation == "serbian_digest_retry" || req.Operation == "viber_digest_delivery" {
+		if airuntime.IsPublishOperation(req.Operation) && airuntime.PublishOutcomeMayBeUnknown(err) {
 			code = "external_outcome_unknown"
 		}
 		rec.code = &code

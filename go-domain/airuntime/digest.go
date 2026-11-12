@@ -83,8 +83,20 @@ func validDigest(v digestInput) (time.Time, bool) {
 	}
 	if v.Operation == "digest_publish" {
 		token, ok := input["prepared_token"].(string)
-		if !ok || len(input) != 1 || !uuidPattern.MatchString(token) {
+		if !ok || len(input) < 1 || len(input) > 2 || !uuidPattern.MatchString(token) {
 			return deadline, false
+		}
+		for key, value := range input {
+			switch key {
+			case "prepared_token":
+			case "serbian_incomplete_code":
+				code, isString := value.(string)
+				if !isString || (code != "" && !safeSerbianGenerationCode(code)) {
+					return deadline, false
+				}
+			default:
+				return deadline, false
+			}
 		}
 	} else if len(input) != 0 {
 		return deadline, false
@@ -250,7 +262,7 @@ func (s *Server) runDigest(key string, receipt *digestReceipt, deadline time.Tim
 	if err != nil {
 		receipt.state = "failed"
 		receipt.code = digestErrorCode(err)
-		if v.Operation == "digest_publish" || v.Operation == "serbian_digest_retry" || v.Operation == "viber_digest_delivery" {
+		if IsPublishOperation(v.Operation) && PublishOutcomeMayBeUnknown(err) {
 			receipt.code = "external_outcome_unknown"
 		}
 	} else {
@@ -259,7 +271,33 @@ func (s *Server) runDigest(key string, receipt *digestReceipt, deadline time.Tim
 	}
 }
 
+func IsPublishOperation(operation string) bool {
+	return operation == "digest_publish" || operation == "serbian_digest_retry" || operation == "viber_digest_delivery"
+}
+
+func PublishOutcomeMayBeUnknown(err error) bool {
+	if errors.Is(err, context.Canceled) || errors.Is(err, authority.ErrStale) {
+		return true
+	}
+	switch {
+	case errors.Is(err, digestworkflow.ErrNotReady), errors.Is(err, digestworkflow.ErrCategoryTranslationMissing),
+		errors.Is(err, digestworkflow.ErrArticleTranslationMissing), errors.Is(err, digestworkflow.ErrSerbianSourceStale),
+		errors.Is(err, digestworkflow.ErrSerbianAttemptsExhausted), errors.Is(err, digestworkflow.ErrSerbianProviderFailed),
+		errors.Is(err, digestworkflow.ErrSerbianDeliveryRejected),
+		errors.Is(err, digestworkflow.ErrTelegramDeliveryRejected),
+		errors.Is(err, digestworkflow.ErrDestination),
+		errors.Is(err, digestworkflow.ErrInvalid), errors.Is(err, digestworkflow.ErrLimit),
+		errors.Is(err, ErrAISettingsInvalid):
+		return false
+	default:
+		return true
+	}
+}
+
 func digestErrorCode(err error) string {
+	if errors.Is(err, digestworkflow.ErrSerbianProviderFailed) {
+		return "serbian_provider_failed"
+	}
 	var providerErr *ai.Error
 	if errors.As(err, &providerErr) {
 		switch providerErr.Kind {
@@ -284,12 +322,28 @@ func digestErrorCode(err error) string {
 		return "editorial_provider_timeout"
 	case errors.Is(err, digestworkflow.ErrNotReady):
 		return "editorial_not_ready"
+	case errors.Is(err, digestworkflow.ErrCategoryTranslationMissing):
+		return "serbian_category_translation_missing"
+	case errors.Is(err, digestworkflow.ErrArticleTranslationMissing):
+		return "serbian_article_translation_missing"
+	case errors.Is(err, digestworkflow.ErrSerbianSourceStale):
+		return "serbian_source_stale"
+	case errors.Is(err, digestworkflow.ErrSerbianAttemptsExhausted):
+		return "serbian_attempts_exhausted"
+	case errors.Is(err, digestworkflow.ErrSerbianProviderFailed):
+		return "serbian_provider_failed"
+	case errors.Is(err, digestworkflow.ErrSerbianDeliveryRejected):
+		return "serbian_delivery_rejected"
+	case errors.Is(err, digestworkflow.ErrTelegramDeliveryRejected):
+		return "telegram_delivery_rejected"
 	case errors.Is(err, digestworkflow.ErrLimit):
 		return "editorial_resource_limit"
 	case errors.Is(err, digestworkflow.ErrInvalid):
 		return "editorial_invalid_result"
 	case errors.Is(err, digestworkflow.ErrPrepared):
 		return "prepared_digest_missing"
+	case errors.Is(err, digestworkflow.ErrDestination):
+		return "telegram_configuration_incomplete"
 	}
 	switch err.Error() {
 	case "provider_summary_missing":
