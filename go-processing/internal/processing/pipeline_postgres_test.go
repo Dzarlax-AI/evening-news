@@ -646,7 +646,7 @@ func TestProcessorRunPostgresAttemptTimeoutPersistsMetadataAndDoesNotCancelSibli
 		Scan(&slowState, &slowError, &slowAttempts, &slowPublished, &slowMedia); err != nil {
 		t.Fatal(err)
 	}
-	if slowState != "retry_wait" || slowError == nil || *slowError != "timeout" || slowAttempts != 1 || slowPublished == nil || len(slowMedia) == 0 {
+	if slowState != "retry_wait" || slowError == nil || *slowError != "timeout" || slowAttempts != 1 || slowPublished == nil || len(slowMedia) != 0 {
 		t.Fatalf("timed out article did not persist retry and extraction metadata: state=%s error=%v attempts=%d published=%v media=%#v", slowState, slowError, slowAttempts, slowPublished, slowMedia)
 	}
 	var siblingState, siblingSummary string
@@ -1272,10 +1272,13 @@ func TestProcessorRunPostgresSelectedReceiptIncludesNotDueRowsButNoMissingFabric
 	}
 }
 
-func TestProcessorRunPostgresRejectedHTMLPersistsParsedMedia(t *testing.T) {
+func TestProcessorRunPostgresRejectedCustomHTMLPersistsParsedMedia(t *testing.T) {
 	pg := newPipelinePG(t, false)
 	const articleID = int64(850)
 	pg.seedArticle(t, articleID)
+	if _, err := pg.pool.Exec(context.Background(), `INSERT INTO sources VALUES(1,'custom','Fixture'); UPDATE articles SET source_id=1 WHERE id=850`); err != nil {
+		t.Fatal(err)
+	}
 	if _, err := pg.admin.Exec(context.Background(), `UPDATE `+pg.schema+`.articles SET content=$2 WHERE id=$1`, articleID, `<img src="/archive.png" alt="Synthetic image">`); err != nil {
 		t.Fatal(err)
 	}
@@ -1584,5 +1587,65 @@ func TestPostgresBilingualPersistenceAndStaleFence(t *testing.T) {
 	}
 	if err = pg.db.SaveOutcome(ctx, f, a, attempt, token, fp, store.Persisted{State: "completed", Fields: out.Fields, Attempts: attempt, Processed: true}); err == nil {
 		t.Fatal("stale claim accepted")
+	}
+}
+
+func TestProcessorRunPostgresRSSRetainsOnlyFeedMedia(t *testing.T) {
+	for _, tc := range []struct {
+		name, source, media string
+		count               int
+	}{
+		{"rss_empty", "rss", `[]`, 0},
+		{"rss_feed", "rss", `[{"type":"image","source":"rss_feed","url":"https://example.test/feed1.jpg"},{"type":"image","source":"rss_feed","url":"https://example.test/feed2.png"}]`, 2},
+		{"custom_page", "custom", `[]`, 1},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			pg := newPipelinePG(t, false)
+			const id = int64(900)
+			pg.seedArticle(t, id)
+			if _, err := pg.pool.Exec(context.Background(), `INSERT INTO sources VALUES(1,$1,'Fixture')`, tc.source); err != nil {
+				t.Fatal(err)
+			}
+			if _, err := pg.pool.Exec(context.Background(), `UPDATE articles SET source_id=1,media_files=$1,content=content||'<img src="https://example.test/page-inline.jpg">' WHERE id=900`, tc.media); err != nil {
+				t.Fatal(err)
+			}
+			extractor, calls := newFixtureExtractor(t)
+			ai := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+				var request aiEnvelope
+				if err := json.NewDecoder(r.Body).Decode(&request); err != nil {
+					t.Error(err)
+					return
+				}
+				if answerFixtureAuxAI(t, w, request) {
+					return
+				}
+				_ = json.NewEncoder(w).Encode(analysisResponse(request, map[string]any{"summary": "Synthetic fixture summary.", "categories": []any{"technology"}, "is_advertisement": false}))
+			}))
+			defer ai.Close()
+			if _, err := newIntegrationProcessor(pg, ai.URL, extractor.URL).Run(context.Background(), pg.newRun(t, id)); err != nil {
+				t.Fatal(err)
+			}
+			var media []map[string]any
+			var image *string
+			var state string
+			if err := pg.pool.QueryRow(context.Background(), `SELECT media_files,image_url,processing_state FROM articles WHERE id=900`).Scan(&media, &image, &state); err != nil {
+				t.Fatal(err)
+			}
+			if state != "completed" || calls.Load() != 1 || len(media) != tc.count {
+				t.Fatalf("state=%s extraction=%d media=%#v", state, calls.Load(), media)
+			}
+			if tc.source == "rss" {
+				if image != nil {
+					t.Fatal("page image was added to RSS article")
+				}
+				for i, m := range media {
+					if m["source"] != "rss_feed" || m["url"] != []string{"https://example.test/feed1.jpg", "https://example.test/feed2.png"}[i] {
+						t.Fatalf("feed media changed: %#v", media)
+					}
+				}
+			} else if image == nil || *image != "https://example.test/synthetic.jpg" {
+				t.Fatal("custom page image behavior changed")
+			}
+		})
 	}
 }

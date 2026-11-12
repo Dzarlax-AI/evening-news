@@ -55,11 +55,20 @@ func (p *Postgres) Close() {
 	}
 }
 
-const articleProjection = `a.id,a.source_id,a.title,a.summary,a.content,a.url,a.image_url,a.media_files,
+// RSS images need feed provenance, including when serving previously stored articles.
+// Unmarked legacy media stays in storage but is not published as feed content.
+const trustedRSSMedia = `COALESCE((SELECT jsonb_agg(entry.value ORDER BY entry.position)
+ FROM jsonb_array_elements(CASE WHEN jsonb_typeof(a.media_files::jsonb)='array' THEN a.media_files::jsonb ELSE '[]'::jsonb END)
+ WITH ORDINALITY AS entry(value,position)
+ WHERE entry.value->>'type'='image' AND entry.value->>'source'='rss_feed'), '[]'::jsonb)`
+const displayedMedia = `CASE WHEN s.source_type='rss' THEN ` + trustedRSSMedia + ` ELSE a.media_files::jsonb END`
+const displayedImage = `CASE WHEN s.source_type='rss' THEN (` + trustedRSSMedia + `)->0->>'url' ELSE a.image_url END`
+
+const articleProjection = `a.id,a.source_id,a.title,a.summary,a.content,a.url,` + displayedImage + `,` + displayedMedia + `,
  a.published_at,a.fetched_at,a.is_advertisement,a.ad_confidence,a.ad_type,a.ad_reasoning,
  s.name, COALESCE((SELECT c.display_name FROM article_categories ac JOIN categories c ON c.id=ac.category_id WHERE ac.article_id=a.id ORDER BY ac.id LIMIT 1),'Other'),
  COALESCE((SELECT jsonb_agg(jsonb_build_object('name',c.name,'display_name',c.display_name,'confidence',ac.confidence,'color',c.color) ORDER BY ac.id) FROM article_categories ac JOIN categories c ON c.id=ac.category_id WHERE ac.article_id=a.id),'[]'::jsonb),
- COALESCE((SELECT jsonb_agg(jsonb_build_object('ai_category',COALESCE(ac.ai_category,'Other'),'confidence',COALESCE(NULLIF(ac.confidence,0),1.0)) ORDER BY ac.id) FROM article_categories ac JOIN categories c ON c.id=ac.category_id WHERE ac.article_id=a.id),'[]'::jsonb)`
+ COALESCE((SELECT jsonb_agg(jsonb_build_object('ai_category',COALESCE(ac.ai_category,'Other'),'confidence',COALESCE(NULLIF(ac.confidence,0),1.0)) ORDER BY ac.id) FROM article_categories ac JOIN categories c ON c.id=ac.category_id WHERE ac.article_id=a.id),'[]'::jsonb), s.source_type`
 
 const serbianReady = `EXISTS (SELECT 1 FROM article_localizations l WHERE l.article_id=a.id AND l.locale='sr-Latn' AND l.status='completed' AND NULLIF(btrim(l.title),'') IS NOT NULL AND NULLIF(btrim(l.summary),'') IS NOT NULL)`
 
@@ -165,8 +174,14 @@ func (p *Postgres) Article(ctx context.Context, id int64, includeUnpublished boo
 }
 
 func scanArticle(row interface{ Scan(...any) error }, includeContent, clean bool) (map[string]any, error) {
+	item, _, err := scanArticleWithSourcePolicy(row, includeContent, clean)
+	return item, err
+}
+
+func scanArticleWithSourcePolicy(row interface{ Scan(...any) error }, includeContent, clean bool) (map[string]any, bool, error) {
 	var id int64
 	var sourceID *int64
+	var sourceType *string
 	var title, summary, content, url, imageURL, sourceName, category *string
 	var media []byte
 	var publishedAt, fetchedAt *time.Time
@@ -174,8 +189,8 @@ func scanArticle(row interface{ Scan(...any) error }, includeContent, clean bool
 	var adConf *float64
 	var adType, adReasoning *string
 	var cats, aiCats []byte
-	if err := row.Scan(&id, &sourceID, &title, &summary, &content, &url, &imageURL, &media, &publishedAt, &fetchedAt, &isAd, &adConf, &adType, &adReasoning, &sourceName, &category, &cats, &aiCats); err != nil {
-		return nil, err
+	if err := row.Scan(&id, &sourceID, &title, &summary, &content, &url, &imageURL, &media, &publishedAt, &fetchedAt, &isAd, &adConf, &adType, &adReasoning, &sourceName, &category, &cats, &aiCats, &sourceType); err != nil {
+		return nil, false, err
 	}
 	if clean && title != nil {
 		v := cleanText(*title)
@@ -259,7 +274,7 @@ func scanArticle(row interface{ Scan(...any) error }, includeContent, clean bool
 	} else {
 		item["content"] = nil
 	}
-	return item, nil
+	return item, sourceType != nil && *sourceType == "rss", nil
 }
 
 func stringOrNil(value *string) any {
@@ -529,11 +544,11 @@ func (p *Postgres) Search(ctx context.Context, q SearchQuery) (map[string]any, e
 	defer rows.Close()
 	articles := []map[string]any{}
 	for rows.Next() {
-		item, e := scanArticle(rows, true, false)
+		item, rssOnly, e := scanArticleWithSourcePolicy(rows, true, false)
 		if e != nil {
 			return nil, e
 		}
-		result := searchArticle(item, query)
+		result := searchArticle(item, query, rssOnly)
 		if isSerbian(ctx) {
 			result["category"] = item["category"]
 		}
@@ -547,13 +562,20 @@ func (p *Postgres) Search(ctx context.Context, q SearchQuery) (map[string]any, e
 
 var contentImageTag = regexp.MustCompile(`(?is)<img[^>]+src=["']([^"']+)["'][^>]*>`)
 
-func searchArticle(item map[string]any, query string) map[string]any {
+func searchArticle(item map[string]any, query string, rssOnly bool) map[string]any {
 	media, _ := item["media_files"].([]any)
 	if media == nil {
 		media = []any{}
 	}
 	content := stringValue(item["content"])
-	for index, match := range contentImageTag.FindAllStringSubmatch(content, -1) {
+	var matches [][]string
+	if !rssOnly {
+		matches = contentImageTag.FindAllStringSubmatch(content, -1)
+	} else {
+		// Legacy feed-card fallback also reads summary HTML for an image.
+		item["summary"] = cleanText(stringValue(item["summary"]))
+	}
+	for index, match := range matches {
 		if len(match) < 2 {
 			continue
 		}
@@ -725,7 +747,7 @@ func (p *Postgres) Digest(ctx context.Context, date time.Time) (DigestPage, erro
 		return page, err
 	}
 	rows.Close()
-	rows, err = p.pool.Query(ctx, `SELECT id,title,summary,url,source_name,image_url,fetched_at,category,confidence FROM (SELECT DISTINCT ON (a.id) a.id,a.title,a.summary,a.url,COALESCE(s.name,'Unknown') AS source_name,COALESCE((SELECT item->>'url' FROM jsonb_array_elements(COALESCE(a.media_files::jsonb,'[]'::jsonb)) item WHERE item->>'type'='image' LIMIT 1),a.image_url) AS image_url,a.fetched_at,COALESCE(c.name,'Other') AS category,COALESCE(ac.confidence,0) AS confidence FROM articles a JOIN article_categories ac ON ac.article_id=a.id JOIN categories c ON c.id=ac.category_id LEFT JOIN sources s ON s.id=a.source_id WHERE a.fetched_at::date=$1 AND a.processing_state='completed' AND a.is_advertisement IS NOT TRUE ORDER BY a.id,ac.confidence DESC NULLS LAST) chosen ORDER BY fetched_at DESC`, date.Format("2006-01-02"))
+	rows, err = p.pool.Query(ctx, `SELECT id,title,summary,url,source_name,image_url,fetched_at,category,confidence FROM (SELECT DISTINCT ON (a.id) a.id,a.title,a.summary,a.url,COALESCE(s.name,'Unknown') AS source_name,CASE WHEN s.source_type='rss' THEN (`+trustedRSSMedia+`)->0->>'url' ELSE COALESCE((SELECT item->>'url' FROM jsonb_array_elements(COALESCE(a.media_files::jsonb,'[]'::jsonb)) item WHERE item->>'type'='image' LIMIT 1),a.image_url) END AS image_url,a.fetched_at,COALESCE(c.name,'Other') AS category,COALESCE(ac.confidence,0) AS confidence FROM articles a JOIN article_categories ac ON ac.article_id=a.id JOIN categories c ON c.id=ac.category_id LEFT JOIN sources s ON s.id=a.source_id WHERE a.fetched_at::date=$1 AND a.processing_state='completed' AND a.is_advertisement IS NOT TRUE ORDER BY a.id,ac.confidence DESC NULLS LAST) chosen ORDER BY fetched_at DESC`, date.Format("2006-01-02"))
 	if err != nil {
 		return page, err
 	}

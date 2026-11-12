@@ -7,6 +7,8 @@ import (
 	"encoding/json"
 	"net/url"
 	"os"
+	"reflect"
+	"strings"
 	"testing"
 	"time"
 
@@ -52,7 +54,7 @@ func TestPostgresPublicReaderMultiCategoryAndReadPaths(t *testing.T) {
 		_, _ = admin.Exec(dropCtx, `DROP SCHEMA `+schema+` CASCADE`)
 	}()
 	ddl := []string{
-		`CREATE TABLE ` + schema + `.sources(id bigint PRIMARY KEY,name text NOT NULL,enabled boolean NOT NULL DEFAULT true)`,
+		`CREATE TABLE ` + schema + `.sources(id bigint PRIMARY KEY,name text NOT NULL,enabled boolean NOT NULL DEFAULT true,source_type text NOT NULL DEFAULT 'custom')`,
 		`CREATE TABLE ` + schema + `.categories(id bigint PRIMARY KEY,name text NOT NULL,display_name text NOT NULL,color text NOT NULL)`,
 		`CREATE TABLE ` + schema + `.articles(id bigint PRIMARY KEY,source_id bigint,title text NOT NULL,summary text,content text,url text NOT NULL,image_url text,media_files jsonb,published_at timestamp,fetched_at timestamp,is_advertisement boolean,ad_confidence real,ad_type text,ad_reasoning text,ad_markers jsonb,processing_state text,ad_processed boolean)`,
 		`CREATE TABLE ` + schema + `.article_categories(id bigint PRIMARY KEY,article_id bigint NOT NULL,category_id bigint NOT NULL,confidence real,ai_category text)`,
@@ -243,6 +245,7 @@ func TestPostgresPublicReaderMultiCategoryAndReadPaths(t *testing.T) {
 	if err != nil || latest == nil || latest.ID != editionID {
 		t.Fatalf("latest editorial edition lookup failed: edition=%#v err=%v", latest, err)
 	}
+	testPublicRSSImagePolicy(t, ctx, reader, pool)
 }
 
 func TestPostgresEditorialDigestStatusDoesNotNeedLegacySummaries(t *testing.T) {
@@ -307,5 +310,111 @@ func TestPostgresEditorialDigestStatusDoesNotNeedLegacySummaries(t *testing.T) {
 	missing, err := reader.EditorialDigestStatus(ctx, time.Date(2026, 10, 26, 0, 0, 0, 0, time.UTC), "ru")
 	if err != nil || missing.Ready || missing.EditionID != "" || missing.ArticleCount != 0 {
 		t.Fatalf("missing edition was presented as ready: status=%+v err=%v", missing, err)
+	}
+}
+
+func testPublicRSSImagePolicy(t *testing.T, ctx context.Context, reader *Postgres, pool *pgxpool.Pool) {
+	t.Helper()
+	const trusted = `[{"type":"image","source":"rss_feed","url":"https://fixture.test/feed1.jpg"},{"type":"image","source":"content_html","url":"https://fixture.test/avatar.jpg"},{"type":"image","source":"rss_feed","url":"https://fixture.test/feed2.png"}]`
+	const legacy = `[{"type":"image","url":"https://fixture.test/legacy.jpg"}]`
+	for _, tc := range []struct {
+		name, source, media string
+		want                []string
+		cover               string
+	}{
+		{"rss_trusted", "rss", trusted, []string{"https://fixture.test/feed1.jpg", "https://fixture.test/feed2.png"}, "https://fixture.test/feed1.jpg"},
+		{"rss_legacy", "rss", legacy, []string{}, ""},
+		{"rss_empty", "rss", `[]`, []string{}, ""},
+		{"custom", "custom", legacy, []string{"https://fixture.test/legacy.jpg"}, "https://fixture.test/cover.jpg"},
+		{"telegram", "telegram", legacy, []string{"https://fixture.test/legacy.jpg"}, "https://fixture.test/cover.jpg"},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			if _, err := pool.Exec(ctx, `UPDATE sources SET source_type=$1 WHERE id=7`, tc.source); err != nil {
+				t.Fatal(err)
+			}
+			if _, err := pool.Exec(ctx, `UPDATE articles SET media_files=$1,image_url='https://fixture.test/cover.jpg',title='Fixture article',summary='Fixture summary <img src="https://fixture.test/summary.jpg">',content='<img src="https://fixture.test/page.jpg">' WHERE id=42`, tc.media); err != nil {
+				t.Fatal(err)
+			}
+			check := func(name string, item map[string]any, want []string) {
+				t.Helper()
+				media, ok := item["media_files"].([]any)
+				if !ok {
+					t.Fatalf("%s invalid media: %#v", name, item["media_files"])
+				}
+				if len(media) != len(want) {
+					t.Fatalf("%s image count=%d, want=%d: %#v", name, len(media), len(want), media)
+				}
+				for i, m := range media {
+					if m.(map[string]any)["url"] != want[i] {
+						t.Fatalf("%s order/media differs: %#v", name, media)
+					}
+				}
+				if stringValue(item["image_url"]) != tc.cover {
+					t.Fatalf("%s cover=%v want=%s", name, item["image_url"], tc.cover)
+				}
+			}
+			feed, err := reader.Feed(ctx, FeedQuery{Limit: 20, HideAds: true})
+			if err != nil || len(feed.Articles) != 1 {
+				t.Fatalf("feed: %v", err)
+			}
+			check("feed", feed.Articles[0], tc.want)
+			article, err := reader.Article(ctx, 42, false)
+			if err != nil {
+				t.Fatal(err)
+			}
+			check("article", article, tc.want)
+			api, err := reader.APIFeed(ctx, APIFeedQuery{Limit: 20})
+			if err != nil || len(api.Items) != 1 {
+				t.Fatalf("api: %v", err)
+			}
+			check("api", api.Items[0], tc.want)
+			search, err := reader.Search(ctx, SearchQuery{Query: "Fixture", Limit: 20, HideAds: true})
+			if err != nil {
+				t.Fatal(err)
+			}
+			matches := search["articles"].([]map[string]any)
+			wantSearch := append([]string{}, tc.want...)
+			if tc.source != "rss" {
+				wantSearch = append(wantSearch, "https://fixture.test/page.jpg")
+			}
+			if len(matches) != 1 {
+				t.Fatalf("search: %#v", search)
+			}
+			check("search", matches[0], wantSearch)
+			if tc.source == "rss" && strings.Contains(stringValue(matches[0]["summary"]), "<img") {
+				t.Fatal("RSS summary can reintroduce a page image")
+			}
+			digest, err := reader.Digest(ctx, time.Date(2026, 10, 26, 0, 0, 0, 0, time.UTC))
+			if err != nil {
+				t.Fatal(err)
+			}
+			var covers []string
+			for _, category := range digest.Categories {
+				for _, a := range category.Articles {
+					if a.ImageURL == nil {
+						covers = append(covers, "")
+					} else {
+						covers = append(covers, *a.ImageURL)
+					}
+				}
+			}
+			digestCover := tc.cover
+			if tc.source != "rss" {
+				digestCover = tc.want[0]
+			}
+			if len(covers) != 1 || covers[0] != digestCover {
+				t.Fatalf("digest covers=%v, want=%s", covers, digestCover)
+			}
+			var stored string
+			if err := pool.QueryRow(ctx, `SELECT media_files::text FROM articles WHERE id=42`).Scan(&stored); err != nil {
+				t.Fatal(err)
+			}
+			var before, after any
+			_ = json.Unmarshal([]byte(tc.media), &before)
+			_ = json.Unmarshal([]byte(stored), &after)
+			if !reflect.DeepEqual(before, after) {
+				t.Fatal("reader rewrote stored media")
+			}
+		})
 	}
 }

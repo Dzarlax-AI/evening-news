@@ -131,6 +131,10 @@ func TestParseRSSSourceGoldenPythonParity(t *testing.T) {
 				articles := expectedValue.([]any)
 				articles[0].(map[string]any)["image_url"] = "https://publisher.example/images/thumb.jpg"
 			}
+			// Feed-only media is an intentional extension, covered by RSS image tests.
+			for _, value := range actualValue.([]any) {
+				delete(value.(map[string]any), "media_files")
+			}
 			if !reflect.DeepEqual(actualValue, expectedValue) {
 				t.Fatalf("Python Article baseline mismatch\nactual:   %s\nexpected: %s", actualJSON, entry.Articles)
 			}

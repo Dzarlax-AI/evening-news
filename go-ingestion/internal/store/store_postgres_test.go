@@ -112,7 +112,7 @@ func TestPostgresFencedArticleCommitAndQueuePrivilegeBoundary(t *testing.T) {
 		t.Fatalf("begin source: ok=%v err=%v", ok, err)
 	}
 	content := "fixture body"
-	counts, err := s.CommitSource(ctx, f, source, []Article{{Title: "Fixture article", URL: "https://fixture.invalid/story", Content: &content, MediaFiles: []byte(`[{"type":"image","url":"https://fixture.invalid/a.jpg","width":640,"contact_data":{"x":1}}]`), SourceType: "rss", SourceName: "Fixture News"}}, "success", "", nil)
+	counts, err := s.CommitSource(ctx, f, source, []Article{{Title: "Fixture article", URL: "https://fixture.invalid/story", Content: &content, MediaFiles: []byte(`[{"type":"image","url":"https://fixture.invalid/a.jpg","source":"rss_feed","width":640,"contact_data":{"x":1}}]`), SourceType: "rss", SourceName: "Fixture News"}}, "success", "", nil)
 	if err != nil || counts.Saved != 1 {
 		t.Fatalf("commit article: counts=%+v err=%v", counts, err)
 	}
@@ -145,7 +145,7 @@ func TestPostgresFencedArticleCommitAndQueuePrivilegeBoundary(t *testing.T) {
 	if err := lease.QueryRow(ctx, `SELECT media_files::text FROM articles WHERE url='https://fixture.invalid/story'`).Scan(&media); err != nil {
 		t.Fatal(err)
 	}
-	if !strings.Contains(media, `"width": 640`) || !strings.Contains(media, "contact_data") {
+	if !strings.Contains(media, `"width": 640`) || !strings.Contains(media, "contact_data") || !strings.Contains(media, `"source": "rss_feed"`) {
 		t.Fatalf("arbitrary media metadata lost: %s", media)
 	}
 	if _, err := lease.Exec(ctx, `INSERT INTO sources(id,name,source_type,url,enabled,config) VALUES(43,'Fixture Monitor','custom','https://fixture.invalid/list',true,'{"max_articles_per_check": 7}')`); err != nil {

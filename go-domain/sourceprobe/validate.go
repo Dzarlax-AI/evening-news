@@ -171,7 +171,32 @@ func validRSS(v any, name string) bool {
 	}
 	for _, item := range items {
 		a, ok := obj(item)
-		if !ok || !exact(a, "title", "url", "content", "summary", "image_url", "published_at", "source_type", "source_name", "raw_data") {
+		if !ok {
+			return false
+		}
+		keys := []string{"title", "url", "content", "summary", "image_url", "published_at", "source_type", "source_name", "raw_data"}
+		// Accept the old extractor during a rolling upgrade, validating feed media when present.
+		if media, present := a["media_files"]; present {
+			keys = append(keys, "media_files")
+			images, valid := arr(media)
+			if !valid || len(images) > 256 {
+				return false
+			}
+			encoded, err := json.Marshal(images)
+			if err != nil || len(encoded) > 256*1024 {
+				return false
+			}
+			for _, image := range images {
+				m, valid := obj(image)
+				if !valid || m["type"] != "image" || m["source"] != "rss_feed" || !safeURL(m["url"]) {
+					return false
+				}
+				if alt, present := m["alt_text"]; present && !bounded(alt, 1024) {
+					return false
+				}
+			}
+		}
+		if !exact(a, keys...) {
 			return false
 		}
 		if _, ok = str(a["title"]); !ok || !safeURL(a["url"]) || a["source_type"] != "rss" || a["source_name"] != name || !utcDate(a["published_at"]) {
