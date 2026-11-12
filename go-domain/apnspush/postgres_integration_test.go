@@ -73,6 +73,38 @@ func randomCapability(t *testing.T) string {
 	return base64.RawURLEncoding.EncodeToString(b)
 }
 
+func TestPostgresChallengeExpiryMatchesPersistedPrecision(t *testing.T) {
+	ctx := context.Background()
+	pool := pushTestDB(t)
+	key := make([]byte, 32)
+	_, _ = rand.Read(key)
+	clock := time.Now().UTC().Truncate(time.Second).Add(123456789 * time.Nanosecond)
+	service := &Service{Pool: pool, Key: key, KeyID: "fixture-key", InstallationID: "domain-fixture", IPHashKey: key, Now: func() time.Time { return clock }}
+	in := Registration{InstallationID: "c1234567-1234-4234-8234-123456789abc", DeviceToken: "0123456789abcdef", Locale: "ru", Environment: "sandbox"}
+	capability := randomCapability(t)
+	created, status, err := service.Register(ctx, in, capability, "192.0.2.42")
+	if err != nil || status != 202 {
+		t.Fatalf("registration: %d %v", status, err)
+	}
+	checkExpiry := func(got Status) {
+		t.Helper()
+		var installationExpiry, challengeExpiry time.Time
+		if err := pool.QueryRow(ctx, `SELECT i.challenge_expires_at,c.expires_at FROM push_installations i JOIN push_challenges c USING(installation_id,subscription_version) WHERE i.installation_id=$1`, in.InstallationID).Scan(&installationExpiry, &challengeExpiry); err != nil {
+			t.Fatal(err)
+		}
+		if got.ExpiresAt == nil || !got.ExpiresAt.Equal(installationExpiry) || !got.ExpiresAt.Equal(challengeExpiry) {
+			t.Fatalf("response expiry differs from persisted proof expiry: response=%v installation=%v challenge=%v", got.ExpiresAt, installationExpiry, challengeExpiry)
+		}
+	}
+	checkExpiry(created)
+	in.DeviceToken = "1123456789abcdef"
+	updated, err := service.Update(ctx, in.InstallationID, in, capability, "192.0.2.42", 1)
+	if err != nil || updated.SubscriptionVersion != 2 {
+		t.Fatalf("rotation: %+v %v", updated, err)
+	}
+	checkExpiry(updated)
+}
+
 func TestPostgresRegistrationRateLimitAndRotation(t *testing.T) {
 	ctx := context.Background()
 	pool := pushTestDB(t)

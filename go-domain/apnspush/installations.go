@@ -249,7 +249,8 @@ func (s *Service) Register(ctx context.Context, in Registration, capability, can
 	}
 	nonceText := base64.RawURLEncoding.EncodeToString(nonce)
 	nonceHash := sha256.Sum256([]byte(nonceText))
-	expires := s.now().Add(10 * time.Minute)
+	// PostgreSQL timestamps retain microseconds; return the exact persisted expiry.
+	expires := s.now().Add(10 * time.Minute).Truncate(time.Microsecond)
 	provider := aadProvider(in.InstallationID, 1)
 	envelope, err := credentialstore.Seal(s.Key, s.KeyID, s.InstallationID, provider, token)
 	if err != nil {
@@ -350,7 +351,7 @@ func (s *Service) Update(ctx context.Context, id string, in Registration, capabi
 		nonceText := base64.RawURLEncoding.EncodeToString(nonce)
 		nh := sha256.Sum256([]byte(nonceText))
 		nonceHash = nh[:]
-		expiry := s.now().Add(10 * time.Minute)
+		expiry := s.now().Add(10 * time.Minute).Truncate(time.Microsecond)
 		challengeExpiresVal = expiry
 		statusExpiry = &expiry
 		ce, eerr := credentialstore.Seal(s.Key, s.KeyID, s.InstallationID, "apns-nonce:"+id+":"+strconv.FormatInt(newVersion, 10), []byte(nonceText))

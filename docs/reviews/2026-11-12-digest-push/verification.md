@@ -12,6 +12,11 @@ verified by these local checks.
 - After the private canary was separated from ordinary readiness cutover, the
   complete `apnspush` race suite and vet passed again.
 - Configuration catalog validation passed after refreshing source references.
+- Initial PostgreSQL 16/17 CI found a timestamp-precision mismatch: newly returned
+  challenge expiry retained nanoseconds while PostgreSQL stored microseconds.
+  Registration and token-rotation responses now use persisted precision. A
+  deterministic nanosecond-clock regression covers both writes; the full local
+  APNs race suite and vet passed after the correction.
 - Independent focused review addressed the public safe-409 boundary, challenge
   attempt accounting, in-flight ownership proof, unknown-challenge resend,
   fixed expiration, token quota, encryption-version binding and lock ordering.
