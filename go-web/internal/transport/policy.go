@@ -30,6 +30,55 @@ func SecureRequest(r *http.Request) bool {
 	return v
 }
 
+// CanonicalClientIP resolves the client address through the configured proxy
+// chain. Forwarding headers from an untrusted peer are ignored.
+func CanonicalClientIP(r *http.Request, trusted []*net.IPNet) (net.IP, bool) {
+	if r == nil {
+		return nil, false
+	}
+	peerHost, _, err := net.SplitHostPort(r.RemoteAddr)
+	if err != nil {
+		peerHost = r.RemoteAddr
+	}
+	peer := net.ParseIP(peerHost)
+	if peer == nil {
+		return nil, false
+	}
+	if !trustedPeer(r.RemoteAddr, trusted) {
+		return peer, true
+	}
+	values := r.Header.Values("X-Forwarded-For")
+	var chain []net.IP
+	for _, value := range values {
+		for _, part := range strings.Split(value, ",") {
+			ip := net.ParseIP(strings.TrimSpace(part))
+			if ip == nil {
+				return nil, false
+			}
+			chain = append(chain, ip)
+		}
+	}
+	if len(chain) == 0 || len(chain) > 16 {
+		return nil, false
+	}
+	current := peer
+	for i := len(chain) - 1; i >= 0; i-- {
+		if !isTrusted(current, trusted) {
+			break
+		}
+		current = chain[i]
+	}
+	return current, true
+}
+func isTrusted(ip net.IP, nets []*net.IPNet) bool {
+	for _, n := range nets {
+		if n != nil && n.Contains(ip) {
+			return true
+		}
+	}
+	return false
+}
+
 // Wrap never obtains identity or the public scheme from an untrusted header.
 // Identity assertion headers are meaningful only behind an explicitly trusted
 // peer; ordinary Basic and JWT authentication do not require a proxy.

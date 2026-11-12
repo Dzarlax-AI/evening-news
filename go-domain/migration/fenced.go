@@ -8,6 +8,9 @@ import (
 	"strings"
 )
 
+//go:embed sql/021.sql
+var pushSQL string
+
 //go:embed sql/012.sql
 var ingestionSQL string
 
@@ -126,4 +129,14 @@ var viberSQL string
 
 func viberMigration() migration {
 	return fencedMigration("020_viber_digest_delivery", "Add durable Viber delivery", viberSQL, []string{"viber_publication_requests", "viber_digest_deliveries", "viber_digest_parts", "viber_test_receipts", "viber_channel_leases"}, "enqueue_viber_digest_delivery", map[string]any{"viber_digest_delivery": true})
+}
+
+func pushMigration() migration {
+	return migration{ID: "021_apns_digest_push", Description: "Add opt-in APNs installations and durable digest readiness receipts", Needed: func(ctx context.Context, tx pgx.Tx) (bool, error) {
+		var exists bool
+		err := tx.QueryRow(ctx, `SELECT to_regclass(current_schema() || '.push_installations') IS NOT NULL AND to_regclass(current_schema() || '.push_readiness_events') IS NOT NULL AND to_regclass(current_schema() || '.push_deliveries') IS NOT NULL`).Scan(&exists)
+		return !exists, err
+	}, Apply: func(ctx context.Context, tx pgx.Tx) (map[string]any, error) {
+		return map[string]any{"tables_created": []string{"push_installations", "push_readiness_events", "push_deliveries", "push_rate_buckets"}}, schemaSQL(ctx, tx, pushSQL)
+	}}
 }

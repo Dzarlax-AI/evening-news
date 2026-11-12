@@ -119,6 +119,15 @@ func (w Workflow) persistLocalizedEdition(ctx context.Context, id, job string, a
 			return err
 		}
 	}
+	if tag.RowsAffected() == 1 && (e.Locale == "ru" || e.Locale == "sr-Latn") {
+		// Serialize post-cutover readiness commits with push activation eligibility.
+		if _, err = tx.Exec(ctx, `SELECT pg_advisory_xact_lock(1649258121,728442)`); err != nil {
+			return err
+		}
+		if _, err = tx.Exec(ctx, `INSERT INTO push_readiness_events(edition_id,edition_date,locale) SELECT id,edition_date,locale FROM editorial_digest_editions WHERE id=$1 AND EXISTS(SELECT 1 FROM push_cutover WHERE id=1 AND enabled) ON CONFLICT(edition_date,locale) DO NOTHING`, id); err != nil {
+			return err
+		}
+	}
 	return tx.Commit(ctx)
 }
 

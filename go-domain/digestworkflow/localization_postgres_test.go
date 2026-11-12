@@ -88,6 +88,15 @@ func draftFor(ids []string, summaries map[string]string, serbian bool) map[strin
 func TestRussianGenerationUsesBoundedProviderBudget(t *testing.T) {
 	pool := localizedPG(t)
 	ctx := context.Background()
+	if _, err := pool.Exec(ctx, `UPDATE push_cutover SET enabled=true WHERE id=1`); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := pool.Exec(ctx, `CREATE FUNCTION reject_push_readiness() RETURNS trigger LANGUAGE plpgsql AS $$ BEGIN RAISE EXCEPTION 'fixture readiness failure'; END $$`); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := pool.Exec(ctx, `CREATE TRIGGER reject_push_readiness BEFORE INSERT ON push_readiness_events FOR EACH ROW EXECUTE FUNCTION reject_push_readiness()`); err != nil {
+		t.Fatal(err)
+	}
 	cutoff := time.Now().UTC().Truncate(time.Microsecond)
 	_, err := pool.Exec(ctx, `INSERT INTO sources(id,name,source_type,url) VALUES(90002,'Fixture','rss','https://source.fixture/feed'); INSERT INTO categories(id,name,display_name) VALUES(90002,'fixture-category','Категория'); INSERT INTO articles(id,title,url,summary,source_id,fetched_at,processing_state) VALUES(90002,'Русский заголовок','https://source.fixture/2','Город начал строительство моста.',90002,$1,'completed'); INSERT INTO article_categories(article_id,category_id,confidence) VALUES(90002,90002,1)`, pgx.QueryExecModeSimpleProtocol, cutoff)
 	if err != nil {
@@ -108,7 +117,21 @@ func TestRussianGenerationUsesBoundedProviderBudget(t *testing.T) {
 	})
 	wf := Workflow{Pool: pool, Fence: localeTestFence{}, SiteBase: "https://news.fixture", Provider: editorial.ProviderConfig{Provider: provider, Model: "fixture"}}
 	n, err := wf.Generate(ctx, "10000000-0000-4000-8000-000000000002", 1, "20000000-0000-4000-8000-000000000001", cutoff)
-	if err != nil || n != 1 || calls != 1 {
+	if err == nil || n != 0 {
+		t.Fatalf("readiness persistence failure should roll back edition: n=%d err=%v", n, err)
+	}
+	var editions, events int
+	if err = pool.QueryRow(ctx, `SELECT count(*) FROM editorial_digest_editions`).Scan(&editions); err != nil {
+		t.Fatal(err)
+	}
+	if err = pool.QueryRow(ctx, `SELECT count(*) FROM push_readiness_events`).Scan(&events); err != nil || editions != 0 || events != 0 {
+		t.Fatalf("edition/readiness transaction was partial: editions=%d events=%d err=%v", editions, events, err)
+	}
+	if _, err = pool.Exec(ctx, `DROP TRIGGER reject_push_readiness ON push_readiness_events; DROP FUNCTION reject_push_readiness()`); err != nil {
+		t.Fatal(err)
+	}
+	n, err = wf.Generate(ctx, "10000000-0000-4000-8000-000000000003", 1, "20000000-0000-4000-8000-000000000001", cutoff)
+	if err != nil || n != 1 || calls != 2 {
 		t.Fatalf("Russian generation count=%d calls=%d error=%v", n, calls, err)
 	}
 }
@@ -116,6 +139,9 @@ func TestRussianGenerationUsesBoundedProviderBudget(t *testing.T) {
 func TestLocalizedEditionPartialFrozenRetryAndFreshJob(t *testing.T) {
 	pool := localizedPG(t)
 	ctx := context.Background()
+	if _, err := pool.Exec(ctx, `UPDATE push_cutover SET enabled=true WHERE id=1`); err != nil {
+		t.Fatal(err)
+	}
 	cutoff := time.Now().UTC().Truncate(time.Microsecond)
 	_, err := pool.Exec(ctx, `INSERT INTO sources(id,name,source_type,url) VALUES(90001,'Fixture','rss','https://source.fixture/feed'); INSERT INTO categories(id,name,display_name) VALUES(90001,'fixture-category','Категория'); INSERT INTO category_localizations(category_id,locale,display_name) VALUES(90001,'sr-Latn','Vesti'); INSERT INTO articles(id,title,url,summary,source_id,fetched_at,processing_state) VALUES(90001,'Русский заголовок','https://source.fixture/1','Город начал строительство моста.',90001,$1,'completed'); INSERT INTO article_categories(article_id,category_id,confidence) VALUES(90001,90001,1); INSERT INTO article_localizations(article_id,locale,title,summary,input_fingerprint,prompt_version,model,status) VALUES(90001,'sr-Latn','Počinje izgradnja mosta','Grad je počeo izgradnju mosta.',repeat('a',64),'fixture','fixture','completed')`, pgx.QueryExecModeSimpleProtocol, cutoff)
 	if err != nil {
@@ -272,6 +298,10 @@ func TestLocalizedEditionPartialFrozenRetryAndFreshJob(t *testing.T) {
 	var count int
 	if err = pool.QueryRow(ctx, `SELECT count(*) FROM editorial_digest_editions WHERE locale='ru'`).Scan(&count); err != nil || count != 2 {
 		t.Fatalf("Russian editions=%d err=%v", count, err)
+	}
+	var ruReady, srReady int
+	if err = pool.QueryRow(ctx, `SELECT count(*) FILTER(WHERE locale='ru'),count(*) FILTER(WHERE locale='sr-Latn') FROM push_readiness_events`).Scan(&ruReady, &srReady); err != nil || ruReady != 1 || srReady != 1 {
+		t.Fatalf("readiness events should dedupe RU per day and retain SR independently: ru=%d sr=%d err=%v", ruReady, srReady, err)
 	}
 }
 

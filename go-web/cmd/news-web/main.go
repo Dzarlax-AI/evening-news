@@ -93,7 +93,7 @@ func run() error {
 		ScheduledJobsReceiptLimit: cfg.ScheduledJobsReceiptLimit,
 		EditorialDigestStatus:     db.EditorialDigestStatus,
 	})
-	httpui.RegisterBackend(mux, authService, privateOps)
+	httpui.RegisterBackend(mux, authService, privateOps, cfg.TrustedProxyCIDRs)
 	if cfg.Managed {
 		client, err := schedules.NewClient(schedules.ClientConfig{Endpoint: cfg.SchedulerURL, Token: cfg.SchedulerToken, AllowHTTP: cfg.SchedulerAllowHTTP, Timeout: 5 * time.Second})
 		if err != nil {

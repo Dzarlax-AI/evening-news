@@ -404,3 +404,63 @@ func TestUploadLimit(t *testing.T) {
 		t.Fatalf("error = %#v", err)
 	}
 }
+
+func TestPushPrivateForwardingReplacesCallerHeaders(t *testing.T) {
+	client, err := NewClient(Config{BaseURL: "http://backend.internal", Token: "private"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	client.http.Transport = roundTripFunc(func(r *http.Request) (*http.Response, error) {
+		if r.URL.Path != "/internal/web/v1/push/installations/11111111-1111-4111-8111-111111111111/activate" || r.Method != http.MethodPost {
+			t.Fatalf("unexpected path %s %s", r.Method, r.URL.Path)
+		}
+		if r.Header.Get("Authorization") != "Bearer private" || r.Header.Get("X-Push-Capability") != "capability" || r.Header.Get("X-Canonical-Client-IP") != "198.51.100.8" {
+			t.Fatalf("private headers were not scoped: %#v", r.Header)
+		}
+		return response(200, `{"installation_id":"11111111-1111-4111-8111-111111111111","state":"active","subscription_version":1}`), nil
+	})
+	out, status, err := client.Push(context.Background(), http.MethodPost, "/push/installations/11111111-1111-4111-8111-111111111111/activate", "capability", "198.51.100.8", json.RawMessage(`{"nonce":"x"}`))
+	if err != nil || status != 200 || !json.Valid(out) {
+		t.Fatalf("status=%d out=%s err=%v", status, out, err)
+	}
+	if _, _, err = client.Push(context.Background(), http.MethodPost, "/push/installations/../credentials", "capability", "198.51.100.8", nil); err == nil {
+		t.Fatal("unsafe route accepted")
+	}
+}
+
+func TestPushPreservesOnlyValidatedAuthorizedConflictState(t *testing.T) {
+	client, err := NewClient(Config{BaseURL: "http://backend.internal", Token: "private"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	const id = "11111111-1111-4111-8111-111111111111"
+	body := json.RawMessage(`{"expected_version":1,"device_token":"aabb","locale":"ru","environment":"sandbox"}`)
+	for _, tc := range []struct {
+		name, response string
+		wantBody       bool
+	}{
+		{"valid", `{"installation_id":"` + id + `","state":"active","subscription_version":2}`, true},
+		{"mismatched installation", `{"installation_id":"22222222-2222-4222-8222-222222222222","state":"active","subscription_version":2}`, false},
+		{"secret field", `{"installation_id":"` + id + `","state":"active","subscription_version":2,"device_token":"secret"}`, false},
+		{"duplicate field", `{"installation_id":"` + id + `","installation_id":"` + id + `","state":"active","subscription_version":2}`, false},
+		{"null field", `{"installation_id":"` + id + `","state":"active","subscription_version":null}`, false},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			client.http.Transport = roundTripFunc(func(*http.Request) (*http.Response, error) { return response(http.StatusConflict, tc.response), nil })
+			out, status, callErr := client.Push(context.Background(), http.MethodPut, "/push/installations/"+id, "capability", "198.51.100.8", body)
+			if status != http.StatusConflict {
+				t.Fatalf("status=%d", status)
+			}
+			if tc.wantBody {
+				if callErr != nil || !json.Valid(out) || !strings.Contains(string(out), `"subscription_version":2`) {
+					t.Fatalf("safe conflict body=%s err=%v", out, callErr)
+				}
+			} else {
+				var apiErr *APIError
+				if !errors.As(callErr, &apiErr) || apiErr.Status != http.StatusConflict || len(out) != 0 {
+					t.Fatalf("unsafe conflict leaked: body=%s err=%v", out, callErr)
+				}
+			}
+		})
+	}
+}

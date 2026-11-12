@@ -199,6 +199,8 @@ GRANT INSERT, UPDATE, DELETE ON news.category_localizations TO news_web_runtime;
 
 GRANT SELECT, INSERT, UPDATE ON news.editorial_locale_inputs TO news_domain_runtime;
 GRANT SELECT, INSERT ON news.editorial_serbian_retry TO news_domain_runtime;
+GRANT SELECT, INSERT, UPDATE, DELETE ON news.push_installations, news.push_readiness_events, news.push_challenges, news.push_deliveries, news.push_rate_buckets, news.push_cutover TO news_domain_runtime;
+GRANT USAGE, SELECT ON SEQUENCE news.push_readiness_events_id_seq TO news_domain_runtime;
 GRANT UPDATE (publication_pinned, publication_attempted, delivery_enabled, destination) ON news.editorial_serbian_retry TO news_domain_runtime;
 GRANT EXECUTE ON FUNCTION news.enqueue_serbian_digest_retry() TO news_worker_runtime;
 

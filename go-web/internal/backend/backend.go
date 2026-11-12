@@ -148,6 +148,12 @@ type CredentialOperations interface {
 type ConfigurationOperations interface {
 	Configuration(context.Context, string, string, json.RawMessage) (json.RawMessage, error)
 }
+type PushOperations interface {
+	Push(context.Context, string, string, string, string, json.RawMessage) (json.RawMessage, int, error)
+}
+type PushCanaryOperations interface {
+	PushCanary(context.Context, string, string, json.RawMessage) (json.RawMessage, int, error)
+}
 
 func (c *Client) Configuration(ctx context.Context, method, group string, body json.RawMessage) (json.RawMessage, error) {
 	if group != "telegram" && group != "viber" && group != "operational" && group != "readiness" {
@@ -161,7 +167,7 @@ func (c *Client) Configuration(ctx context.Context, method, group string, body j
 }
 
 func (c *Client) Credential(ctx context.Context, method, provider string, body json.RawMessage) (json.RawMessage, error) {
-	if provider != "gemini" && provider != "openai" && provider != "telegram" && provider != "viber" {
+	if provider != "gemini" && provider != "openai" && provider != "telegram" && provider != "viber" && provider != "apns" {
 		return nil, &APIError{Status: 422, Detail: "Invalid provider"}
 	}
 	var reader io.Reader
@@ -169,6 +175,186 @@ func (c *Client) Credential(ctx context.Context, method, provider string, body j
 		reader = bytes.NewReader(body)
 	}
 	return c.rawJSON(ctx, method, "/credentials/"+provider, reader, "application/json")
+}
+
+// Push forwards one fixed installation operation through the private web
+// boundary. Capability and canonical IP arguments replace all caller headers.
+func (c *Client) Push(ctx context.Context, method, operation, capability, clientIP string, body json.RawMessage) (json.RawMessage, int, error) {
+	if method != http.MethodPost && method != http.MethodPut && method != http.MethodDelete {
+		return nil, 0, &APIError{Status: 400, Detail: "Invalid push request"}
+	}
+	if !validPushOperation(method, operation) {
+		return nil, 0, &APIError{Status: 400, Detail: "Invalid push request"}
+	}
+	if strings.ContainsAny(capability+clientIP, "\r\n") || capability == "" || clientIP == "" {
+		return nil, 0, &APIError{Status: 400, Detail: "Invalid push request"}
+	}
+	var reader io.Reader
+	if body != nil {
+		reader = bytes.NewReader(body)
+	}
+	resp, err := c.requestWithHeaders(ctx, method, operation, reader, "application/json", http.Header{"X-Push-Capability": {capability}, "X-Canonical-Client-IP": {clientIP}})
+	if err != nil {
+		return nil, 0, err
+	}
+	defer resp.Body.Close()
+	status := resp.StatusCode
+	if status < 200 || status >= 300 {
+		if status == http.StatusConflict {
+			data, readErr := io.ReadAll(io.LimitReader(resp.Body, 4097))
+			if readErr == nil && len(data) <= 4096 && validPushConflict(data, method, operation, body) {
+				return json.RawMessage(data), status, nil
+			}
+			return nil, status, &APIError{Status: status, Detail: "Push operation failed"}
+		}
+		_, _ = io.Copy(io.Discard, io.LimitReader(resp.Body, 4096))
+		return nil, status, &APIError{Status: status, Detail: "Push operation failed"}
+	}
+	data, err := io.ReadAll(io.LimitReader(resp.Body, maxJSONResponse+1))
+	if err != nil {
+		return nil, status, fmt.Errorf("%w: response read failed", ErrUnavailable)
+	}
+	if len(data) > maxJSONResponse {
+		return nil, status, &APIError{Status: 502, Detail: "Private backend response exceeded the response limit"}
+	}
+	if status != http.StatusNoContent && !json.Valid(data) {
+		return nil, status, &APIError{Status: 502, Detail: "Private backend returned invalid JSON"}
+	}
+	if status == http.StatusNoContent {
+		return nil, status, nil
+	}
+	return json.RawMessage(data), status, nil
+}
+
+func validPushConflict(raw []byte, method, operation string, requestBody json.RawMessage) bool {
+	fields, ok := strictJSONObject(raw)
+	if !ok || (len(fields) != 3 && len(fields) != 4) {
+		return false
+	}
+	for key, value := range fields {
+		if key != "installation_id" && key != "state" && key != "subscription_version" && key != "expires_at" {
+			return false
+		}
+		if bytes.Equal(bytes.TrimSpace(value), []byte("null")) {
+			return false
+		}
+	}
+	var status struct {
+		InstallationID      string     `json:"installation_id"`
+		State               string     `json:"state"`
+		SubscriptionVersion int64      `json:"subscription_version"`
+		ExpiresAt           *time.Time `json:"expires_at,omitempty"`
+	}
+	dec := json.NewDecoder(bytes.NewReader(raw))
+	dec.DisallowUnknownFields()
+	if dec.Decode(&status) != nil || status.InstallationID == "" || status.SubscriptionVersion < 1 ||
+		(status.State != "pending" && status.State != "active" && status.State != "disabled" && status.State != "invalid") {
+		return false
+	}
+	expectedID := ""
+	if operation == "/push/installations" {
+		if method != http.MethodPost {
+			return false
+		}
+		requestFields, valid := strictJSONObject(requestBody)
+		if !valid {
+			return false
+		}
+		if json.Unmarshal(requestFields["installation_id"], &expectedID) != nil {
+			return false
+		}
+	} else {
+		parts := strings.Split(strings.TrimPrefix(operation, "/push/installations/"), "/")
+		if len(parts) == 0 || parts[0] == "" {
+			return false
+		}
+		expectedID = parts[0]
+	}
+	return status.InstallationID == expectedID
+}
+
+// strictJSONObject returns only top-level object fields and rejects duplicate
+// keys, null values, malformed input, and trailing data.
+func strictJSONObject(raw []byte) (map[string]json.RawMessage, bool) {
+	dec := json.NewDecoder(bytes.NewReader(raw))
+	tok, err := dec.Token()
+	if err != nil || tok != json.Delim('{') {
+		return nil, false
+	}
+	fields := make(map[string]json.RawMessage)
+	for dec.More() {
+		tok, err = dec.Token()
+		key, isString := tok.(string)
+		if err != nil || !isString {
+			return nil, false
+		}
+		if _, duplicate := fields[key]; duplicate {
+			return nil, false
+		}
+		var value json.RawMessage
+		if dec.Decode(&value) != nil || bytes.Equal(bytes.TrimSpace(value), []byte("null")) {
+			return nil, false
+		}
+		fields[key] = value
+	}
+	if _, err = dec.Token(); err != nil {
+		return nil, false
+	}
+	var trailing any
+	if dec.Decode(&trailing) != io.EOF {
+		return nil, false
+	}
+	return fields, true
+}
+
+func validPushOperation(method, op string) bool {
+	if op == "/push/canary" {
+		return method == http.MethodPost
+	}
+	if op == "/push/installations" {
+		return method == http.MethodPost
+	}
+	parts := strings.Split(strings.TrimPrefix(op, "/push/installations/"), "/")
+	if len(parts) < 1 || len(parts[0]) != 36 {
+		return false
+	}
+	for i, c := range parts[0] {
+		if i == 8 || i == 13 || i == 18 || i == 23 {
+			if c != '-' {
+				return false
+			}
+		} else if !(c >= '0' && c <= '9' || c >= 'a' && c <= 'f') {
+			return false
+		}
+	}
+	if len(parts) == 1 {
+		return method == http.MethodPut || method == http.MethodDelete
+	}
+	return len(parts) == 2 && parts[1] == "activate" && method == http.MethodPost
+}
+
+func (c *Client) PushCanary(ctx context.Context, operation, clientIP string, body json.RawMessage) (json.RawMessage, int, error) {
+	if operation != "/push/canary" || clientIP == "" || strings.ContainsAny(clientIP, "\r\n") || body == nil {
+		return nil, 0, &APIError{Status: 400, Detail: "Invalid canary request"}
+	}
+	resp, err := c.requestWithHeaders(ctx, http.MethodPost, operation, bytes.NewReader(body), "application/json", http.Header{"X-Canonical-Client-IP": {clientIP}})
+	if err != nil {
+		return nil, 0, err
+	}
+	defer resp.Body.Close()
+	status := resp.StatusCode
+	if status < 200 || status >= 300 {
+		_, _ = io.Copy(io.Discard, io.LimitReader(resp.Body, 4096))
+		return nil, status, &APIError{Status: status, Detail: "Canary operation failed"}
+	}
+	data, err := io.ReadAll(io.LimitReader(resp.Body, maxJSONResponse+1))
+	if err != nil {
+		return nil, status, fmt.Errorf("%w: response read failed", ErrUnavailable)
+	}
+	if len(data) > maxJSONResponse || !json.Valid(data) {
+		return nil, status, &APIError{Status: 502, Detail: "Invalid private response"}
+	}
+	return json.RawMessage(data), status, nil
 }
 
 func (c *Client) GetAISettings(ctx context.Context) (json.RawMessage, error) {
@@ -320,6 +506,9 @@ func (c *Client) rawJSON(ctx context.Context, method, endpoint string, body io.R
 	return json.RawMessage(data), nil
 }
 func (c *Client) request(ctx context.Context, method, endpoint string, body io.Reader, contentType string) (*http.Response, error) {
+	return c.requestWithHeaders(ctx, method, endpoint, body, contentType, nil)
+}
+func (c *Client) requestWithHeaders(ctx context.Context, method, endpoint string, body io.Reader, contentType string, headers http.Header) (*http.Response, error) {
 	if c == nil || c.base == nil || c.token == "" {
 		return nil, fmt.Errorf("%w: private backend is not configured", ErrUnavailable)
 	}
@@ -340,6 +529,12 @@ func (c *Client) request(ctx context.Context, method, endpoint string, body io.R
 	req.Header.Set("Authorization", "Bearer "+c.token)
 	if contentType != "" {
 		req.Header.Set("Content-Type", contentType)
+	}
+	for key, values := range headers {
+		req.Header.Del(key)
+		for _, value := range values {
+			req.Header.Add(key, value)
+		}
 	}
 	resp, err := c.http.Do(req)
 	if err != nil {

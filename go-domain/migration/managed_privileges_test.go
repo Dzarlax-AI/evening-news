@@ -90,7 +90,7 @@ func TestManagedRolePrivileges(t *testing.T) {
 		}
 	}
 	for name, queries := range map[string][]string{
-		"news_web_runtime":        {"SELECT * FROM viber_test_receipts", "SELECT * FROM viber_digest_deliveries", "SELECT enqueue_viber_digest_delivery()", "SELECT * FROM integration_credentials", "UPDATE background_worker_status SET generation=99", "UPDATE articles SET content='changed'"},
+		"news_web_runtime":        {"SELECT * FROM viber_test_receipts", "SELECT * FROM viber_digest_deliveries", "SELECT * FROM push_installations", "SELECT * FROM push_deliveries", "SELECT enqueue_viber_digest_delivery()", "SELECT * FROM integration_credentials", "UPDATE background_worker_status SET generation=99", "UPDATE articles SET content='changed'"},
 		"news_domain_runtime":     {"SELECT * FROM managed_admin", "SELECT * FROM setup_tokens", "UPDATE background_worker_status SET generation=99", "UPDATE background_jobs SET state='failed'", "DELETE FROM articles"},
 		"news_worker_runtime":     {"SELECT * FROM viber_test_receipts", "SELECT * FROM viber_digest_parts", "SELECT * FROM integration_credentials", "SELECT * FROM managed_admin", "UPDATE articles SET content='changed'"},
 		"news_execution_runtime":  {"SELECT * FROM viber_digest_parts", "SELECT enqueue_viber_digest_delivery()", "SELECT * FROM integration_credentials", "UPDATE background_worker_status SET generation=99", "INSERT INTO articles(title,url) VALUES('x','https://fixture.invalid')"},
@@ -178,7 +178,7 @@ func TestManagedRolePrivileges(t *testing.T) {
 	})
 	for name, query := range map[string]string{
 		"news_web_runtime":       "SELECT * FROM managed_admin; SELECT * FROM installation_state; SELECT * FROM sources; SELECT * FROM editorial_digest_editions; SELECT j.id FROM background_jobs j JOIN background_job_idempotency_keys k ON k.job_id=j.id FOR UPDATE; SELECT occurrence_id FROM scheduler_occurrence_receipts FOR UPDATE",
-		"news_domain_runtime":    "SELECT * FROM viber_test_receipts; SELECT * FROM viber_digest_deliveries; SELECT * FROM viber_digest_parts; SELECT * FROM viber_channel_leases; SELECT * FROM integration_credentials; SELECT * FROM background_worker_status FOR UPDATE; SELECT * FROM article_processing_items FOR UPDATE",
+		"news_domain_runtime":    "SELECT * FROM viber_test_receipts; SELECT * FROM viber_digest_deliveries; SELECT * FROM viber_digest_parts; SELECT * FROM viber_channel_leases; SELECT * FROM push_installations; SELECT * FROM push_readiness_events; SELECT * FROM push_challenges; SELECT * FROM push_deliveries; SELECT * FROM push_rate_buckets; SELECT * FROM push_cutover; SELECT * FROM integration_credentials; SELECT * FROM background_worker_status FOR UPDATE; SELECT * FROM article_processing_items FOR UPDATE",
 		"news_worker_runtime":    "SELECT enqueue_viber_digest_delivery(); SELECT * FROM background_worker_status FOR UPDATE; SELECT * FROM background_jobs FOR UPDATE",
 		"news_execution_runtime": "SELECT * FROM background_worker_status FOR UPDATE; SELECT * FROM background_jobs FOR UPDATE",
 	} {

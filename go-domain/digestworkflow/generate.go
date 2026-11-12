@@ -90,6 +90,15 @@ func (w Workflow) Generate(ctx context.Context, job string, attempt int, operati
 			return 0, err
 		}
 	}
+	if tag.RowsAffected() == 1 {
+		// Serialize post-cutover readiness commits with push activation eligibility.
+		if _, err = tx.Exec(ctx, `SELECT pg_advisory_xact_lock(1649258121,728442)`); err != nil {
+			return 0, err
+		}
+		if _, err = tx.Exec(ctx, `INSERT INTO push_readiness_events(edition_id,edition_date,locale) SELECT id,edition_date,locale FROM editorial_digest_editions WHERE id=$1 AND locale='ru' AND EXISTS(SELECT 1 FROM push_cutover WHERE id=1 AND enabled) ON CONFLICT(edition_date,locale) DO NOTHING`, id); err != nil {
+			return 0, err
+		}
+	}
 	if tag.RowsAffected() == 0 {
 		var found bool
 		if err = tx.QueryRow(ctx, `SELECT EXISTS(SELECT 1 FROM editorial_digest_editions WHERE job_id=$1 AND attempt_generation=$2 AND locale='ru')`, job, attempt).Scan(&found); err != nil {

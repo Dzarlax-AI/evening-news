@@ -254,6 +254,20 @@ func TestExternalInstallPostgresFixture(t *testing.T) {
 	if err = validateExternalBundle(ctx, input); err != nil {
 		t.Fatalf("restored external privilege preflight failed: %v", err)
 	}
+	if err = requirePreparedExternalNews(ctx, newsPool); err != nil {
+		t.Fatalf("disabled migration seed was not accepted: %v", err)
+	}
+	for _, gate := range []string{"enabled", "sender_enabled"} {
+		if _, err = newsPool.Exec(ctx, "UPDATE news.push_cutover SET "+gate+"=TRUE WHERE id=1"); err != nil {
+			t.Fatal(err)
+		}
+		if err = requirePreparedExternalNews(ctx, newsPool); err == nil {
+			t.Fatalf("external install accepted enabled push gate %s", gate)
+		}
+		if _, err = newsPool.Exec(ctx, "UPDATE news.push_cutover SET "+gate+"=FALSE WHERE id=1"); err != nil {
+			t.Fatal(err)
+		}
+	}
 	root := t.TempDir()
 	layout := managedsetup.Layout{Setup: filepath.Join(root, "setup"), Web: filepath.Join(root, "web"), Domain: filepath.Join(root, "domain"), Background: filepath.Join(root, "background"), Extractor: filepath.Join(root, "extractor"), WebUID: -1, DomainUID: -1, BackgroundUID: -1, ExtractorUID: -1}
 	for _, dir := range []string{layout.Setup, layout.Web, layout.Domain, layout.Background, layout.Extractor} {
