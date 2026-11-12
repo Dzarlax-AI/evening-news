@@ -16,6 +16,13 @@ import (
 
 var ErrNotReady = errors.New("editorial_not_ready")
 var ErrPrepared = errors.New("prepared_digest_missing")
+var ErrCategoryTranslationMissing = errors.New("serbian_category_translation_missing")
+var ErrArticleTranslationMissing = errors.New("serbian_article_translation_missing")
+var ErrSerbianSourceStale = errors.New("serbian_source_stale")
+var ErrSerbianAttemptsExhausted = errors.New("serbian_attempts_exhausted")
+var ErrSerbianProviderFailed = errors.New("serbian_provider_failed")
+var ErrSerbianDeliveryRejected = errors.New("serbian_delivery_rejected")
+var ErrTelegramDeliveryRejected = errors.New("telegram_delivery_rejected")
 
 type Identity struct {
 	JobID, DomainInstanceID string

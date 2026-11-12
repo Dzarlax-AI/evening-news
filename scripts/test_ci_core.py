@@ -14,6 +14,22 @@ spec.loader.exec_module(ci)
 
 
 class CoreTests(unittest.TestCase):
+    def test_vertical_failure_exposes_only_closed_diagnostics(self):
+        result = SimpleNamespace(returncode=1,
+            stdout=b"fixture stage=idle_and_active_shutdown passed\nfixture stage=private_token passed\n",
+            stderr=b"secret registry diagnostic\nvertical fixture gate failed: default digest job failed\n")
+        with patch.object(ci.subprocess, "run", return_value=result):
+            with self.assertRaisesRegex(ci.Failure, r"^command_failed:vertical-fixture-gate:reason=default_digest_job_failed:after=idle_and_active_shutdown$"):
+                ci.run(["/fixture/vertical-fixture-gate"])
+
+    def test_unknown_tool_diagnostics_remain_private(self):
+        result = SimpleNamespace(returncode=1, stdout=b"private output", stderr=b"vertical fixture gate failed: private_token")
+        with patch.object(ci.subprocess, "run", return_value=result):
+            for tool in ("vertical-fixture-gate", "registry-tool"):
+                with self.assertRaises(ci.Failure) as raised:
+                    ci.run([tool])
+                self.assertEqual(str(raised.exception), "command_failed:" + tool)
+
     def exercise_candidate(self, directory, *, pr=False, unavailable=False, registry_unavailable=False):
         root = Path(directory)
         source, output = root / "plan", root / "bundle"

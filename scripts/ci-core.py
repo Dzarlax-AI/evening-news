@@ -18,6 +18,22 @@ TAGS = {"web": "evening-news-web:consolidation-fixture",
 FIXTURE_TAG = "evening-news-collector:consolidation-fixture"
 SHA = re.compile(r"^[0-9a-f]{40}$")
 DIGEST = re.compile(r"^sha256:[0-9a-f]{64}$")
+VERTICAL_FAILURE_REASONS = {
+    "postgres not ready", "migration failed", "seed failed", "role provisioning failed",
+    "background role provisioning failed", "background liveness unavailable without domain",
+    "background readiness unavailable with domain", "web not ready", "web login failed",
+    "web source create failed", "job did not succeed", "job timed out",
+    "default digest job failed", "fresh digest job failed", "fresh edition receipt missing",
+    "default digest did not generate and deliver", "partial delivery receipts invalid",
+    "rate limit delivery terminal state invalid", "partial delivery state invalid",
+    "fixture cleanup failed", "fixture docker run failed", "fixture docker exec failed",
+    "fixture docker up failed", "fixture docker down failed",
+}
+VERTICAL_STAGES = {
+    "web_auth_and_source_crud", "source_collection_and_selector_learning",
+    "idle_and_active_shutdown", "default_digest", "lease_loss_and_unknown_delivery",
+    "rate_limit_delivery", "partial_delivery_replay", "backup_strict_restore", "image_identity",
+}
 
 
 class Failure(Exception):
@@ -28,7 +44,18 @@ def run(args, *, env=None):
     p = subprocess.run([str(a) for a in args], capture_output=True, env=env)
     if p.returncode:
         # Tool output may include registry diagnostics. Do not echo it.
-        raise Failure("command_failed:" + Path(str(args[0])).name)
+        name = Path(str(args[0])).name
+        detail = ""
+        if name == "vertical-fixture-gate":
+            for line in p.stderr.decode("utf-8", "replace").splitlines():
+                prefix = "vertical fixture gate failed: "
+                if line.startswith(prefix) and line[len(prefix):] in VERTICAL_FAILURE_REASONS:
+                    detail += ":reason=" + line[len(prefix):].replace(" ", "_")
+            stages = re.findall(rb"^fixture stage=([a-z_]+) passed$", p.stdout, re.MULTILINE)
+            known = [s.decode("ascii") for s in stages if s.decode("ascii") in VERTICAL_STAGES]
+            if known:
+                detail += ":after=" + known[-1]
+        raise Failure("command_failed:" + name + detail)
     return p.stdout
 
 

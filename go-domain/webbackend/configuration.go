@@ -114,6 +114,8 @@ func (s *Server) operationalConfiguration(w http.ResponseWriter, r *http.Request
 	}
 	v, err := store.UpdateOperational(r.Context(), appsettings.OperationalUpdate{ExpectedRevision: *in.ExpectedRevision, LimitsEnabled: *in.LimitsEnabled, MaxArticles: *in.MaxArticles, PerSource: *in.PerSource, Days: *in.Days, NewestDate: *in.NewestDate, ProcessingEnabled: *in.ProcessingEnabled, DeliveryEnabled: *in.DeliveryEnabled, SerbianEnabled: *in.SerbianEnabled})
 	switch {
+	case errors.Is(err, appsettings.ErrSerbianCategoryMissing):
+		reject(w, 422, "Add a Serbian name for every category before enabling Serbian generation")
 	case errors.Is(err, appsettings.ErrInvalid):
 		reject(w, 422, "Invalid settings request")
 	case errors.Is(err, appsettings.ErrConflict):

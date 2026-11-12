@@ -85,6 +85,12 @@ func (s *Server) executeDigest(ctx context.Context, v digestInput, f authority.F
 		} else {
 			n, e = wf.Generate(ctx, v.Envelope.JobID, v.Envelope.Attempt, v.OperationID, time.Now())
 		}
+		if code := serbianIncompleteCode(e); code != "" {
+			if v.Kind == "summaries_generate" {
+				return nil, e
+			}
+			return map[string]any{"summaries_generated": n, "serbian_status": "incomplete", "serbian_error_code": code}, nil
+		}
 		return map[string]any{"summaries_generated": n}, e
 	case "serbian_digest_retry":
 		var payload struct {
@@ -115,15 +121,19 @@ func (s *Server) executeDigest(ctx context.Context, v digestInput, f authority.F
 			return nil, err
 		}
 		if !deliveryEnabled {
+			ready, readyErr := wf.HasSerbian(ctx, digestworkflow.SerbianEditionID(payload.RussianEditionID))
+			if readyErr != nil {
+				return nil, readyErr
+			}
+			if !ready {
+				return nil, digestworkflow.ErrNotReady
+			}
 			return map[string]any{"status": "success", "parts_sent": 0}, nil
 		}
 		if destination == nil || *destination == "" {
 			return nil, digestworkflow.ErrDestination
 		}
 		sr, err := wf.PrepareSerbian(ctx, identity, date, payload.RussianEditionID, *destination)
-		if errors.Is(err, digestworkflow.ErrNotReady) {
-			return map[string]any{"status": "success", "parts_sent": 0}, nil
-		}
 		if err != nil {
 			return nil, err
 		}
@@ -131,11 +141,10 @@ func (s *Server) executeDigest(ctx context.Context, v digestInput, f authority.F
 		if err != nil {
 			return nil, err
 		}
-		status := "success"
-		if ok, _ := published["success"].(bool); !ok {
-			status = "warning"
+		if sent, _ := published["success"].(bool); !sent {
+			return nil, digestworkflow.ErrSerbianDeliveryRejected
 		}
-		return map[string]any{"status": status, "success": published["success"], "parts_sent": published["parts_sent"]}, nil
+		return map[string]any{"status": "success", "success": published["success"], "parts_sent": published["parts_sent"]}, nil
 	case "digest_prepare":
 		publication, prepareErr := wf.Publication(ctx, identity, time.Now())
 		if prepareErr != nil {
@@ -162,14 +171,19 @@ func (s *Server) executeDigest(ctx context.Context, v digestInput, f authority.F
 		return map[string]any{"prepared_token": token, "viber_binding_status": viberBindingStatus}, e
 	case "digest_publish":
 		var input struct {
-			Token string `json:"prepared_token"`
+			Token                 string `json:"prepared_token"`
+			SerbianIncompleteCode string `json:"serbian_incomplete_code"`
 		}
-		if json.Unmarshal(v.Input, &input) != nil {
+		if json.Unmarshal(v.Input, &input) != nil || (input.SerbianIncompleteCode != "" && !safeSerbianGenerationCode(input.SerbianIncompleteCode)) {
 			return nil, digestworkflow.ErrPrepared
 		}
 		prepared, e := s.digest.prepared.Claim(input.Token, identity)
 		if e != nil {
 			return nil, e
+		}
+		editionDate, e := time.Parse("2006-01-02", prepared.Edition.Date)
+		if e != nil {
+			return nil, digestworkflow.ErrInvalid
 		}
 		policy := digestworkflow.SerbianRetryPolicy{PublicationPinned: true}
 		if pinned != nil && pinned.Settings.DeliveryEnabled && pinned.Settings.SerbianEnabled && pinned.Telegram != nil && pinned.Telegram.SerbianDeliveryEnabled && appsettings.ValidateTelegram(appsettings.TelegramUpdate{ChatID: pinned.Telegram.ChatID, ServiceChatID: pinned.Telegram.ServiceChatID, SerbianChatID: pinned.Telegram.SerbianChatID, SerbianDeliveryEnabled: true}) == nil {
@@ -186,34 +200,103 @@ func (s *Server) executeDigest(ctx context.Context, v digestInput, f authority.F
 		if err := wf.MarkRussianPublicationAttempted(ctx, prepared.EditionID); err != nil {
 			return nil, err
 		}
+		if russianErr != nil {
+			return nil, russianErr
+		}
 		if result == nil {
 			result = map[string]any{}
 		}
-		if prepared.Secondary == nil && pinned != nil && pinned.Settings.SerbianEnabled && pinned.Telegram != nil && pinned.Telegram.SerbianDeliveryEnabled {
-			if _, err := wf.RetrySerbian(ctx, v.Envelope.JobID, v.Envelope.Attempt, v.OperationID, time.Now(), prepared.EditionID); err == nil {
-				sr, err := wf.PrepareSerbian(ctx, identity, time.Now(), prepared.EditionID, pinned.Telegram.SerbianChatID)
-				if err == nil {
-					prepared.Secondary = &sr
+		if success, _ := result["success"].(bool); !success {
+			return nil, digestworkflow.ErrTelegramDeliveryRejected
+		}
+		serbianErrorCode := input.SerbianIncompleteCode
+		if prepared.Secondary == nil && pinned != nil && pinned.Settings.SerbianEnabled {
+			if serbianErrorCode != "" {
+				// Generation already made a bounded attempt earlier in this parent job.
+			} else if _, err := wf.RetrySerbian(ctx, v.Envelope.JobID, v.Envelope.Attempt, v.OperationID, editionDate, prepared.EditionID); err != nil {
+				serbianErrorCode = serbianIncompleteCode(err)
+				if serbianErrorCode == "" {
+					return nil, err
+				}
+			} else {
+				ready, err := wf.HasSerbian(ctx, digestworkflow.SerbianEditionID(prepared.EditionID))
+				if err != nil {
+					return nil, err
+				}
+				if !ready {
+					applicable, inputErr := wf.HasLocalizedInput(ctx, prepared.EditionID)
+					if inputErr != nil {
+						return nil, inputErr
+					}
+					if !applicable {
+						result["serbian_delivery"] = map[string]any{"success": false, "status": "not_applicable", "reason_code": "legacy_edition_without_localization_input"}
+					} else {
+						serbianErrorCode = "serbian_edition_missing"
+					}
+				} else if pinned.Settings.DeliveryEnabled && pinned.Telegram != nil && pinned.Telegram.SerbianDeliveryEnabled {
+					sr, prepareErr := wf.PrepareSerbian(ctx, identity, editionDate, prepared.EditionID, pinned.Telegram.SerbianChatID)
+					if prepareErr != nil {
+						serbianErrorCode = serbianIncompleteCode(prepareErr)
+						if serbianErrorCode == "" {
+							return nil, prepareErr
+						}
+					} else {
+						prepared.Secondary = &sr
+					}
 				}
 			}
 		}
 		if prepared.Secondary != nil {
 			secondary, err := s.publishPrepared(ctx, v, f, *prepared.Secondary)
 			if err != nil {
-				result["serbian_delivery"] = map[string]any{"success": false, "status": "delivery_not_confirmed"}
+				return nil, err
 			} else {
-				result["serbian_delivery"] = secondary
+				if ok, _ := secondary["success"].(bool); !ok {
+					result["serbian_delivery"] = map[string]any{"success": false, "status": "incomplete", "error_code": "serbian_delivery_rejected"}
+				} else {
+					result["serbian_delivery"] = secondary
+				}
 			}
-		} else if pinned != nil && pinned.Settings.SerbianEnabled {
-			result["serbian_delivery"] = map[string]any{"success": false, "status": "not_ready_or_disabled"}
-		}
-		if russianErr != nil {
-			return nil, russianErr
+		} else if pinned != nil && pinned.Settings.SerbianEnabled && serbianErrorCode != "" {
+			result["serbian_delivery"] = map[string]any{"success": false, "status": "incomplete", "error_code": serbianErrorCode}
 		}
 		return result, nil
 
 	}
 	return nil, digestworkflow.ErrInvalid
+}
+
+func safeSerbianGenerationCode(code string) bool {
+	switch code {
+	case "editorial_not_ready", "serbian_category_translation_missing", "serbian_article_translation_missing",
+		"serbian_source_stale", "serbian_attempts_exhausted", "serbian_provider_failed":
+		return true
+	default:
+		return false
+	}
+}
+
+func serbianIncompleteCode(err error) string {
+	switch {
+	case errors.Is(err, digestworkflow.ErrNotReady):
+		return "editorial_not_ready"
+	case errors.Is(err, digestworkflow.ErrCategoryTranslationMissing):
+		return "serbian_category_translation_missing"
+	case errors.Is(err, digestworkflow.ErrArticleTranslationMissing):
+		return "serbian_article_translation_missing"
+	case errors.Is(err, digestworkflow.ErrSerbianSourceStale):
+		return "serbian_source_stale"
+	case errors.Is(err, digestworkflow.ErrSerbianAttemptsExhausted):
+		return "serbian_attempts_exhausted"
+	case errors.Is(err, digestworkflow.ErrSerbianProviderFailed):
+		return "serbian_provider_failed"
+	case errors.Is(err, digestworkflow.ErrSerbianDeliveryRejected):
+		return "serbian_delivery_rejected"
+	case errors.Is(err, digestworkflow.ErrTelegramDeliveryRejected):
+		return "telegram_delivery_rejected"
+	default:
+		return ""
+	}
 }
 
 func (s *Server) publishPrepared(ctx context.Context, v digestInput, f authority.Fence, prepared digestworkflow.Prepared) (map[string]any, error) {
@@ -288,11 +371,17 @@ func (s *Server) publishPrepared(ctx context.Context, v digestInput, f authority
 		state, e := delivery.SendPart(ctx, part)
 		if e != nil {
 			if errors.Is(e, telegramdelivery.ErrRejected) {
+				if sent > 0 {
+					return nil, telegramdelivery.ErrUnknown
+				}
 				return map[string]any{"success": false, "parts_sent": sent, "parts_total": len(parts), "rich_message": false}, nil
 			}
 			return nil, e
 		}
 		if state != telegramdelivery.Sent {
+			if sent > 0 {
+				return nil, telegramdelivery.ErrUnknown
+			}
 			return map[string]any{"success": false, "parts_sent": sent, "parts_total": len(parts), "rich_message": false}, nil
 		}
 		sent++

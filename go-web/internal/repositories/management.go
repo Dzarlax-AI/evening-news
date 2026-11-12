@@ -223,12 +223,41 @@ func setSerbianCategory(ctx context.Context, tx pgx.Tx, id int64, name *string) 
 	_, err := tx.Exec(ctx, `INSERT INTO category_localizations(category_id,locale,display_name) VALUES($1,'sr-Latn',$2) ON CONFLICT(category_id,locale) DO UPDATE SET display_name=EXCLUDED.display_name`, id, value)
 	return err
 }
+
+// Serialize category changes with the Serbian operational switch.
+func validateSerbianCategory(ctx context.Context, tx pgx.Tx, id int64, name *string) error {
+	if _, err := tx.Exec(ctx, `SELECT pg_advisory_xact_lock(1649258121,728440)`); err != nil {
+		return err
+	}
+	var enabled bool
+	if err := tx.QueryRow(ctx, `SELECT COALESCE((SELECT (value #>> '{}')::boolean FROM settings WHERE key='operational_serbian_enabled'),false)`).Scan(&enabled); err != nil {
+		return err
+	}
+	if !enabled {
+		return nil
+	}
+	var label string
+	if name != nil {
+		label = *name
+	} else if id != 0 {
+		if err := tx.QueryRow(ctx, `SELECT COALESCE((SELECT display_name FROM category_localizations WHERE category_id=$1 AND locale='sr-Latn'),'')`, id).Scan(&label); err != nil {
+			return err
+		}
+	}
+	if strings.TrimSpace(label) == "" {
+		return &management.APIError{Status: 422, Detail: "A Serbian category name is required while Serbian generation is enabled"}
+	}
+	return nil
+}
 func (r *ManagementRepository) CreateCategory(ctx context.Context, in management.CategoryCreate) (map[string]any, error) {
 	tx, err := r.pool.Begin(ctx)
 	if err != nil {
 		return nil, err
 	}
 	defer tx.Rollback(ctx)
+	if err = validateSerbianCategory(ctx, tx, 0, in.SerbianDisplayName); err != nil {
+		return nil, err
+	}
 	var id int64
 	var created *time.Time
 	err = tx.QueryRow(ctx, `INSERT INTO categories(name,display_name,description,color,created_at) VALUES($1,$2,$3,$4,timezone('UTC',now())) RETURNING id,created_at`, in.Name, in.DisplayName, in.Description, *in.Color).Scan(&id, &created)
@@ -252,6 +281,9 @@ func (r *ManagementRepository) UpdateCategory(ctx context.Context, id int64, in 
 		return nil, err
 	}
 	defer tx.Rollback(ctx)
+	if err = validateSerbianCategory(ctx, tx, id, in.SerbianDisplayName); err != nil {
+		return nil, err
+	}
 	if in.IsLocal != nil && *in.IsLocal {
 		if _, err = tx.Exec(ctx, `UPDATE categories SET is_local=false WHERE is_local=true AND id!=$1`, id); err != nil {
 			return nil, err

@@ -147,6 +147,35 @@ func TestPostgresManagementSourceCategoryArticleAndSummaryContracts(t *testing.T
 	if err = pool.QueryRow(ctx, `SELECT count(*) FROM categories WHERE is_local`).Scan(&localCount); err != nil || localCount != 1 {
 		t.Fatalf("local category uniqueness update failed: %d %v", localCount, err)
 	}
+	if _, err = pool.Exec(ctx, `INSERT INTO settings(key,value,updated_at) VALUES('operational_serbian_enabled','true',now())`); err != nil {
+		t.Fatal(err)
+	}
+	for _, label := range []*string{nil, ptrString("   ")} {
+		if _, err = r.CreateCategory(ctx, management.CategoryCreate{Name: "Untranslated", DisplayName: "New category", Color: ptrString("#123456"), SerbianDisplayName: label}); err == nil {
+			t.Fatal("Serbian-enabled installation accepted an untranslated category")
+		} else {
+			var api *management.APIError
+			if !errors.As(err, &api) || api.Status != 422 {
+				t.Fatalf("missing category label error: %v", err)
+			}
+		}
+	}
+	if _, err = r.UpdateCategory(ctx, catAID, management.CategoryUpdate{DisplayName: "Technology", SerbianDisplayName: ptrString("Tehnologija")}); err != nil {
+		t.Fatal(err)
+	}
+	if _, err = r.UpdateCategory(ctx, catAID, management.CategoryUpdate{DisplayName: "Must roll back", SerbianDisplayName: ptrString(" ")}); err == nil {
+		t.Fatal("Serbian-enabled installation removed a required label")
+	}
+	if _, err = r.UpdateCategory(ctx, catAID, management.CategoryUpdate{DisplayName: "Technology"}); err != nil {
+		t.Fatalf("omitted existing Serbian label must be preserved: %v", err)
+	}
+	var preserved bool
+	if err = pool.QueryRow(ctx, `SELECT c.display_name='Technology' AND l.display_name='Tehnologija' FROM categories c JOIN category_localizations l ON l.category_id=c.id AND l.locale='sr-Latn' WHERE c.id=$1`, catAID).Scan(&preserved); err != nil || !preserved {
+		t.Fatalf("category validation did not preserve prior values: %v", err)
+	}
+	if _, err = pool.Exec(ctx, `UPDATE settings SET value='false' WHERE key='operational_serbian_enabled'`); err != nil {
+		t.Fatal(err)
+	}
 	if _, err = pool.Exec(ctx, `INSERT INTO articles(source_id,title,url,summary,content,media_files,published_at,fetched_at,processed,summary_processed,category_processed,processing_state,processing_attempts) VALUES($1,'One','https://fixture.invalid/one','brief','body','[{"type":"image","url":"https://fixture.invalid/a.png"}]',date_trunc('second',timezone('UTC',now())),timezone('UTC',now()),true,true,true,'completed',2)`, sourceID); err != nil {
 		t.Fatal(err)
 	}

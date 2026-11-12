@@ -248,6 +248,7 @@ func TestSafeResultRejectsContentAndBounds(t *testing.T) {
 	for _, raw := range []string{
 		`{"secret":"x"}`, `{"articles_processed":-1}`, `{"processed":1e999}`,
 		`{"success":1}`, `{"connection_ok":0}`, `{"retryable":null}`,
+		`{"status":"warning","failure_reason":"raw error text"}`,
 		`{"status":"success","status":"warning"}`,
 		`{"article_outcomes":[{"article_id":1,"article_id":2,"state":"completed","reason":"other"}],"article_outcomes_total":1,"article_outcomes_omitted":0}`,
 		`{"article_outcomes":[{"article_id":true,"state":"completed","reason":"other"}],"article_outcomes_total":1,"article_outcomes_omitted":0}`,
@@ -263,6 +264,9 @@ func TestSafeResultRejectsContentAndBounds(t *testing.T) {
 	}
 	if _, err := safeResult(json.RawMessage(`{"status":"warning","processed":3}`)); err != nil {
 		t.Fatal(err)
+	}
+	if _, err := safeResult(json.RawMessage(`{"status":"warning","failure_reason":"serbian_category_translation_missing"}`)); err != nil {
+		t.Fatalf("bounded failure reason rejected: %v", err)
 	}
 	if _, err := safeResult(json.RawMessage(`{"article_outcomes":[{"article_id":1,"state":"completed","reason":"other"}],"article_outcomes_total":2,"article_outcomes_omitted":1}`)); err != nil {
 		t.Fatalf("valid bounded article outcomes rejected: %v", err)

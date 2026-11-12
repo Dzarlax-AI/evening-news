@@ -25,6 +25,13 @@ var safeCode = regexp.MustCompile(`^[a-z0-9_-]{1,64}$`)
 var allowedDomainErrors = map[string]bool{
 	"domain_operation_failed": true, "stale_fence": true, "authority_unavailable": true,
 	"delivery_unknown": true, "external_outcome_unknown": true, "prepared_digest_missing": true, "resource_limit": true,
+	"editorial_not_ready": true, "serbian_category_translation_missing": true,
+	"serbian_article_translation_missing": true, "serbian_source_stale": true,
+	"serbian_attempts_exhausted": true, "serbian_provider_failed": true,
+	"editorial_provider_timeout": true, "editorial_provider_unavailable": true,
+	"editorial_invalid_result": true, "editorial_resource_limit": true,
+	"telegram_configuration_incomplete": true, "telegram_delivery_rejected": true,
+	"serbian_delivery_rejected": true,
 }
 
 type DomainOperationError struct{ Code string }
