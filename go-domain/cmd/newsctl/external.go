@@ -523,6 +523,15 @@ func requirePreparedExternalNews(ctx context.Context, p *pgxpool.Pool) error {
 			}
 			continue
 		}
+		if table == "push_cutover" && count == 1 {
+			// Migration 021 seeds only the disabled singleton. Enabled gates
+			// belong to an existing installation and require adoption.
+			var pristine bool
+			if err := p.QueryRow(ctx, `SELECT id=1 AND enabled=FALSE AND sender_enabled=FALSE FROM news.push_cutover`).Scan(&pristine); err != nil || !pristine {
+				return errors.New("external News schema contains data; use adopt for an existing installation")
+			}
+			continue
+		}
 		if count != 0 {
 			return errors.New("external News schema contains data; use adopt for an existing installation")
 		}

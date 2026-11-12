@@ -17,6 +17,12 @@ verified by these local checks.
   Registration and token-rotation responses now use persisted precision. A
   deterministic nanosecond-clock regression covers both writes; the full local
   APNs race suite and vet passed after the correction.
+- Full integration then exposed the external fresh-install check treating the
+  migration's disabled `push_cutover` singleton as existing installation data.
+  The installer accepts only that one default-off row; either enabled gate still
+  requires adoption. The real external-install PostgreSQL 17 fixture passed with
+  positive installation and both enabled-gate rejection cases; cmd/newsctl vet
+  passed. The full CI acceptance must rerun for this correction.
 - Independent focused review addressed the public safe-409 boundary, challenge
   attempt accounting, in-flight ownership proof, unknown-challenge resend,
   fixed expiration, token quota, encryption-version binding and lock ordering.
