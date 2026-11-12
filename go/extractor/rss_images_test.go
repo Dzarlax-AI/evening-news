@@ -94,3 +94,24 @@ func TestRSSImagesRejectOverflowInsteadOfTruncating(t *testing.T) {
 		t.Fatalf("overflow must be explicit: %v", err)
 	}
 }
+
+func TestAtomTextAndXHTMLExamplesDoNotBecomeImages(t *testing.T) {
+	for _, body := range []string{
+		`<summary type="text">&lt;img src="/example.jpg"&gt;</summary>`,
+		`<summary>&lt;img src="/example.jpg"&gt;</summary>`,
+		`<content type="xhtml"><div xmlns="http://www.w3.org/1999/xhtml"><code>&lt;img src="/example.jpg"&gt;</code><img src="/real.png"/></div></content>`,
+	} {
+		feed := `<feed xmlns="http://www.w3.org/2005/Atom"><entry><title>Fixture</title><link href="https://publisher.example/story"/>` + body + `</entry></feed>`
+		got := rssImageWire(t, feed)
+		want := 0
+		if strings.Contains(body, `src="/real.png"`) {
+			want = 1
+		}
+		if len(got[0].Media) != want {
+			t.Fatalf("Atom text became image: %#v", got[0].Media)
+		}
+		if want == 1 && got[0].Media[0].URL != "https://publisher.example/real.png" {
+			t.Fatalf("actual XHTML image lost: %#v", got[0].Media)
+		}
+	}
+}

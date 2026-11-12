@@ -18,6 +18,25 @@ func isRSSMediaNamespace(namespace string) bool {
 	return strings.TrimRight(namespace, "/") == "http://search.yahoo.com/mrss" || namespace == "media"
 }
 
+// Atom text constructs default to plain text. XHTML images are XML elements;
+// reparsing their character data would turn escaped code examples into images.
+func rssHasHTMLImageContent(element xml.StartElement) bool {
+	name := strings.ToLower(element.Name.Local)
+	if isRSSMediaNamespace(element.Name.Space) || (name != "content" && name != "encoded" && name != "summary" && name != "description") {
+		return false
+	}
+	if element.Name.Space != "http://www.w3.org/2005/Atom" {
+		return true
+	}
+	for _, attr := range element.Attr {
+		if attr.Name.Local == "type" {
+			kind := strings.ToLower(strings.TrimSpace(attr.Value))
+			return kind == "html" || kind == "text/html"
+		}
+	}
+	return false
+}
+
 func (meta *rssEntryMetadata) collectRSSImage(element xml.StartElement, base string) {
 	attrs := map[string]string{}
 	for _, a := range element.Attr {

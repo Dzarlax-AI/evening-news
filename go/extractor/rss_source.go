@@ -215,7 +215,7 @@ func scanRSSXML(xmlText, feedURL string) ([]rssEntryMetadata, error) {
 			if activeEntry >= 0 {
 				meta := &entries[activeEntry]
 				meta.collectRSSImage(value, base)
-				if !isRSSMediaNamespace(value.Name.Space) && (localName == "content" || localName == "encoded" || localName == "summary" || localName == "description") {
+				if rssHasHTMLImageContent(value) {
 					htmlImageIndex = len(meta.images)
 					meta.images = append(meta.images, rssImageCandidate{base: base, html: true})
 				}

@@ -20,7 +20,8 @@
       "Custom and Telegram read behavior, custom page extraction retained",
       "iOS GIF/APNG eligibility and provenance cache round trip; legacy media decoding compatible"
     ],
-    "source_probe": "Actual RSS extractor output reproduced strict-validator rejection before fix. Source probe accepts both legacy and feed-media contracts, rejects unsafe/malformed media; go test -count=1 ./sourceprobe passed."
+    "source_probe": "Actual RSS extractor output reproduced strict-validator rejection before fix. Source probe accepts both legacy and feed-media contracts, rejects unsafe/malformed media; go test -count=1 ./sourceprobe passed.",
+    "atom_text_constructs": "Plain/default Atom text and escaped XHTML code examples reproduced false images before fix. Respect HTML content types and actual XHTML image elements; parser/pipeline and source-probe checks passed."
   },
   "limitations": [
     "Stored legacy RSS images without provenance are hidden on fresh reads, not rewritten or deleted.",
