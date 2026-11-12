@@ -1,0 +1,67 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Evening News — Privacy / Конфиденциальность</title>
+<style>:root{color-scheme:light dark;--bg:#fcfaf7;--paper:#fff;--text:#1a1a1e;--muted:#55555e;--line:#d7d3cc;--link:#292933}*{box-sizing:border-box}html{scroll-padding-top:1rem}body{margin:0;background:var(--bg);color:var(--text);font:17px/1.65 system-ui,sans-serif}main{max-width:820px;margin:auto;padding:clamp(20px,5vw,48px)}header{border-bottom:1px solid var(--line);padding-bottom:24px}h1,h2,h3{line-height:1.25}h1,h2{font-family:Georgia,serif}h1{font-size:clamp(32px,6vw,46px);margin:.5em 0}h2{font-size:28px}h3{font-size:20px;margin-top:1.8em}a{color:var(--link);text-underline-offset:3px}a:focus-visible{outline:3px solid currentColor;outline-offset:4px}nav{display:flex;flex-wrap:wrap;gap:12px 24px}nav a{display:inline-block;padding:6px 0;min-height:44px}section{padding:24px 0;border-bottom:1px solid var(--line)}p,li,a{overflow-wrap:anywhere}.muted{color:var(--muted)}.contact{background:var(--paper);border:1px solid var(--line);border-radius:12px;padding:18px}footer{padding-top:24px}@media(prefers-color-scheme:dark){:root{--bg:#19191b;--paper:#222225;--text:#efedf0;--muted:#bbb8c0;--line:#48464c;--link:#efedf0}}@media print{body{background:white;color:black}nav{display:none}section{break-before:auto}a{color:inherit}}</style>
+</head>
+<body><main>
+<header>
+<a href="/">Evening News</a>
+<h1>Privacy / Конфиденциальность</h1>
+<nav aria-label="Pages"><a href="privacy.html">Privacy / Конфиденциальность</a><a href="support.html">Support / Поддержка</a></nav>
+<nav aria-label="Languages"><a href="#english" lang="en">English</a><a href="#russian" lang="ru">Русский</a></nav>
+</header>
+
+<section id="english" lang="en" aria-labelledby="privacy-en">
+<h2 id="privacy-en">Privacy policy</h2>
+<p class="muted">Last updated: 12 November 2026</p>
+<p>Evening News is a news reader for iPhone and iPad. It does not require an account. This policy describes the app and the requests it makes to the Evening News service.</p>
+<h3>Information on your device</h3>
+<p>The app stores news language, appearance and text-size choices, iPad reader layout, recent searches and read-article identifiers on your device. Requests and media may be cached to improve loading. Recent searches can be removed in Search; media cache controls are in Settings. Removing the app removes its local container, subject to operating-system backup and restore behavior.</p>
+<h3>Requests and operational logs</h3>
+<p>To load news, the app sends requests to news.dzarlax.dev. Requests include the selected language, requested articles and feed or search filters. When you search, your search term is sent to the service to return results. Network infrastructure receives normal connection information, including network addresses.</p>
+<p>The service's reverse proxy records access logs containing request information, including requested paths, query strings and network address fields. Search terms may therefore appear in operational logs. These logs support operation, troubleshooting and security of the service. Local access logs rotate based on size and traffic rather than a fixed number of days; infrastructure providers and backups have separate retention.</p>
+<p>The service uses Cloudflare infrastructure to deliver and protect requests. Cloudflare processes request information under its own <a href="https://www.cloudflare.com/privacypolicy/">privacy policy</a>.</p>
+<h3>AI-prepared news</h3>
+<p>The service uses AI providers to prepare or translate headlines and summaries from news source material. These reader, search and notification flows do not send your search terms or push registration to AI models. There is no personalized AI chat in the app. Prepared news can contain mistakes; check the original source for details.</p>
+<h3>External media and original-source links</h3>
+<p>The app loads article media from URLs supplied by the news service. The receiving servers receive normal network request information. For RSS/Atom sources, the service uses images included in the feed entry. Opening an original article takes you to its publisher's website, where that website's privacy practices apply. The full source article body is not displayed inside the app.</p>
+<h3>Optional digest notifications</h3>
+<p>If you enable digest notifications, the app requests system permission and registers this installation for your selected news language. The service receives an installation identifier, an Apple Push Notification service (APNs) device token, the selected language and the APNs environment. It also stores subscription status, timestamps and delivery records. The routing token is encrypted at rest. A device-only Keychain credential protects changes to the registration; the server stores its hash. Short-lived verification data confirms control of the device token before the subscription becomes active.</p>
+<p>Apple processes push requests to deliver notifications. A digest notification contains a short availability message and the issue identifier, date and language, without article bodies or search history. Acceptance by APNs does not guarantee display on your device.</p>
+<p>Turning notifications off in the app requests removal of the routing token and cancellation of unsent notifications. Verification expires after ten minutes. Active subscriptions become eligible for automatic disabling after 180 days without a registration refresh. Disabled-registration records and completed delivery or verification records become eligible for scheduled cleanup after 30 days; dependent records can delay removal. Rate-limit records use a keyed network-address hash rather than a raw address, expire two hours after the latest request in that bucket, and are removed by cleanup. Operational logs and backups have separate retention.</p>
+<p>Server registration is separate from the app container. Removing the app alone does not immediately remove the registration, and Keychain identity may remain under operating-system behavior. Turn notifications off in the app before removing it if you want to request removal of its routing token.</p>
+<h3>Tracking, permissions and support</h3>
+<p>The client does not include an advertising or analytics SDK, a tracking identifier integration or an account profile. Reading news does not require access to your contacts, precise location, camera, microphone or photo library. System sharing sends a link when you choose to share it.</p>
+<p>If you email support, we receive your email address, message and any details you choose to provide so that we can respond.</p>
+<p class="contact">For privacy questions or a request concerning information you believe the service retains, contact <a href="mailto:dzarlax@gmail.com">dzarlax@gmail.com</a>. Include enough context to identify the relevant request without sending passwords, device tokens or other unnecessary private information.</p>
+</section>
+<section id="russian" lang="ru" aria-labelledby="privacy-ru">
+<h2 id="privacy-ru">Политика конфиденциальности</h2>
+<p class="muted">Обновлено: 12 ноября 2026 года</p>
+<p>Evening News — приложение для чтения новостей на iPhone и iPad. Учётная запись не требуется. Эта политика описывает приложение и его запросы к сервису Evening News.</p>
+<h3>Данные на устройстве</h3>
+<p>Приложение сохраняет на устройстве язык новостей, тему и размер текста, расположение панелей на iPad, недавние поисковые запросы и идентификаторы прочитанных статей. Запросы и медиа могут кэшироваться для ускорения загрузки. Недавние запросы можно удалить в разделе поиска; управление кэшем медиа находится в настройках. При удалении приложения удаляется его локальный контейнер с учётом особенностей резервного копирования и восстановления операционной системы.</p>
+<h3>Запросы и технические журналы</h3>
+<p>Для загрузки новостей приложение отправляет запросы на news.dzarlax.dev. Они содержат выбранный язык, запрашиваемые статьи и фильтры ленты или поиска. При поиске текст запроса передаётся сервису для получения результатов. Сетевая инфраструктура получает обычные сведения о соединении, включая сетевые адреса.</p>
+<p>Обратный прокси сервиса ведёт журнал доступа, включающий пути запросов, параметры URL и поля сетевых адресов. Поэтому поисковые запросы могут попадать в технические журналы. Журналы используются для работы сервиса, диагностики и безопасности. Локальные журналы ротируются по объёму и трафику, а не по фиксированному числу дней; у инфраструктурных провайдеров и резервных копий отдельные сроки хранения.</p>
+<p>Для доставки и защиты запросов сервис использует инфраструктуру Cloudflare. Cloudflare обрабатывает сведения о запросах согласно своей <a href="https://www.cloudflare.com/privacypolicy/">политике конфиденциальности</a>.</p>
+<h3>Подготовка новостей с помощью ИИ</h3>
+<p>Сервис использует ИИ для подготовки или перевода заголовков и кратких изложений на основе материалов источников новостей. Эти сценарии чтения, поиска и уведомлений не передают ваши поисковые запросы или регистрацию push-уведомлений ИИ-моделям. Персонального ИИ-чата в приложении нет. Подготовленные новости могут содержать ошибки; проверяйте подробности в первоисточнике.</p>
+<h3>Внешние медиа и ссылки на источники</h3>
+<p>Приложение загружает медиа статей по адресам, которые возвращает новостной сервис. Серверы, принимающие эти запросы, получают обычные сетевые сведения. Для RSS/Atom используются изображения, включённые в саму запись ленты. Переход к оригиналу открывает сайт издателя, где действуют его правила конфиденциальности. Полный исходный текст статьи внутри приложения не отображается.</p>
+<h3>Необязательные уведомления о дайджестах</h3>
+<p>Если вы включаете уведомления о дайджестах, приложение запрашивает системное разрешение и регистрирует эту установку для выбранного языка новостей. Сервис получает идентификатор установки, токен устройства Apple Push Notification service (APNs), выбранный язык и окружение APNs. Также сохраняются статус подписки, временные отметки и записи о доставке. Токен маршрутизации хранится в зашифрованном виде. Изменения регистрации защищены секретом в Keychain этого устройства; сервер хранит его хеш. Краткосрочные проверочные данные подтверждают контроль над токеном до активации подписки.</p>
+<p>Apple обрабатывает push-запросы для доставки уведомлений. Уведомление содержит короткое сообщение о готовности дайджеста, идентификатор выпуска, дату и язык, без текстов статей и истории поиска. Принятие запроса APNs не гарантирует показ уведомления на устройстве.</p>
+<p>Отключение уведомлений в приложении отправляет запрос на удаление токена маршрутизации и отмену ещё не отправленных уведомлений. Проверка регистрации истекает через десять минут. Активные подписки подлежат автоматическому отключению после 180 дней без обновления регистрации. Записи отключённых регистраций, завершённых доставок и проверок подлежат плановой очистке через 30 дней; связанные записи могут задержать удаление. Для ограничения частоты запросов используется хеш сетевого адреса с секретным ключом вместо самого адреса. Такие записи истекают через два часа после последнего запроса в соответствующей группе и удаляются при очистке. У технических журналов и резервных копий отдельные сроки хранения.</p>
+<p>Серверная регистрация существует отдельно от контейнера приложения. Удаление приложения само по себе не удаляет регистрацию немедленно; данные Keychain могут сохраняться в соответствии с поведением операционной системы. Чтобы запросить удаление токена маршрутизации, отключите уведомления в приложении перед его удалением.</p>
+<h3>Отслеживание, разрешения и поддержка</h3>
+<p>В клиенте нет рекламного или аналитического SDK, интеграции рекламного идентификатора и профиля учётной записи. Для чтения новостей не нужен доступ к контактам, точной геолокации, камере, микрофону или медиатеке. Системное меню «Поделиться» отправляет ссылку по вашему выбору.</p>
+<p>При обращении по электронной почте мы получаем ваш адрес, текст сообщения и сведения, которые вы решите сообщить, чтобы ответить на обращение.</p>
+<p class="contact">По вопросам конфиденциальности и данным, которые, по вашему мнению, сохраняет сервис, пишите на <a href="mailto:dzarlax@gmail.com">dzarlax@gmail.com</a>. Укажите достаточно сведений для поиска обращения, не отправляя пароли, токены устройства и другие лишние личные данные.</p>
+</section>
+<footer><a href="mailto:dzarlax@gmail.com">dzarlax@gmail.com</a> · <a href="/">Evening News</a></footer>
+</main></body>
+</html>
