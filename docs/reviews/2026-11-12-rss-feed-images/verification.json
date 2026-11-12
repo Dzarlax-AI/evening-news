@@ -19,7 +19,8 @@
       "Feed/article/search/API feed/legacy digest policy, including legacy unmarked media and HTML-summary fallback",
       "Custom and Telegram read behavior, custom page extraction retained",
       "iOS GIF/APNG eligibility and provenance cache round trip; legacy media decoding compatible"
-    ]
+    ],
+    "source_probe": "Actual RSS extractor output reproduced strict-validator rejection before fix. Source probe accepts both legacy and feed-media contracts, rejects unsafe/malformed media; go test -count=1 ./sourceprobe passed."
   },
   "limitations": [
     "Stored legacy RSS images without provenance are hidden on fresh reads, not rewritten or deleted.",
