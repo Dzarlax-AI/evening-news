@@ -1,6 +1,7 @@
 package apnspush
 
 import (
+	"context"
 	"crypto/ecdsa"
 	"crypto/elliptic"
 	"crypto/rand"
@@ -56,7 +57,7 @@ func TestSenderReusesHTTP2ClientAndCachesJWT(t *testing.T) {
 	s := &Sender{Client: client, Credential: c, Key: k, Now: func() time.Time { return now }}
 	for _, delta := range []time.Duration{0, 20 * time.Minute, 41 * time.Minute} {
 		now = time.Unix(1700000000, 0).Add(delta)
-		if _, e = s.Send("sandbox", "aabb", "00000000-0000-4000-8000-000000000001", "background", "", 5, now.Add(time.Minute), []byte(`{}`)); e != nil {
+		if _, e = s.Send(context.Background(), "sandbox", "aabb", "00000000-0000-4000-8000-000000000001", "background", "", 5, now.Add(time.Minute), []byte(`{}`)); e != nil {
 			t.Fatal(e)
 		}
 	}
@@ -73,6 +74,29 @@ func TestCredentialStrictAndP256(t *testing.T) {
 	bad := append(raw[:len(raw)-1], []byte(`,"other":1}`)...)
 	if _, _, err = ParseCredential(bad); err == nil {
 		t.Fatal("unknown property accepted")
+	}
+}
+
+func TestSenderPropagatesRequestCancellation(t *testing.T) {
+	c, key, err := ParseCredential(fixtureCredential(t))
+	if err != nil {
+		t.Fatal(err)
+	}
+	ctx, cancel := context.WithCancel(context.Background())
+	defer cancel()
+	observed := false
+	s := &Sender{Credential: c, Key: key, Client: &http.Client{Transport: rtFunc(func(r *http.Request) (*http.Response, error) {
+		cancel()
+		select {
+		case <-r.Context().Done():
+			observed = true
+			return nil, r.Context().Err()
+		default:
+			return nil, errors.New("request context did not cancel")
+		}
+	})}}
+	if _, err = s.Send(ctx, "sandbox", "aabb", "00000000-0000-4000-8000-000000000001", "alert", "", 5, time.Now().Add(time.Hour), []byte(`{}`)); err == nil || !observed {
+		t.Fatalf("transport did not observe caller cancellation: observed=%v err=%v", observed, err)
 	}
 }
 func TestProviderTokenSignature(t *testing.T) {
@@ -119,7 +143,7 @@ func TestSenderReturnsBoundedAPNsStatusAndTransportAmbiguity(t *testing.T) {
 				return &http.Response{StatusCode: status, Header: h, Body: io.NopCloser(strings.NewReader(`{"reason":"fixture"}`)), Request: r}, nil
 			})}
 			s := &Sender{Client: client, Credential: c, Key: key}
-			result, err := s.Send("sandbox", "aabb", "00000000-0000-4000-8000-000000000001", "alert", "", 5, time.Now().Add(time.Hour), []byte(`{}`))
+			result, err := s.Send(context.Background(), "sandbox", "aabb", "00000000-0000-4000-8000-000000000001", "alert", "", 5, time.Now().Add(time.Hour), []byte(`{}`))
 			if err != nil || result.Status != status || result.APNsID == "" || result.Reason != "fixture" {
 				t.Fatalf("result=%+v err=%v", result, err)
 			}
@@ -129,7 +153,7 @@ func TestSenderReturnsBoundedAPNsStatusAndTransportAmbiguity(t *testing.T) {
 		})
 	}
 	s := &Sender{Client: &http.Client{Transport: rtFunc(func(*http.Request) (*http.Response, error) { return nil, errors.New("timeout") })}, Credential: c, Key: key}
-	if _, err = s.Send("sandbox", "aabb", "00000000-0000-4000-8000-000000000001", "alert", "", 5, time.Now().Add(time.Hour), []byte(`{}`)); err == nil || !strings.Contains(err.Error(), "unknown") {
+	if _, err = s.Send(context.Background(), "sandbox", "aabb", "00000000-0000-4000-8000-000000000001", "alert", "", 5, time.Now().Add(time.Hour), []byte(`{}`)); err == nil || !strings.Contains(err.Error(), "unknown") {
 		t.Fatalf("transport ambiguity not reported: %v", err)
 	}
 }

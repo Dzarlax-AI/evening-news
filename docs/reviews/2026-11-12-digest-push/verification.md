@@ -23,6 +23,18 @@ verified by these local checks.
   requires adoption. The real external-install PostgreSQL 17 fixture passed with
   positive installation and both enabled-gate rejection cases; cmd/newsctl vet
   passed. The full CI acceptance must rerun for this correction.
+- Subsequent review fixes stop downstream rate-bucket creation after IP
+  exhaustion, aggregate IPv6 privacy addresses by /64, and separate private
+  canary admission from normal device operations. Valid-format incorrect
+  capabilities still consume durable abuse quotas.
+- Issued proof remains valid while requeued pending; pending locale rotation
+  cancels older unsent proof. Database failures return unavailable rather than
+  invalid capability/proof/conflict. Tests exercise these boundaries.
+- APNs requests inherit cancellation. Bounded detached receipt writes preserve
+  actual provider responses during cancellation, and shutdown waits for the
+  push loop before releasing database ownership. Invalid credential revisions
+  clear the previous sender. Expired-lease assertions now identify the exact
+  modified delivery, rather than any earlier unknown receipt.
 - Independent focused review addressed the public safe-409 boundary, challenge
   attempt accounting, in-flight ownership proof, unknown-challenge resend,
   fixed expiration, token quota, encryption-version binding and lock ordering.
@@ -46,3 +58,8 @@ exact-issue navigation require their own evidence.
 
 The existing Telegram/Viber behavior, browser/egress/extractor configuration,
 private manifests and unrelated application work are outside this patch.
+
+The existing global migration runner does not serialize overlapping maintenance
+invocations. A losing duplicate DDL attempt fails with transactional rollback;
+this patch does not change that pre-existing maintenance behavior. The release
+uses one guarded migration invocation, verified to reject repeat application.

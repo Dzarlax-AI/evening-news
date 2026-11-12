@@ -34,10 +34,11 @@ func runPushLoop(ctx context.Context, service *apnspush.Service, credentials *cr
 						if sender != nil {
 							sender.CloseIdleConnections()
 						}
+						sender = nil
+						revision = meta.Revision
 						config, key, e := apnspush.ParseCredential(raw)
 						if e == nil {
 							sender = &apnspush.Sender{Credential: config, Key: key}
-							revision = meta.Revision
 						}
 					}
 					current = sender

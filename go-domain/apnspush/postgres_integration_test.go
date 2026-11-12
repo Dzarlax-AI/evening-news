@@ -440,14 +440,16 @@ func TestPostgresAPNsOutcomesAndRetryIdentity(t *testing.T) {
 	if err := pool.QueryRow(ctx, `SELECT count(*) FROM push_installations WHERE state='invalid'`).Scan(&invalid); err != nil || invalid != 1 {
 		t.Fatalf("410 invalidation count=%d err=%v", invalid, err)
 	}
-	if _, err := pool.Exec(ctx, `WITH one AS (SELECT id FROM push_deliveries WHERE state='accepted' ORDER BY id LIMIT 1) UPDATE push_deliveries d SET state='sending',lease_id=gen_random_uuid(),lease_until=now()-interval '1 second' FROM one WHERE d.id=one.id`); err != nil {
+	var expiredDeliveryID string
+	if err := pool.QueryRow(ctx, `WITH one AS (SELECT id FROM push_deliveries WHERE state='accepted' ORDER BY id LIMIT 1) UPDATE push_deliveries d SET state='sending',lease_id=gen_random_uuid(),lease_until=now()-interval '1 second' FROM one WHERE d.id=one.id RETURNING d.id::text`).Scan(&expiredDeliveryID); err != nil {
 		t.Fatal(err)
 	}
 	if err := service.expireSending(ctx, 10); err != nil {
 		t.Fatal(err)
 	}
 	var staleState string
-	if err := pool.QueryRow(ctx, `SELECT state FROM push_deliveries WHERE lease_until IS NULL AND state='unknown' ORDER BY updated_at DESC LIMIT 1`).Scan(&staleState); err != nil || staleState != "unknown" {
+	var leaseCleared bool
+	if err := pool.QueryRow(ctx, `SELECT state,lease_id IS NULL AND lease_until IS NULL FROM push_deliveries WHERE id=$1`, expiredDeliveryID).Scan(&staleState, &leaseCleared); err != nil || staleState != "unknown" || !leaseCleared {
 		t.Fatalf("expired lease not marked unknown: %q %v", staleState, err)
 	}
 	if _, ok, err := service.claim(ctx); err != nil || ok {

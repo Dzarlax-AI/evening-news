@@ -302,7 +302,12 @@ func (s *Service) sendOne(ctx context.Context, sender *Sender, d delivery) {
 	}
 	var edition []byte
 	if err = s.Pool.QueryRow(ctx, `SELECT edition FROM editorial_digest_editions WHERE id=$1`, d.EditionID).Scan(&edition); err != nil {
-		s.finish(ctx, d, "rejected", 0, 0)
+		if errors.Is(err, pgx.ErrNoRows) {
+			s.finish(ctx, d, "rejected", 0, 0)
+		} else {
+			// APNs has not been called; a failed database read can safely retry.
+			s.retry(ctx, d, 0, 0)
+		}
 		return
 	}
 	var editionMap map[string]any
@@ -327,7 +332,7 @@ func (s *Service) sendOne(ctx context.Context, sender *Sender, d delivery) {
 	}
 	payload, _ := json.Marshal(payloadMap)
 	collapse := d.EditionDate.Format("20060102") + "-" + d.Locale
-	result, err := sender.Send(d.Environment, fmt.Sprintf("%x", token), d.APNsID, "alert", collapse, 5, d.ExpiresAt, payload)
+	result, err := sender.Send(ctx, d.Environment, fmt.Sprintf("%x", token), d.APNsID, "alert", collapse, 5, d.ExpiresAt, payload)
 	if err != nil {
 		s.finish(ctx, d, "unknown", 0, 0)
 		return
@@ -345,6 +350,8 @@ func (s *Service) sendOne(ctx context.Context, sender *Sender, d delivery) {
 	}
 }
 func (s *Service) finish(ctx context.Context, d delivery, state string, status int, retry time.Duration) {
+	ctx, cancel := context.WithTimeout(context.WithoutCancel(ctx), 2*time.Second)
+	defer cancel()
 	tx, err := s.Pool.Begin(ctx)
 	if err != nil {
 		return
@@ -375,6 +382,8 @@ func (s *Service) retry(ctx context.Context, d delivery, status int, after time.
 	s.finish(ctx, d, "retry_wait", status, after)
 }
 func (s *Service) invalidate(ctx context.Context, d delivery) {
+	ctx, cancel := context.WithTimeout(context.WithoutCancel(ctx), 2*time.Second)
+	defer cancel()
 	_, _ = s.Pool.Exec(ctx, `UPDATE push_installations SET state='invalid',token_envelope_version=NULL,token_key_id=NULL,token_nonce=NULL,token_ciphertext=NULL,updated_at=clock_timestamp() WHERE installation_id=$1 AND subscription_version=$2 AND token_hash=$3`, d.InstallationID, d.Version, d.TokenHash)
 }
 func (s *Service) expireSending(ctx context.Context, limit int) error {
@@ -444,7 +453,7 @@ func (s *Service) sendChallenge(ctx context.Context, sender *Sender) error {
 		return nil
 	}
 	payload, _ := json.Marshal(map[string]any{"aps": map[string]any{"content-available": 1}, "type": "installation_challenge", "installation_id": c.ID, "subscription_version": c.Version, "nonce": string(nonceText)})
-	result, sendErr := sender.Send(c.Environment, fmt.Sprintf("%x", token), c.APNsID, "background", "", 5, c.Expires, payload)
+	result, sendErr := sender.Send(ctx, c.Environment, fmt.Sprintf("%x", token), c.APNsID, "background", "", 5, c.Expires, payload)
 	if sendErr != nil {
 		s.finishChallenge(ctx, c, "unknown", 0, 0)
 		return nil
@@ -467,6 +476,8 @@ func (s *Service) sendChallenge(ctx context.Context, sender *Sender) error {
 	return nil
 }
 func (s *Service) finishChallenge(ctx context.Context, c challenge, state string, status int, delay time.Duration) {
+	ctx, cancel := context.WithTimeout(context.WithoutCancel(ctx), 2*time.Second)
+	defer cancel()
 	if state == "retry_wait" {
 		_, _ = s.Pool.Exec(ctx, `UPDATE push_challenges SET state='retry_wait',next_attempt_at=clock_timestamp()+$4::interval,lease_id=NULL,lease_until=NULL,updated_at=clock_timestamp() WHERE installation_id=$1 AND subscription_version=$2 AND lease_id=$3 AND state='sending' AND attempts<5`, c.ID, c.Version, c.LeaseID, delay.String())
 		return

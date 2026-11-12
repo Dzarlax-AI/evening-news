@@ -92,8 +92,15 @@ func (s *Service) addressHash(ip string) []byte {
 		return nil
 	}
 	h := hmac.New(sha256.New, s.IPHashKey)
-	_, _ = h.Write([]byte("push-ip-v1"))
-	_, _ = h.Write(parsed.To16())
+	if ipv4 := parsed.To4(); ipv4 != nil {
+		_, _ = h.Write([]byte("push-ip-v4"))
+		_, _ = h.Write(ipv4)
+	} else {
+		// Aggregate IPv6 privacy addresses within a /64 to prevent address rotation.
+		prefix := parsed.Mask(net.CIDRMask(64, 128))
+		_, _ = h.Write([]byte("push-ip-v6-64"))
+		_, _ = h.Write(prefix)
+	}
 	return h.Sum(nil)
 }
 func (s *Service) rate(ctx context.Context, tx pgx.Tx, key []byte, cap int, window time.Duration) error {
@@ -139,7 +146,10 @@ func (s *Service) admit(ctx context.Context, ip string, limits ...rateLimit) err
 	var limited bool
 	err = s.rate(ctx, tx, ipKey, 30, time.Hour)
 	if errors.Is(err, ErrRateLimit) {
-		limited = true
+		if err = tx.Commit(ctx); err != nil {
+			return ErrUnavailable
+		}
+		return ErrRateLimit
 	} else if err != nil {
 		return err
 	}
@@ -183,14 +193,14 @@ func (s *Service) Register(ctx context.Context, in Registration, capability, can
 	if !validRegistration(in) {
 		return zero, 0, ErrRequest
 	}
+	capHash, ok := capabilityHash(capability)
+	if !ok {
+		return zero, 0, ErrUnauthorized
+	}
 	token, _ := hex.DecodeString(in.DeviceToken)
 	tokenHash := sha256.Sum256(token)
 	if err := s.admit(ctx, canonicalIP, rateLimit{digestKey("installation", []byte(in.InstallationID)), 12, time.Hour}, rateLimit{digestKey("token", tokenHash[:]), 24, time.Hour}); err != nil {
 		return zero, 429, err
-	}
-	capHash, ok := capabilityHash(capability)
-	if !ok {
-		return zero, 0, ErrUnauthorized
 	}
 	tx, err := s.Pool.Begin(ctx)
 	if err != nil {
@@ -283,14 +293,14 @@ func (s *Service) Update(ctx context.Context, id string, in Registration, capabi
 	if !s.valid() || !installationID.MatchString(id) || id != in.InstallationID || !validRegistration(in) || expected < 1 {
 		return z, ErrRequest
 	}
+	capHash, ok := capabilityHash(capability)
+	if !ok {
+		return z, ErrUnauthorized
+	}
 	token, _ := hex.DecodeString(in.DeviceToken)
 	tokenHash := sha256.Sum256(token)
 	if err := s.admit(ctx, canonicalIP, rateLimit{digestKey("installation", []byte(id)), 20, time.Hour}, rateLimit{digestKey("token", tokenHash[:]), 24, time.Hour}); err != nil {
 		return z, err
-	}
-	capHash, ok := capabilityHash(capability)
-	if !ok {
-		return z, ErrUnauthorized
 	}
 	th := tokenHash
 	tx, err := s.Pool.Begin(ctx)
@@ -306,8 +316,11 @@ func (s *Service) Update(ctx context.Context, id string, in Registration, capabi
 	var version int64
 	var currentExpiry *time.Time
 	err = tx.QueryRow(ctx, `SELECT capability_hash,token_hash,state,locale,environment,subscription_version,challenge_expires_at FROM push_installations WHERE installation_id=$1 FOR UPDATE`, id).Scan(&ch, &oldToken, &state, &locale, &env, &version, &currentExpiry)
-	if err != nil {
+	if errors.Is(err, pgx.ErrNoRows) {
 		return z, ErrUnauthorized
+	}
+	if err != nil {
+		return z, ErrUnavailable
 	}
 	if subtleConstant(ch, capHash) != 1 {
 		return z, ErrUnauthorized
@@ -375,7 +388,7 @@ func (s *Service) Update(ctx context.Context, id string, in Registration, capabi
 	if err != nil {
 		return z, ErrUnavailable
 	}
-	if changedToken {
+	if changedToken || state != "active" {
 		_, err = tx.Exec(ctx, `UPDATE push_challenges SET state='cancelled',nonce_hash=NULL,nonce_envelope_version=NULL,nonce_key_id=NULL,nonce_nonce=NULL,nonce_ciphertext=NULL,updated_at=$3 WHERE installation_id=$1 AND subscription_version<$2 AND state IN ('pending','retry_wait')`, id, newVersion, s.now())
 		if err != nil {
 			return z, ErrUnavailable
@@ -396,12 +409,12 @@ func (s *Service) Activate(ctx context.Context, id, capability, canonicalIP, non
 	if !s.valid() || !installationID.MatchString(id) || version < 1 || len(nonce) != 43 {
 		return z, ErrRequest
 	}
-	if err := s.admit(ctx, canonicalIP, rateLimit{digestKey("installation", []byte(id)), 12, time.Hour}); err != nil {
-		return z, err
-	}
 	capHash, ok := capabilityHash(capability)
 	if !ok {
 		return z, ErrUnauthorized
+	}
+	if err := s.admit(ctx, canonicalIP, rateLimit{digestKey("installation", []byte(id)), 12, time.Hour}); err != nil {
+		return z, err
 	}
 	nonceBytes, e := base64.RawURLEncoding.DecodeString(nonce)
 	if e != nil || len(nonceBytes) != 32 {
@@ -421,7 +434,13 @@ func (s *Service) Activate(ctx context.Context, id, capability, canonicalIP, non
 	var current int64
 	var currentExpiry *time.Time
 	err = tx.QueryRow(ctx, `SELECT capability_hash,state,subscription_version,challenge_hash,challenge_expires_at FROM push_installations WHERE installation_id=$1 FOR UPDATE`, id).Scan(&ch, &state, &current, &stored, &currentExpiry)
-	if err != nil || subtleConstant(ch, capHash) != 1 {
+	if errors.Is(err, pgx.ErrNoRows) {
+		return z, ErrUnauthorized
+	}
+	if err != nil {
+		return z, ErrUnavailable
+	}
+	if subtleConstant(ch, capHash) != 1 {
 		return z, ErrUnauthorized
 	}
 	if current != version {
@@ -441,7 +460,10 @@ func (s *Service) Activate(ctx context.Context, id, capability, canonicalIP, non
 	var attempts int
 	var challengeHash []byte
 	err = tx.QueryRow(ctx, `SELECT expires_at,state,attempts,nonce_hash FROM push_challenges WHERE installation_id=$1 AND subscription_version=$2 FOR UPDATE`, id, version).Scan(&expires, &chState, &attempts, &challengeHash)
-	if err != nil || !expires.After(s.now()) || attempts < 1 || (chState != "accepted" && chState != "sending" && chState != "unknown" && chState != "retry_wait") || subtleConstant(challengeHash, nh[:]) != 1 {
+	if err != nil && !errors.Is(err, pgx.ErrNoRows) {
+		return z, ErrUnavailable
+	}
+	if err != nil || !expires.After(s.now()) || attempts < 1 || (chState != "pending" && chState != "accepted" && chState != "sending" && chState != "unknown" && chState != "retry_wait") || subtleConstant(challengeHash, nh[:]) != 1 {
 		return z, ErrRequest
 	}
 	_, err = tx.Exec(ctx, `UPDATE push_challenges SET state='confirmed',nonce_hash=NULL,nonce_envelope_version=NULL,nonce_key_id=NULL,nonce_nonce=NULL,nonce_ciphertext=NULL,updated_at=$3 WHERE installation_id=$1 AND subscription_version=$2`, id, version, s.now())
@@ -462,12 +484,12 @@ func (s *Service) Delete(ctx context.Context, id, capability, canonicalIP string
 	if !s.valid() || !installationID.MatchString(id) {
 		return ErrRequest
 	}
-	if err := s.admit(ctx, canonicalIP, rateLimit{digestKey("installation", []byte(id)), 12, time.Hour}); err != nil {
-		return err
-	}
 	capHash, ok := capabilityHash(capability)
 	if !ok {
 		return ErrUnauthorized
+	}
+	if err := s.admit(ctx, canonicalIP, rateLimit{digestKey("installation", []byte(id)), 12, time.Hour}); err != nil {
+		return err
 	}
 	tx, err := s.Pool.Begin(ctx)
 	if err != nil {
@@ -481,7 +503,13 @@ func (s *Service) Delete(ctx context.Context, id, capability, canonicalIP string
 	var ch []byte
 	var version int64
 	err = tx.QueryRow(ctx, `SELECT capability_hash,subscription_version FROM push_installations WHERE installation_id=$1 FOR UPDATE`, id).Scan(&ch, &version)
-	if err != nil || subtleConstant(ch, capHash) != 1 {
+	if errors.Is(err, pgx.ErrNoRows) {
+		return ErrUnauthorized
+	}
+	if err != nil {
+		return ErrUnavailable
+	}
+	if subtleConstant(ch, capHash) != 1 {
 		return ErrUnauthorized
 	}
 	_, err = tx.Exec(ctx, `UPDATE push_installations SET state='disabled',token_envelope_version=NULL,token_key_id=NULL,token_nonce=NULL,token_ciphertext=NULL,challenge_hash=NULL,challenge_expires_at=NULL,subscription_version=subscription_version+1,updated_at=$2 WHERE installation_id=$1`, id, s.now())
@@ -511,7 +539,7 @@ func (s *Service) Canary(ctx context.Context, in CanaryRequest, canonicalIP stri
 	if !s.valid() || !installationID.MatchString(in.InstallationID) || !installationID.MatchString(in.EditionID) || !installationID.MatchString(in.IdempotencyKey) {
 		return z, 0, ErrRequest
 	}
-	if err := s.admit(ctx, canonicalIP, rateLimit{digestKey("installation", []byte(in.InstallationID)), 5, time.Hour}); err != nil {
+	if err := s.admit(ctx, canonicalIP, rateLimit{digestKey("canary-installation", []byte(in.InstallationID)), 5, time.Hour}); err != nil {
 		return z, 429, err
 	}
 	tx, err := s.Pool.Begin(ctx)
@@ -550,11 +578,17 @@ func (s *Service) Canary(ctx context.Context, in CanaryRequest, canonicalIP stri
 	var tokenHash []byte
 	err = tx.QueryRow(ctx, `SELECT locale,environment,subscription_version,token_hash FROM push_installations WHERE installation_id=$1 AND state='active' FOR UPDATE`, in.InstallationID).Scan(&locale, &environment, &version, &tokenHash)
 	if err != nil {
+		if !errors.Is(err, pgx.ErrNoRows) {
+			return z, 0, ErrUnavailable
+		}
 		return z, 0, ErrConflict
 	}
 	var day time.Time
 	var editionLocale string
 	if err = tx.QueryRow(ctx, `SELECT edition_date,locale FROM editorial_digest_editions WHERE id=$1`, in.EditionID).Scan(&day, &editionLocale); err != nil || editionLocale != locale {
+		if err != nil && !errors.Is(err, pgx.ErrNoRows) {
+			return z, 0, ErrUnavailable
+		}
 		return z, 0, ErrConflict
 	}
 	id, err := newUUID()

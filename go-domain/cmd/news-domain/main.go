@@ -273,11 +273,17 @@ func run() error {
 	}
 	worker := source.get("BACKGROUND_EXECUTION_MODE") != "embedded"
 	web := &webbackend.Server{Credentials: credentials, Guard: guard, Pool: pool, Runtime: runtime, Worker: worker, AllowCreateAll: allowCreateAll, TelegramToken: config.TelegramToken, ChatID: config.TelegramMain, ServiceChatID: config.TelegramService, ViberSiteBase: config.SiteBase}
+	pushDone := make(chan struct{})
 	if source.managed {
 		ipKey := sha256.Sum256(append([]byte("push-ip-hmac-v1"), source.key...))
 		pushService := &apnspush.Service{Pool: pool, Key: source.key, KeyID: source.keyID, InstallationID: source.installation, IPHashKey: ipKey[:]}
 		web.Push = &apnspush.Handler{Service: pushService, Token: source.get("WEB_BACKEND_TOKEN")}
-		go runPushLoop(appCtx, pushService, credentials, guard)
+		go func() {
+			defer close(pushDone)
+			runPushLoop(appCtx, pushService, credentials, guard)
+		}()
+	} else {
+		close(pushDone)
 	}
 	mux.HandleFunc("GET /internal/v1/runtime-configuration", func(w http.ResponseWriter, r *http.Request) {
 		expected := "Bearer " + jobToken
@@ -363,6 +369,12 @@ loop:
 		_ = server.Close()
 	}
 	cancel()
+	select {
+	case <-pushDone:
+	case <-time.After(5 * time.Second):
+		abandoned = true
+		return errors.New("APNs delivery loop failed to drain")
+	}
 	select {
 	case <-done:
 	case <-time.After(5 * time.Second):

@@ -2,6 +2,7 @@ package apnspush
 
 import (
 	"bytes"
+	"context"
 	"crypto/ecdsa"
 	"crypto/elliptic"
 	"crypto/rand"
@@ -122,7 +123,7 @@ type Result struct {
 	Reason     string
 }
 
-func (s *Sender) Send(environment, token, requestID, pushType, collapse string, priority int, expiration time.Time, payload []byte) (Result, error) {
+func (s *Sender) Send(ctx context.Context, environment, token, requestID, pushType, collapse string, priority int, expiration time.Time, payload []byte) (Result, error) {
 	var out Result
 	if s == nil || s.Key == nil || (environment != "sandbox" && environment != "production") || !validToken(token) {
 		return out, ErrCredential
@@ -139,7 +140,7 @@ func (s *Sender) Send(environment, token, requestID, pushType, collapse string, 
 	if err != nil {
 		return out, err
 	}
-	req, err := http.NewRequest(http.MethodPost, base+"/3/device/"+token, bytes.NewReader(payload))
+	req, err := http.NewRequestWithContext(ctx, http.MethodPost, base+"/3/device/"+token, bytes.NewReader(payload))
 	if err != nil {
 		return out, errors.New("APNs request unavailable")
 	}

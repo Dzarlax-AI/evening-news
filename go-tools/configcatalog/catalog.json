@@ -1319,7 +1319,7 @@
     "precedence": "selected role manifest takes precedence without environment fallback; legacy environment when no file is selected; component default if absent",
     "sources": [
       "go-background/cmd/news-background/runtime_config.go:13",
-      "go-domain/cmd/news-domain/main.go:398",
+      "go-domain/cmd/news-domain/main.go:410",
       "go-domain/cmd/news-domain/runtime_config.go:25",
       "go-processing/runner/runner.go:120"
     ],
@@ -1489,7 +1489,7 @@
     "precedence": "selected role manifest takes precedence without environment fallback; legacy environment when no file is selected; component default if absent",
     "sources": [
       "go-background/cmd/news-background/runtime_config.go:13",
-      "go-domain/cmd/news-domain/main.go:386",
+      "go-domain/cmd/news-domain/main.go:398",
       "go-domain/cmd/news-domain/runtime_config.go:25",
       "go-processing/runner/runner.go:119"
     ],
@@ -1955,7 +1955,7 @@
     "migration": "preserve effective value and consuming role during adoption; verify managed parity before switching",
     "precedence": "selected role manifest takes precedence without environment fallback; legacy environment when no file is selected; component default if absent",
     "sources": [
-      "go-domain/cmd/news-domain/main.go:321",
+      "go-domain/cmd/news-domain/main.go:327",
       "go-domain/cmd/news-domain/runtime_config.go:25"
     ],
     "class": "runtime",
@@ -1994,7 +1994,7 @@
     "precedence": "selected role manifest takes precedence without environment fallback; legacy environment when no file is selected; component default if absent",
     "sources": [
       "go-domain/cmd/news-domain/healthcheck.go:31",
-      "go-domain/cmd/news-domain/main.go:325",
+      "go-domain/cmd/news-domain/main.go:331",
       "go-domain/cmd/news-domain/runtime_config.go:25"
     ],
     "class": "runtime",
@@ -3930,7 +3930,7 @@
     "migration": "preserve effective value and consuming role during adoption; verify managed parity before switching",
     "precedence": "selected role manifest takes precedence without environment fallback; legacy environment when no file is selected; component default if absent",
     "sources": [
-      "go-domain/cmd/news-domain/main.go:296",
+      "go-domain/cmd/news-domain/main.go:302",
       "go-domain/cmd/news-domain/runtime_config.go:25",
       "go-domain/cmd/news-domain/runtime_config.go:26",
       "go-web/internal/backend/backend.go:113",
