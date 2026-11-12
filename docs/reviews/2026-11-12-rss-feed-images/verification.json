@@ -1,0 +1,32 @@
+{
+  "date": "2026-11-12",
+  "status": "locally_verified_not_published",
+  "backend_base": "d0f72067256e483d72fe80a65997c41fcd4bc0be",
+  "ios_base": "ad01f2d4de204ff407c50b403bb138dda163894a",
+  "policy": "All RSS/Atom entry images, in feed order, exact resolved URL deduplication; no article-page enrichment.",
+  "provenance": "media_files[].source=rss_feed",
+  "verification": {
+    "parser_and_pipeline": "go test ./extractor ./pipeline: passed; parser tests first failed without media_files, then passed",
+    "ingestion": "TEST_DATABASE_URL=<isolated loopback PostgreSQL 17 UTC> go test -count=1 ./internal/ingest ./internal/store: passed",
+    "processing": "TEST_DATABASE_URL=<isolated loopback PostgreSQL 17 UTC> go test -count=1 ./internal/processing: passed",
+    "public_reader": "TEST_DATABASE_URL=<isolated loopback PostgreSQL 17 UTC> go test -count=1 ./internal/repositories ./internal/httpui: passed",
+    "ios_gallery": "Xcode iPad Air 13-inch (M4), iOS 26.5: ArticleGalleryImagesTests 6 passed, 0 failed, 0 skipped",
+    "covered": [
+      "RSS HTML images, image enclosures, Media RSS, Atom HTML/XHTML/enclosures",
+      "XML base resolution, unsafe URL rejection, exact deduplication, explicit resource limit",
+      "Provenance survives ingestion and restricted-role database insert",
+      "Empty RSS media never filled from inline or freshly extracted article-page HTML",
+      "Feed/article/search/API feed/legacy digest policy, including legacy unmarked media and HTML-summary fallback",
+      "Custom and Telegram read behavior, custom page extraction retained",
+      "iOS GIF/APNG eligibility and provenance cache round trip; legacy media decoding compatible"
+    ]
+  },
+  "limitations": [
+    "Stored legacy RSS images without provenance are hidden on fresh reads, not rewritten or deleted.",
+    "No historical feed reconstruction or reprocessing. Existing cached client data may persist until refreshed.",
+    "Images retain existing loading/rendering behavior; animation and real publisher network loading were not tested.",
+    "Existing parser bounds apply: 256 images, 8 KiB URL, 256 KiB media JSON; overflow fails explicitly instead of dropping images.",
+    "No deployment, publication, TestFlight upload, App Review submission or real push performed."
+  ],
+  "initial_test_setup_correction": "The ingestion fence fixture expects UTC. The isolated PostgreSQL timezone was corrected from host-local time to UTC, then the unchanged fence logic passed."
+}

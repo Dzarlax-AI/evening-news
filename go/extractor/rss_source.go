@@ -36,6 +36,7 @@ type RSSArticle struct {
 	Content     *string        `json:"content"`
 	Summary     *string        `json:"summary"`
 	ImageURL    *string        `json:"image_url"`
+	MediaFiles  []Media        `json:"media_files"`
 	PublishedAt string         `json:"published_at"`
 	SourceType  string         `json:"source_type"`
 	SourceName  string         `json:"source_name"`
@@ -66,6 +67,9 @@ func ParseRSSSource(ctx context.Context, xmlText string, sourceURL, sourceName s
 	}
 	entryMetadata, err := scanRSSXML(xmlText, feedURL)
 	if err != nil {
+		if errors.Is(err, ErrRSSResourceLimit) {
+			return nil, err
+		}
 		return nil, ErrInvalidRSSFeed
 	}
 
@@ -112,6 +116,7 @@ func ParseRSSSource(ctx context.Context, xmlText string, sourceURL, sourceName s
 			continue
 		}
 		article := RSSArticle{
+			MediaFiles:  []Media{},
 			Title:       entry.Title,
 			URL:         articleURL,
 			PublishedAt: rssPublishedAt(entry, now),
@@ -134,12 +139,17 @@ func ParseRSSSource(ctx context.Context, xmlText string, sourceURL, sourceName s
 		if image := rssImage(entry, meta, feedURL); image != "" {
 			article.ImageURL = stringPointer(image)
 		}
+		article.MediaFiles, err = rssImages(meta)
+		if err != nil {
+			return nil, err
+		}
 		articles = append(articles, article)
 	}
 	return articles, nil
 }
 
 type rssEntryMetadata struct {
+	images          []rssImageCandidate
 	entryBase       string
 	singleLink      string
 	linkCount       int
@@ -150,8 +160,9 @@ type rssEntryMetadata struct {
 }
 
 type rssXMLFrame struct {
-	name string
-	base string
+	name           string
+	base           string
+	htmlImageIndex int
 }
 
 // gofeed's pull parser accepts some mismatched closing tags. feedparser marks
@@ -196,12 +207,21 @@ func scanRSSXML(xmlText, feedURL string) ([]rssEntryMetadata, error) {
 				}
 			}
 			localName := strings.ToLower(value.Name.Local)
+			htmlImageIndex := -1
 			if activeEntry < 0 && (localName == "entry" || localName == "item") {
 				entries = append(entries, rssEntryMetadata{entryBase: base, contentBase: base, descriptionBase: base, links: map[string]string{}})
 				activeEntry = len(entries) - 1
 			}
 			if activeEntry >= 0 {
 				meta := &entries[activeEntry]
+				meta.collectRSSImage(value, base)
+				if !isRSSMediaNamespace(value.Name.Space) && (localName == "content" || localName == "encoded" || localName == "summary" || localName == "description") {
+					htmlImageIndex = len(meta.images)
+					meta.images = append(meta.images, rssImageCandidate{base: base, html: true})
+				}
+				if len(meta.images) > maxArticleMediaCount*16 {
+					return nil, ErrRSSResourceLimit
+				}
 				switch localName {
 				case "title":
 					meta.titleSeen = true
@@ -228,7 +248,7 @@ func scanRSSXML(xmlText, feedURL string) ([]rssEntryMetadata, error) {
 					}
 				}
 			}
-			stack = append(stack, rssXMLFrame{name: value.Name.Local, base: base})
+			stack = append(stack, rssXMLFrame{name: value.Name.Local, base: base, htmlImageIndex: htmlImageIndex})
 		case xml.EndElement:
 			if len(stack) == 0 || stack[len(stack)-1].name != value.Name.Local {
 				return nil, ErrInvalidRSSFeed
@@ -242,6 +262,14 @@ func scanRSSXML(xmlText, feedURL string) ([]rssEntryMetadata, error) {
 				activeEntry = -1
 			}
 		case xml.CharData:
+			if activeEntry >= 0 {
+				for i := len(stack) - 1; i >= 0; i-- {
+					if index := stack[i].htmlImageIndex; index >= 0 {
+						entries[activeEntry].images[index].parts = append(entries[activeEntry].images[index].parts, string(value))
+						break
+					}
+				}
+			}
 			if len(stack) == 0 && strings.TrimSpace(string(value)) != "" {
 				return nil, ErrInvalidRSSFeed
 			}

@@ -415,7 +415,7 @@ func (p *Processor) processOne(ctx context.Context, f store.Fence, a store.Artic
 	if forceExtract && EnforceTextLimit(mediaContent, p.textLimit()) != nil {
 		mediaContent = ""
 	}
-	if !summaryDone && !hasMediaFiles(a.MediaFiles) && strings.TrimSpace(mediaContent) != "" {
+	if a.SourceType != "rss" && !summaryDone && !hasMediaFiles(a.MediaFiles) && strings.TrimSpace(mediaContent) != "" {
 		if extractedMedia := extractMediaFiles(mediaContent, a.URL); len(extractedMedia) > 0 {
 			fields["media_files"] = extractedMedia
 		}
@@ -532,10 +532,10 @@ func (p *Processor) processOne(ctx context.Context, f store.Fence, a store.Artic
 				if len([]rune(strings.TrimSpace(candidate))) > len([]rune(a.Content)) {
 					fields["content"] = candidate
 				}
-				if a.ImageURL == "" && fresh.ImageURL != "" {
+				if a.SourceType != "rss" && a.ImageURL == "" && fresh.ImageURL != "" {
 					fields["image_url"] = fresh.ImageURL
 				}
-				if !hasMediaFiles(a.MediaFiles) && len(fresh.MediaFiles) > 0 {
+				if a.SourceType != "rss" && !hasMediaFiles(a.MediaFiles) && len(fresh.MediaFiles) > 0 {
 					fields["media_files"] = fresh.MediaFiles
 				}
 				if a.PublishedAt == nil || a.PublishedAt.Year() < 2020 {

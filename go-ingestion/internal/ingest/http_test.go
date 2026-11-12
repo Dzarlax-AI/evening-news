@@ -280,7 +280,7 @@ func TestFetchBatchAllowsPayloadFreeDeferredAlongsideSuccess(t *testing.T) {
 			"results": []any{
 				map[string]any{"request_id": request.RequestID, "source_id": 1, "type": "rss", "outcome": "deferred",
 					"error": map[string]any{"code": "response_budget_exhausted", "retry_after_seconds": 1}},
-				map[string]any{"request_id": request.RequestID, "source_id": 2, "type": "rss", "outcome": "success", "rss_articles": []any{}},
+				map[string]any{"request_id": request.RequestID, "source_id": 2, "type": "rss", "outcome": "success", "rss_articles": []any{map[string]any{"title": "Fixture", "url": "https://fixture.test/story", "media_files": []any{map[string]any{"type": "image", "source": "rss_feed", "url": "https://fixture.test/feed.jpg"}}}}},
 			},
 		})
 	}))
@@ -296,7 +296,7 @@ func TestFetchBatchAllowsPayloadFreeDeferredAlongsideSuccess(t *testing.T) {
 	if deferred := got[1]; deferred.Outcome != "deferred" || hasAnyCollectedPayload(deferred) || deferred.Error == nil || deferred.Error.Code != "response_budget_exhausted" {
 		t.Fatalf("payload-free deferred outcome was not preserved: %+v", deferred)
 	}
-	if success := got[2]; success.Outcome != "success" || success.RSSArticles == nil {
+	if success := got[2]; success.Outcome != "success" || len(success.RSSArticles) != 1 || !strings.Contains(string(success.RSSArticles[0].MediaFiles), `"source":"rss_feed"`) {
 		t.Fatalf("neighboring success result was lost: %+v", success)
 	}
 }
