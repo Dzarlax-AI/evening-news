@@ -80,6 +80,8 @@ func (h *Handler) Register(mux *http.ServeMux) {
 	mux.HandleFunc("GET /api/public/categories", h.localizedPublicAPI(h.categories))
 	mux.HandleFunc("GET /api/public/sources", h.localizedPublicAPI(h.sources))
 	mux.HandleFunc("GET /api/public/search", h.localizedPublicAPI(h.search))
+	mux.HandleFunc("GET /api/public/digests", h.publicDigests)
+	mux.HandleFunc("GET /api/public/digests/{date}", h.publicDigestDetail)
 	mux.HandleFunc("GET /api/v1/", h.apiRoot)
 	mux.HandleFunc("GET /api/v1/feed", h.localizedPublicAPI(h.apiFeed))
 	mux.HandleFunc("GET /api/v1/feed.rss", h.localizedPublicAPI(h.rss))
