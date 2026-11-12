@@ -479,6 +479,7 @@ func TestSerbianRetryReadinessAndDefiniteRejectionAreNotSuccessful(t *testing.T)
 		parent           bool
 		unknownRU        bool
 		deliveryDisabled bool
+		delayedReady     bool
 		wantErr          error
 		wantPosts        int32
 	}{
@@ -488,6 +489,7 @@ func TestSerbianRetryReadinessAndDefiniteRejectionAreNotSuccessful(t *testing.T)
 		{name: "definite_telegram_rejection", withSerbianIssue: true, wantErr: digestworkflow.ErrSerbianDeliveryRejected, wantPosts: 1},
 		{name: "parent_ru_complete_serbian_incomplete", parent: true, wantPosts: 1},
 		{name: "parent_ru_unknown_send_dominates", parent: true, unknownRU: true, wantErr: telegramdelivery.ErrUnknown, wantPosts: 1},
+		{name: "parent_selected_previous_day", parent: true, delayedReady: true, withSerbianIssue: true, wantPosts: 2},
 	} {
 		t.Run(tc.name, func(t *testing.T) {
 			dsn := os.Getenv("TEST_DATABASE_URL")
@@ -567,10 +569,13 @@ func TestSerbianRetryReadinessAndDefiniteRejectionAreNotSuccessful(t *testing.T)
 				t.Fatal("real fence rejected", err)
 			}
 			date := time.Now().UTC().Format("2006-01-02")
+			if tc.delayedReady {
+				date = time.Now().UTC().AddDate(0, 0, -1).Format("2006-01-02")
+			}
 			for _, item := range []struct{ id, locale, text string }{{ruID, "ru", "Подтвержденная новость"}} {
 				insertDigestFixtureEdition(t, ctx, pool, item.id, item.locale, item.text, date, job)
 			}
-			if tc.withSerbianIssue {
+			if tc.withSerbianIssue && !tc.delayedReady {
 				insertDigestFixtureEdition(t, ctx, pool, srID, "sr-Latn", "Potvrđena vest", date, job)
 			}
 			if _, err = pool.Exec(ctx, `INSERT INTO editorial_serbian_retry(russian_edition_id,destination,delivery_enabled,publication_pinned,publication_attempted,last_job_id) VALUES($1,'synthetic-destination',$3,true,true,$2)`, ruID, job, !tc.deliveryDisabled); err != nil {
@@ -611,18 +616,43 @@ func TestSerbianRetryReadinessAndDefiniteRejectionAreNotSuccessful(t *testing.T)
 			v := digestInput{Operation: "serbian_digest_retry", OperationID: "20000000-0000-4000-8000-000000000027", DomainInstanceID: domainID, Envelope: digestEnvelope{JobID: job, Attempt: 1, Deadline: deadline.Format(time.RFC3339Nano)}, Kind: kind, Payload: payload}
 			var result map[string]any
 			if tc.parent {
-				v.Operation = "digest_prepare"
-				prepared, prepErr := server.executeDigest(ctx, v, fence)
-				if prepErr != nil {
-					t.Fatal("prepare parent digest", prepErr)
+				var token string
+				marker := "serbian_category_translation_missing"
+				if tc.delayedReady {
+					selectedDate, _ := time.Parse("2006-01-02", date)
+					identity := digestworkflow.Identity{JobID: job, Attempt: 1, DomainInstanceID: domainID, Deadline: deadline}
+					workflow := digestworkflow.Workflow{Pool: pool, Fence: fence}
+					publication, prepareErr := workflow.Publication(ctx, identity, selectedDate)
+					if prepareErr != nil {
+						t.Fatal(prepareErr)
+					}
+					// Model RU selected before midnight, with SR becoming ready before publish.
+					token, err = workflow.PreparePublication(ctx, &server.digest.prepared, publication, map[string]string{"ru": "synthetic-ru", "sr-Latn": "synthetic-destination"})
+					if err != nil {
+						t.Fatal(err)
+					}
+					insertDigestFixtureEdition(t, ctx, pool, srID, "sr-Latn", "Potvrđena vest", date, job)
+					marker = ""
+				} else {
+					v.Operation = "digest_prepare"
+					prepared, prepErr := server.executeDigest(ctx, v, fence)
+					if prepErr != nil {
+						t.Fatal("prepare parent digest", prepErr)
+					}
+					token = prepared["prepared_token"].(string)
 				}
 				v.Operation = "digest_publish"
-				v.Input, _ = json.Marshal(map[string]string{"prepared_token": prepared["prepared_token"].(string), "serbian_incomplete_code": "serbian_category_translation_missing"})
+				v.Input, _ = json.Marshal(map[string]string{"prepared_token": token, "serbian_incomplete_code": marker})
 				result, err = server.executeDigest(ctx, v, fence)
 			} else {
 				result, err = server.executeDigest(ctx, v, fence)
 			}
-			if tc.parent && !tc.unknownRU {
+			if tc.delayedReady {
+				secondary, _ := result["serbian_delivery"].(map[string]any)
+				if err != nil || result["success"] != true || secondary["success"] != true || posts.Load() != 2 {
+					t.Fatalf("selected-day publication result=%#v err=%v posts=%d", result, err, posts.Load())
+				}
+			} else if tc.parent && !tc.unknownRU {
 				incomplete, _ := result["serbian_delivery"].(map[string]any)
 				if err != nil || result["success"] != true || incomplete["status"] != "incomplete" || incomplete["error_code"] != "serbian_category_translation_missing" || posts.Load() != tc.wantPosts {
 					t.Fatalf("parent result=%#v err=%v posts=%d", result, err, posts.Load())
@@ -635,7 +665,7 @@ func TestSerbianRetryReadinessAndDefiniteRejectionAreNotSuccessful(t *testing.T)
 					t.Fatalf("ready issue with delivery disabled result=%#v", result)
 				}
 			}
-			if tc.withSerbianIssue && !tc.deliveryDisabled {
+			if tc.withSerbianIssue && !tc.deliveryDisabled && !tc.parent {
 				if code := DigestErrorCode(err); code != "serbian_delivery_rejected" {
 					t.Fatalf("rejection code=%q", code)
 				}
@@ -645,7 +675,11 @@ func TestSerbianRetryReadinessAndDefiniteRejectionAreNotSuccessful(t *testing.T)
 				if err := pool.QueryRow(ctx, `SELECT count(*) FILTER (WHERE e.locale='sr-Latn'),count(*) FILTER (WHERE d.state='completed' AND e.locale='ru') FROM editorial_digest_editions e LEFT JOIN digest_delivery_intents d ON d.edition_id=e.id`).Scan(&srCount, &ruCompleted); err != nil {
 					t.Fatal(err)
 				}
-				if srCount != 0 || (!tc.unknownRU && ruCompleted != 1) {
+				wantSR := 0
+				if tc.withSerbianIssue {
+					wantSR = 1
+				}
+				if srCount != wantSR || (!tc.unknownRU && ruCompleted != 1) {
 					t.Fatalf("SR editions=%d completed RU intents=%d", srCount, ruCompleted)
 				}
 			}

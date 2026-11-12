@@ -164,6 +164,16 @@ func TestOperationalPostgresCASAndImmutableAttemptSnapshot(t *testing.T) {
 	if value, err := store.UpdateOperational(ctx, enableSerbian); err != nil || !value.SerbianEnabled || value.Revision != 3 {
 		t.Fatalf("complete category names should allow Serbian activation: %+v %v", value, err)
 	}
+	if _, err = pool.Exec(ctx, `DELETE FROM category_localizations`); err != nil {
+		t.Fatal(err)
+	}
+	// An existing data gap must not prevent stopping delivery or processing.
+	enableSerbian.ExpectedRevision = 3
+	enableSerbian.DeliveryEnabled = false
+	enableSerbian.ProcessingEnabled = false
+	if value, err := store.UpdateOperational(ctx, enableSerbian); err != nil || value.DeliveryEnabled || value.ProcessingEnabled || !value.SerbianEnabled {
+		t.Fatalf("unrelated controls blocked by an existing category gap: %+v %v", value, err)
+	}
 }
 
 func operationalUpdate(revision int64, maxArticles int) OperationalUpdate {

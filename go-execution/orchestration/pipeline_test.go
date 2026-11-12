@@ -244,6 +244,17 @@ func TestSerbianIncompleteMarkerFailsOnlyAfterConfirmedRussianPublish(t *testing
 	}
 }
 
+func TestInvalidSerbianGenerationMarkerRetainsSafeFailureReason(t *testing.T) {
+	f := &fakeServices{operationResults: map[string]any{
+		"summary_status":     map[string]any{"summaries_count": 0},
+		"summaries_generate": map[string]any{"summaries_generated": 1, "serbian_status": "incomplete", "serbian_error_code": "untrusted error"},
+	}}
+	_, err := testPipeline(t, f).Execute(context.Background(), testFence(), "telegram_digest", json.RawMessage(`{}`))
+	if err == nil || execution.SafeExecutionFailureReason(err) != "digest_summaries_generate_result_failed" || execution.DeliveryOutcomeUnknown("telegram_digest", json.RawMessage(`{}`), err) {
+		t.Fatalf("malformed marker classification: %v", err)
+	}
+}
+
 func TestPreparedDigestMissingRemainsUnknown(t *testing.T) {
 	f := &fakeServices{operationFailures: map[string]string{"digest_publish": "prepared_digest_missing"}}
 	p := testPipeline(t, f)

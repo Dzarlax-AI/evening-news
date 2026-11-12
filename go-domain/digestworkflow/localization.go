@@ -6,6 +6,7 @@ import (
 	"errors"
 	"fmt"
 	"strconv"
+	"strings"
 	"time"
 
 	"github.com/Dzarlax-AI/evening-news/go-editorial/editorial"
@@ -46,11 +47,11 @@ func (w Workflow) localizedSnapshot(ctx context.Context, ru editorial.Snapshot, 
 		var title, summary, currentTitle, currentSummary, label string
 		err = tx.QueryRow(ctx, `SELECT l.title,l.summary,COALESCE(a.title,''),COALESCE(a.summary,''),COALESCE(c.display_name,'') FROM article_localizations l JOIN articles a ON a.id=l.article_id LEFT JOIN category_localizations c ON c.category_id=$2 AND c.locale='sr-Latn' WHERE l.article_id=$1 AND l.locale='sr-Latn' AND l.status='completed'`, aid, cid).Scan(&title, &summary, &currentTitle, &currentSummary, &label)
 		if errors.Is(err, pgx.ErrNoRows) {
-			var categoryExists bool
-			if e := tx.QueryRow(ctx, `SELECT EXISTS(SELECT 1 FROM category_localizations WHERE category_id=$1 AND locale='sr-Latn' AND display_name<>'')`, cid).Scan(&categoryExists); e != nil {
+			var categoryLabel string
+			if e := tx.QueryRow(ctx, `SELECT COALESCE((SELECT display_name FROM category_localizations WHERE category_id=$1 AND locale='sr-Latn'),'')`, cid).Scan(&categoryLabel); e != nil {
 				return sr, e
 			}
-			if !categoryExists {
+			if strings.TrimSpace(categoryLabel) == "" {
 				return sr, ErrCategoryTranslationMissing
 			}
 			return sr, ErrArticleTranslationMissing
@@ -61,10 +62,10 @@ func (w Workflow) localizedSnapshot(ctx context.Context, ru editorial.Snapshot, 
 		if currentTitle != article.Title || currentSummary != article.Summary {
 			return sr, ErrSerbianSourceStale
 		}
-		if title == "" || summary == "" {
+		if strings.TrimSpace(title) == "" || strings.TrimSpace(summary) == "" {
 			return sr, ErrArticleTranslationMissing
 		}
-		if label == "" {
+		if strings.TrimSpace(label) == "" {
 			return sr, ErrCategoryTranslationMissing
 		}
 		sr.Articles[i].Title = title

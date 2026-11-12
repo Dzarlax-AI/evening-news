@@ -181,6 +181,10 @@ func (s *Server) executeDigest(ctx context.Context, v digestInput, f authority.F
 		if e != nil {
 			return nil, e
 		}
+		editionDate, e := time.Parse("2006-01-02", prepared.Edition.Date)
+		if e != nil {
+			return nil, digestworkflow.ErrInvalid
+		}
 		policy := digestworkflow.SerbianRetryPolicy{PublicationPinned: true}
 		if pinned != nil && pinned.Settings.DeliveryEnabled && pinned.Settings.SerbianEnabled && pinned.Telegram != nil && pinned.Telegram.SerbianDeliveryEnabled && appsettings.ValidateTelegram(appsettings.TelegramUpdate{ChatID: pinned.Telegram.ChatID, ServiceChatID: pinned.Telegram.ServiceChatID, SerbianChatID: pinned.Telegram.SerbianChatID, SerbianDeliveryEnabled: true}) == nil {
 			policy.DeliveryEnabled, policy.Destination = true, pinned.Telegram.SerbianChatID
@@ -209,7 +213,7 @@ func (s *Server) executeDigest(ctx context.Context, v digestInput, f authority.F
 		if prepared.Secondary == nil && pinned != nil && pinned.Settings.SerbianEnabled {
 			if serbianErrorCode != "" {
 				// Generation already made a bounded attempt earlier in this parent job.
-			} else if _, err := wf.RetrySerbian(ctx, v.Envelope.JobID, v.Envelope.Attempt, v.OperationID, time.Now(), prepared.EditionID); err != nil {
+			} else if _, err := wf.RetrySerbian(ctx, v.Envelope.JobID, v.Envelope.Attempt, v.OperationID, editionDate, prepared.EditionID); err != nil {
 				serbianErrorCode = serbianIncompleteCode(err)
 				if serbianErrorCode == "" {
 					return nil, err
@@ -230,7 +234,7 @@ func (s *Server) executeDigest(ctx context.Context, v digestInput, f authority.F
 						serbianErrorCode = "serbian_edition_missing"
 					}
 				} else if pinned.Settings.DeliveryEnabled && pinned.Telegram != nil && pinned.Telegram.SerbianDeliveryEnabled {
-					sr, prepareErr := wf.PrepareSerbian(ctx, identity, time.Now(), prepared.EditionID, pinned.Telegram.SerbianChatID)
+					sr, prepareErr := wf.PrepareSerbian(ctx, identity, editionDate, prepared.EditionID, pinned.Telegram.SerbianChatID)
 					if prepareErr != nil {
 						serbianErrorCode = serbianIncompleteCode(prepareErr)
 						if serbianErrorCode == "" {

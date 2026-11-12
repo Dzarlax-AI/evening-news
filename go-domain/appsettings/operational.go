@@ -116,7 +116,11 @@ func (s Store) UpdateOperational(ctx context.Context, in OperationalUpdate) (Ope
 	if rev != in.ExpectedRevision {
 		return Operational{}, ErrConflict
 	}
-	if v.SerbianEnabled {
+	previous, err := operationalInTx(ctx, tx)
+	if err != nil {
+		return Operational{}, err
+	}
+	if v.SerbianEnabled && !previous.SerbianEnabled {
 		var missing bool
 		if err = tx.QueryRow(ctx, `SELECT EXISTS(SELECT 1 FROM categories c WHERE NOT EXISTS(SELECT 1 FROM category_localizations l WHERE l.category_id=c.id AND l.locale='sr-Latn' AND NULLIF(btrim(l.display_name),'') IS NOT NULL))`).Scan(&missing); err != nil {
 			return Operational{}, err
@@ -124,10 +128,6 @@ func (s Store) UpdateOperational(ctx context.Context, in OperationalUpdate) (Ope
 		if missing {
 			return Operational{}, ErrSerbianCategoryMissing
 		}
-	}
-	previous, err := operationalInTx(ctx, tx)
-	if err != nil {
-		return Operational{}, err
 	}
 	if previous.DeliveryEnabled != v.DeliveryEnabled {
 		if _, err = tx.Exec(ctx, `SELECT pg_advisory_xact_lock(1649258121,728441)`); err != nil {

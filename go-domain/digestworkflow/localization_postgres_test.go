@@ -329,6 +329,24 @@ INSERT INTO article_localizations(article_id,locale,title,summary,input_fingerpr
 			}
 		})
 	}
+	for _, tc := range []struct {
+		name, sql string
+		want      error
+	}{
+		{"blank_category", `INSERT INTO category_localizations(category_id,locale,display_name) VALUES(90011,'sr-Latn',E' \t\n')`, ErrCategoryTranslationMissing},
+		{"blank_article", `UPDATE category_localizations SET display_name='Priroda' WHERE category_id=90011; UPDATE article_localizations SET title=E' \t\n' WHERE article_id=90011`, ErrArticleTranslationMissing},
+		{"blank_category_and_missing_article", `UPDATE category_localizations SET display_name=E' \t\n' WHERE category_id=90011; DELETE FROM article_localizations WHERE article_id=90011`, ErrCategoryTranslationMissing},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			if _, err := pool.Exec(ctx, tc.sql); err != nil {
+				t.Fatal(err)
+			}
+			snapshot := editorial.Snapshot{Articles: []editorial.Article{{ID: "90011", CategoryID: "90011", Title: "Nature title", Summary: "Nature summary"}}}
+			if _, err := wf.localizedSnapshot(ctx, snapshot, "20000000-0000-4000-8000-000000000011"); !errors.Is(err, tc.want) {
+				t.Fatalf("whitespace readiness: %v", err)
+			}
+		})
+	}
 }
 
 func TestMissingCategoryKeepsRussianEditionAndFailsRequiredSerbian(t *testing.T) {
