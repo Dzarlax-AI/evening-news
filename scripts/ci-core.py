@@ -25,6 +25,7 @@ VERTICAL_FAILURE_REASONS = {
     "web source create failed", "job did not succeed", "job timed out",
     "default digest job failed", "fresh digest job failed", "fresh edition receipt missing",
     "default digest did not generate and deliver", "partial delivery receipts invalid",
+    "rate limit delivery terminal state invalid", "partial delivery state invalid",
     "fixture cleanup failed", "fixture docker run failed", "fixture docker exec failed",
     "fixture docker up failed", "fixture docker down failed",
 }

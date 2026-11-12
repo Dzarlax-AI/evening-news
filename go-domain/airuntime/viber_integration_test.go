@@ -478,8 +478,11 @@ func TestSerbianRetryReadinessAndDefiniteRejectionAreNotSuccessful(t *testing.T)
 		withSerbianIssue bool
 		parent           bool
 		unknownRU        bool
+		rateLimitedRU    bool
 		deliveryDisabled bool
 		delayedReady     bool
+		partialStatus    int
+		firstRejection   int
 		wantErr          error
 		wantPosts        int32
 	}{
@@ -487,9 +490,13 @@ func TestSerbianRetryReadinessAndDefiniteRejectionAreNotSuccessful(t *testing.T)
 		{name: "disabled_delivery_missing_issue", deliveryDisabled: true, wantErr: digestworkflow.ErrNotReady},
 		{name: "disabled_delivery_ready_issue", deliveryDisabled: true, withSerbianIssue: true},
 		{name: "definite_telegram_rejection", withSerbianIssue: true, wantErr: digestworkflow.ErrSerbianDeliveryRejected, wantPosts: 1},
+		{name: "serbian_zero_part_429", withSerbianIssue: true, firstRejection: 429, wantErr: digestworkflow.ErrSerbianDeliveryRejected, wantPosts: 1},
 		{name: "parent_ru_complete_serbian_incomplete", parent: true, wantPosts: 1},
 		{name: "parent_ru_unknown_send_dominates", parent: true, unknownRU: true, wantErr: telegramdelivery.ErrUnknown, wantPosts: 1},
+		{name: "parent_ru_rate_limit_preserves_unknown", parent: true, rateLimitedRU: true, wantErr: digestworkflow.ErrTelegramDeliveryRejected, wantPosts: 1},
 		{name: "parent_selected_previous_day", parent: true, delayedReady: true, withSerbianIssue: true, wantPosts: 2},
+		{name: "serbian_partial_then_400", withSerbianIssue: true, partialStatus: 400, wantErr: telegramdelivery.ErrUnknown, wantPosts: 2},
+		{name: "serbian_partial_then_429", withSerbianIssue: true, partialStatus: 429, wantErr: telegramdelivery.ErrUnknown, wantPosts: 2},
 	} {
 		t.Run(tc.name, func(t *testing.T) {
 			dsn := os.Getenv("TEST_DATABASE_URL")
@@ -603,19 +610,40 @@ func TestSerbianRetryReadinessAndDefiniteRejectionAreNotSuccessful(t *testing.T)
 			}
 			var posts atomic.Int32
 			client := &http.Client{Transport: viberFixtureRoundTrip(func(r *http.Request) (*http.Response, error) {
-				posts.Add(1)
+				count := posts.Add(1)
+				if tc.partialStatus != 0 {
+					if count == 1 {
+						return &http.Response{StatusCode: 200, Header: make(http.Header), Body: io.NopCloser(strings.NewReader(`{"ok":true,"result":{"message_id":1}}`)), Request: r}, nil
+					}
+					return &http.Response{StatusCode: tc.partialStatus, Header: http.Header{"Retry-After": []string{"60"}}, Body: io.NopCloser(strings.NewReader(fmt.Sprintf(`{"ok":false,"error_code":%d,"parameters":{"retry_after":60}}`, tc.partialStatus))), Request: r}, nil
+				}
+				if tc.rateLimitedRU {
+					return &http.Response{StatusCode: http.StatusTooManyRequests, Header: http.Header{"Retry-After": []string{"60"}}, Body: io.NopCloser(strings.NewReader(`{"ok":false,"error_code":429,"parameters":{"retry_after":60}}`)), Request: r}, nil
+				}
 				if tc.parent && !tc.unknownRU {
 					return &http.Response{StatusCode: http.StatusOK, Header: make(http.Header), Body: io.NopCloser(strings.NewReader(`{"ok":true,"result":{"message_id":1}}`)), Request: r}, nil
 				}
 				if tc.parent && tc.unknownRU {
 					return &http.Response{StatusCode: http.StatusInternalServerError, Header: make(http.Header), Body: io.NopCloser(strings.NewReader(`{"ok":false,"error_code":500}`)), Request: r}, nil
 				}
-				return &http.Response{StatusCode: http.StatusBadRequest, Header: make(http.Header), Body: io.NopCloser(strings.NewReader(`{"ok":false,"error_code":400}`)), Request: r}, nil
+				code := tc.firstRejection
+				if code == 0 {
+					code = http.StatusBadRequest
+				}
+				return &http.Response{StatusCode: code, Header: http.Header{"Retry-After": []string{"60"}}, Body: io.NopCloser(strings.NewReader(fmt.Sprintf(`{"ok":false,"error_code":%d,"parameters":{"retry_after":60}}`, code))), Request: r}, nil
 			})}
 			server := &Server{db: pool, credentials: credentials, client: client, limiter: NewSlidingWindow(3), config: Config{TelegramToken: "fixture-token", TelegramMain: "synthetic-ru", TelegramService: "synthetic-service", TelegramEndpoint: "https://telegram.fixture", SiteBase: "https://news.fixture"}, digest: &digestRegistry{entries: make(map[string]*digestReceipt)}}
 			v := digestInput{Operation: "serbian_digest_retry", OperationID: "20000000-0000-4000-8000-000000000027", DomainInstanceID: domainID, Envelope: digestEnvelope{JobID: job, Attempt: 1, Deadline: deadline.Format(time.RFC3339Nano)}, Kind: kind, Payload: payload}
 			var result map[string]any
-			if tc.parent {
+			if tc.partialStatus != 0 {
+				selectedDate, _ := time.Parse("2006-01-02", date)
+				prepared, prepErr := (digestworkflow.Workflow{Pool: pool, Fence: fence}).PrepareSerbian(ctx, digestworkflow.Identity{JobID: job, Attempt: 1, DomainInstanceID: domainID, Deadline: deadline}, selectedDate, ruID, "synthetic-destination")
+				if prepErr != nil {
+					t.Fatal(prepErr)
+				}
+				prepared.Rendered.PlainParts = []string{"Synthetic first part.", "Synthetic second part."}
+				result, err = server.publishPrepared(ctx, v, fence, prepared)
+			} else if tc.parent {
 				var token string
 				marker := "serbian_category_translation_missing"
 				if tc.delayedReady {
@@ -652,7 +680,7 @@ func TestSerbianRetryReadinessAndDefiniteRejectionAreNotSuccessful(t *testing.T)
 				if err != nil || result["success"] != true || secondary["success"] != true || posts.Load() != 2 {
 					t.Fatalf("selected-day publication result=%#v err=%v posts=%d", result, err, posts.Load())
 				}
-			} else if tc.parent && !tc.unknownRU {
+			} else if tc.parent && !tc.unknownRU && !tc.rateLimitedRU {
 				incomplete, _ := result["serbian_delivery"].(map[string]any)
 				if err != nil || result["success"] != true || incomplete["status"] != "incomplete" || incomplete["error_code"] != "serbian_category_translation_missing" || posts.Load() != tc.wantPosts {
 					t.Fatalf("parent result=%#v err=%v posts=%d", result, err, posts.Load())
@@ -660,14 +688,23 @@ func TestSerbianRetryReadinessAndDefiniteRejectionAreNotSuccessful(t *testing.T)
 			} else if !errors.Is(err, tc.wantErr) || posts.Load() != tc.wantPosts {
 				t.Fatalf("retry err=%v posts=%d", err, posts.Load())
 			}
+			if tc.rateLimitedRU && !PublishOutcomeMayBeUnknown(err) {
+				t.Fatal("existing RU rejection must retain its conservative unknown disposition")
+			}
 			if tc.deliveryDisabled && tc.withSerbianIssue {
 				if result["status"] != "success" || result["parts_sent"] != 0 {
 					t.Fatalf("ready issue with delivery disabled result=%#v", result)
 				}
 			}
-			if tc.withSerbianIssue && !tc.deliveryDisabled && !tc.parent {
+			if tc.withSerbianIssue && !tc.deliveryDisabled && !tc.parent && tc.partialStatus == 0 {
 				if code := DigestErrorCode(err); code != "serbian_delivery_rejected" {
 					t.Fatalf("rejection code=%q", code)
+				}
+			}
+			if tc.partialStatus != 0 {
+				var sent, rejected, completed int
+				if e := pool.QueryRow(ctx, `SELECT count(*) FILTER(WHERE p.state='sent'),count(*) FILTER(WHERE p.state='rejected'),count(*) FILTER(WHERE d.state='completed') FROM digest_delivery_intents d LEFT JOIN digest_delivery_parts p ON p.intent_id=d.id WHERE d.edition_id=$1`, srID).Scan(&sent, &rejected, &completed); e != nil || sent != 1 || rejected != 1 || completed != 0 {
+					t.Fatalf("partial receipt sent=%d rejected=%d completed=%d err=%v", sent, rejected, completed, e)
 				}
 			}
 			if tc.parent {
@@ -679,7 +716,7 @@ func TestSerbianRetryReadinessAndDefiniteRejectionAreNotSuccessful(t *testing.T)
 				if tc.withSerbianIssue {
 					wantSR = 1
 				}
-				if srCount != wantSR || (!tc.unknownRU && ruCompleted != 1) {
+				if srCount != wantSR || (!tc.unknownRU && !tc.rateLimitedRU && ruCompleted != 1) {
 					t.Fatalf("SR editions=%d completed RU intents=%d", srCount, ruCompleted)
 				}
 			}

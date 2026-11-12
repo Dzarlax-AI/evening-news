@@ -371,11 +371,17 @@ func (s *Server) publishPrepared(ctx context.Context, v digestInput, f authority
 		state, e := delivery.SendPart(ctx, part)
 		if e != nil {
 			if errors.Is(e, telegramdelivery.ErrRejected) {
+				if sent > 0 {
+					return nil, telegramdelivery.ErrUnknown
+				}
 				return map[string]any{"success": false, "parts_sent": sent, "parts_total": len(parts), "rich_message": false}, nil
 			}
 			return nil, e
 		}
 		if state != telegramdelivery.Sent {
+			if sent > 0 {
+				return nil, telegramdelivery.ErrUnknown
+			}
 			return map[string]any{"success": false, "parts_sent": sent, "parts_total": len(parts), "rich_message": false}, nil
 		}
 		sent++

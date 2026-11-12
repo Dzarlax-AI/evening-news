@@ -284,7 +284,6 @@ func PublishOutcomeMayBeUnknown(err error) bool {
 		errors.Is(err, digestworkflow.ErrArticleTranslationMissing), errors.Is(err, digestworkflow.ErrSerbianSourceStale),
 		errors.Is(err, digestworkflow.ErrSerbianAttemptsExhausted), errors.Is(err, digestworkflow.ErrSerbianProviderFailed),
 		errors.Is(err, digestworkflow.ErrSerbianDeliveryRejected),
-		errors.Is(err, digestworkflow.ErrTelegramDeliveryRejected),
 		errors.Is(err, digestworkflow.ErrDestination),
 		errors.Is(err, digestworkflow.ErrInvalid), errors.Is(err, digestworkflow.ErrLimit),
 		errors.Is(err, ErrAISettingsInvalid):

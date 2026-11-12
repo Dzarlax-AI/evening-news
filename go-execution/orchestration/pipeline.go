@@ -50,7 +50,7 @@ func safeSerbianRetryCode(code string) bool {
 	case "editorial_not_ready", "serbian_category_translation_missing", "serbian_article_translation_missing",
 		"serbian_source_stale", "serbian_attempts_exhausted", "serbian_provider_failed",
 		"editorial_provider_timeout", "editorial_provider_unavailable", "editorial_invalid_result",
-		"editorial_resource_limit", "telegram_configuration_incomplete", "serbian_delivery_rejected", "telegram_delivery_rejected", "serbian_edition_missing":
+		"editorial_resource_limit", "telegram_configuration_incomplete", "serbian_delivery_rejected", "serbian_edition_missing":
 		return true
 	default:
 		return false
@@ -369,7 +369,7 @@ func (p *Pipeline) digest(ctx context.Context, f execution.ExecutionContext, cal
 
 func safePreSendPublishCode(code string) bool {
 	switch code {
-	case "telegram_configuration_incomplete", "telegram_delivery_rejected":
+	case "telegram_configuration_incomplete":
 		return true
 	default:
 		return false

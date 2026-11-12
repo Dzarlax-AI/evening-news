@@ -32,6 +32,7 @@ func TestSerbianFailurePersistsTruthfulExecutionReceipt(t *testing.T) {
 	}{
 		{"missing_category", "serbian_digest_retry", "serbian_digest_retry", "serbian_category_translation_missing", "failed", "worker_error", "serbian_category_translation_missing", false},
 		{"send_rejected", "serbian_digest_retry", "serbian_digest_retry", "serbian_delivery_rejected", "failed", "worker_error", "serbian_delivery_rejected", false},
+		{"parent_ru_rejection_unchanged", "telegram_digest", "digest_publish", "telegram_delivery_rejected", "delivery_unknown", "external_outcome_unknown", "digest_publish_failed", false},
 		{"send_unknown", "serbian_digest_retry", "serbian_digest_retry", "external_outcome_unknown", "delivery_unknown", "external_outcome_unknown", "digest_publish_failed", false},
 		{"receipt_missing", "serbian_digest_retry", "serbian_digest_retry", "prepared_digest_missing", "delivery_unknown", "external_outcome_unknown", "digest_publish_failed", false},
 		{"parent_ru_confirmed_sr_missing", "telegram_digest", "", "", "failed", "worker_error", "serbian_category_translation_missing", true},
