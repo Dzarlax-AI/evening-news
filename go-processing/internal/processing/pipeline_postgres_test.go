@@ -78,13 +78,13 @@ func newPipelinePG(t *testing.T, omitTechCategory bool) *pipelinePG {
 		`CREATE TABLE ` + q + `.sources(id bigint PRIMARY KEY,source_type text NOT NULL,name text NOT NULL)`,
 		`CREATE TABLE ` + q + `.articles(
 			id bigint PRIMARY KEY,title text NOT NULL,url text NOT NULL,content text,summary text,
-			source_id bigint,published_at timestamp,summary_processed boolean NOT NULL DEFAULT false,
+			source_id bigint,published_at timestamp,fetched_at timestamp DEFAULT now(),summary_processed boolean NOT NULL DEFAULT false,
 			category_processed boolean NOT NULL DEFAULT false,ad_processed boolean NOT NULL DEFAULT false,
 			is_advertisement boolean,ad_confidence double precision,ad_type text,ad_reasoning text,
 			processing_attempts integer NOT NULL DEFAULT 0,
 			processing_state text NOT NULL DEFAULT 'pending',next_attempt_at timestamp,
 			last_processing_error text,processed boolean NOT NULL DEFAULT false,image_url text,
-			media_files jsonb NOT NULL DEFAULT '[]'::jsonb,hash_content text)`,
+			media_files jsonb NOT NULL DEFAULT '[]'::jsonb,media_evidence jsonb,telegram_context jsonb,hash_content text)`,
 		`CREATE TABLE ` + q + `.article_processing_items(
 			run_id uuid NOT NULL,article_id bigint NOT NULL,article_attempt integer NOT NULL,
 			input_fingerprint text NOT NULL,claim_token uuid NOT NULL,state text NOT NULL,
@@ -113,6 +113,14 @@ func newPipelinePG(t *testing.T, omitTechCategory bool) *pipelinePG {
 			t.Fatalf("prepare isolated processing schema: %v", err)
 		}
 	}
+	dedupMigration, err := os.ReadFile("../../../go-domain/migration/sql/022.sql")
+	if err != nil {
+		t.Fatal("read dedup migration failed")
+	}
+	if _, err := admin.Exec(ctx, strings.ReplaceAll(string(dedupMigration), "__SCHEMA_Q__", q)); err != nil {
+		t.Fatal("apply dedup migration to processing fixture failed")
+	}
+
 	cfg, err := pgxpool.ParseConfig(dsn)
 	if err != nil {
 		t.Fatal(err)
@@ -254,6 +262,10 @@ func newFixtureExtractor(t *testing.T) (*httptest.Server, *atomic.Int32) {
 				"content": syntheticExtractedArticle, "title": "Synthetic fixture title",
 				"publication_date": "2026-10-24", "method": "source_content", "method_used": "source_content",
 				"selector_used": "article", "image_url": "https://example.test/synthetic.jpg",
+				"media_evidence": map[string]any{
+					"version":         1,
+					"editorial_cover": map[string]any{"url": "https://example.test/editorial.jpg", "source": "og_image", "article_url": rawURL},
+				},
 				"media": []any{map[string]any{"type": "image", "url": "https://example.test/synthetic.jpg"}},
 			},
 			"observations": []any{map[string]any{"selector": "article", "method": "source_content", "success": true}},
@@ -267,8 +279,7 @@ func newIntegrationProcessor(pg *pipelinePG, aiURL, extractorURL string) *Proces
 	return &Processor{DB: pg.db, AI: NewAIClient(aiURL, "fixture-ai-token"),
 		Extractor:  NewExtractorClient(extractorURL, "fixture-extractor-token"),
 		MaxWorkers: 1, MaxBatch: 10, MaxAttempts: 3, TextLimit: 10000,
-		AttemptTimeout: 5 * time.Second, RetryInitial: time.Minute, RetryLater: 2 * time.Minute,
-		Duplicates: NewDuplicateCache()}
+		AttemptTimeout: 5 * time.Second, RetryInitial: time.Minute, RetryLater: 2 * time.Minute}
 }
 
 func TestProcessorRunPostgresClaimBusyRefundPartialStageAndRetry(t *testing.T) {
@@ -800,16 +811,23 @@ func TestProcessorRunPostgresForcedTelegramKeepsBoundedArchiveAsContext(t *testi
 	if _, err := newIntegrationProcessor(pg, ai.URL, extractor.URL).Run(context.Background(), f); err != nil {
 		t.Fatalf("forced Telegram reprocessing: %v", err)
 	}
+	var cover *string
+	if err := pg.admin.QueryRow(context.Background(), `SELECT media_evidence->'editorial_cover'->>'url' FROM `+pg.schema+`.articles WHERE id=$1`, articleID).Scan(&cover); err != nil || cover == nil || *cover != "https://example.test/editorial.jpg" {
+		t.Fatalf("verified cover did not survive the worker path: %v", err)
+	}
 }
 
-func TestProcessorRunPostgresDirectTelegramOmitsOriginalContext(t *testing.T) {
+func TestProcessorRunPostgresTelegramReprocessUsesOriginalContext(t *testing.T) {
 	pg := newPipelinePG(t, false)
 	const articleID = int64(729)
+	const originalText = "Synthetic Telegram post: useful closure notice at 14:00."
+	const savedSummary = "A previously saved brief summary."
 	pg.seedArticle(t, articleID)
 	if _, err := pg.admin.Exec(context.Background(), `INSERT INTO `+pg.schema+`.sources(id,source_type,name) VALUES(1,'telegram','Synthetic Telegram')`); err != nil {
 		t.Fatal(err)
 	}
-	if _, err := pg.admin.Exec(context.Background(), `UPDATE `+pg.schema+`.articles SET source_id=1,url='https://t.me/synthetic/729' WHERE id=$1`, articleID); err != nil {
+	contextJSON := `{"source_text":"` + originalText + `","metadata_known":true,"has_media":false,"external_links":[]}`
+	if _, err := pg.admin.Exec(context.Background(), `UPDATE `+pg.schema+`.articles SET source_id=1,url='https://t.me/synthetic/729',content=$2,summary=$3,summary_processed=true,category_processed=true,ad_processed=true,telegram_context=$4::jsonb WHERE id=$1`, articleID, originalText, savedSummary, contextJSON); err != nil {
 		t.Fatal(err)
 	}
 	extractor, extractionCalls := newFixtureExtractor(t)
@@ -819,12 +837,12 @@ func TestProcessorRunPostgresDirectTelegramOmitsOriginalContext(t *testing.T) {
 			http.Error(w, "bad fixture request", http.StatusBadRequest)
 			return
 		}
-		if request.Operation != "analyze" || request.Input["url"] != "https://t.me/synthetic/729" {
+		if request.Operation != "analyze" || request.Input["url"] != "https://t.me/synthetic/729" || request.Input["source_type"] != "telegram" || request.Input["content"] != savedSummary {
 			http.Error(w, "direct Telegram analysis used the wrong callback", http.StatusUnprocessableEntity)
 			return
 		}
-		if _, exists := request.Input["original_context"]; exists {
-			http.Error(w, "direct Telegram analysis received original source context", http.StatusUnprocessableEntity)
+		if request.Input["original_context"] != originalText {
+			http.Error(w, "direct Telegram analysis did not receive original source context", http.StatusUnprocessableEntity)
 			return
 		}
 		result := map[string]any{"summary": "Synthetic Telegram summary.", "categories": []any{"technology"}, "is_advertisement": false}
@@ -832,8 +850,9 @@ func TestProcessorRunPostgresDirectTelegramOmitsOriginalContext(t *testing.T) {
 		_ = json.NewEncoder(w).Encode(analysisResponse(request, result))
 	}))
 	defer ai.Close()
-	if _, err := newIntegrationProcessor(pg, ai.URL, extractor.URL).Run(context.Background(), pg.newRun(t, articleID)); err != nil {
-		t.Fatalf("direct Telegram processing: %v", err)
+	f := pg.newRunWithPayload(t, articleID, "article_reprocess", map[string]any{"article_ids": []int64{articleID}, "force": false})
+	if _, err := newIntegrationProcessor(pg, ai.URL, extractor.URL).Run(context.Background(), f); err != nil {
+		t.Fatalf("Telegram reprocessing: %v", err)
 	}
 	if extractionCalls.Load() != 0 {
 		t.Fatalf("nonextractable Telegram URL unexpectedly used collector: %d", extractionCalls.Load())

@@ -32,6 +32,9 @@ func (p *Postgres) CheckSchema(ctx context.Context) error {
 		"background_jobs.schedule_key", "background_jobs.schedule_revision", "background_jobs.occurrence_id",
 		"background_jobs.scheduled_for", "background_jobs.attempt_generation",
 	}
+	if p.filterArticleMedia {
+		columns = append(columns, "articles.media_evidence")
+	}
 	err = p.pool.QueryRow(ctx, `SELECT count(*)=$1 FROM information_schema.columns
  WHERE table_schema=current_schema() AND table_name || '.' || column_name = ANY($2::text[])`, len(columns), columns).Scan(&ready)
 	if err != nil {

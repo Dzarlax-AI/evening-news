@@ -7,7 +7,6 @@ import (
 	"strings"
 	"sync"
 	"testing"
-	"time"
 )
 
 type smartFilterGolden struct {
@@ -24,32 +23,6 @@ type smartFilterGolden struct {
 		ShouldProcess bool   `json:"should_process"`
 		Reason        string `json:"reason"`
 	} `json:"expected"`
-}
-
-func TestDuplicateCacheMatchesLegacyOwnerAndExpiryRules(t *testing.T) {
-	cache := NewDuplicateCache()
-	now := time.Date(2026, 10, 26, 12, 0, 0, 0, time.UTC)
-	ownerID := int64(41)
-	hash, duplicate, cacheHit := cache.Lookup("  Synthetic ARTICLE body  ", ownerID, now)
-	if hash != contentHash("Synthetic ARTICLE body") || duplicate || cacheHit {
-		t.Fatalf("first lookup = (%q, %v, %v)", hash, duplicate, cacheHit)
-	}
-	cache.Remember(hash, &ownerID, now)
-	if _, duplicate, cacheHit = cache.Lookup("synthetic article BODY", ownerID, now.Add(time.Hour)); duplicate || !cacheHit {
-		t.Fatalf("owner replay should be admitted from cache: duplicate=%v cacheHit=%v", duplicate, cacheHit)
-	}
-	if _, duplicate, cacheHit = cache.Lookup("synthetic article BODY", 42, now.Add(time.Hour)); !duplicate || !cacheHit {
-		t.Fatalf("different article should be a duplicate: duplicate=%v cacheHit=%v", duplicate, cacheHit)
-	}
-	if _, duplicate, cacheHit = cache.Lookup("synthetic article BODY", 42, now.Add(24*time.Hour)); duplicate || cacheHit {
-		t.Fatalf("entry exactly 24 hours old must expire: duplicate=%v cacheHit=%v", duplicate, cacheHit)
-	}
-
-	dbHitHash := contentHash("durable hit")
-	cache.Remember(dbHitHash, nil, now)
-	if _, duplicate, cacheHit = cache.Lookup("durable hit", ownerID, now.Add(time.Minute)); !duplicate || !cacheHit {
-		t.Fatalf("durable hit remembered without owner must block replay: duplicate=%v cacheHit=%v", duplicate, cacheHit)
-	}
 }
 
 func TestSmartFilterMatchesFrozenPythonCorpus(t *testing.T) {

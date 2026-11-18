@@ -99,7 +99,7 @@ func TestExtractorClientSendsBoundedContractAndPreservesObservations(t *testing.
 		_ = json.NewEncoder(w).Encode(map[string]any{
 			"contract_version": "1", "request_id": body["request_id"], "original_url": url,
 			"final_url": url, "outcome": "success",
-			"result":       map[string]any{"content": syntheticExtractedArticle, "title": "fixture", "media": []any{map[string]any{"type": "image", "url": "https://fixture.invalid/image.jpg"}}, "method": "http", "method_used": "http", "selector_used": "article"},
+			"result":       map[string]any{"content": syntheticExtractedArticle, "title": "fixture", "media": []any{map[string]any{"type": "image", "url": "https://fixture.invalid/image.jpg", "data": map[string]any{"article_body_scope": "outside", "width": 300}}}, "method": "http", "method_used": "http", "selector_used": "article"},
 			"observations": []any{map[string]any{"selector": "article", "method": "http", "success": true}},
 		})
 	}))
@@ -112,6 +112,10 @@ func TestExtractorClientSendsBoundedContractAndPreservesObservations(t *testing.
 	}
 	if out.Content != syntheticExtractedArticle || len(out.MediaFiles) != 1 || out.MethodUsed != "http" || len(out.Observations) != 1 || !out.Observations[0].Success {
 		t.Fatalf("extraction result lost fields: %#v", out)
+	}
+	mediaData, ok := out.MediaFiles[0]["data"].(map[string]any)
+	if !ok || mediaData["article_body_scope"] != "outside" || mediaData["width"] != float64(300) {
+		t.Fatalf("extraction result lost media metadata: %#v", out.MediaFiles[0])
 	}
 }
 

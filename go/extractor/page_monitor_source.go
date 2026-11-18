@@ -112,7 +112,7 @@ func ParsePageMonitorList(in PageMonitorOptions) ([]PageMonitorItem, []string, e
 		return nil, nil, err
 	}
 	rawItems := []PageMonitorItem{}
-	seenTitles := map[[32]byte]struct{}{}
+	seenItems := map[[32]byte]struct{}{}
 	uniqueCount := 0
 	rawCount := 0
 	retainedBytes := 0
@@ -135,9 +135,14 @@ func ParsePageMonitorList(in PageMonitorOptions) ([]PageMonitorItem, []string, e
 				item, ok := pageMonitorItem(in, element, in.Now)
 				if ok {
 					rawCount++
-					key := sha256.Sum256([]byte(cases.Lower(language.Und).String(strings.TrimSpace(item.Title))))
-					if _, duplicate := seenTitles[key]; !duplicate && uniqueCount < in.Limit {
-						seenTitles[key] = struct{}{}
+					keyText := "url:" + item.Link
+					if item.Link == in.URL {
+						// Items without a distinct link still share the monitor's source URL.
+						keyText = "title:" + cases.Lower(language.Und).String(strings.TrimSpace(item.Title))
+					}
+					key := sha256.Sum256([]byte(keyText))
+					if _, duplicate := seenItems[key]; !duplicate && uniqueCount < in.Limit {
+						seenItems[key] = struct{}{}
 						uniqueCount++
 						if uniqueCount > in.Offset {
 							itemBytes := pageMonitorRetainedItemBytes(item)

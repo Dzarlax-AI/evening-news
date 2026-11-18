@@ -91,7 +91,7 @@ func (s *Store) SaveLocalizationRetry(ctx context.Context, f Fence, a Article, f
 	}
 	var current Article
 	var articleAttempt int
-	err = tx.QueryRow(ctx, `SELECT COALESCE(title,''),COALESCE(url,''),COALESCE(content,''),COALESCE(summary,''),COALESCE(summary_processed,false),COALESCE(category_processed,false),COALESCE(ad_processed,false),is_advertisement,processing_attempts FROM articles WHERE id=$1 FOR UPDATE`, a.ID).Scan(&current.Title, &current.URL, &current.Content, &current.Summary, &current.SummaryProcessed, &current.CategoryProcessed, &current.AdProcessed, &current.IsAdvertisement, &articleAttempt)
+	err = tx.QueryRow(ctx, `SELECT COALESCE(title,''),COALESCE(url,''),COALESCE(content,''),COALESCE(summary,''),COALESCE(summary_processed,false),COALESCE(category_processed,false),COALESCE(ad_processed,false),is_advertisement,processing_attempts,telegram_context FROM articles WHERE id=$1 FOR UPDATE`, a.ID).Scan(&current.Title, &current.URL, &current.Content, &current.Summary, &current.SummaryProcessed, &current.CategoryProcessed, &current.AdProcessed, &current.IsAdvertisement, &articleAttempt, &current.TelegramContext)
 	var data map[string]string
 	_ = json.Unmarshal(receipt, &data)
 	if err != nil || articleAttempt != attempt || sourceSnapshotFingerprint(current) != data["snapshot_fingerprint"] {

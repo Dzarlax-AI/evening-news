@@ -742,6 +742,7 @@ func (h *Handler) enrichTelegram(ctx context.Context, articles []telegramArticle
 			break
 		}
 		article := &articles[i]
+		ensureTelegramSourceContext(article)
 		if article.Content == "" || len([]rune(article.Content)) >= 200 || article.RawData == nil {
 			continue
 		}
@@ -752,6 +753,15 @@ func (h *Handler) enrichTelegram(ctx context.Context, articles []telegramArticle
 		if code := h.enrichTelegramArticle(ctx, article, link); code != "" {
 			log.Printf("telegram enrichment skipped code=%s", code)
 		}
+	}
+}
+
+func ensureTelegramSourceContext(article *telegramArticle) {
+	if article.RawData == nil {
+		article.RawData = map[string]any{}
+	}
+	if _, exists := article.RawData["source_text"]; !exists {
+		article.RawData["source_text"] = article.Content
 	}
 }
 
@@ -1332,6 +1342,7 @@ func normalize(r collectResult, src store.Source, page *store.PageState) []store
 	if r.Telegram != nil {
 		out := make([]store.Article, 0, len(r.Telegram.Articles))
 		for _, a := range r.Telegram.Articles {
+			ensureTelegramSourceContext(&a)
 			c := a.Content
 			out = append(out, store.Article{Title: a.Title, URL: a.URL, Content: &c, Summary: a.Summary, ImageURL: a.ImageURL, MediaFiles: a.MediaFiles, PublishedAt: a.PublishedAt, SourceType: a.SourceType, SourceName: src.Name, RawData: a.RawData})
 		}
@@ -1349,12 +1360,32 @@ func normalize(r collectResult, src store.Source, page *store.PageState) []store
 			if page != nil && !include[index] {
 				continue
 			}
+			if samePageMonitorSourceURL(src.URL, a.Link) {
+				continue
+			}
 			c := a.Description
 			out = append(out, store.Article{Title: a.Title, URL: a.Link, Content: &c, PublishedAt: a.Published, SourceType: r.Type, SourceName: src.Name, MediaFiles: json.RawMessage(`[]`), RawData: map[string]any{}})
 		}
 		return out
 	}
 	return []store.Article{}
+}
+
+// This particular monitored source was confirmed to be a listing page.
+// Other monitors can legitimately publish updates at their own URL.
+func samePageMonitorSourceURL(source, candidate string) bool {
+	a, e1 := url.Parse(source)
+	b, e2 := url.Parse(candidate)
+	if e1 != nil || e2 != nil || !validHTTPURL(source) || !validHTTPURL(candidate) {
+		return false
+	}
+	if !strings.EqualFold(a.Hostname(), "studenti.org.rs") || strings.TrimRight(a.EscapedPath(), "/") != "/vesti" || a.RawQuery != "" {
+		return false
+	}
+	if !strings.EqualFold(a.Scheme, b.Scheme) || !strings.EqualFold(a.Host, b.Host) || a.RawQuery != b.RawQuery {
+		return false
+	}
+	return strings.TrimRight(a.EscapedPath(), "/") == strings.TrimRight(b.EscapedPath(), "/")
 }
 func pageState(old store.PageState, r *pageMonitorResult, cfg map[string]any) *store.PageState {
 	limit, ok := positiveConfig(cfg, "max_articles_per_check", 100)

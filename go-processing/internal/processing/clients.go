@@ -119,6 +119,7 @@ type Extracted struct {
 	PublicationDate   string                 `json:"publication_date"`
 	ImageURL          string                 `json:"image_url"`
 	MediaFiles        []map[string]any       `json:"media_files"`
+	MediaEvidence     json.RawMessage        `json:"media_evidence,omitempty"`
 	Method            string                 `json:"method"`
 	MethodUsed        string                 `json:"method_used"`
 	SelectorUsed      string                 `json:"selector_used"`
@@ -197,6 +198,7 @@ func classifyInvalidSuccessfulContent(result Extracted, maxChars int) Extracted 
 		result.PublicationDate = ""
 		result.ImageURL = ""
 		result.MediaFiles = nil
+		result.MediaEvidence = nil
 		for i := range result.Observations {
 			result.Observations[i].Success = false
 		}
@@ -322,6 +324,7 @@ func (c *ExtractorClient) extractOnce(ctx context.Context, rawURL, title, source
 			PublicationDate string           `json:"publication_date"`
 			ImageURL        string           `json:"image_url"`
 			Media           []map[string]any `json:"media"`
+			MediaEvidence   json.RawMessage  `json:"media_evidence"`
 			Method          string           `json:"method"`
 			MethodUsed      string           `json:"method_used"`
 			SelectorUsed    string           `json:"selector_used"`
@@ -336,7 +339,7 @@ func (c *ExtractorClient) extractOnce(ctx context.Context, rawURL, title, source
 	if json.Unmarshal(data, &envelope) != nil || envelope.ContractVersion != "1" || envelope.RequestID != requestID || envelope.OriginalURL != rawURL || !validOutcome(envelope.Outcome) || len(envelope.Observations) > 64 {
 		return Extracted{}, fatal("extractor_protocol")
 	}
-	out := Extracted{Content: envelope.Result.Content, Title: envelope.Result.Title, PublicationDate: envelope.Result.PublicationDate, ImageURL: envelope.Result.ImageURL, MediaFiles: envelope.Result.Media, Method: envelope.Result.Method, MethodUsed: envelope.Result.MethodUsed, SelectorUsed: envelope.Result.SelectorUsed, Outcome: envelope.Outcome, Observations: envelope.Observations}
+	out := Extracted{Content: envelope.Result.Content, Title: envelope.Result.Title, PublicationDate: envelope.Result.PublicationDate, ImageURL: envelope.Result.ImageURL, MediaFiles: envelope.Result.Media, MediaEvidence: validatedMediaEvidence(envelope.Result.MediaEvidence, rawURL), Method: envelope.Result.Method, MethodUsed: envelope.Result.MethodUsed, SelectorUsed: envelope.Result.SelectorUsed, Outcome: envelope.Outcome, Observations: envelope.Observations}
 	if out.MethodUsed == "" {
 		out.MethodUsed = out.Method
 	}

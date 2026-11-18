@@ -118,17 +118,18 @@ ON news.article_ingestion_runs TO news_ingestion_runtime;
 GRANT SELECT, INSERT, UPDATE ON news.article_ingestion_source_runs TO news_ingestion_runtime;
 GRANT SELECT, INSERT, UPDATE ON news.source_collection_state TO news_ingestion_runtime;
 
-GRANT SELECT (id, source_id, title, url, content, summary, image_url,
-              published_at, fetched_at, processed, hash_content)
+GRANT SELECT (id, source_id, title, source_title, url, content, summary, image_url,
+              published_at, fetched_at, processed, hash_content, telegram_context)
 ON news.articles TO news_ingestion_runtime;
-GRANT INSERT (source_id, title, url, content, summary, image_url, media_files,
+GRANT INSERT (source_id, title, source_title, url, content, summary, image_url, media_files,
+              telegram_context,
               published_at, fetched_at, processed, summary_processed,
               category_processed, processing_state, processing_attempts,
               next_attempt_at, last_processing_error, hash_content,
               is_advertisement, ad_confidence, ad_type, ad_reasoning,
               ad_markers, ad_processed)
 ON news.articles TO news_ingestion_runtime;
-GRANT UPDATE (title, content, url, image_url, published_at, hash_content)
+GRANT UPDATE (title, source_title, content, url, image_url, published_at, hash_content, telegram_context)
 ON news.articles TO news_ingestion_runtime;
 GRANT USAGE, SELECT ON SEQUENCE news.articles_id_seq TO news_ingestion_runtime;
 
@@ -167,16 +168,17 @@ TO news_processing_runtime;
 GRANT UPDATE (state, result, error_code, updated_at, finished_at)
 ON news.article_processing_runs TO news_processing_runtime;
 GRANT INSERT, UPDATE ON news.article_processing_items TO news_processing_runtime;
-GRANT SELECT (id, title, url, content, summary, source_id,
+GRANT SELECT, INSERT, UPDATE ON news.article_dedup_observations TO news_processing_runtime;
+GRANT SELECT (id, title, source_title, url, content, summary, source_id,
               published_at, summary_processed, category_processed, ad_processed,
               is_advertisement, processing_attempts, processing_state, next_attempt_at,
               last_processing_error, fetched_at, image_url, media_files, hash_content, ad_confidence, ad_type,
-              ad_reasoning, processed)
+              ad_reasoning, processed, completed_processing_claim, telegram_context)
 ON news.articles TO news_processing_runtime;
 GRANT UPDATE (title, content, summary, summary_processed, category_processed, ad_processed,
               is_advertisement, processing_attempts, processing_state, next_attempt_at,
-              last_processing_error, image_url, media_files, ad_confidence, ad_type,
-              ad_reasoning, published_at, processed)
+              last_processing_error, image_url, media_files, media_evidence, ad_confidence, ad_type,
+              ad_reasoning, published_at, processed, completed_processing_claim)
 ON news.articles TO news_processing_runtime;
 GRANT SELECT ON news.sources, news.categories, news.category_mapping
 TO news_processing_runtime;

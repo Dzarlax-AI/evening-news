@@ -44,6 +44,7 @@ type Config struct {
 	CycleMax                int
 	PerSourceLimit          int
 	NativeBrowser           bool
+	DedupTrial              bool
 	DateFrom                *time.Time
 	DateTo                  *time.Time
 	LoadOperationalSnapshot func(context.Context, string, int64) (OperationalSnapshot, error)
@@ -138,6 +139,9 @@ func LoadConfig(env func(string) string) (Config, error) {
 		return c, e
 	}
 	c.NativeBrowser = b
+	if c.DedupTrial, e = boolean("ARTICLE_DEDUP_TRIAL"); e != nil {
+		return c, e
+	}
 	b, e = boolean("NEWS_LIMIT_ENABLED")
 	if e != nil {
 		return c, e
@@ -219,7 +223,7 @@ func Run(ctx context.Context, c Config, onReady func()) error {
 		PerSourceLimit: c.PerSourceLimit,
 		DateFrom:       c.DateFrom,
 		DateTo:         c.DateTo,
-		Duplicates:     processing.NewDuplicateCache(),
+		DedupTrial:     c.DedupTrial,
 	}
 	if c.LoadOperationalSnapshot != nil {
 		p.LoadOperationalSnapshot = func(ctx context.Context, f store.Fence) (processing.OperationalSnapshot, error) {

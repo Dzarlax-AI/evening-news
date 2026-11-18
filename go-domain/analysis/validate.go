@@ -48,6 +48,19 @@ func validateAnalysisResult(raw map[string]any, r Request) map[string]any {
 		"content_quality":      clamp(number(raw["content_quality"], 0.7)),
 		"confidence":           clamp(number(raw["confidence"], 0.8)),
 	}
+	if r.SourceType == "telegram" {
+		if admission, ok := raw["content_admission"].(map[string]any); ok {
+			verdict, _ := admission["verdict"].(string)
+			reason, _ := admission["reason"].(string)
+			switch verdict {
+			case "keep", "exclude", "uncertain":
+				if verdict == "exclude" && r.OriginalContext != nil && len([]rune(*r.OriginalContext)) > 2000 {
+					verdict = "uncertain"
+				}
+				result["content_admission"] = map[string]any{"verdict": verdict, "reason": stringDefaultTrim(reason, "No reason provided")}
+			}
+		}
+	}
 	if r.Version == 2 {
 		localizations := map[string]any{}
 		rawLocales, _ := raw["localizations"].(map[string]any)

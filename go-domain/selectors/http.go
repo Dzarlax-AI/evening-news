@@ -186,6 +186,11 @@ func (h *Handler) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 			w.WriteHeader(http.StatusNoContent)
 			return
 		}
+		// An article body is never a Page Monitor list container.
+		if !eligibleListStudy(analysis) {
+			w.WriteHeader(http.StatusNoContent)
+			return
+		}
 		recorded, recordErr := h.Store.RecordStructure(ctx, domain, analysis, f)
 		err = recordErr
 		if errors.Is(err, authority.ErrStale) {
@@ -239,6 +244,10 @@ func (h *Handler) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 	}
 	w.Header().Set("Content-Type", "application/json")
 	_ = json.NewEncoder(w).Encode(map[string]any{"version": 1, "learned_container_selectors": arrays[0], "learned_title_selectors": arrays[1], "learned_link_selectors": arrays[2], "learned_date_selectors": arrays[3]})
+}
+
+func eligibleListStudy(a *Analysis) bool {
+	return a != nil && (!a.pageKindProvided || a.PageKind == "listing")
 }
 
 func (h *Handler) publishAnalysis(ctx context.Context, f SourceFence, url string, analysis *Analysis) error {

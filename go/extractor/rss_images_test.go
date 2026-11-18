@@ -115,3 +115,38 @@ func TestAtomTextAndXHTMLExamplesDoNotBecomeImages(t *testing.T) {
 		}
 	}
 }
+
+func TestRSSImagesPreserveBoundedSelectionEvidence(t *testing.T) {
+	feed := `<rss version="2.0"><channel><item><link>https://publisher.example/story</link><description><![CDATA[<img src="/cover-small.jpg" data-canonical-src="/cover.jpg" width="800" height="600"><img src="/icon.svg" width="60" height="60" role="presentation"><img src="/chart.svg" width="900" height="600">]]></description></item></channel></rss>`
+	got := rssImageWire(t, feed)[0].Media
+	if len(got) != 3 {
+		t.Fatalf("raw candidates lost: %#v", got)
+	}
+	if got[0].Data["canonical_url"] != "https://publisher.example/cover.jpg" || got[0].Data["width"] != float64(800) {
+		t.Fatalf("cover metadata: %#v", got[0].Data)
+	}
+	if got[1].Data["decorative"] != true || got[1].Data["height"] != float64(60) {
+		t.Fatalf("icon metadata: %#v", got[1].Data)
+	}
+	if got[2].Source != "rss_feed" {
+		t.Fatal("lost provenance")
+	}
+}
+
+// The structure mirrors the observed Verge Atom content: an editorial image
+// within escaped HTML. Full page HTML is deliberately not a feed input.
+func TestTheVergeStyleAtomMediaStaysFeedScoped(t *testing.T) {
+	feed := `<feed xmlns="http://www.w3.org/2005/Atom"><entry><title>Fixture</title><link href="https://www.theverge.com/tech/example"/><content type="html">&lt;img alt="Editorial photograph" src="https://platform.theverge.com/wp-content/uploads/sites/2/2026/11/editorial.jpg?quality=90&amp;amp;strip=all&amp;amp;crop=0,0,100,100" /&gt;</content></entry></feed>`
+	got := rssImageWire(t, feed)[0].Media
+	if len(got) != 1 || got[0].Source != "rss_feed" || got[0].URL != "https://platform.theverge.com/wp-content/uploads/sites/2/2026/11/editorial.jpg?quality=90&strip=all&crop=0,0,100,100" {
+		t.Fatalf("feed media: %#v", got)
+	}
+}
+
+func TestRSSDuplicateThumbnailMergesLaterHTMLEvidence(t *testing.T) {
+	feed := `<rss xmlns:media="http://search.yahoo.com/mrss/"><channel><item><link>https://publisher.example/story</link><media:thumbnail url="/pixel.svg"/><description><![CDATA[<img src="/pixel.svg" width="1" height="1" role="presentation"><img src="/photo.jpg">]]></description></item></channel></rss>`
+	m := rssImageWire(t, feed)[0].Media
+	if len(m) != 2 || m[0].URL != "https://publisher.example/pixel.svg" || m[0].Source != "rss_feed" || m[0].Data["width"] != float64(1) || m[0].Data["decorative"] != true {
+		t.Fatalf("merged media: %#v", m)
+	}
+}

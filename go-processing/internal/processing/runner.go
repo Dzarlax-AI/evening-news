@@ -23,8 +23,9 @@ type Processor struct {
 	MaxWorkers, MaxBatch, MaxAttempts, TextLimit int
 	CycleMax, PerSourceLimit                     int
 	DateFrom, DateTo                             *time.Time
-	Duplicates                                   *DuplicateCache
+	DedupTrial                                   bool
 	AttemptTimeout, RetryInitial, RetryLater     time.Duration
+	ApplyTelegramContentAdmission                bool
 	LoadOperationalSnapshot                      func(context.Context, store.Fence) (OperationalSnapshot, error)
 }
 
@@ -68,9 +69,6 @@ func (p *Processor) Run(ctx context.Context, f store.Fence) (map[string]any, err
 		if !snapshot.ProcessingEnabled {
 			return map[string]any{"status": "processing_disabled", "articles_processed": 0, "articles_summarized": 0, "articles_categorized": 0, "errors_count": 0}, nil
 		}
-	}
-	if p.Duplicates == nil {
-		p.Duplicates = NewDuplicateCache()
 	}
 	kind, raw, err := p.DB.CanonicalJob(ctx, f)
 	if err != nil {
@@ -396,8 +394,8 @@ func (p *Processor) processOne(ctx context.Context, f store.Fence, a store.Artic
 	if adDone && a.IsAdvertisement != nil && *a.IsAdvertisement {
 		return p.finish(ctx, f, a, attempt, fp, Outcome{State: StateRejected, Fields: map[string]any{}, Error: "advertisement"})
 	}
-	if summaryDone && categoryDone && adDone {
-		return p.finish(ctx, f, a, attempt, fp, Outcome{State: StateCompleted, Fields: map[string]any{}})
+	if summaryDone && categoryDone && adDone && a.SourceType != "telegram" {
+		return p.finishAndObserveDedup(ctx, f, a, attempt, fp, Outcome{State: StateCompleted, Fields: map[string]any{}}, a.Content)
 	}
 	mediaContent := a.Content
 	content := a.Content
@@ -423,23 +421,6 @@ func (p *Processor) processOne(ctx context.Context, f store.Fence, a store.Artic
 	ordinaryFreshAccepted := false
 	extractNeeded := forceExtract
 	if !forceMode && !summaryDone {
-		if a.ProcessingAttempts == 0 {
-			hash, duplicate, cacheHit := p.Duplicates.Lookup(content, a.ID, time.Now())
-			if cacheHit && duplicate {
-				return p.finish(ctx, f, a, attempt, fp, Outcome{State: StateRejected, Fields: fields, Error: "smart_filter_rejected"})
-			}
-			if !cacheHit && hash != "" {
-				exists, lookupErr := p.DB.HasDuplicateHash(workCtx, hash, a.ID)
-				if lookupErr == nil {
-					if exists {
-						p.Duplicates.Remember(hash, nil, time.Now())
-						return p.finish(ctx, f, a, attempt, fp, Outcome{State: StateRejected, Fields: fields, Error: "smart_filter_rejected"})
-					}
-					owner := a.ID
-					p.Duplicates.Remember(hash, &owner, time.Now())
-				}
-			}
-		}
 		ok, reason := shouldProcess(a.Title, content, a.URL, a.SourceType, true)
 		if !ok {
 			extractNeeded = reasonNeedsExtraction(reason)
@@ -535,6 +516,9 @@ func (p *Processor) processOne(ctx context.Context, f store.Fence, a store.Artic
 				if a.SourceType != "rss" && a.ImageURL == "" && fresh.ImageURL != "" {
 					fields["image_url"] = fresh.ImageURL
 				}
+				if a.SourceType != "rss" && len(fresh.MediaEvidence) > 0 {
+					fields["media_evidence"] = fresh.MediaEvidence
+				}
 				if a.SourceType != "rss" && !hasMediaFiles(a.MediaFiles) && len(fresh.MediaFiles) > 0 {
 					fields["media_files"] = fresh.MediaFiles
 				}
@@ -566,10 +550,16 @@ func (p *Processor) processOne(ctx context.Context, f store.Fence, a store.Artic
 		}
 	}
 	input := map[string]any{"title": a.Title, "content": content, "url": a.URL}
+	input["source_type"] = a.SourceType
 	if bilingual {
 		input["locales"] = []string{"ru", "sr-Latn"}
 	}
-	if ordinaryFreshAccepted && strings.TrimSpace(mediaContent) != "" {
+	telegramSourceText, telegramMetadata := parseTelegramContext(a.TelegramContext)
+	var admissionContext string
+	if a.SourceType == "telegram" && strings.TrimSpace(telegramSourceText) != "" && EnforceTextLimit(telegramSourceText, p.textLimit()) == nil {
+		input["original_context"] = telegramSourceText
+		admissionContext = telegramSourceText
+	} else if ordinaryFreshAccepted && strings.TrimSpace(mediaContent) != "" {
 		input["original_context"] = mediaContent
 	} else if forceExtract && a.SourceType == "telegram" && len([]rune(strings.TrimSpace(mediaContent))) >= 30 && EnforceTextLimit(mediaContent, p.textLimit()) == nil {
 		input["original_context"] = mediaContent
@@ -599,7 +589,10 @@ func (p *Processor) processOne(ctx context.Context, f store.Fence, a store.Artic
 		return p.finish(ctx, f, a, attempt, fp, Outcome{State: StateRetryWait, Fields: fields, Error: errorCode(err)})
 	}
 	if !bilingual && ordinaryFreshAccepted && shouldFallbackSummary(analysis) {
-		fallbackInput := map[string]any{"title": a.Title, "content": content, "url": a.URL}
+		fallbackInput := map[string]any{"title": a.Title, "content": content, "url": a.URL, "source_type": a.SourceType}
+		if a.SourceType == "telegram" && strings.TrimSpace(telegramSourceText) != "" && EnforceTextLimit(telegramSourceText, p.textLimit()) == nil {
+			fallbackInput["original_context"] = telegramSourceText
+		}
 		if bilingual {
 			fallbackInput["locales"] = []string{"ru", "sr-Latn"}
 		}
@@ -639,11 +632,94 @@ func (p *Processor) processOne(ctx context.Context, f store.Fence, a store.Artic
 		analysis = map[string]any{}
 	}
 	analysis = requireBilingualResult(analysis, bilingual)
+	if a.SourceType == "telegram" {
+		if effective := effectiveTelegramAdmission(analysis["content_admission"], admissionContext, telegramMetadata); effective != nil {
+			fields["content_admission"] = effective
+			if p.ApplyTelegramContentAdmission && effective["verdict"] == "exclude" {
+				return p.finish(ctx, f, a, attempt, fp, Outcome{State: StateRejected, Fields: fields, Error: "insufficient_content"})
+			}
+		}
+	}
 	out := AnalyzeOutcome(analysis, summaryDone, categoryDone, adDone)
 	for k, v := range fields {
 		out.Fields[k] = v
 	}
-	return p.finish(ctx, f, a, attempt, fp, out)
+	originalText := content
+	if summaryDone {
+		originalText = a.Content
+	}
+	return p.finishAndObserveDedup(ctx, f, a, attempt, fp, out, originalText)
+}
+
+type telegramAdmissionMetadata struct {
+	Known              bool
+	HasAttachments     bool
+	AdmissionUncertain bool
+	ExternalLinks      []string
+}
+
+func parseTelegramContext(raw json.RawMessage) (string, telegramAdmissionMetadata) {
+	var context struct {
+		SourceText         string   `json:"source_text"`
+		MetadataKnown      bool     `json:"metadata_known"`
+		HasMedia           bool     `json:"has_media"`
+		AdmissionUncertain bool     `json:"admission_uncertain"`
+		ExternalLinks      []string `json:"external_links"`
+	}
+	if len(raw) == 0 || json.Unmarshal(raw, &context) != nil {
+		return "", telegramAdmissionMetadata{}
+	}
+	return context.SourceText, telegramAdmissionMetadata{Known: context.MetadataKnown, HasAttachments: context.HasMedia, AdmissionUncertain: context.AdmissionUncertain, ExternalLinks: context.ExternalLinks}
+}
+
+func effectiveTelegramAdmission(raw any, originalContext string, metadata telegramAdmissionMetadata) map[string]any {
+	modelVerdict := ""
+	reason := ""
+	if model, ok := raw.(map[string]any); ok {
+		modelVerdict, _ = model["verdict"].(string)
+		reason, _ = model["reason"].(string)
+	}
+	effective := map[string]any{"verdict": "uncertain", "model_verdict": modelVerdict, "reason": reason}
+	switch {
+	case modelVerdict != "keep" && modelVerdict != "exclude" && modelVerdict != "uncertain":
+		effective["guard_reason"] = "model_verdict_missing"
+	case strings.TrimSpace(originalContext) == "":
+		effective["guard_reason"] = "source_context_unavailable"
+	case len([]rune(originalContext)) > 2000:
+		effective["guard_reason"] = "source_context_truncated"
+	case hasExternalLink(originalContext):
+		effective["guard_reason"] = "link_in_source_text"
+	case !metadata.Known:
+		effective["guard_reason"] = "attachment_metadata_unknown"
+	case metadata.AdmissionUncertain:
+		effective["guard_reason"] = "source_evidence_incomplete"
+	case metadata.HasAttachments:
+		effective["guard_reason"] = "attachment_present"
+	case len(metadata.ExternalLinks) > 0:
+		effective["guard_reason"] = "external_link_present"
+	default:
+		effective["verdict"] = modelVerdict
+	}
+	return effective
+}
+
+func shouldRejectTelegramContent(effective map[string]any) bool {
+	verdict, _ := effective["verdict"].(string)
+	return verdict == "exclude"
+}
+
+func hasExternalLink(text string) bool {
+	for _, token := range strings.Fields(text) {
+		token = strings.Trim(token, "()[]{}<>,.;!?«»\"'")
+		if strings.HasPrefix(strings.ToLower(token), "t.me/") || strings.HasPrefix(strings.ToLower(token), "telegram.me/") {
+			return true
+		}
+		u, err := url.Parse(token)
+		if err == nil && (u.Scheme == "http" || u.Scheme == "https") && u.Hostname() != "" {
+			return true
+		}
+	}
+	return false
 }
 func (p *Processor) extract(ctx context.Context, f store.Fence, a store.Article, attempt int, fp, content string) (Extracted, error) {
 	if p.Extractor == nil {
@@ -711,7 +787,7 @@ func (p *Processor) finish(ctx context.Context, f store.Fence, a store.Article, 
 	dbOutcome := store.Persisted{State: persisted.State, Fields: persisted.Fields, Attempts: persisted.Attempts, NextAttemptAt: persisted.NextAttemptAt, Error: persisted.Error, Processed: persisted.Processed}
 	if err := p.DB.SaveOutcome(cleanupCtx, f, a, attempt, a.ClaimToken, fp, dbOutcome); err != nil {
 		if errors.Is(err, store.ErrCategoryMapping) {
-			if recordErr := p.DB.RecordCategoryMappingFailure(cleanupCtx, f, a, attempt, a.ClaimToken, fp); recordErr != nil {
+			if recordErr := p.DB.RecordCategoryMappingFailure(cleanupCtx, f, a, attempt, a.ClaimToken, fp, persisted.Fields); recordErr != nil {
 				return o, attempt, recordErr
 			}
 			return Outcome{State: StateRetryWait, Fields: map[string]any{}, Error: "category_mapping_failed"}, attempt, nil

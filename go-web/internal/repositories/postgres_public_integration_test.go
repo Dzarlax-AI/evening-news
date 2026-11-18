@@ -56,7 +56,7 @@ func TestPostgresPublicReaderMultiCategoryAndReadPaths(t *testing.T) {
 	ddl := []string{
 		`CREATE TABLE ` + schema + `.sources(id bigint PRIMARY KEY,name text NOT NULL,enabled boolean NOT NULL DEFAULT true,source_type text NOT NULL DEFAULT 'custom')`,
 		`CREATE TABLE ` + schema + `.categories(id bigint PRIMARY KEY,name text NOT NULL,display_name text NOT NULL,color text NOT NULL)`,
-		`CREATE TABLE ` + schema + `.articles(id bigint PRIMARY KEY,source_id bigint,title text NOT NULL,summary text,content text,url text NOT NULL,image_url text,media_files jsonb,published_at timestamp,fetched_at timestamp,is_advertisement boolean,ad_confidence real,ad_type text,ad_reasoning text,ad_markers jsonb,processing_state text,ad_processed boolean)`,
+		`CREATE TABLE ` + schema + `.articles(id bigint PRIMARY KEY,source_id bigint,title text NOT NULL,summary text,content text,url text NOT NULL,image_url text,media_evidence jsonb,media_files jsonb,published_at timestamp,fetched_at timestamp,is_advertisement boolean,ad_confidence real,ad_type text,ad_reasoning text,ad_markers jsonb,processing_state text,ad_processed boolean)`,
 		`CREATE TABLE ` + schema + `.article_categories(id bigint PRIMARY KEY,article_id bigint NOT NULL,category_id bigint NOT NULL,confidence real,ai_category text)`,
 		`CREATE TABLE ` + schema + `.article_localizations(article_id bigint,locale text,title text,summary text,status text)`,
 		`CREATE TABLE ` + schema + `.category_localizations(category_id bigint,locale text,display_name text)`,
@@ -316,23 +316,35 @@ func TestPostgresEditorialDigestStatusDoesNotNeedLegacySummaries(t *testing.T) {
 func testPublicRSSImagePolicy(t *testing.T, ctx context.Context, reader *Postgres, pool *pgxpool.Pool) {
 	t.Helper()
 	const trusted = `[{"type":"image","source":"rss_feed","url":"https://fixture.test/feed1.jpg"},{"type":"image","source":"content_html","url":"https://fixture.test/avatar.jpg"},{"type":"image","source":"rss_feed","url":"https://fixture.test/feed2.png"}]`
+	const decorated = `[{"type":"image","source":"rss_feed","url":"https://fixture.test/icon.svg","data":{"width":60,"height":60}},{"type":"image","source":"rss_feed","url":"https://fixture.test/photo.jpg"}]`
+	const coverEvidence = `{"version":1,"editorial_cover":{"source":"og_image","article_url":"https://example.test/story/42","url":"https://fixture.test/editorial.jpg"}}`
+	const cardLogo = `[{"type":"image","source":"img_tag","url":"https://fixture.test/logo.svg","data":{"article_body_scope":"outside"}}]`
 	const legacy = `[{"type":"image","url":"https://fixture.test/legacy.jpg"}]`
 	for _, tc := range []struct {
-		name, source, media string
-		want                []string
-		cover               string
+		name, source, media, evidence string
+		filter                        bool
+		want                          []string
+		cover                         string
 	}{
-		{"rss_trusted", "rss", trusted, []string{"https://fixture.test/feed1.jpg", "https://fixture.test/feed2.png"}, "https://fixture.test/feed1.jpg"},
-		{"rss_legacy", "rss", legacy, []string{}, ""},
-		{"rss_empty", "rss", `[]`, []string{}, ""},
-		{"custom", "custom", legacy, []string{"https://fixture.test/legacy.jpg"}, "https://fixture.test/cover.jpg"},
-		{"telegram", "telegram", legacy, []string{"https://fixture.test/legacy.jpg"}, "https://fixture.test/cover.jpg"},
+		{"rss_trusted", "rss", trusted, "", false, []string{"https://fixture.test/feed1.jpg", "https://fixture.test/feed2.png"}, "https://fixture.test/feed1.jpg"},
+		{"rss_legacy", "rss", legacy, "", false, []string{}, ""},
+		{"rss_empty", "rss", `[]`, "", false, []string{}, ""},
+		{"custom", "custom", legacy, "", false, []string{"https://fixture.test/legacy.jpg"}, "https://fixture.test/cover.jpg"},
+		{"telegram", "telegram", legacy, "", false, []string{"https://fixture.test/legacy.jpg"}, "https://fixture.test/cover.jpg"},
+		{"rss_filtered", "rss", decorated, "", true, []string{"https://fixture.test/photo.jpg"}, "https://fixture.test/photo.jpg"},
+		{"rss_previous_projection", "rss", decorated, "", false, []string{"https://fixture.test/icon.svg", "https://fixture.test/photo.jpg"}, "https://fixture.test/icon.svg"},
+		{"custom_filtered", "custom", legacy, "", true, []string{"https://fixture.test/legacy.jpg"}, "https://fixture.test/legacy.jpg"},
+		{"custom_verified", "custom", cardLogo, coverEvidence, true, []string{}, "https://fixture.test/editorial.jpg"},
+		{"custom_verified_prioritizes_cover", "custom", legacy, coverEvidence, true, []string{"https://fixture.test/legacy.jpg"}, "https://fixture.test/editorial.jpg"},
+		{"custom_verified_rollback", "custom", cardLogo, coverEvidence, false, []string{"https://fixture.test/logo.svg"}, "https://fixture.test/cover.jpg"},
+		{"rss_ignores_verified_web_cover", "rss", trusted, coverEvidence, true, []string{"https://fixture.test/feed1.jpg", "https://fixture.test/feed2.png"}, "https://fixture.test/feed1.jpg"},
 	} {
 		t.Run(tc.name, func(t *testing.T) {
+			reader := &Postgres{pool: reader.pool, filterArticleMedia: tc.filter}
 			if _, err := pool.Exec(ctx, `UPDATE sources SET source_type=$1 WHERE id=7`, tc.source); err != nil {
 				t.Fatal(err)
 			}
-			if _, err := pool.Exec(ctx, `UPDATE articles SET media_files=$1,image_url='https://fixture.test/cover.jpg',title='Fixture article',summary='Fixture summary <img src="https://fixture.test/summary.jpg">',content='<img src="https://fixture.test/page.jpg">' WHERE id=42`, tc.media); err != nil {
+			if _, err := pool.Exec(ctx, `UPDATE articles SET url='https://example.test/story/42',media_files=$1,media_evidence=NULLIF($2,'')::jsonb,image_url='https://fixture.test/cover.jpg',title='Fixture article',summary='Fixture summary <img src="https://fixture.test/summary.jpg">',content='<img src="https://fixture.test/page.jpg">' WHERE id=42`, tc.media, tc.evidence); err != nil {
 				t.Fatal(err)
 			}
 			check := func(name string, item map[string]any, want []string) {
@@ -374,7 +386,7 @@ func testPublicRSSImagePolicy(t *testing.T, ctx context.Context, reader *Postgre
 			}
 			matches := search["articles"].([]map[string]any)
 			wantSearch := append([]string{}, tc.want...)
-			if tc.source != "rss" {
+			if tc.source != "rss" && !tc.filter {
 				wantSearch = append(wantSearch, "https://fixture.test/page.jpg")
 			}
 			if len(matches) != 1 {
@@ -399,7 +411,7 @@ func testPublicRSSImagePolicy(t *testing.T, ctx context.Context, reader *Postgre
 				}
 			}
 			digestCover := tc.cover
-			if tc.source != "rss" {
+			if tc.source != "rss" && !tc.filter {
 				digestCover = tc.want[0]
 			}
 			if len(covers) != 1 || covers[0] != digestCover {

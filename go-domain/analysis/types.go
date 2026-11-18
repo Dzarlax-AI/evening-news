@@ -9,6 +9,7 @@ type Request struct {
 	Title                   string             `json:"title"`
 	Content                 string             `json:"content"`
 	URL                     string             `json:"url"`
+	SourceType              string             `json:"source_type,omitempty"`
 	OriginalContext         *string            `json:"original_context,omitempty"`
 	Categories              []CategoryMetadata `json:"categories"`
 	LocalCategory           string             `json:"local_category"`
@@ -30,6 +31,13 @@ type Response struct {
 	Result  map[string]any `json:"result,omitempty"`
 	Usage   *Usage         `json:"usage,omitempty"`
 	Error   *Error         `json:"error,omitempty"`
+}
+
+// ContentAdmission is an advisory verdict for short Telegram posts. It is
+// intentionally independent from the existing advertisement classification.
+type ContentAdmission struct {
+	Verdict string `json:"verdict"`
+	Reason  string `json:"reason"`
 }
 
 type Usage struct {

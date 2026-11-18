@@ -4,6 +4,7 @@ import (
 	"context"
 	"crypto/sha256"
 	"encoding/hex"
+	"encoding/json"
 	"errors"
 	"fmt"
 	"net/url"
@@ -370,6 +371,31 @@ func TestPostgresFencedArticleCommitAndQueuePrivilegeBoundary(t *testing.T) {
 	if preservedSummary != "preserve this summary" || processedAliasTitle != "processed alias" || processedReceiptSkipped != 1 {
 		t.Fatalf("processed summary or alias changed: summary=%q alias=%q skipped=%d", preservedSummary, processedAliasTitle, processedReceiptSkipped)
 	}
+	// Publishers can reuse a generic headline for distinct events. Accept
+	// unique URLs both within one batch and across recent runs.
+	headline := "Nvidia announces a new decision"
+	sameTitle := func(path, content string) Article {
+		return Article{Title: headline, URL: "https://fixture.invalid/" + path, Content: &content, SourceType: source.Type}
+	}
+	announcement := sameTitle("announcement", "Nvidia confirmed a permanent CEO search.")
+	earnings := sameTitle("earnings", "Nvidia announced new quarterly revenue guidance.")
+	firstHeadlineRun := beginURLSourceRun(9)
+	headlineCounts, err := s.CommitSource(ctx, firstHeadlineRun, source, []Article{announcement, earnings, announcement}, "success", "", nil)
+	if err != nil || headlineCounts.Saved != 2 || headlineCounts.Skipped != 1 || headlineCounts.Updated != 0 {
+		t.Fatalf("same title within batch or repeated URL misclassified: counts=%+v err=%v", headlineCounts, err)
+	}
+	var sourceTitle string
+	if err := lease.QueryRow(ctx, `SELECT source_title FROM articles WHERE url=$1`, announcement.URL).Scan(&sourceTitle); err != nil || sourceTitle != headline {
+		t.Fatalf("original headline was not stored: %v", err)
+	}
+
+	secondHeadlineRun := beginURLSourceRun(10)
+	followup := sameTitle("followup", "Nvidia appointed a permanent CEO after the search.")
+	headlineCounts, err = s.CommitSource(ctx, secondHeadlineRun, source, []Article{followup}, "success", "", nil)
+	if err != nil || headlineCounts.Saved != 1 || headlineCounts.Skipped != 0 || headlineCounts.Updated != 0 {
+		t.Fatalf("recent same-source title blocked another URL: counts=%+v err=%v", headlineCounts, err)
+	}
+
 	failedFence := newFencedRun("10000000-0000-4000-8000-000000000003", "30000000-0000-4000-8000-000000000003", 5)
 	if err := restarted.UpdateRun(ctx, failedFence, "failed", map[string]any{"status": "error", "articles_fetched": 0}, "fixture_failure"); err != nil {
 		t.Fatalf("restricted runtime role could not finalize failed ingestion run: %v", err)
@@ -440,7 +466,7 @@ func setupFenceFixture(ctx context.Context, admin *pgx.Conn, schema, role string
 		`CREATE TABLE ` + q + `.background_jobs(id uuid primary key,kind text,state text,owner_generation integer,attempt_generation integer,payload jsonb)`,
 		`CREATE TABLE ` + q + `.background_job_executions(job_id uuid,attempt_generation integer,executor_instance_id uuid,owner_id uuid,worker_generation integer,deadline_at timestamp,state text,primary key(job_id,attempt_generation))`,
 		`CREATE TABLE ` + q + `.sources(id integer primary key,name text,source_type text,url text,enabled boolean,config jsonb,last_fetch timestamp)`,
-		`CREATE TABLE ` + q + `.articles(id bigserial primary key,source_id integer,title text,url text unique,content text,summary text,image_url text,media_files jsonb,published_at timestamp,fetched_at timestamp not null,processed boolean not null,summary_processed boolean not null,category_processed boolean not null,processing_state text not null,processing_attempts integer not null,next_attempt_at timestamp,last_processing_error text,hash_content text,is_advertisement boolean not null,ad_confidence double precision not null,ad_type text,ad_reasoning text,ad_markers jsonb not null,ad_processed boolean not null)`,
+		`CREATE TABLE ` + q + `.articles(id bigserial primary key,source_id integer,title text,source_title text,url text unique,content text,summary text,image_url text,media_files jsonb,telegram_context jsonb,published_at timestamp,fetched_at timestamp not null,processed boolean not null,summary_processed boolean not null,category_processed boolean not null,processing_state text not null,processing_attempts integer not null,next_attempt_at timestamp,last_processing_error text,hash_content text,is_advertisement boolean not null,ad_confidence double precision not null,ad_type text,ad_reasoning text,ad_markers jsonb not null,ad_processed boolean not null)`,
 		`CREATE TABLE ` + q + `.article_ingestion_runs(id uuid primary key,job_id uuid not null,attempt_generation integer not null,envelope_sha256 text not null,owner_id uuid not null,worker_generation integer not null,backend_pid integer not null,executor_instance_id uuid not null,deadline_at timestamp not null,state varchar(20) not null default 'running',started_at timestamp not null default current_timestamp,updated_at timestamp not null default current_timestamp,finished_at timestamp,result jsonb not null default '{}',error_code varchar(40),unique(job_id,attempt_generation))`,
 		`CREATE TABLE ` + q + `.article_ingestion_source_runs(run_id uuid,source_id integer,source_type text,config_sha256 text,state varchar(20),candidates integer default 0,saved integer default 0,updated integer default 0,skipped integer default 0,fetched_at timestamp,error_code varchar(40),selector_study_sha256 varchar(64),primary key(run_id,source_id))`,
 		`CREATE TABLE ` + q + `.source_collection_state(source_id integer primary key,config_sha256 text,scan_limit integer default 20,cursor_offset integer default 0,scan_active boolean default false,previous_hashes jsonb default '{}',scan_hashes jsonb default '{}',acknowledged_hashes jsonb default '{}',snapshot_at timestamp,content_sha256 text,updated_at timestamp default current_timestamp)`,
@@ -466,7 +492,7 @@ func setupFenceFixture(ctx context.Context, admin *pgx.Conn, schema, role string
 		`GRANT SELECT,INSERT,UPDATE ON ` + q + `.article_ingestion_source_runs,` + q + `.source_collection_state TO ` + roleQ,
 		`GRANT SELECT,INSERT ON ` + q + `.articles TO ` + roleQ,
 		`GRANT USAGE,SELECT ON SEQUENCE ` + q + `.articles_id_seq TO ` + roleQ,
-		`GRANT UPDATE(title,content,url,image_url,published_at,hash_content) ON ` + q + `.articles TO ` + roleQ,
+		`GRANT UPDATE(title,source_title,content,url,image_url,published_at,hash_content,telegram_context) ON ` + q + `.articles TO ` + roleQ,
 		`GRANT EXECUTE ON FUNCTION ` + q + `.fence_article_ingestion_attempt(uuid,uuid,integer,text,uuid,integer,integer,uuid,timestamp) TO ` + roleQ,
 	}
 	for _, sql := range grants {
@@ -475,4 +501,29 @@ func setupFenceFixture(ctx context.Context, admin *pgx.Conn, schema, role string
 		}
 	}
 	return nil
+}
+
+func TestTelegramContextRetainsOriginalTextAndEvidence(t *testing.T) {
+	article := Article{SourceType: "telegram", RawData: map[string]any{
+		"source_text": "Synthetic Telegram caption", "has_media": true,
+		"admission_uncertain": false,
+		"external_links":      []any{"https://example.test/story"}, "original_link": "https://example.test/story",
+	}}
+	raw := telegramContext(article)
+	var got map[string]any
+	if err := json.Unmarshal(raw, &got); err != nil {
+		t.Fatal(err)
+	}
+	links, _ := got["external_links"].([]any)
+	if got["source_text"] != "Synthetic Telegram caption" || got["metadata_known"] != true || got["has_media"] != true || got["admission_uncertain"] != false || len(links) != 1 {
+		t.Fatalf("telegram context = %#v", got)
+	}
+
+	unknown := telegramContext(Article{SourceType: "telegram", RawData: map[string]any{"source_text": "caption"}})
+	if err := json.Unmarshal(unknown, &got); err != nil {
+		t.Fatal(err)
+	}
+	if got["metadata_known"] != false {
+		t.Fatalf("missing attachment/link evidence marked complete: %#v", got)
+	}
 }

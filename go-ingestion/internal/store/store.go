@@ -45,16 +45,17 @@ type Source struct {
 }
 
 type Article struct {
-	Title       string          `json:"title"`
-	URL         string          `json:"url"`
-	Content     *string         `json:"content"`
-	Summary     *string         `json:"summary"`
-	ImageURL    *string         `json:"image_url"`
-	MediaFiles  json.RawMessage `json:"media_files"`
-	PublishedAt *time.Time      `json:"published_at"`
-	SourceType  string          `json:"source_type"`
-	SourceName  string          `json:"source_name"`
-	RawData     map[string]any  `json:"raw_data"`
+	Title           string          `json:"title"`
+	URL             string          `json:"url"`
+	Content         *string         `json:"content"`
+	Summary         *string         `json:"summary"`
+	ImageURL        *string         `json:"image_url"`
+	MediaFiles      json.RawMessage `json:"media_files"`
+	TelegramContext json.RawMessage `json:"telegram_context,omitempty"`
+	PublishedAt     *time.Time      `json:"published_at"`
+	SourceType      string          `json:"source_type"`
+	SourceName      string          `json:"source_name"`
+	RawData         map[string]any  `json:"raw_data"`
 }
 
 type PageState struct {
@@ -431,19 +432,14 @@ func (s *Store) commitSource(ctx context.Context, f Fence, src Source, articles 
 	}
 	now := time.Now().UTC()
 	seenURLs := map[string]bool{}
-	seenTitles := map[string]bool{}
 	for _, a := range articles {
 		urls := candidateURLs(a)
-		title := strings.ToLower(strings.TrimSpace(a.Title))
 		duplicate := false
 		for _, u := range urls {
 			if u != "" && seenURLs[u] {
 				duplicate = true
 				break
 			}
-		}
-		if !duplicate && title != "" && seenTitles[title] {
-			duplicate = true
 		}
 		if duplicate {
 			c.Skipped++
@@ -456,7 +452,7 @@ func (s *Store) commitSource(ctx context.Context, f Fence, src Source, articles 
 		if old != nil {
 			if old.Processed && strings.TrimSpace(old.Summary) != "" {
 				c.Skipped++
-				recordSeen(urls, title, seenURLs, seenTitles)
+				recordSeenURLs(urls, seenURLs)
 				continue
 			}
 			updated, updateErr := updateExisting(ctx, tx, *old, a)
@@ -469,28 +465,20 @@ func (s *Store) commitSource(ctx context.Context, f Fence, src Source, articles 
 			} else {
 				c.Skipped++
 			}
-			recordSeen(urls, title, seenURLs, seenTitles)
-			continue
-		}
-		dup, e := titleDuplicate(ctx, tx, src.ID, title, now.Add(-7*24*time.Hour))
-		if e != nil {
-			return c, e
-		}
-		if dup {
-			c.Skipped++
+			recordSeenURLs(urls, seenURLs)
 			continue
 		}
 		e = insertArticle(ctx, tx, src.ID, a, now)
 		if e != nil {
 			if pgCode(e) == "23505" {
 				c.Skipped++
-				recordSeen(urls, title, seenURLs, seenTitles)
+				recordSeenURLs(urls, seenURLs)
 				continue
 			}
 			return c, errors.New("article insert failed")
 		}
 		c.Saved++
-		recordSeen(urls, title, seenURLs, seenTitles)
+		recordSeenURLs(urls, seenURLs)
 	}
 	if _, err = tx.Exec(ctx, `UPDATE sources SET last_fetch=$2 WHERE id=$1`, src.ID, now); err != nil {
 		return c, errors.New("source fetch metadata update failed")
@@ -665,7 +653,7 @@ func updateExisting(ctx context.Context, tx pgx.Tx, old dbArticle, a Article) (b
 		return false, errors.New("article metadata savepoint unavailable")
 	}
 	defer rollback(sp)
-	result, err := sp.Exec(ctx, `UPDATE articles SET title=COALESCE(NULLIF($2,''),title),content=COALESCE($3,content),url=COALESCE(NULLIF($4,''),url),image_url=COALESCE($5,image_url),published_at=COALESCE($6,published_at),hash_content=COALESCE(NULLIF($7,''),hash_content) WHERE id=$1 AND NOT (processed IS TRUE AND COALESCE(summary,'')<>'')`, old.ID, a.Title, nullableNonempty(a.Content), a.URL, nullableNonempty(a.ImageURL), published, contentHash(a.Title, a.URL))
+	result, err := sp.Exec(ctx, `UPDATE articles SET title=COALESCE(NULLIF($2,''),title),source_title=COALESCE(left(NULLIF($2,''),500),source_title),content=COALESCE($3,content),url=COALESCE(NULLIF($4,''),url),image_url=COALESCE($5,image_url),published_at=COALESCE($6,published_at),hash_content=COALESCE(NULLIF($7,''),hash_content),telegram_context=COALESCE($8::jsonb,telegram_context) WHERE id=$1 AND NOT (processed IS TRUE AND COALESCE(summary,'')<>'')`, old.ID, a.Title, nullableNonempty(a.Content), a.URL, nullableNonempty(a.ImageURL), published, contentHash(a.Title, a.URL), nullableJSON(telegramContext(a)))
 	if err != nil {
 		if pgCode(err) == "23505" {
 			if rollbackErr := sp.Rollback(ctx); rollbackErr != nil {
@@ -679,17 +667,6 @@ func updateExisting(ctx context.Context, tx pgx.Tx, old dbArticle, a Article) (b
 		return false, errors.New("article metadata update failed")
 	}
 	return result.RowsAffected() == 1, nil
-}
-func titleDuplicate(ctx context.Context, tx pgx.Tx, source int32, title string, since time.Time) (bool, error) {
-	if title == "" {
-		return false, nil
-	}
-	var yes bool
-	err := tx.QueryRow(ctx, `SELECT EXISTS(SELECT 1 FROM articles WHERE source_id=$1 AND lower(title)=$2 AND fetched_at >= $3)`, source, title, since).Scan(&yes)
-	if err != nil {
-		return false, errors.New("article title duplicate lookup failed")
-	}
-	return yes, nil
 }
 func insertArticle(ctx context.Context, tx pgx.Tx, source int32, a Article, now time.Time) error {
 	media := []byte(a.MediaFiles)
@@ -707,11 +684,69 @@ func insertArticle(ctx context.Context, tx pgx.Tx, source int32, a Article, now 
 		return errors.New("article savepoint unavailable")
 	}
 	defer rollback(sp)
-	_, err = sp.Exec(ctx, `INSERT INTO articles(source_id,title,url,content,summary,image_url,media_files,published_at,fetched_at,processed,summary_processed,category_processed,processing_state,processing_attempts,next_attempt_at,last_processing_error,hash_content,is_advertisement,ad_confidence,ad_type,ad_reasoning,ad_markers,ad_processed) VALUES($1,$2,$3,$4,$5,$6,$7::jsonb,$8,$9,FALSE,FALSE,FALSE,'pending',0,NULL,NULL,$10,$11,$12,$13,$14,$15::jsonb,$16)`, source, a.Title, a.URL, nullableNonempty(a.Content), nullableNonempty(a.Summary), nullableNonempty(a.ImageURL), string(media), published, now, contentHash(a.Title, a.URL), ad.isAd, ad.confidence, nullableString(ad.typ), nullableString(ad.reason), string(admarkers), ad.processed)
+	_, err = sp.Exec(ctx, `INSERT INTO articles(source_id,title,source_title,url,content,summary,image_url,media_files,telegram_context,published_at,fetched_at,processed,summary_processed,category_processed,processing_state,processing_attempts,next_attempt_at,last_processing_error,hash_content,is_advertisement,ad_confidence,ad_type,ad_reasoning,ad_markers,ad_processed) VALUES($1,$2,left(NULLIF($2,''),500),$3,$4,$5,$6,$7::jsonb,$8::jsonb,$9,$10,FALSE,FALSE,FALSE,'pending',0,NULL,NULL,$11,$12,$13,$14,$15,$16::jsonb,$17)`, source, a.Title, a.URL, nullableNonempty(a.Content), nullableNonempty(a.Summary), nullableNonempty(a.ImageURL), string(media), nullableJSON(telegramContext(a)), published, now, contentHash(a.Title, a.URL), ad.isAd, ad.confidence, nullableString(ad.typ), nullableString(ad.reason), string(admarkers), ad.processed)
 	if err != nil {
 		return err
 	}
 	return sp.Commit(ctx)
+}
+
+func telegramContext(a Article) json.RawMessage {
+	if a.SourceType != "telegram" || a.RawData == nil {
+		return nil
+	}
+	sourceText, _ := a.RawData["source_text"].(string)
+	hasMedia, mediaKnown := a.RawData["has_media"].(bool)
+	admissionUncertain, admissionUncertainKnown := a.RawData["admission_uncertain"].(bool)
+	links, linksKnown := stringValues(a.RawData["external_links"])
+	if original, ok := a.RawData["original_link"].(string); ok && original != "" {
+		found := false
+		for _, link := range links {
+			if link == original {
+				found = true
+				break
+			}
+		}
+		if !found {
+			links = append(links, original)
+		}
+	}
+	context := map[string]any{
+		"source_text": sourceText, "metadata_known": mediaKnown && linksKnown,
+		"has_media": hasMedia, "external_links": links,
+		"admission_uncertain": !admissionUncertainKnown || admissionUncertain,
+	}
+	raw, err := json.Marshal(context)
+	if err != nil {
+		return nil
+	}
+	return raw
+}
+
+func stringValues(value any) ([]string, bool) {
+	switch values := value.(type) {
+	case []string:
+		return values, true
+	case []any:
+		result := make([]string, 0, len(values))
+		for _, item := range values {
+			text, ok := item.(string)
+			if !ok {
+				return nil, false
+			}
+			result = append(result, text)
+		}
+		return result, true
+	default:
+		return nil, false
+	}
+}
+
+func nullableJSON(raw []byte) any {
+	if len(raw) == 0 || !json.Valid(raw) {
+		return nil
+	}
+	return string(raw)
 }
 
 type adMeta struct {
@@ -759,12 +794,9 @@ func candidateURLs(a Article) []string {
 	}
 	return r
 }
-func recordSeen(urls []string, title string, su, st map[string]bool) {
-	for _, u := range urls {
-		su[u] = true
-	}
-	if title != "" {
-		st[title] = true
+func recordSeenURLs(urls []string, seen map[string]bool) {
+	for _, url := range urls {
+		seen[url] = true
 	}
 }
 func contentHash(title, url string) string {

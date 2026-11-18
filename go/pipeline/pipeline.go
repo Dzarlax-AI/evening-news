@@ -333,7 +333,7 @@ func (r Runner) Extract(ctx context.Context, request Request) Outcome {
 				stopFailure = extractor.ErrOutputLimit
 			}
 			trace = append(trace, got.Trace...)
-			if method == "learned_pattern" && !strings.HasPrefix(got.Method, "learned_pattern_") {
+			if method == "learned_pattern" && got.Error != "non_article_listing" && !strings.HasPrefix(got.Method, "learned_pattern_") {
 				got.State = "failed"
 				got.Content = ""
 			}
@@ -353,6 +353,9 @@ func (r Runner) Extract(ctx context.Context, request Request) Outcome {
 			if extractor.HasPopulatedTableCounterpart(pageInput.HTML, pageInput.RenderedHTML) {
 				trace = append(trace, "rendered_table_ready")
 				got = attempt("browser_rendering")
+				if got.Error == "non_article_listing" {
+					return got
+				}
 				if got.State == "extracted" {
 					return got
 				}
@@ -361,6 +364,9 @@ func (r Runner) Extract(ctx context.Context, request Request) Outcome {
 		if pageInput.LearnedMethod == "browser_rendering" || pageInput.LearnedMethod == "learned_pattern_browser_rendering" {
 			render()
 			got = attempt("learned_pattern_browser_rendering")
+			if got.Error == "non_article_listing" {
+				return got
+			}
 			if pageInput.RenderedHTML != "" {
 				out.Observations = append(out.Observations, Observation{Selector: pageInput.LearnedSelector, Method: "browser_rendering", Success: got.State == "extracted", Reason: got.Error})
 			}
@@ -369,6 +375,9 @@ func (r Runner) Extract(ctx context.Context, request Request) Outcome {
 			}
 		} else if pageInput.LearnedSelector != "" {
 			got = attempt("learned_pattern")
+			if got.Error == "non_article_listing" {
+				return got
+			}
 			if pageInput.HTML != "" {
 				out.Observations = append(out.Observations, Observation{Selector: pageInput.LearnedSelector, Method: pageInput.LearnedMethod, Success: got.State == "extracted", Reason: got.Error})
 			}
@@ -378,6 +387,9 @@ func (r Runner) Extract(ctx context.Context, request Request) Outcome {
 		}
 		for _, method := range []string{"enhanced_selectors", "readability"} {
 			got = attempt(method)
+			if got.Error == "non_article_listing" {
+				return got
+			}
 			if got.State == "extracted" {
 				return got
 			}
@@ -387,6 +399,9 @@ func (r Runner) Extract(ctx context.Context, request Request) Outcome {
 		}
 		render()
 		got = attempt("browser_rendering")
+		if got.Error == "non_article_listing" {
+			return got
+		}
 		if got.State == "extracted" {
 			return got
 		}
@@ -458,7 +473,7 @@ func (r Runner) Extract(ctx context.Context, request Request) Outcome {
 	if stopFailure != nil {
 		return finishFailure(stopFailure)
 	}
-	if out.Result.State != "extracted" && out.Result.Error != "browser_required" && ctx.Err() == nil {
+	if out.Result.State != "extracted" && out.Result.Error != "browser_required" && out.Result.Error != "non_article_listing" && ctx.Err() == nil {
 		// The first two candidates are intentional, including a canonical self
 		// link. No recursive expansion or unbounded retry queue is permitted.
 		base := out.Result.URL
@@ -498,7 +513,7 @@ func (r Runner) Extract(ctx context.Context, request Request) Outcome {
 		out.Result = failed(u, transportLimit.Error())
 		out.Result.State = "resource_limit"
 		out.StudyHTML = ""
-	} else if out.Result.State != "extracted" && in.Content != "" && !r.HTTPOnly {
+	} else if out.Result.State != "extracted" && out.Result.Error != "non_article_listing" && in.Content != "" && !r.HTTPOnly {
 		in.Strategy = "source_content"
 		out.Result = extractor.Extract(ctx, in)
 		trace = append(trace, "source_content_fallback")
@@ -510,7 +525,7 @@ func (r Runner) Extract(ctx context.Context, request Request) Outcome {
 		out.Result.ExtractedFrom = out.Result.URL
 		out.Result.URL = u
 	}
-	out.NeedsSelectorStudy = out.Result.State != "extracted" && out.Result.Error != "browser_required" && out.StudyHTML != "" && ctx.Err() == nil
+	out.NeedsSelectorStudy = out.Result.State != "extracted" && out.Result.Error != "browser_required" && out.Result.Error != "non_article_listing" && out.StudyHTML != "" && ctx.Err() == nil
 	if out.Result.State == "extracted" {
 		out.StudyHTML = ""
 		if out.Result.SelectorUsed != "" {

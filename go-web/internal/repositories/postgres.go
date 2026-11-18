@@ -16,7 +16,10 @@ import (
 )
 
 // Postgres is the bounded-pool read adapter for the public site.
-type Postgres struct{ pool *pgxpool.Pool }
+type Postgres struct {
+	pool               *pgxpool.Pool
+	filterArticleMedia bool
+}
 
 func (*Postgres) SupportsPublicLocale(locale string) bool {
 	return locale == "ru" || locale == "sr-Latn"
@@ -49,6 +52,9 @@ func OpenPostgres(ctx context.Context, databaseURL string, maxConns int32) (*Pos
 	return &Postgres{pool: p}, nil
 }
 
+// EnableArticleMediaPolicy selects the filtered public projection before serving traffic.
+func (p *Postgres) EnableArticleMediaPolicy() { p.filterArticleMedia = true }
+
 func (p *Postgres) Close() {
 	if p != nil && p.pool != nil {
 		p.pool.Close()
@@ -72,11 +78,19 @@ const articleProjection = `a.id,a.source_id,a.title,a.summary,a.content,a.url,` 
 
 const serbianReady = `EXISTS (SELECT 1 FROM article_localizations l WHERE l.article_id=a.id AND l.locale='sr-Latn' AND l.status='completed' AND NULLIF(btrim(l.title),'') IS NOT NULL AND NULLIF(btrim(l.summary),'') IS NOT NULL)`
 
-func localizedProjection(ctx context.Context) string {
-	if !isSerbian(ctx) {
-		return articleProjection
+func (p *Postgres) mediaEvidenceExpression() string {
+	if p.filterArticleMedia {
+		return `a.media_evidence`
 	}
-	projection := strings.Replace(articleProjection, "a.id,a.source_id,a.title,a.summary,a.content", `a.id,a.source_id,(SELECT l.title FROM article_localizations l WHERE l.article_id=a.id AND l.locale='sr-Latn' AND l.status='completed'),(SELECT l.summary FROM article_localizations l WHERE l.article_id=a.id AND l.locale='sr-Latn' AND l.status='completed'),a.content`, 1)
+	return `NULL::jsonb`
+}
+
+func (p *Postgres) localizedProjection(ctx context.Context) string {
+	base := articleProjection + ", " + p.mediaEvidenceExpression()
+	if !isSerbian(ctx) {
+		return base
+	}
+	projection := strings.Replace(base, "a.id,a.source_id,a.title,a.summary,a.content", `a.id,a.source_id,(SELECT l.title FROM article_localizations l WHERE l.article_id=a.id AND l.locale='sr-Latn' AND l.status='completed'),(SELECT l.summary FROM article_localizations l WHERE l.article_id=a.id AND l.locale='sr-Latn' AND l.status='completed'),a.content`, 1)
 	projection = strings.ReplaceAll(projection, "c.display_name", `COALESCE((SELECT cl.display_name FROM category_localizations cl WHERE cl.category_id=c.id AND cl.locale='sr-Latn'),'Ostale teme')`)
 	return strings.Replace(projection, "'Other'", "'Ostale teme'", 1)
 }
@@ -133,7 +147,7 @@ func (p *Postgres) Feed(ctx context.Context, q FeedQuery) (FeedResponse, error) 
 		}
 	}
 	args = append(args, q.Limit, q.Offset)
-	sql := `SELECT ` + localizedProjection(ctx) + ` FROM articles a LEFT JOIN sources s ON s.id=a.source_id WHERE ` + strings.Join(where, " AND ") + fmt.Sprintf(` ORDER BY a.published_at DESC OFFSET $%d LIMIT $%d`, len(args), len(args)-1)
+	sql := `SELECT ` + p.localizedProjection(ctx) + ` FROM articles a LEFT JOIN sources s ON s.id=a.source_id WHERE ` + strings.Join(where, " AND ") + fmt.Sprintf(` ORDER BY a.published_at DESC OFFSET $%d LIMIT $%d`, len(args), len(args)-1)
 	rows, err := p.pool.Query(ctx, sql, args...)
 	if err != nil {
 		return FeedResponse{}, err
@@ -141,7 +155,7 @@ func (p *Postgres) Feed(ctx context.Context, q FeedQuery) (FeedResponse, error) 
 	defer rows.Close()
 	items := []map[string]any{}
 	for rows.Next() {
-		item, e := scanArticle(rows, false, true)
+		item, e := p.scanArticle(rows, false, true)
 		if e != nil {
 			return FeedResponse{}, e
 		}
@@ -163,8 +177,8 @@ func (p *Postgres) Article(ctx context.Context, id int64, includeUnpublished boo
 	if !includeUnpublished {
 		where += ` AND ` + published(true)
 	}
-	row := p.pool.QueryRow(ctx, `SELECT `+localizedProjection(ctx)+` FROM articles a LEFT JOIN sources s ON s.id=a.source_id WHERE `+where, id)
-	item, err := scanArticle(row, true, true)
+	row := p.pool.QueryRow(ctx, `SELECT `+p.localizedProjection(ctx)+` FROM articles a LEFT JOIN sources s ON s.id=a.source_id WHERE `+where, id)
+	item, err := p.scanArticle(row, true, true)
 	if err == pgx.ErrNoRows {
 		return nil, nil
 	}
@@ -173,23 +187,23 @@ func (p *Postgres) Article(ctx context.Context, id int64, includeUnpublished boo
 	return item, err
 }
 
-func scanArticle(row interface{ Scan(...any) error }, includeContent, clean bool) (map[string]any, error) {
-	item, _, err := scanArticleWithSourcePolicy(row, includeContent, clean)
+func (p *Postgres) scanArticle(row interface{ Scan(...any) error }, includeContent, clean bool) (map[string]any, error) {
+	item, _, err := p.scanArticleWithSourcePolicy(row, includeContent, clean)
 	return item, err
 }
 
-func scanArticleWithSourcePolicy(row interface{ Scan(...any) error }, includeContent, clean bool) (map[string]any, bool, error) {
+func (p *Postgres) scanArticleWithSourcePolicy(row interface{ Scan(...any) error }, includeContent, clean bool) (map[string]any, bool, error) {
 	var id int64
 	var sourceID *int64
 	var sourceType *string
 	var title, summary, content, url, imageURL, sourceName, category *string
-	var media []byte
+	var media, evidence []byte
 	var publishedAt, fetchedAt *time.Time
 	var isAd *bool
 	var adConf *float64
 	var adType, adReasoning *string
 	var cats, aiCats []byte
-	if err := row.Scan(&id, &sourceID, &title, &summary, &content, &url, &imageURL, &media, &publishedAt, &fetchedAt, &isAd, &adConf, &adType, &adReasoning, &sourceName, &category, &cats, &aiCats, &sourceType); err != nil {
+	if err := row.Scan(&id, &sourceID, &title, &summary, &content, &url, &imageURL, &media, &publishedAt, &fetchedAt, &isAd, &adConf, &adType, &adReasoning, &sourceName, &category, &cats, &aiCats, &sourceType, &evidence); err != nil {
 		return nil, false, err
 	}
 	if clean && title != nil {
@@ -249,23 +263,29 @@ func scanArticleWithSourcePolicy(row interface{ Scan(...any) error }, includeCon
 	titleV = stringOrNil(title)
 	summaryV = stringOrNil(summary)
 	urlV = stringOrNil(url)
-	imageV = stringOrNil(imageURL)
 	adTypeV = stringOrNil(adType)
 	adReasoningV = stringOrNil(adReasoning)
 	var primary *string
-	if files, ok := mediaValue.([]any); ok {
-		for _, f := range files {
-			if m, ok := f.(map[string]any); ok && m["type"] == "image" {
-				if u, ok := m["url"].(string); ok {
-					primary = &u
-					break
+	if p.filterArticleMedia {
+		files, _ := mediaValue.([]any)
+		mediaValue, primary = projectArticleMediaWithCover(files, stringValue(stringOrNil(sourceType)), stringValue(stringOrNil(url)), evidence)
+		imageURL = primary
+	} else {
+		if files, ok := mediaValue.([]any); ok {
+			for _, f := range files {
+				if m, ok := f.(map[string]any); ok && m["type"] == "image" {
+					if u, ok := m["url"].(string); ok {
+						primary = &u
+						break
+					}
 				}
 			}
 		}
+		if primary == nil {
+			primary = imageURL
+		}
 	}
-	if primary == nil {
-		primary = imageURL
-	}
+	imageV = stringOrNil(imageURL)
 	item := map[string]any{"id": id, "article_id": id, "title": titleV, "summary": summaryV, "image_url": imageV, "primary_image": stringOrNil(primary), "media_files": mediaValue, "url": urlV, "domain": domain, "category": valueOr(category, "Other"), "categories": catValue, "ai_categories": aiValue, "published_at": pAt, "fetched_at": fAt, "is_advertisement": ad, "is_advertisement_value": boolOrNil(isAd), "ad_confidence": conf, "ad_type": adTypeV, "ad_reasoning": adReasoningV, "source_id": sid, "source_name": source}
 	if includeContent {
 		item["content"] = stringOrNil(content)
@@ -537,18 +557,18 @@ func (p *Postgres) Search(ctx context.Context, q SearchQuery) (map[string]any, e
 		return nil, err
 	}
 	args = append(args, q.Offset, q.Limit)
-	rows, err := p.pool.Query(ctx, `SELECT `+localizedProjection(ctx)+` FROM articles a LEFT JOIN sources s ON s.id=a.source_id WHERE `+where+` ORDER BY `+order+fmt.Sprintf(` OFFSET $%d LIMIT $%d`, len(args)-1, len(args)), args...)
+	rows, err := p.pool.Query(ctx, `SELECT `+p.localizedProjection(ctx)+` FROM articles a LEFT JOIN sources s ON s.id=a.source_id WHERE `+where+` ORDER BY `+order+fmt.Sprintf(` OFFSET $%d LIMIT $%d`, len(args)-1, len(args)), args...)
 	if err != nil {
 		return nil, err
 	}
 	defer rows.Close()
 	articles := []map[string]any{}
 	for rows.Next() {
-		item, rssOnly, e := scanArticleWithSourcePolicy(rows, true, false)
+		item, rssOnly, e := p.scanArticleWithSourcePolicy(rows, true, false)
 		if e != nil {
 			return nil, e
 		}
-		result := searchArticle(item, query, rssOnly)
+		result := searchArticle(item, query, rssOnly || p.filterArticleMedia)
 		if isSerbian(ctx) {
 			result["category"] = item["category"]
 		}
@@ -562,14 +582,14 @@ func (p *Postgres) Search(ctx context.Context, q SearchQuery) (map[string]any, e
 
 var contentImageTag = regexp.MustCompile(`(?is)<img[^>]+src=["']([^"']+)["'][^>]*>`)
 
-func searchArticle(item map[string]any, query string, rssOnly bool) map[string]any {
+func searchArticle(item map[string]any, query string, useStoredMediaOnly bool) map[string]any {
 	media, _ := item["media_files"].([]any)
 	if media == nil {
 		media = []any{}
 	}
 	content := stringValue(item["content"])
 	var matches [][]string
-	if !rssOnly {
+	if !useStoredMediaOnly {
 		matches = contentImageTag.FindAllStringSubmatch(content, -1)
 	} else {
 		// Legacy feed-card fallback also reads summary HTML for an image.
@@ -666,14 +686,14 @@ func (p *Postgres) APIFeed(ctx context.Context, q APIFeedQuery) (APIFeedResponse
 		}
 	}
 	args = append(args, q.Offset, q.Limit)
-	rows, err := p.pool.Query(ctx, `SELECT `+localizedProjection(ctx)+` FROM articles a LEFT JOIN sources s ON s.id=a.source_id WHERE `+strings.Join(conditions, " AND ")+fmt.Sprintf(` ORDER BY a.fetched_at DESC OFFSET $%d LIMIT $%d`, len(args)-1, len(args)), args...)
+	rows, err := p.pool.Query(ctx, `SELECT `+p.localizedProjection(ctx)+` FROM articles a LEFT JOIN sources s ON s.id=a.source_id WHERE `+strings.Join(conditions, " AND ")+fmt.Sprintf(` ORDER BY a.fetched_at DESC OFFSET $%d LIMIT $%d`, len(args)-1, len(args)), args...)
 	if err != nil {
 		return APIFeedResponse{}, err
 	}
 	defer rows.Close()
 	items := []map[string]any{}
 	for rows.Next() {
-		item, e := scanArticle(rows, false, true)
+		item, e := p.scanArticle(rows, false, true)
 		if e != nil {
 			return APIFeedResponse{}, e
 		}
@@ -747,7 +767,7 @@ func (p *Postgres) Digest(ctx context.Context, date time.Time) (DigestPage, erro
 		return page, err
 	}
 	rows.Close()
-	rows, err = p.pool.Query(ctx, `SELECT id,title,summary,url,source_name,image_url,fetched_at,category,confidence FROM (SELECT DISTINCT ON (a.id) a.id,a.title,a.summary,a.url,COALESCE(s.name,'Unknown') AS source_name,CASE WHEN s.source_type='rss' THEN (`+trustedRSSMedia+`)->0->>'url' ELSE COALESCE((SELECT item->>'url' FROM jsonb_array_elements(COALESCE(a.media_files::jsonb,'[]'::jsonb)) item WHERE item->>'type'='image' LIMIT 1),a.image_url) END AS image_url,a.fetched_at,COALESCE(c.name,'Other') AS category,COALESCE(ac.confidence,0) AS confidence FROM articles a JOIN article_categories ac ON ac.article_id=a.id JOIN categories c ON c.id=ac.category_id LEFT JOIN sources s ON s.id=a.source_id WHERE a.fetched_at::date=$1 AND a.processing_state='completed' AND a.is_advertisement IS NOT TRUE ORDER BY a.id,ac.confidence DESC NULLS LAST) chosen ORDER BY fetched_at DESC`, date.Format("2006-01-02"))
+	rows, err = p.pool.Query(ctx, `SELECT id,title,summary,url,source_name,image_url,fetched_at,category,confidence,media_files,source_type,media_evidence FROM (SELECT DISTINCT ON (a.id) a.id,a.title,a.summary,a.url,COALESCE(s.name,'Unknown') AS source_name,CASE WHEN s.source_type='rss' THEN (`+trustedRSSMedia+`)->0->>'url' ELSE COALESCE((SELECT item->>'url' FROM jsonb_array_elements(COALESCE(a.media_files::jsonb,'[]'::jsonb)) item WHERE item->>'type'='image' LIMIT 1),a.image_url) END AS image_url,a.fetched_at,COALESCE(c.name,'Other') AS category,COALESCE(ac.confidence,0) AS confidence,`+displayedMedia+` AS media_files,s.source_type,`+p.mediaEvidenceExpression()+` AS media_evidence FROM articles a JOIN article_categories ac ON ac.article_id=a.id JOIN categories c ON c.id=ac.category_id LEFT JOIN sources s ON s.id=a.source_id WHERE a.fetched_at::date=$1 AND a.processing_state='completed' AND a.is_advertisement IS NOT TRUE ORDER BY a.id,ac.confidence DESC NULLS LAST) chosen ORDER BY fetched_at DESC`, date.Format("2006-01-02"))
 	if err != nil {
 		return page, err
 	}
@@ -757,9 +777,16 @@ func (p *Postgres) Digest(ctx context.Context, date time.Time) (DigestPage, erro
 		var a DigestArticle
 		var category string
 		var confidence float64
-		if err := rows.Scan(&a.ID, &a.Title, &a.Summary, &a.URL, &a.SourceName, &a.ImageURL, &a.FetchedAt, &category, &confidence); err != nil {
+		var rawMedia, evidence []byte
+		var sourceType *string
+		if err := rows.Scan(&a.ID, &a.Title, &a.Summary, &a.URL, &a.SourceName, &a.ImageURL, &a.FetchedAt, &category, &confidence, &rawMedia, &sourceType, &evidence); err != nil {
 			rows.Close()
 			return page, err
+		}
+		if p.filterArticleMedia {
+			var files []any
+			_ = json.Unmarshal(rawMedia, &files)
+			_, a.ImageURL = projectArticleMediaWithCover(files, stringValue(stringOrNil(sourceType)), a.URL, evidence)
 		}
 		if _, ok := byCategory[category]; !ok {
 			order = append(order, category)

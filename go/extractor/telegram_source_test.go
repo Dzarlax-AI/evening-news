@@ -9,6 +9,8 @@ import (
 	"strings"
 	"testing"
 	"time"
+
+	"github.com/PuerkitoBio/goquery"
 )
 
 func TestParseTelegramChannelMatchesPythonBaseline(t *testing.T) {
@@ -51,6 +53,11 @@ func TestParseTelegramChannelMatchesPythonBaseline(t *testing.T) {
 			}
 			for _, article := range got.([]any) {
 				row := article.(map[string]any)
+				rawData := row["raw_data"].(map[string]any)
+				if _, ok := rawData["admission_uncertain"].(bool); !ok {
+					t.Fatal("admission_uncertain signal missing")
+				}
+				delete(rawData, "admission_uncertain")
 				if raw, ok := row["published_at"].(string); ok && raw != "" {
 					parsed, err := time.Parse(time.RFC3339Nano, raw)
 					if err != nil {
@@ -69,6 +76,26 @@ func TestParseTelegramChannelMatchesPythonBaseline(t *testing.T) {
 			}
 			if !reflect.DeepEqual(got, want) {
 				t.Fatalf("Go Telegram output differs from Python baseline at %s", firstTelegramDifference(got, want, "$"))
+			}
+		})
+	}
+}
+
+func TestTelegramAdmissionSignalFindsNonPreviewLinksAndUnknownAttachments(t *testing.T) {
+	for _, tc := range []struct {
+		name string
+		html string
+	}{
+		{name: "non preview link", html: `<div><a href="https://example.test/story">story</a></div>`},
+		{name: "attachment wrapper without url", html: `<div class="tgme_widget_message_video"></div>`},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			doc, err := goquery.NewDocumentFromReader(strings.NewReader(tc.html))
+			if err != nil {
+				t.Fatal(err)
+			}
+			if !telegramAdmissionUncertain(doc.Selection, "https://t.me/channel/123") {
+				t.Fatal("incomplete evidence was not marked uncertain")
 			}
 		})
 	}

@@ -302,6 +302,7 @@ type analyzeInput struct {
 	Title           string   `json:"title"`
 	Content         string   `json:"content"`
 	URL             string   `json:"url"`
+	SourceType      string   `json:"source_type,omitempty"`
 	OriginalContext *string  `json:"original_context"`
 	MaxTextChars    int      `json:"max_text_chars"`
 	Locales         []string `json:"locales,omitempty"`
@@ -310,6 +311,7 @@ type analyzeInput struct {
 // ArticleInput is the direct in-process input for article analysis.
 type ArticleInput struct {
 	Title, Content, URL string
+	SourceType          string
 	OriginalContext     *string
 	MaxTextChars        int
 	Locales             []string
@@ -388,7 +390,7 @@ func (s *Server) analyze(w http.ResponseWriter, r *http.Request) {
 		writeJSON(w, 400, errorEnvelope("resource_limit", 400))
 		return
 	}
-	result, usage, err := s.analyzeArticle(ctx, ArticleInput{Title: base.Input.Title, Content: base.Input.Content, URL: base.Input.URL, OriginalContext: base.Input.OriginalContext, MaxTextChars: base.Input.MaxTextChars, Locales: base.Input.Locales, Model: base.Model})
+	result, usage, err := s.analyzeArticle(ctx, ArticleInput{Title: base.Input.Title, Content: base.Input.Content, URL: base.Input.URL, SourceType: base.Input.SourceType, OriginalContext: base.Input.OriginalContext, MaxTextChars: base.Input.MaxTextChars, Locales: base.Input.Locales, Model: base.Model})
 	if err != nil {
 		writeError(w, err)
 		return
@@ -439,7 +441,7 @@ func (s *Server) analyzeArticle(ctx context.Context, input ArticleInput) (map[st
 	if len(input.Locales) > 0 {
 		version = 2
 	}
-	req := analysis.Request{Version: version, Locales: input.Locales, Title: input.Title, Content: input.Content, URL: input.URL, OriginalContext: input.OriginalContext, Categories: cats, LocalCategory: local, ConfiguredLocalCategory: s.config.LocalCategory, Model: input.Model, Endpoint: s.config.Endpoint, MaxTextChars: input.MaxTextChars}
+	req := analysis.Request{Version: version, Locales: input.Locales, Title: input.Title, Content: input.Content, URL: input.URL, SourceType: input.SourceType, OriginalContext: input.OriginalContext, Categories: cats, LocalCategory: local, ConfiguredLocalCategory: s.config.LocalCategory, Model: input.Model, Endpoint: s.config.Endpoint, MaxTextChars: input.MaxTextChars}
 	resultMap, usage, err := analysis.Analyze(ctx, req, analysis.ProviderConfig{Provider: snap.provider, Model: snap.model, Revision: snap.revision})
 	if err != nil {
 		return nil, nil, err

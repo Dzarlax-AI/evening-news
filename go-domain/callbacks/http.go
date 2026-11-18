@@ -133,6 +133,9 @@ func normalizeNumbers(value any) any {
 func hash(data []byte) string { sum := sha256.Sum256(data); return hex.EncodeToString(sum[:]) }
 func analysisFingerprint(input map[string]any) (string, error) {
 	ident := map[string]any{"title": input["title"], "content": input["content"], "url": input["url"]}
+	if value, ok := input["source_type"]; ok {
+		ident["source_type"] = value
+	}
 	if value, ok := input["original_context"]; ok {
 		ident["original_context"] = value
 	}
