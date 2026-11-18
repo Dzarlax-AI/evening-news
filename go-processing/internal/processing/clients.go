@@ -30,6 +30,7 @@ type ExtractorClient struct {
 	HTTP               *http.Client
 	MaxBytes, MaxChars int
 	UseBrowser         bool
+	EnablePageStudy    bool
 	BrowserMaxBytes    int
 	AttemptTimeout     time.Duration
 	TotalBudget        time.Duration
@@ -119,6 +120,7 @@ type Extracted struct {
 	PublicationDate   string                 `json:"publication_date"`
 	ImageURL          string                 `json:"image_url"`
 	MediaFiles        []map[string]any       `json:"media_files"`
+	MediaEvidence     json.RawMessage        `json:"media_evidence,omitempty"`
 	Method            string                 `json:"method"`
 	MethodUsed        string                 `json:"method_used"`
 	SelectorUsed      string                 `json:"selector_used"`
@@ -129,6 +131,9 @@ type Extracted struct {
 	Observations      []ExtractorObservation `json:"-"`
 	Retryable         bool                   `json:"-"`
 	Terminal          bool                   `json:"-"`
+	study             *extractionStudySnapshot
+	applied           bool
+	failureReason     string
 }
 
 func (c *ExtractorClient) Extract(ctx context.Context, rawURL, title, sourceType, selector, method string, maxChars int) (Extracted, error) {
@@ -146,7 +151,7 @@ func (c *ExtractorClient) Extract(ctx context.Context, rawURL, title, sourceType
 	if browserLearnedMethod(method) {
 		firstSelector, firstMethod = "", ""
 	}
-	result, err := c.admittedAttempt(totalCtx, rawURL, title, sourceType, firstSelector, firstMethod, maxChars, false, maxBytes)
+	result, err := c.admittedAttempt(totalCtx, rawURL, title, sourceType, firstSelector, firstMethod, maxChars, false, maxBytes, nil)
 	if err != nil {
 		return result, err
 	}
@@ -164,7 +169,7 @@ func (c *ExtractorClient) Extract(ctx context.Context, rawURL, title, sourceType
 			return Extracted{Error: "busy", Retryable: true}, nil
 		case <-timer.C:
 		}
-		result, err = c.admittedAttempt(totalCtx, rawURL, title, sourceType, firstSelector, firstMethod, maxChars, false, maxBytes)
+		result, err = c.admittedAttempt(totalCtx, rawURL, title, sourceType, firstSelector, firstMethod, maxChars, false, maxBytes, nil)
 		if err != nil {
 			return result, err
 		}
@@ -178,7 +183,7 @@ func (c *ExtractorClient) Extract(ctx context.Context, rawURL, title, sourceType
 		browserBytes = maxBytes
 	}
 	firstObservations := result.Observations
-	result, err = c.admittedAttempt(totalCtx, rawURL, title, sourceType, selector, method, maxChars, true, browserBytes)
+	result, err = c.admittedAttempt(totalCtx, rawURL, title, sourceType, selector, method, maxChars, true, browserBytes, nil)
 	if err != nil {
 		return result, err
 	}
@@ -197,6 +202,7 @@ func classifyInvalidSuccessfulContent(result Extracted, maxChars int) Extracted 
 		result.PublicationDate = ""
 		result.ImageURL = ""
 		result.MediaFiles = nil
+		result.MediaEvidence = nil
 		for i := range result.Observations {
 			result.Observations[i].Success = false
 		}
@@ -217,7 +223,7 @@ func appendObservationSets(first, second []ExtractorObservation) []ExtractorObse
 	return out
 }
 
-func (c *ExtractorClient) admittedAttempt(ctx context.Context, rawURL, title, sourceType, selector, method string, maxChars int, useBrowser bool, maxBytes int) (Extracted, error) {
+func (c *ExtractorClient) admittedAttempt(ctx context.Context, rawURL, title, sourceType, selector, method string, maxChars int, useBrowser bool, maxBytes int, replay *extractionStudyReplay) (Extracted, error) {
 	if c.admission == nil {
 		c.admission = make(chan struct{}, 1)
 	}
@@ -250,10 +256,10 @@ func (c *ExtractorClient) admittedAttempt(ctx context.Context, rawURL, title, so
 	}
 	requestCtx, cancel := context.WithTimeout(ctx, attempt)
 	defer cancel()
-	return c.extractOnce(requestCtx, rawURL, title, sourceType, selector, method, maxChars, useBrowser, maxBytes)
+	return c.extractOnce(requestCtx, rawURL, title, sourceType, selector, method, maxChars, useBrowser, maxBytes, replay)
 }
 
-func (c *ExtractorClient) extractOnce(ctx context.Context, rawURL, title, sourceType, selector, method string, maxChars int, useBrowser bool, maxBytes int) (Extracted, error) {
+func (c *ExtractorClient) extractOnce(ctx context.Context, rawURL, title, sourceType, selector, method string, maxChars int, useBrowser bool, maxBytes int, replay *extractionStudyReplay) (Extracted, error) {
 	if maxChars < 1 || maxChars > 100000 {
 		maxChars = 100000
 	}
@@ -270,12 +276,21 @@ func (c *ExtractorClient) extractOnce(ctx context.Context, rawURL, title, source
 	}
 	requestID := fmt.Sprintf("%08x-%04x-%04x-%04x-%012x", idBytes[0:4], idBytes[4:6], idBytes[6:8], idBytes[8:10], idBytes[10:16])
 	body := map[string]any{"request_id": requestID, "url": rawURL, "strategy": "auto", "source_type": "article", "budget_ms": max(1, min(30000, int(budget.Milliseconds()))), "max_bytes": maxBytes, "max_chars": maxChars, "title": title, "use_browser": useBrowser}
+	if replay != nil {
+		body["reparse"] = replay
+	} else if c.EnablePageStudy {
+		body["enable_page_study"] = true
+	}
 	if selector != "" || method != "" {
 		body["learned_selector"] = selector
 		body["learned_method"] = method
 	}
 	wire, err := json.Marshal(body)
-	if err != nil || len(wire) > maxBytes {
+	wireLimit := maxBytes
+	if replay != nil {
+		wireLimit = maxStudyWireBytes
+	}
+	if err != nil || len(wire) > wireLimit {
 		return Extracted{}, errors.New("extractor request too large")
 	}
 	req, err := http.NewRequestWithContext(ctx, http.MethodPost, c.URL+"/v1/extract", bytes.NewReader(wire))
@@ -306,22 +321,31 @@ func (c *ExtractorClient) extractOnce(ctx context.Context, rawURL, title, source
 	if enc := strings.ToLower(resp.Header.Get("Content-Encoding")); enc != "" && enc != "identity" {
 		return Extracted{}, fatal("extractor_protocol")
 	}
-	data, err := io.ReadAll(io.LimitReader(resp.Body, int64(maxBytes)+1))
-	if err != nil || len(data) > maxBytes {
+	responseLimit := maxBytes
+	if c.EnablePageStudy && replay == nil {
+		responseLimit = maxStudyWireBytes
+	}
+	data, err := io.ReadAll(io.LimitReader(resp.Body, int64(responseLimit)+1))
+	if err != nil || len(data) > responseLimit {
 		return Extracted{}, ErrResourceLimit
 	}
 	var envelope struct {
-		ContractVersion string `json:"contract_version"`
-		RequestID       string `json:"request_id"`
-		OriginalURL     string `json:"original_url"`
-		FinalURL        string `json:"final_url"`
-		Outcome         string `json:"outcome"`
-		Result          struct {
+		ContractVersion  string `json:"contract_version"`
+		RequestID        string `json:"request_id"`
+		OriginalURL      string `json:"original_url"`
+		FinalURL         string `json:"final_url"`
+		Outcome          string `json:"outcome"`
+		Applied          bool   `json:"applied"`
+		StudyHTML        string `json:"study_html"`
+		StudyDocumentURL string `json:"study_document_url"`
+		SnapshotDigest   string `json:"snapshot_digest"`
+		Result           struct {
 			Content         string           `json:"content"`
 			Title           string           `json:"title"`
 			PublicationDate string           `json:"publication_date"`
 			ImageURL        string           `json:"image_url"`
 			Media           []map[string]any `json:"media"`
+			MediaEvidence   json.RawMessage  `json:"media_evidence"`
 			Method          string           `json:"method"`
 			MethodUsed      string           `json:"method_used"`
 			SelectorUsed    string           `json:"selector_used"`
@@ -330,13 +354,21 @@ func (c *ExtractorClient) extractOnce(ctx context.Context, rawURL, title, source
 			Code              string `json:"code"`
 			Retryable         *bool  `json:"retryable"`
 			RetryAfterSeconds *int   `json:"retry_after_seconds"`
+			Reason            string `json:"reason"`
 		} `json:"error"`
 		Observations []ExtractorObservation `json:"observations"`
 	}
 	if json.Unmarshal(data, &envelope) != nil || envelope.ContractVersion != "1" || envelope.RequestID != requestID || envelope.OriginalURL != rawURL || !validOutcome(envelope.Outcome) || len(envelope.Observations) > 64 {
 		return Extracted{}, fatal("extractor_protocol")
 	}
-	out := Extracted{Content: envelope.Result.Content, Title: envelope.Result.Title, PublicationDate: envelope.Result.PublicationDate, ImageURL: envelope.Result.ImageURL, MediaFiles: envelope.Result.Media, Method: envelope.Result.Method, MethodUsed: envelope.Result.MethodUsed, SelectorUsed: envelope.Result.SelectorUsed, Outcome: envelope.Outcome, Observations: envelope.Observations}
+	out := Extracted{Content: envelope.Result.Content, Title: envelope.Result.Title, PublicationDate: envelope.Result.PublicationDate, ImageURL: envelope.Result.ImageURL, MediaFiles: envelope.Result.Media, MediaEvidence: validatedMediaEvidence(envelope.Result.MediaEvidence, rawURL), Method: envelope.Result.Method, MethodUsed: envelope.Result.MethodUsed, SelectorUsed: envelope.Result.SelectorUsed, Outcome: envelope.Outcome, Observations: envelope.Observations}
+	out.applied = envelope.Applied
+	if c.EnablePageStudy && replay == nil && (envelope.StudyDocumentURL == rawURL || envelope.StudyDocumentURL == envelope.FinalURL) {
+		snapshot := extractionStudySnapshot{DocumentURL: envelope.StudyDocumentURL, HTML: envelope.StudyHTML, SnapshotDigest: envelope.SnapshotDigest}
+		if snapshot.valid() {
+			out.study = &snapshot
+		}
+	}
 	if out.MethodUsed == "" {
 		out.MethodUsed = out.Method
 	}
@@ -345,6 +377,7 @@ func (c *ExtractorClient) extractOnce(ctx context.Context, rawURL, title, source
 			return Extracted{}, fatal("extractor_protocol")
 		}
 		out.Error = envelope.Error.Code
+		out.failureReason = envelope.Error.Reason
 		out.Retryable = *envelope.Error.Retryable
 		if envelope.Error.RetryAfterSeconds != nil {
 			if *envelope.Error.RetryAfterSeconds < 0 || *envelope.Error.RetryAfterSeconds > 86400 {

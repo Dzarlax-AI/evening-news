@@ -239,9 +239,12 @@ func TestNativeRunnerParsesRenderedSourceAndKeepsArticleIdentity(t *testing.T) {
 	prose := "Researchers at the Northstar Institute published a detailed account of river measurements gathered from four independent stations. They released the full calibration procedure and reproducible sample data, described the limitations of their equipment, and explained why unusually heavy rainfall requires additional manual review. The report contains sufficient evidence for neighboring laboratories to repeat the experiment and compare the results with historical observations."
 	r := service.Request{URL: "https://example.org/story", Strategy: "browser_rendering", MaxBytes: 10000, MaxChars: 10000}
 	resp := nativeArticleResponse(context.Background(), r, func(context.Context, string, transport.BrowserOptions, string) (transport.RenderedDocument, error) {
-		return transport.RenderedDocument{Document: transport.Document{URL: "https://example.org/final", HTML: []byte(`<html><head><title>River report</title></head><body><article><h1>River report</h1><p>` + prose + `</p></article></body></html>`), StatusCode: 200}}, nil
+		return transport.RenderedDocument{Document: transport.Document{URL: "https://example.org/final", HTML: []byte(`<html><head><title>River report</title><meta property="og:type" content="article"><meta property="og:image" content="/hero.jpg"></head><body><article><h1>River report</h1><p>` + prose + `</p><img src="/hero.jpg"></article></body></html>`), StatusCode: 200}}, nil
 	})
 	if resp.Outcome != "success" || resp.Result.URL != r.URL || resp.Result.ExtractedFrom != "https://example.org/final" || !strings.Contains(resp.Result.Content, "four independent stations") || resp.Result.Title != "River report" {
 		t.Fatalf("native result lost source: %+v", resp)
+	}
+	if cover := resp.Result.MediaEvidence; cover == nil || cover.EditorialCover.ArticleURL != r.URL || cover.EditorialCover.URL != "https://example.org/hero.jpg" {
+		t.Fatal("native cover evidence lost its article identity on redirect")
 	}
 }

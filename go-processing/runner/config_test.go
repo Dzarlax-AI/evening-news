@@ -11,8 +11,12 @@ func TestLoadConfigUsesLookupAndReturnsErrorsForInvalidValues(t *testing.T) {
 	if e != nil {
 		t.Fatal(e)
 	}
-	if c.DatabaseURL != v["DATABASE_URL"] || c.DBMaxConns != 5 || c.MaxWorkers != 5 {
+	if c.DatabaseURL != v["DATABASE_URL"] || c.DBMaxConns != 5 || c.MaxWorkers != 5 || c.DedupTrial {
 		t.Fatalf("unexpected config: %+v", c)
+	}
+	v["ARTICLE_DEDUP_TRIAL"] = "true"
+	if c, e = LoadConfig(func(k string) string { return v[k] }); e != nil || !c.DedupTrial {
+		t.Fatalf("dedup trial flag missing from processing config: %v", e)
 	}
 	v["MAX_WORKERS"] = "oops"
 	if _, e = LoadConfig(func(k string) string { return v[k] }); !errors.Is(e, ErrInvalidConfig) {

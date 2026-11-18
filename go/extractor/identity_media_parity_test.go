@@ -72,11 +72,11 @@ func TestArticleMediaBoundsEscapedOutputAndPreservesArticle(t *testing.T) {
 	base := "https://example.test/" + strings.Repeat("b", 6800) + "/"
 	alt := strings.Repeat("é\"\\", 600)
 	var page strings.Builder
-	page.WriteString(article(prose))
+	page.WriteString(prose)
 	for i := 0; i < 400; i++ {
 		fmt.Fprintf(&page, `<img src="asset-%d.jpg" alt="%s">`, i, html.EscapeString(alt))
 	}
-	r := Extract(context.Background(), Input{URL: base, HTML: page.String(), SourceType: "article"})
+	r := Extract(context.Background(), Input{URL: base, HTML: article(page.String()), SourceType: "article"})
 	if r.State != "extracted" || r.Content == "" {
 		t.Fatalf("media bounding discarded article extraction: state=%s error=%s", r.State, r.Error)
 	}

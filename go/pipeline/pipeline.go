@@ -16,8 +16,9 @@ import (
 )
 
 type Request struct {
-	Input          extractor.Input
-	ChromeEndpoint string
+	Input           extractor.Input
+	ChromeEndpoint  string
+	EnablePageStudy bool
 }
 type Observation struct {
 	Selector string `json:"selector"`
@@ -30,8 +31,9 @@ type Outcome struct {
 	Observations       []Observation    `json:"observations"`
 	NeedsSelectorStudy bool             `json:"needs_selector_study"`
 	// StudyHTML is bounded input for the caller's optional AI round trip. It is
-	// returned only on failure and must never be included in logs or metrics.
+	// exposed only through the opted-in private path and never logged.
 	StudyHTML         string `json:"study_html,omitempty"`
+	StudyDocumentURL  string `json:"study_document_url,omitempty"`
 	UpstreamStatus    int    `json:"upstream_status,omitempty"`
 	RetryAfterSeconds *int   `json:"retry_after_seconds,omitempty"`
 	Reason            string `json:"reason,omitempty"`
@@ -329,6 +331,17 @@ func (r Runner) Extract(ctx context.Context, request Request) Outcome {
 				candidate.URL = browserURL
 			}
 			got := extractor.Extract(ctx, candidate)
+			if request.EnablePageStudy && got.State == "extracted" {
+				snapshot := candidate.HTML
+				if strings.Contains(method, "browser") {
+					snapshot = candidate.RenderedHTML
+				}
+				if len(snapshot) <= 2*1024*1024 && extractor.StrongListingSignal(snapshot) {
+					out.StudyHTML, out.StudyDocumentURL = snapshot, candidate.URL
+				} else {
+					out.StudyHTML, out.StudyDocumentURL = "", ""
+				}
+			}
 			if got.State == "resource_limit" {
 				stopFailure = extractor.ErrOutputLimit
 			}
@@ -419,6 +432,7 @@ func (r Runner) Extract(ctx context.Context, request Request) Outcome {
 		got = attempt("fallback_extraction")
 		if got.State != "extracted" && out.StudyHTML == "" {
 			out.StudyHTML = pageInput.HTML
+			out.StudyDocumentURL = pageInput.URL
 		}
 		return got
 	}
@@ -448,10 +462,7 @@ func (r Runner) Extract(ctx context.Context, request Request) Outcome {
 			}
 		}
 		out.Result = extractor.Extract(ctx, candidate)
-		if out.Result.URL != u {
-			out.Result.ExtractedFrom = out.Result.URL
-			out.Result.URL = u
-		}
+		out.Result.RestoreArticleURL(u)
 		return out
 	}
 	out.Result = page(in)
@@ -481,10 +492,7 @@ func (r Runner) Extract(ctx context.Context, request Request) Outcome {
 				return finishFailure(stopFailure)
 			}
 			if got.State == "extracted" {
-				if got.ExtractedFrom == "" {
-					got.ExtractedFrom = got.URL
-				}
-				got.URL = u
+				got.RestoreArticleURL(u)
 				out.Result = got
 				trace = append(trace, "alternative_url_success")
 				break
@@ -506,13 +514,13 @@ func (r Runner) Extract(ctx context.Context, request Request) Outcome {
 		out.Result = failed(u, classifyFailure(fetchFailure))
 	}
 	out.Result.Trace = trace
-	if out.Result.URL != u {
-		out.Result.ExtractedFrom = out.Result.URL
-		out.Result.URL = u
-	}
+	out.Result.RestoreArticleURL(u)
 	out.NeedsSelectorStudy = out.Result.State != "extracted" && out.Result.Error != "browser_required" && out.StudyHTML != "" && ctx.Err() == nil
 	if out.Result.State == "extracted" {
-		out.StudyHTML = ""
+		if !request.EnablePageStudy {
+			out.StudyHTML = ""
+			out.StudyDocumentURL = ""
+		}
 		if out.Result.SelectorUsed != "" {
 			out.Observations = append(out.Observations, Observation{Selector: out.Result.SelectorUsed, Method: out.Result.MethodUsed, Success: true})
 		}

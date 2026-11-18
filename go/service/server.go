@@ -276,6 +276,12 @@ func (s *Server) fail(w http.ResponseWriter, status int, code string) {
 }
 func (s *Server) write(w http.ResponseWriter, status int, v any) {
 	b, err := json.Marshal(v)
+	if response, ok := v.(Response); ok && response.StudyHTML != "" && (err != nil || len(b) > MaxJSONBytes) {
+		// Study is optional. Never replace an otherwise usable result merely
+		// because JSON escaping expanded the private snapshot past the cap.
+		response.StudyHTML, response.StudyDocumentURL, response.SnapshotDigest = "", "", ""
+		b, err = json.Marshal(response)
+	}
 	if err != nil || len(b) > MaxJSONBytes {
 		status = 500
 		b = []byte(`{"contract_version":"1","error":{"code":"response_too_large","retryable":false}}`)
@@ -415,7 +421,7 @@ func boundedOutcome(v string) string {
 	return "other"
 }
 func boundedMethod(v string) string {
-	for _, method := range []string{"source_content", "enhanced_selectors", "readability", "browser_rendering", "browser_heuristics", "fallback_extraction", "json_ld", "open_graph", "meta_description", "enhanced_heuristics", "reddit_json", "reddit_linked_article"} {
+	for _, method := range []string{"source_content", "ai_selectors", "enhanced_selectors", "readability", "browser_rendering", "browser_heuristics", "fallback_extraction", "json_ld", "open_graph", "meta_description", "enhanced_heuristics", "reddit_json", "reddit_linked_article"} {
 		if v == method || v == "learned_pattern_"+method {
 			return v
 		}
@@ -456,6 +462,29 @@ func validate(r *Request) error {
 	if len(r.Content)+len(r.HTML) > r.MaxBytes {
 		return errSize
 	}
+	if r.Reparse != nil {
+		if r.EnablePageStudy || r.HTML != "" || r.Content != "" || len(r.Reparse.HTML) == 0 || len(r.Reparse.HTML) > 2*1024*1024 || len(r.Reparse.HTML) > r.MaxBytes || len(r.Reparse.DocumentURL) > 8192 || len(r.Reparse.SnapshotDigest) != 64 {
+			return errors.New("invalid reparse")
+		}
+		u, e := url.Parse(r.Reparse.DocumentURL)
+		if e != nil || (u.Scheme != "http" && u.Scheme != "https") || u.Hostname() == "" || u.User != nil {
+			return errors.New("invalid document url")
+		}
+		layout := r.Reparse.Layout
+		if len(layout.ExcludeBlocks) > 8 || len(layout.ContentSelectors) > 16 || len(layout.TitleSelectors) > 16 || len(layout.DateSelectors) > 16 {
+			return errors.New("too many layout selectors")
+		}
+		selectors := append([]string{layout.ArticleBody, layout.EditorialCover}, layout.ExcludeBlocks...)
+		selectors = append(selectors, layout.ContentSelectors...)
+		selectors = append(selectors, layout.TitleSelectors...)
+		selectors = append(selectors, layout.DateSelectors...)
+		for _, selector := range selectors {
+			if len(selector) > 256 {
+				return errors.New("invalid layout selector")
+			}
+		}
+	}
+
 	if len(r.Selectors) > 32 {
 		return errors.New("too many selectors")
 	}

@@ -17,8 +17,8 @@ import (
 	"testing"
 	"time"
 
-	ai "github.com/Dzarlax-AI/go-ai"
 	"github.com/Dzarlax-AI/evening-news/go-domain/analysis"
+	ai "github.com/Dzarlax-AI/go-ai"
 )
 
 type roundTripFunc func(*http.Request) (*http.Response, error)
@@ -594,6 +594,36 @@ func TestAnalyzeArticleDirectUsesSharedRuntime(t *testing.T) {
 	}
 	if len(s.usage) != 1 {
 		t.Fatalf("usage events = %d", len(s.usage))
+	}
+}
+
+func TestAnalyzeArticleCarriesTelegramSourceContextAndAdmission(t *testing.T) {
+	original := "Synthetic Telegram source text with no useful context."
+	s := NewServer(Config{APIKey: "fixture", Endpoint: "https://fixture.invalid/v1/models", Model: "fixture-model", RPS: 100}, nil)
+	s.client = &http.Client{Transport: roundTripFunc(func(req *http.Request) (*http.Response, error) {
+		var body map[string]any
+		if err := json.NewDecoder(req.Body).Decode(&body); err != nil {
+			return nil, err
+		}
+		prompt := body["contents"].([]any)[0].(map[string]any)["parts"].([]any)[0].(map[string]any)["text"].(string)
+		if !strings.Contains(prompt, original) || !strings.Contains(prompt, "TELEGRAM CONTENT ADMISSION") {
+			return nil, errors.New("telegram source context missing from analysis prompt")
+		}
+		analysisJSON, _ := json.Marshal(map[string]any{"summary": "ok", "categories": []string{"Other"}, "is_advertisement": false,
+			"content_admission": map[string]string{"verdict": "exclude", "reason": "Reaction without context"}})
+		providerJSON, _ := json.Marshal(map[string]any{"candidates": []any{map[string]any{"finishReason": "STOP", "content": map[string]any{"parts": []any{map[string]string{"text": string(analysisJSON)}}}}},
+			"usageMetadata": map[string]int{"promptTokenCount": 10, "candidatesTokenCount": 20}})
+		return response(200, nil, string(providerJSON)), nil
+	})}
+	ctx, cancel := context.WithTimeout(context.Background(), time.Minute)
+	defer cancel()
+	result, _, err := s.AnalyzeArticle(ctx, ArticleInput{Title: "Synthetic Telegram post", Content: "brief notice", URL: "https://example.test/story", SourceType: "telegram", OriginalContext: &original})
+	if err != nil {
+		t.Fatal(err)
+	}
+	admission, ok := result["content_admission"].(map[string]any)
+	if !ok || admission["verdict"] != "exclude" || admission["reason"] != "Reaction without context" {
+		t.Fatalf("content_admission = %#v result=%#v", result["content_admission"], result)
 	}
 }
 

@@ -152,6 +152,21 @@ func TestParsePageMonitorOffsetUsesUniqueFirstWindowAndKeepsRawSelectorStop(t *t
 	}
 }
 
+func TestParsePageMonitorKeepsEqualHeadlinesForDistinctLinks(t *testing.T) {
+	got, _, err := ParsePageMonitorList(PageMonitorOptions{
+		URL: "https://example.test/updates",
+		HTML: `<main>
+			<article><a href="/alert-a"><h2>The city has issued an alert</h2></a></article>
+			<article><a href="/alert-b"><h2>The city has issued an alert</h2></a></article>
+			<article><a href="/alert-a"><h2>Updated headline for the first link</h2></a></article>
+		</main>`,
+		Selectors: PageMonitorSelectors{Article: []string{"article"}, Title: []string{"h2"}},
+	})
+	if err != nil || len(got) != 2 || got[0].Link != "https://example.test/alert-a" || got[1].Link != "https://example.test/alert-b" {
+		t.Fatalf("expected one item per distinct article link: count=%d err=%v", len(got), err)
+	}
+}
+
 func TestParsePageMonitorOffsetRejectsOutsideWindow(t *testing.T) {
 	_, _, err := ParsePageMonitorList(PageMonitorOptions{URL: "https://example.org/", HTML: "", Limit: 2, Offset: 2})
 	if err == nil || err.Error() != "invalid_offset" {

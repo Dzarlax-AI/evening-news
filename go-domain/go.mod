@@ -8,8 +8,8 @@ require (
 	codeberg.org/readeck/go-readability/v2 v2.1.3 // indirect
 	filippo.io/age v1.3.2 // indirect
 	filippo.io/hpke v0.4.0 // indirect
-	github.com/PuerkitoBio/goquery v1.10.3 // indirect
-	github.com/andybalholm/cascadia v1.3.3 // indirect
+	github.com/PuerkitoBio/goquery v1.10.3
+	github.com/andybalholm/cascadia v1.3.3
 	github.com/go-shiori/dom v0.0.0-20230515143342-73569d674e1c // indirect
 	github.com/gogs/chardet v0.0.0-20211120154057-b7413eaefb8f // indirect
 	github.com/itlightning/dateparse v0.2.1 // indirect

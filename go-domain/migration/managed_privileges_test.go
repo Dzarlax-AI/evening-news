@@ -90,12 +90,12 @@ func TestManagedRolePrivileges(t *testing.T) {
 		}
 	}
 	for name, queries := range map[string][]string{
-		"news_web_runtime":        {"SELECT * FROM viber_test_receipts", "SELECT * FROM viber_digest_deliveries", "SELECT * FROM push_installations", "SELECT * FROM push_deliveries", "SELECT enqueue_viber_digest_delivery()", "SELECT * FROM integration_credentials", "UPDATE background_worker_status SET generation=99", "UPDATE articles SET content='changed'"},
+		"news_web_runtime":        {"SELECT * FROM article_dedup_observations", "SELECT * FROM viber_test_receipts", "SELECT * FROM viber_digest_deliveries", "SELECT * FROM push_installations", "SELECT * FROM push_deliveries", "SELECT enqueue_viber_digest_delivery()", "SELECT * FROM integration_credentials", "UPDATE background_worker_status SET generation=99", "UPDATE articles SET content='changed'"},
 		"news_domain_runtime":     {"SELECT * FROM managed_admin", "SELECT * FROM setup_tokens", "UPDATE background_worker_status SET generation=99", "UPDATE background_jobs SET state='failed'", "DELETE FROM articles"},
 		"news_worker_runtime":     {"SELECT * FROM viber_test_receipts", "SELECT * FROM viber_digest_parts", "SELECT * FROM integration_credentials", "SELECT * FROM managed_admin", "UPDATE articles SET content='changed'"},
 		"news_execution_runtime":  {"SELECT * FROM viber_digest_parts", "SELECT enqueue_viber_digest_delivery()", "SELECT * FROM integration_credentials", "UPDATE background_worker_status SET generation=99", "INSERT INTO articles(title,url) VALUES('x','https://fixture.invalid')"},
-		"news_ingestion_runtime":  {"SELECT * FROM integration_credentials", "UPDATE background_jobs SET state='failed'", "UPDATE articles SET summary='changed'"},
-		"news_processing_runtime": {"SELECT * FROM integration_credentials", "UPDATE background_jobs SET state='failed'", "DELETE FROM articles"},
+		"news_ingestion_runtime":  {"SELECT * FROM article_dedup_observations", "UPDATE articles SET completed_processing_claim=NULL", "SELECT * FROM integration_credentials", "UPDATE background_jobs SET state='failed'", "UPDATE articles SET summary='changed'"},
+		"news_processing_runtime": {"UPDATE articles SET source_title=NULL", "UPDATE articles SET telegram_context='{}'", "SELECT * FROM integration_credentials", "UPDATE background_jobs SET state='failed'", "DELETE FROM articles"},
 	} {
 		for _, query := range queries {
 			t.Run(name+"/"+query, func(t *testing.T) {
@@ -112,6 +112,30 @@ func TestManagedRolePrivileges(t *testing.T) {
 			})
 		}
 	}
+
+	t.Run("processing/dedup", func(t *testing.T) {
+		tx, err := pool.Begin(ctx)
+		if err != nil {
+			t.Fatal(err)
+		}
+		defer tx.Rollback(ctx)
+		if _, err = tx.Exec(ctx, `INSERT INTO articles(id,title,source_title,url) VALUES(17,'Display title','Source title','https://fixture.invalid/dedup')`); err != nil {
+			t.Fatal("seed dedup privilege fixture failed")
+		}
+		if _, err = tx.Exec(ctx, "SET LOCAL ROLE "+ident(roles["news_processing_runtime"])); err != nil {
+			t.Fatal(err)
+		}
+		if _, err = tx.Exec(ctx, `UPDATE articles SET completed_processing_claim='10000000-0000-4000-8000-000000000017' WHERE id=17;
+			INSERT INTO article_dedup_observations(article_id,version,article_attempt,claim_token)
+			SELECT id,1,1,completed_processing_claim FROM articles WHERE id=17 AND source_title='Source title';
+			UPDATE article_dedup_observations SET article_attempt=2 WHERE article_id=17`); err != nil {
+			t.Fatal("managed processing role could not record a dedup observation")
+		}
+		var attempt int
+		if err = tx.QueryRow(ctx, `SELECT article_attempt FROM article_dedup_observations WHERE article_id=17`).Scan(&attempt); err != nil || attempt != 2 {
+			t.Fatal("managed processing role could not read the updated dedup observation")
+		}
+	})
 
 	// Reserved snapshots are producer-owned even though web can edit settings.
 	for _, prefix := range []string{"managed_digest_publication:", "managed_job_config:"} {

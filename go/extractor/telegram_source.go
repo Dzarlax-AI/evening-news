@@ -202,6 +202,7 @@ func parseTelegramPost(original *goquery.Selection, pageURL, channel, sourceName
 	}
 	mediaInfo := telegramMediaInfo(original, pageURL)
 	hasMedia := imageURL != "" || mediaInfo["video_url"] != nil || mediaInfo["document_url"] != nil || len(media) > 0
+	admissionUncertain := telegramAdmissionUncertain(original, messageURL)
 	for _, selector := range []string{
 		".tgme_widget_message_forwarded_from", ".tgme_widget_message_reply", ".tgme_widget_message_footer",
 		".tgme_widget_message_info", ".tgme_widget_message_date", ".tgme_widget_message_views",
@@ -261,9 +262,63 @@ func parseTelegramPost(original *goquery.Selection, pageURL, channel, sourceName
 			"channel": channel, "access_method": pageURL, "content_length": runeLen(content),
 			"media_info": mediaInfo, "has_media": hasMedia,
 			"media_count": len(media), "external_links": externalLinks, "hashtags": telegramHashtags(content),
-			"original_link": originalLink, "forwarded_from": forwarded, "message_id": messageID, "telegram_url": messageURL,
+			"admission_uncertain": admissionUncertain,
+			"original_link":       originalLink, "forwarded_from": forwarded, "message_id": messageID, "telegram_url": messageURL,
 		},
 	}, true, nil
+}
+
+// telegramAdmissionUncertain is deliberately separate from link enrichment:
+// admission must fail open when a meaningful href or attachment wrapper was
+// omitted by the narrower historical metadata extraction.
+func telegramAdmissionUncertain(msg *goquery.Selection, messageURL string) bool {
+	const channelChrome = ".tgme_widget_message_user,.tgme_widget_message_user_photo,.tgme_widget_message_owner_photo,.tgme_widget_message_owner_name,.tgme_widget_message_author,.message_author_photo"
+	const editorial = ".tgme_widget_message_text,.message-text,.tgme_widget_message_text_wrapper,.tgme_widget_message_link_preview,.link_preview,.tgme_widget_message_document,.tgme_widget_message_photo,.tgme_widget_message_video,.tgme_widget_message_forwarded_from"
+	if msg.Find("a[href]").FilterFunction(func(_ int, anchor *goquery.Selection) bool {
+		if anchor.Closest(channelChrome).Length() > 0 && anchor.Closest(editorial).Length() == 0 {
+			return false
+		}
+		href := strings.TrimSpace(anchor.AttrOr("href", ""))
+		if href == "" {
+			return false
+		}
+		parsed, err := url.Parse(href)
+		if err != nil {
+			return true
+		}
+		if !parsed.IsAbs() {
+			base, baseErr := url.Parse(messageURL)
+			if baseErr != nil {
+				return true
+			}
+			parsed = base.ResolveReference(parsed)
+		}
+		parsed.Fragment = ""
+		current, currentErr := url.Parse(messageURL)
+		if currentErr == nil {
+			current.Fragment = ""
+			if parsed.String() == current.String() {
+				return false
+			}
+		}
+		return true
+	}).Length() > 0 {
+		return true
+	}
+	for _, selector := range []string{
+		".tgme_widget_message_video", ".tgme_widget_message_document", ".tgme_widget_message_photo",
+		".message_media_video", ".message_media_document", ".document_wrap", ".video_note", ".round_video",
+	} {
+		found := false
+		msg.Find(selector).EachWithBreak(func(_ int, wrapper *goquery.Selection) bool {
+			found = wrapper.Find("video[src],source[src],audio[src],a[href],img[src],[data-src],[data-video],[data-url]").Length() == 0
+			return !found
+		})
+		if found {
+			return true
+		}
+	}
+	return false
 }
 
 func optionalTelegramText(s *goquery.Selection) any {

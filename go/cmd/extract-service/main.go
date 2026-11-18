@@ -4,6 +4,7 @@ package main
 import (
 	"context"
 	"crypto/sha256"
+	"encoding/hex"
 	"errors"
 	"flag"
 	"fmt"
@@ -18,6 +19,7 @@ import (
 	"time"
 
 	"github.com/Dzarlax-AI/evening-news/go/extractor"
+	"github.com/Dzarlax-AI/evening-news/go/pagelayout"
 	"github.com/Dzarlax-AI/evening-news/go/pipeline"
 	"github.com/Dzarlax-AI/evening-news/go/runtimefile"
 	"github.com/Dzarlax-AI/evening-news/go/service"
@@ -118,6 +120,9 @@ func run() error {
 		return !httpOnly && chromeReady(endpoint)
 	}
 	articleRunner := service.RunnerFunc(func(ctx context.Context, r service.Request) service.Response {
+		if r.Reparse != nil {
+			return reparseArticle(ctx, r)
+		}
 		if native != nil && r.UseBrowser != nil && *r.UseBrowser {
 			return nativeArticleResponse(ctx, r, func(ctx context.Context, raw string, opts transport.BrowserOptions, selector string) (transport.RenderedDocument, error) {
 				return native.Fetch(ctx, raw, transport.NativeBrowserOptions{BrowserOptions: opts, ReadySelector: nativeSelector})
@@ -128,8 +133,14 @@ func run() error {
 		if native != nil {
 			requestEngine.HTTPOnly = true
 		}
-		out := requestEngine.Extract(ctx, pipeline.Request{Input: in, ChromeEndpoint: endpoint})
-		return toServiceResponse(out)
+		out := requestEngine.Extract(ctx, pipeline.Request{Input: in, ChromeEndpoint: endpoint, EnablePageStudy: r.EnablePageStudy})
+		resp := toServiceResponse(out)
+		if r.EnablePageStudy && len(out.StudyHTML) > 0 && len(out.StudyHTML) <= 2*1024*1024 && out.StudyDocumentURL != "" {
+			resp.StudyHTML, resp.StudyDocumentURL = out.StudyHTML, out.StudyDocumentURL
+			sum := sha256.Sum256([]byte(out.StudyHTML))
+			resp.SnapshotDigest = hex.EncodeToString(sum[:])
+		}
+		return resp
 	})
 	rssSource := pipeline.RSSSource{Admit: transport.AdmitPublicURL, Fetch: transport.FetchPublicRSS}
 	telegramSource := pipeline.TelegramSource{Fetch: transport.FetchPublic}
@@ -342,4 +353,33 @@ func chromeReady(endpoint string) bool {
 	ctx, cancel := context.WithTimeout(context.Background(), 500*time.Millisecond)
 	defer cancel()
 	return transport.ProbeConfiguredBrowser(ctx, endpoint) == nil
+}
+
+// reparseArticle is a private offline operation: it never fetches a page.
+func reparseArticle(ctx context.Context, r service.Request) service.Response {
+	p := r.Reparse
+	fallback := service.Response{Outcome: "failed", Error: &service.Failure{Code: "no_content"}}
+	if p == nil || transport.ValidatePublicURL(r.URL) != nil || transport.ValidatePublicURL(p.DocumentURL) != nil {
+		return fallback
+	}
+	sum := sha256.Sum256([]byte(p.HTML))
+	if p.SnapshotDigest != hex.EncodeToString(sum[:]) {
+		return fallback
+	}
+	layout := p.Layout
+	pagelayout.Validate(&layout, p.HTML)
+	if layout.PageKind == "listing" && extractor.StrongListingSignal(p.HTML) {
+		return service.Response{Applied: true, Outcome: "rejected", Result: extractor.Result{URL: r.URL, State: "failed", Error: "unsupported_input"}, FinalURL: p.DocumentURL, Error: &service.Failure{Code: "unsupported_input", Reason: "non_article_listing"}}
+	}
+	if layout.PageKind != "article" {
+		return fallback
+	}
+	in := extractor.Input{URL: p.DocumentURL, Title: r.Title, HTML: p.HTML, SourceType: r.SourceType, MaxChars: r.MaxChars, MaxBytes: r.MaxBytes}
+	baseline := extractor.Extract(ctx, in)
+	result, ok := extractor.ReparseArticleLayout(in, baseline, p.SnapshotDigest, layout)
+	if !ok || ctx.Err() != nil {
+		return fallback
+	}
+	result.RestoreArticleURL(r.URL)
+	return service.Response{Applied: true, Outcome: "success", Result: result, FinalURL: p.DocumentURL}
 }

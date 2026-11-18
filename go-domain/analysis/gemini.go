@@ -32,7 +32,8 @@ func Analyze(ctx context.Context, r Request, config ProviderConfig) (map[string]
 	if err := validateRequest(r); err != nil {
 		return nil, nil, err
 	}
-	if strings.TrimSpace(r.Content) == "" || (len([]rune(strings.TrimSpace(r.Content))) < 30 && !(r.Version == 2 && len(r.Locales) == 1 && r.Locales[0] == "sr-Latn")) {
+	hasTelegramSourceContext := r.SourceType == "telegram" && r.OriginalContext != nil && strings.TrimSpace(*r.OriginalContext) != ""
+	if strings.TrimSpace(r.Content) == "" || (len([]rune(strings.TrimSpace(r.Content))) < 30 && !(r.Version == 2 && len(r.Locales) == 1 && r.Locales[0] == "sr-Latn") && !hasTelegramSourceContext) {
 		if scientificTitleFallback(r.Title, r.URL) && len([]rune(strings.TrimSpace(r.Title))) > 20 {
 			r.Content = r.Title
 		} else {
@@ -78,6 +79,10 @@ func analysisSchema() map[string]any {
 			"publication_date":     map[string]any{"type": []string{"string", "null"}},
 			"content_quality":      map[string]any{"type": "number"},
 			"confidence":           map[string]any{"type": "number"},
+			"content_admission": map[string]any{"type": "object", "properties": map[string]any{
+				"verdict": map[string]any{"type": "string", "enum": []string{"keep", "exclude", "uncertain"}},
+				"reason":  map[string]any{"type": "string"},
+			}},
 		},
 		"required":             []string{"summary", "categories", "is_advertisement"},
 		"additionalProperties": true,
@@ -91,6 +96,9 @@ func localizationSchema() map[string]any {
 // analyzeWithProvider keeps domain validation separate from transport.
 func analyzeWithProvider(ctx context.Context, r Request, cfg ProviderConfig) (map[string]any, *Usage, error) {
 	schemaDef := analysisSchema()
+	if r.SourceType != "telegram" {
+		delete(schemaDef["properties"].(map[string]any), "content_admission")
+	}
 	if r.Version == 2 {
 		schemaDef["required"] = []string{"categories", "is_advertisement"}
 		if len(r.Locales) == 1 {

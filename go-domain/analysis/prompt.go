@@ -179,6 +179,12 @@ Answer ONLY with valid JSON, no additional text.`
 		prompt += `
 LOCALIZATIONS: In addition to shared categorization and advertisement detection, return a "localizations" object with "ru" and "sr-Latn" keys. Each value is an object containing "title" and "summary" strings. Write sr-Latn in Serbian Latin script. The existing top-level optimized_title and summary must match the Russian localization. Do not translate category IDs.`
 	}
+	if r.SourceType == "telegram" {
+		prompt += `
+
+TELEGRAM CONTENT ADMISSION (shared across locales): Assess whether the ORIGINAL SOURCE TEXT itself contains useful standalone information for a news feed. Keep short factual notices with a concrete event, place, time, announcement, instruction, review, or explanation. A bare reaction, meme caption without independent meaning, or audience address without substantive information may be excluded. Do not use the extracted page or generated summary to invent context. Return content_admission with verdict "keep", "exclude", or "uncertain" and a brief reason. Use "uncertain" whenever source context is missing or insufficient. This is a content quality decision, not an advertisement decision.`
+		prompt += `\nRequired output property: "content_admission": {"verdict":"keep|exclude|uncertain","reason":"short explanation"}.`
+	}
 	return prompt
 }
 

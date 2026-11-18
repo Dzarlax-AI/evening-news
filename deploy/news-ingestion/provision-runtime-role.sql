@@ -1,4 +1,4 @@
--- Operator-run once after migration 012_article_ingestion has succeeded.
+-- Operator-run once after migrations through 023_telegram_source_context have succeeded.
 -- Connect as the News database administrator to the News database. The
 -- default schema is "news"; pass -v news_schema=... to select another schema.
 -- This file intentionally contains no passwords or automatic app startup hook.
@@ -59,16 +59,16 @@ ON :"news_schema".article_ingestion_runs TO news_ingestion_runtime;
 GRANT SELECT, INSERT, UPDATE ON :"news_schema".article_ingestion_source_runs TO news_ingestion_runtime;
 GRANT SELECT, INSERT, UPDATE ON :"news_schema".source_collection_state TO news_ingestion_runtime;
 
-GRANT SELECT (id, source_id, title, url, content, summary, image_url,
-              published_at, fetched_at, processed, hash_content)
+GRANT SELECT (id, source_id, title, source_title, url, content, summary, image_url,
+              published_at, fetched_at, processed, hash_content, telegram_context)
 ON :"news_schema".articles TO news_ingestion_runtime;
-GRANT INSERT (source_id, title, url, content, summary, image_url, media_files,
+GRANT INSERT (source_id, title, source_title, url, content, summary, image_url, media_files, telegram_context,
               published_at, fetched_at, processed, summary_processed,
               category_processed, processing_state, processing_attempts,
               next_attempt_at, last_processing_error, hash_content,
               is_advertisement, ad_confidence, ad_type, ad_reasoning,
               ad_markers, ad_processed)
 ON :"news_schema".articles TO news_ingestion_runtime;
-GRANT UPDATE (title, content, url, image_url, published_at, hash_content)
+GRANT UPDATE (title, source_title, content, url, image_url, published_at, hash_content, telegram_context)
 ON :"news_schema".articles TO news_ingestion_runtime;
 GRANT USAGE, SELECT ON SEQUENCE :"news_schema".articles_id_seq TO news_ingestion_runtime;

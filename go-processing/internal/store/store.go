@@ -72,6 +72,7 @@ type Article struct {
 	ProcessingState    string          `json:"processing_state"`
 	ImageURL           string          `json:"image_url"`
 	MediaFiles         json.RawMessage `json:"media_files"`
+	TelegramContext    json.RawMessage `json:"telegram_context,omitempty"`
 	Processed          bool            `json:"processed"`
 	ClaimToken         string          `json:"-"`
 }
@@ -330,9 +331,9 @@ func (s *Store) SelectDue(ctx context.Context, f Fence, limit int, cursor int64,
 	}
 	var rows pgx.Rows
 	if len(selected) > 0 {
-		rows, err = tx.Query(ctx, `SELECT a.id,COALESCE(a.title,''),COALESCE(a.url,''),COALESCE(a.content,''),COALESCE(a.summary,''),a.source_id,COALESCE(s.source_type,'rss'),COALESCE(s.name,'Unknown'),a.published_at,COALESCE(a.summary_processed,false),COALESCE(a.category_processed,false),COALESCE(a.ad_processed,false),a.is_advertisement,COALESCE(a.processing_attempts,0),COALESCE(a.processing_state,'pending'),COALESCE(a.image_url,''),COALESCE(a.media_files::jsonb,'[]'::jsonb),COALESCE(a.processed,false) FROM articles a LEFT JOIN sources s ON s.id=a.source_id WHERE a.id=ANY($1) AND a.id>$2 AND COALESCE(a.processing_attempts,0)<$3 AND (COALESCE(a.processing_state,'pending')='pending' OR (a.processing_state='retry_wait' AND a.next_attempt_at<=now())) ORDER BY a.id LIMIT $4`, selected, cursor, maxAttempts, limit)
+		rows, err = tx.Query(ctx, `SELECT a.id,COALESCE(a.title,''),COALESCE(a.url,''),COALESCE(a.content,''),COALESCE(a.summary,''),a.source_id,COALESCE(s.source_type,'rss'),COALESCE(s.name,'Unknown'),a.published_at,COALESCE(a.summary_processed,false),COALESCE(a.category_processed,false),COALESCE(a.ad_processed,false),a.is_advertisement,COALESCE(a.processing_attempts,0),COALESCE(a.processing_state,'pending'),COALESCE(a.image_url,''),COALESCE(a.media_files::jsonb,'[]'::jsonb),a.telegram_context,COALESCE(a.processed,false) FROM articles a LEFT JOIN sources s ON s.id=a.source_id WHERE a.id=ANY($1) AND a.id>$2 AND COALESCE(a.processing_attempts,0)<$3 AND (COALESCE(a.processing_state,'pending')='pending' OR (a.processing_state='retry_wait' AND a.next_attempt_at<=now())) ORDER BY a.id LIMIT $4`, selected, cursor, maxAttempts, limit)
 	} else {
-		rows, err = tx.Query(ctx, `SELECT a.id,COALESCE(a.title,''),COALESCE(a.url,''),COALESCE(a.content,''),COALESCE(a.summary,''),a.source_id,COALESCE(s.source_type,'rss'),COALESCE(s.name,'Unknown'),a.published_at,COALESCE(a.summary_processed,false),COALESCE(a.category_processed,false),COALESCE(a.ad_processed,false),a.is_advertisement,COALESCE(a.processing_attempts,0),COALESCE(a.processing_state,'pending'),COALESCE(a.image_url,''),COALESCE(a.media_files::jsonb,'[]'::jsonb),COALESCE(a.processed,false) FROM articles a LEFT JOIN sources s ON s.id=a.source_id WHERE a.id>$1 AND COALESCE(a.processing_attempts,0)<$2 AND (COALESCE(a.processing_state,'pending')='pending' OR (a.processing_state='retry_wait' AND a.next_attempt_at<=now())) AND ($3::timestamp IS NULL OR a.published_at >= $3) AND ($4::timestamp IS NULL OR a.published_at <= $4) ORDER BY a.id LIMIT $5`, cursor, maxAttempts, dateFrom, dateTo, limit)
+		rows, err = tx.Query(ctx, `SELECT a.id,COALESCE(a.title,''),COALESCE(a.url,''),COALESCE(a.content,''),COALESCE(a.summary,''),a.source_id,COALESCE(s.source_type,'rss'),COALESCE(s.name,'Unknown'),a.published_at,COALESCE(a.summary_processed,false),COALESCE(a.category_processed,false),COALESCE(a.ad_processed,false),a.is_advertisement,COALESCE(a.processing_attempts,0),COALESCE(a.processing_state,'pending'),COALESCE(a.image_url,''),COALESCE(a.media_files::jsonb,'[]'::jsonb),a.telegram_context,COALESCE(a.processed,false) FROM articles a LEFT JOIN sources s ON s.id=a.source_id WHERE a.id>$1 AND COALESCE(a.processing_attempts,0)<$2 AND (COALESCE(a.processing_state,'pending')='pending' OR (a.processing_state='retry_wait' AND a.next_attempt_at<=now())) AND ($3::timestamp IS NULL OR a.published_at >= $3) AND ($4::timestamp IS NULL OR a.published_at <= $4) ORDER BY a.id LIMIT $5`, cursor, maxAttempts, dateFrom, dateTo, limit)
 	}
 	if err != nil {
 		return nil, errors.New("article selection failed")
@@ -341,7 +342,7 @@ func (s *Store) SelectDue(ctx context.Context, f Fence, limit int, cursor int64,
 	out := []Article{}
 	for rows.Next() {
 		var a Article
-		if err = rows.Scan(&a.ID, &a.Title, &a.URL, &a.Content, &a.Summary, &a.SourceID, &a.SourceType, &a.SourceName, &a.PublishedAt, &a.SummaryProcessed, &a.CategoryProcessed, &a.AdProcessed, &a.IsAdvertisement, &a.ProcessingAttempts, &a.ProcessingState, &a.ImageURL, &a.MediaFiles, &a.Processed); err != nil {
+		if err = rows.Scan(&a.ID, &a.Title, &a.URL, &a.Content, &a.Summary, &a.SourceID, &a.SourceType, &a.SourceName, &a.PublishedAt, &a.SummaryProcessed, &a.CategoryProcessed, &a.AdProcessed, &a.IsAdvertisement, &a.ProcessingAttempts, &a.ProcessingState, &a.ImageURL, &a.MediaFiles, &a.TelegramContext, &a.Processed); err != nil {
 			return nil, errors.New("article decode failed")
 		}
 		out = append(out, a)
@@ -355,8 +356,8 @@ func (s *Store) SelectDue(ctx context.Context, f Fence, limit int, cursor int64,
 	return out, nil
 }
 
-func fingerprint(title, content, url string, original *string) string {
-	v := map[string]string{"title": title, "content": content, "url": url}
+func fingerprint(title, content, url, sourceType string, original *string) string {
+	v := map[string]string{"title": title, "content": content, "url": url, "source_type": sourceType}
 	if original != nil {
 		v["original_context"] = *original
 	}
@@ -412,10 +413,15 @@ func (s *Store) ClaimArticle(ctx context.Context, f Fence, a Article, force bool
 	token := fmt.Sprintf("%08x-%04x-%04x-%04x-%012x", raw[0:4], raw[4:6], raw[6:8], raw[8:10], raw[10:16])
 	var currentInput string
 	original := (*string)(nil)
-	if a.SourceType == "telegram" && len([]rune(strings.TrimSpace(content))) >= 30 {
-		original = &content
+	if a.SourceType == "telegram" {
+		var context struct {
+			SourceText string `json:"source_text"`
+		}
+		if json.Unmarshal(a.TelegramContext, &context) == nil && strings.TrimSpace(context.SourceText) != "" {
+			original = &context.SourceText
+		}
 	}
-	currentInput = fingerprint(title, content, url, original)
+	currentInput = fingerprint(title, content, url, a.SourceType, original)
 	initial, _ := json.Marshal(map[string]string{"snapshot_fingerprint": srcfp})
 	_, err = tx.Exec(ctx, `INSERT INTO article_processing_items(run_id,article_id,article_attempt,input_fingerprint,claim_token,state,result) VALUES($1::uuid,$2,$3,$4,$5::uuid,'running',$6::jsonb)`, f.RunID, a.ID, attempt, currentInput, token, initial)
 	if err != nil {
@@ -465,25 +471,32 @@ func (s *Store) SaveOutcome(ctx context.Context, f Fence, a Article, attempt int
 	_ = json.Unmarshal(raw, &receipt)
 	var articleAttempt int
 	var dbTitle, dbURL, dbContent, dbSummary string
+	var dbTelegramContext []byte
 	var dbSummaryProcessed, dbCategoryProcessed, dbAdProcessed bool
 	var dbAdvertisement *bool
-	err = tx.QueryRow(ctx, `SELECT COALESCE(processing_attempts,0),COALESCE(title,''),COALESCE(url,''),COALESCE(content,''),COALESCE(summary,''),COALESCE(summary_processed,false),COALESCE(category_processed,false),COALESCE(ad_processed,false),is_advertisement FROM articles WHERE id=$1 FOR UPDATE`, a.ID).Scan(&articleAttempt, &dbTitle, &dbURL, &dbContent, &dbSummary, &dbSummaryProcessed, &dbCategoryProcessed, &dbAdProcessed, &dbAdvertisement)
+	err = tx.QueryRow(ctx, `SELECT COALESCE(processing_attempts,0),COALESCE(title,''),COALESCE(url,''),COALESCE(content,''),COALESCE(summary,''),COALESCE(summary_processed,false),COALESCE(category_processed,false),COALESCE(ad_processed,false),is_advertisement,telegram_context FROM articles WHERE id=$1 FOR UPDATE`, a.ID).Scan(&articleAttempt, &dbTitle, &dbURL, &dbContent, &dbSummary, &dbSummaryProcessed, &dbCategoryProcessed, &dbAdProcessed, &dbAdvertisement, &dbTelegramContext)
 	dbArticle := a
 	dbArticle.Title, dbArticle.URL, dbArticle.Content, dbArticle.Summary = dbTitle, dbURL, dbContent, dbSummary
+	dbArticle.TelegramContext = dbTelegramContext
 	dbArticle.SummaryProcessed, dbArticle.CategoryProcessed, dbArticle.AdProcessed, dbArticle.IsAdvertisement = dbSummaryProcessed, dbCategoryProcessed, dbAdProcessed, dbAdvertisement
 	if err != nil || articleAttempt != attempt || sourceSnapshotFingerprint(dbArticle) != receipt["snapshot_fingerprint"] {
 		return errors.New("article changed during processing")
 	}
 	fields := p.Fields
 	sets := []string{"processing_attempts=$2", "processing_state=$3", "next_attempt_at=$4", "last_processing_error=$5", "processed=$6"}
-	args := []any{a.ID, p.Attempts, p.State, p.NextAttemptAt, p.Error, p.Processed}
-	allowed := map[string]bool{"title": true, "content": true, "summary": true, "summary_processed": true, "category_processed": true, "ad_processed": true, "is_advertisement": true, "ad_confidence": true, "ad_type": true, "ad_reasoning": true, "image_url": true, "media_files": true, "published_at": true}
-	for _, key := range []string{"title", "content", "summary", "summary_processed", "category_processed", "ad_processed", "is_advertisement", "ad_confidence", "ad_type", "ad_reasoning", "image_url", "media_files", "published_at"} {
+	var completedClaim any
+	if p.State == "completed" {
+		completedClaim = claimToken
+	}
+	args := []any{a.ID, p.Attempts, p.State, p.NextAttemptAt, p.Error, p.Processed, completedClaim}
+	sets = append(sets, "completed_processing_claim=$7::uuid")
+	allowed := map[string]bool{"title": true, "content": true, "summary": true, "summary_processed": true, "category_processed": true, "ad_processed": true, "is_advertisement": true, "ad_confidence": true, "ad_type": true, "ad_reasoning": true, "image_url": true, "media_files": true, "media_evidence": true, "published_at": true}
+	for _, key := range []string{"title", "content", "summary", "summary_processed", "category_processed", "ad_processed", "is_advertisement", "ad_confidence", "ad_type", "ad_reasoning", "image_url", "media_files", "media_evidence", "published_at"} {
 		v, ok := fields[key]
 		if !ok || !allowed[key] {
 			continue
 		}
-		if key == "media_files" {
+		if key == "media_files" || key == "media_evidence" {
 			b, _ := json.Marshal(v)
 			v = b
 		}
@@ -552,7 +565,7 @@ func (s *Store) SaveOutcome(ctx context.Context, f Fence, a Article, attempt int
 			}
 		}
 	}
-	result, _ := json.Marshal(map[string]any{"state": p.State, "error": p.Error})
+	result := articleProcessingItemResult(p)
 	tag, err := tx.Exec(ctx, `UPDATE article_processing_items SET state=$4,result=$5::jsonb,updated_at=now() WHERE run_id=$1::uuid AND article_id=$2 AND article_attempt=$3 AND claim_token=$6::uuid AND input_fingerprint=$7 AND state='running'`, f.RunID, a.ID, attempt, p.State, result, claimToken, inputFP)
 	if err != nil || tag.RowsAffected() != 1 {
 		return errors.New("article item update failed")
@@ -580,7 +593,7 @@ func lookupFixedCategory(ctx context.Context, tx pgx.Tx, name string) (string, b
 
 // RecordCategoryMappingFailure preserves the already-committed claim and its
 // finite recovery deadline after the category transaction has rolled back.
-func (s *Store) RecordCategoryMappingFailure(ctx context.Context, f Fence, a Article, attempt int, claimToken, inputFP string) error {
+func (s *Store) RecordCategoryMappingFailure(ctx context.Context, f Fence, a Article, attempt int, claimToken, inputFP string, fields map[string]any) error {
 	tx, err := s.Pool.Begin(ctx)
 	if err != nil {
 		return errors.New("category failure receipt unavailable")
@@ -599,7 +612,7 @@ func (s *Store) RecordCategoryMappingFailure(ctx context.Context, f Fence, a Art
 	var receipt map[string]string
 	_ = json.Unmarshal(raw, &receipt)
 	var current Article
-	if err = tx.QueryRow(ctx, `SELECT id,COALESCE(title,''),COALESCE(url,''),COALESCE(content,''),COALESCE(summary,''),COALESCE(summary_processed,false),COALESCE(category_processed,false),COALESCE(ad_processed,false),is_advertisement FROM articles WHERE id=$1 FOR UPDATE`, a.ID).Scan(&current.ID, &current.Title, &current.URL, &current.Content, &current.Summary, &current.SummaryProcessed, &current.CategoryProcessed, &current.AdProcessed, &current.IsAdvertisement); err != nil {
+	if err = tx.QueryRow(ctx, `SELECT id,COALESCE(title,''),COALESCE(url,''),COALESCE(content,''),COALESCE(summary,''),COALESCE(summary_processed,false),COALESCE(category_processed,false),COALESCE(ad_processed,false),is_advertisement,telegram_context FROM articles WHERE id=$1 FOR UPDATE`, a.ID).Scan(&current.ID, &current.Title, &current.URL, &current.Content, &current.Summary, &current.SummaryProcessed, &current.CategoryProcessed, &current.AdProcessed, &current.IsAdvertisement, &current.TelegramContext); err != nil {
 		return errors.New("category failure article unavailable")
 	}
 	if sourceSnapshotFingerprint(current) != receipt["snapshot_fingerprint"] {
@@ -608,7 +621,8 @@ func (s *Store) RecordCategoryMappingFailure(ctx context.Context, f Fence, a Art
 	if _, err = tx.Exec(ctx, `UPDATE articles SET last_processing_error='category_mapping_failed' WHERE id=$1 AND processing_attempts=$2`, a.ID, attempt); err != nil {
 		return errors.New("category failure article update unavailable")
 	}
-	result, _ := json.Marshal(map[string]any{"state": "retry_wait", "error": "category_mapping_failed"})
+	errorCode := "category_mapping_failed"
+	result := articleProcessingItemResult(Persisted{State: "retry_wait", Error: &errorCode, Fields: fields})
 	tag, err := tx.Exec(ctx, `UPDATE article_processing_items SET state='retry_wait',result=$4::jsonb,updated_at=now() WHERE run_id=$1::uuid AND article_id=$2 AND article_attempt=$3 AND claim_token=$5::uuid AND input_fingerprint=$6 AND state='running'`, f.RunID, a.ID, attempt, result, claimToken, inputFP)
 	if err != nil || tag.RowsAffected() != 1 {
 		return errors.New("category failure item update unavailable")
@@ -619,6 +633,7 @@ func (s *Store) RecordCategoryMappingFailure(ctx context.Context, f Fence, a Art
 func sourceSnapshotFingerprint(a Article) string {
 	v := map[string]any{
 		"title": a.Title, "url": a.URL, "content": a.Content, "summary": a.Summary,
+		"telegram_context":  json.RawMessage(a.TelegramContext),
 		"summary_processed": a.SummaryProcessed, "category_processed": a.CategoryProcessed,
 		"ad_processed": a.AdProcessed, "is_advertisement": a.IsAdvertisement,
 	}
@@ -687,13 +702,5 @@ func (s *Store) ArticleOutcomes(ctx context.Context, ids []int64) ([]ArticleOutc
 		return nil, errors.New("article outcome read failed")
 	}
 	return out, nil
-}
-func (s *Store) HasDuplicateHash(ctx context.Context, hash string, articleID int64) (bool, error) {
-	var exists bool
-	err := s.Pool.QueryRow(ctx, `SELECT EXISTS(SELECT 1 FROM articles WHERE hash_content=$1 AND id<>$2)`, hash, articleID).Scan(&exists)
-	if err != nil {
-		return false, errors.New("duplicate lookup failed")
-	}
-	return exists, nil
 }
 func (s *Store) String() string { return strings.TrimSpace("article-processing-store") }

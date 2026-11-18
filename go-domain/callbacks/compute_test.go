@@ -15,6 +15,8 @@ func TestCallbackInputValidation(t *testing.T) {
 		{"analyze", `{"title":"abcd","content":"ok","url":"https://example.test/"}`, nil},
 		{"analyze", `{"title":"abcde","content":"ok","url":"https://example.test/"}`, ErrTextLimit},
 		{"analyze", `{"title":"ok","content":"ok","url":"https://example.test/","original_context":null}`, nil},
+		{"analyze", `{"title":"ok","content":"ok","url":"https://example.test/","source_type":"telegram"}`, nil},
+		{"analyze", `{"title":"ok","content":"ok","url":"https://example.test/","source_type":"unknown"}`, invalidInput},
 		{"analyze", `{"title":"ok","content":"ok","url":"https://example.test/","extra":1}`, invalidInput},
 		{"extraction_context", `{"url":"https://example.test/"}`, nil},
 		{"extraction_feedback", `{"url":"https://example.test/","method":"readability","success":false,"observations":[{"selector":"main","method":"readability","success":false}],"quality_score":0}`, nil},

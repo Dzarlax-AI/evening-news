@@ -502,6 +502,16 @@ func TestTelegramEnrichmentUsesExtractorAndPreservesRichFields(t *testing.T) {
 	}
 }
 
+func TestEnsureTelegramSourceContextPreservesPreEnrichmentText(t *testing.T) {
+	article := telegramArticle{Content: "Synthetic original Telegram caption"}
+	ensureTelegramSourceContext(&article)
+	applyTelegramEnrichment(&article, "Synthetic extracted linked article content with more detail.")
+	ensureTelegramSourceContext(&article)
+	if article.RawData["source_text"] != "Synthetic original Telegram caption" {
+		t.Fatalf("source text was overwritten by enrichment: %#v", article.RawData)
+	}
+}
+
 func TestTelegramEnrichmentBusyPreservesOriginalPost(t *testing.T) {
 	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
 		w.WriteHeader(http.StatusTooManyRequests)

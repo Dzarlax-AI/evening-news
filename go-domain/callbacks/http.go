@@ -43,7 +43,7 @@ type ContextReader interface {
 	Get(context.Context, string, int) (authority.ExecutionContext, error)
 }
 
-// Compute must implement all three operations and their precise input semantics.
+// Compute must implement all supported operations and their precise input semantics.
 // It is invoked only after a successful current-claim check and must not hold a
 // database connection over network calls. It is responsible for fencing writes.
 type Compute interface {
@@ -133,6 +133,9 @@ func normalizeNumbers(value any) any {
 func hash(data []byte) string { sum := sha256.Sum256(data); return hex.EncodeToString(sum[:]) }
 func analysisFingerprint(input map[string]any) (string, error) {
 	ident := map[string]any{"title": input["title"], "content": input["content"], "url": input["url"]}
+	if value, ok := input["source_type"]; ok {
+		ident["source_type"] = value
+	}
 	if value, ok := input["original_context"]; ok {
 		ident["original_context"] = value
 	}
@@ -180,7 +183,7 @@ func (h *Handler) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	var req Request
-	if privateapi.DecodeJSON(raw, &req) != nil || req.Version != 1 || !uuidRE.MatchString(req.RunID) || req.ArticleID <= 0 || req.ArticleAttempt <= 0 || !hashRE.MatchString(req.InputFingerprint) || (req.Operation != "analyze" && req.Operation != "extraction_context" && req.Operation != "extraction_feedback") || h.Compute == nil || h.Admission == nil || h.Pool == nil || h.Authority == nil {
+	if privateapi.DecodeJSON(raw, &req) != nil || req.Version != 1 || !uuidRE.MatchString(req.RunID) || req.ArticleID <= 0 || req.ArticleAttempt <= 0 || !hashRE.MatchString(req.InputFingerprint) || (req.Operation != "analyze" && req.Operation != "extraction_context" && req.Operation != "extraction_feedback" && req.Operation != extractionStudy) || h.Compute == nil || h.Admission == nil || h.Pool == nil || h.Authority == nil {
 		detail(w, 422, "Article AI callback request is invalid")
 		return
 	}

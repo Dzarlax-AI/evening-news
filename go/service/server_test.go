@@ -525,3 +525,29 @@ func TestRealClientCancellationAndGracefulDrain(t *testing.T) {
 		t.Fatal(resp.StatusCode)
 	}
 }
+
+func TestOversizedOptionalStudyPreservesBaselineResponse(t *testing.T) {
+	s := testServer(t, func(context.Context, Request) Response { return Response{} })
+	w := httptest.NewRecorder()
+	s.write(w, 200, Response{Outcome: "success", Result: extractor.Result{Content: "baseline", State: "extracted"}, StudyHTML: strings.Repeat("<", 2*1024*1024), StudyDocumentURL: "https://news.example/story", SnapshotDigest: strings.Repeat("a", 64)})
+	var got Response
+	if w.Code != 200 || json.Unmarshal(w.Body.Bytes(), &got) != nil || got.Outcome != "success" || got.Result.Content != "baseline" || got.StudyHTML != "" || got.SnapshotDigest != "" {
+		t.Fatalf("baseline lost when optional snapshot expanded: status=%d", w.Code)
+	}
+}
+
+func TestReparseRespectsSnapshotAndSelectorBounds(t *testing.T) {
+	r := Request{RequestID: "test", URL: "https://news.example/story", MaxBytes: 16, Reparse: &ReparseRequest{DocumentURL: "https://news.example/story", HTML: strings.Repeat("x", 17), SnapshotDigest: strings.Repeat("a", 64)}}
+	if validate(&r) == nil {
+		t.Fatal("reparse exceeded byte budget")
+	}
+	r.MaxBytes = 100
+	r.Reparse.Layout.ContentSelectors = make([]string, 17)
+	if validate(&r) == nil {
+		t.Fatal("reparse accepted too many selectors")
+	}
+	r.Reparse.Layout.ContentSelectors = []string{strings.Repeat("x", 257)}
+	if validate(&r) == nil {
+		t.Fatal("reparse accepted overlong selector")
+	}
+}

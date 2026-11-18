@@ -4,6 +4,7 @@ package service
 import (
 	"context"
 	"github.com/Dzarlax-AI/evening-news/go/extractor"
+	"github.com/Dzarlax-AI/evening-news/go/pagelayout"
 	"time"
 )
 
@@ -12,8 +13,17 @@ const MaxBytes = 5 * 1024 * 1024
 const MaxJSONBytes = 8 * 1024 * 1024
 const MaxTelegramJSONBytes = 5 * 1024 * 1024
 
-// Request deliberately excludes replay injection fields and server configuration.
+// ReparseRequest is accepted only on the authenticated private extraction API.
+type ReparseRequest struct {
+	DocumentURL    string            `json:"document_url"`
+	HTML           string            `json:"html"`
+	SnapshotDigest string            `json:"snapshot_digest"`
+	Layout         pagelayout.Layout `json:"layout"`
+}
+
 type Request struct {
+	EnablePageStudy bool                `json:"enable_page_study,omitempty"`
+	Reparse         *ReparseRequest     `json:"reparse,omitempty"`
 	RequestID       string              `json:"request_id"`
 	URL             string              `json:"url"`
 	Content         string              `json:"content,omitempty"`
@@ -48,12 +58,15 @@ type Response struct {
 	BuildVersion       string           `json:"build_version"`
 	RequestID          string           `json:"request_id"`
 	Outcome            string           `json:"outcome"`
+	Applied            bool             `json:"applied,omitempty"`
 	OriginalURL        string           `json:"original_url"`
 	FinalURL           string           `json:"final_url"`
 	Result             extractor.Result `json:"result"`
 	Observations       []Observation    `json:"observations"`
 	NeedsSelectorStudy bool             `json:"needs_selector_study"`
 	StudyHTML          string           `json:"study_html,omitempty"`
+	StudyDocumentURL   string           `json:"study_document_url,omitempty"`
+	SnapshotDigest     string           `json:"snapshot_digest,omitempty"`
 	Error              *Failure         `json:"error,omitempty"`
 }
 

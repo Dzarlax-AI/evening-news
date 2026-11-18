@@ -4,6 +4,7 @@ import (
 	"encoding/json"
 	"net/url"
 	"regexp"
+	"strconv"
 	"strings"
 	"unicode/utf8"
 
@@ -23,11 +24,218 @@ func articleMedia(h, base string) []Media {
 	return media
 }
 
+// articleMediaFromBody keeps only the DOM selected by the text extractor.
+// A missing body is intentionally not replaced with the whole document.
+func articleMediaFromBody(body *goquery.Selection, base string) ([]Media, bool, bool) {
+	if body == nil || body.Length() == 0 {
+		return nil, false, false
+	}
+	clone := body.Clone()
+	pruneRecommendationControls(clone)
+	clone.Find("script,style,template,nav,aside,footer,form,dialog,[role=dialog],[aria-modal=true],[role=navigation],[role=contentinfo],[data-native-ad-id],.newsletter-signup,.subscription-widget,.subscribe-widget,.ad-container,.advertisement,.social-share-bar,[itemprop=author]").Remove()
+	var parts []string
+	clone.Each(func(_ int, s *goquery.Selection) {
+		if h, err := goquery.OuterHtml(s); err == nil {
+			parts = append(parts, h)
+		}
+	})
+	media, truncated, incomplete := boundedArticleMediaDetailed(strings.Join(parts, "\n"), base)
+	if addPictureEvidence(clone, media, base) {
+		truncated = true
+	}
+	return media, truncated, incomplete
+}
+
+// Require an Open Graph cover to also appear in the selected editorial body.
+func bodyContainsImage(body *goquery.Selection, base, target string) bool {
+	return body.Find("img[src],img[data-src]").AddBackFiltered("img[src],img[data-src]").FilterFunction(func(_ int, img *goquery.Selection) bool {
+		return safeRSSHTTPURL(img.AttrOr("src", img.AttrOr("data-src", "")), base) == target &&
+			img.ParentsFiltered("aside,nav,footer,[itemprop=author],[role=navigation]").Length() == 0 &&
+			!insideRecommendationContainer(img)
+	}).Length() > 0
+}
+
+// addPictureEvidence links only candidates explicitly present in the same
+// picture's unconditional src/srcset. Query-bearing URLs remain independent.
+func addPictureEvidence(body *goquery.Selection, media []Media, base string) bool {
+	indexes := make(map[string]int, len(media))
+	for i, m := range media {
+		if m.Type == "image" {
+			indexes[m.URL] = i
+		}
+	}
+	truncated := false
+	body.Find("picture").AddBackFiltered("picture").Each(func(_ int, picture *goquery.Selection) {
+		img := picture.Find("img[src]").First()
+		if img.Length() == 0 {
+			return
+		}
+		primary := safeRSSHTTPURL(img.AttrOr("src", ""), base)
+		p, err := url.Parse(primary)
+		if err != nil || p.RawQuery != "" || p.Fragment != "" {
+			return
+		}
+		first, exists := indexes[primary]
+		if !exists {
+			return
+		}
+		members := []int{first}
+		seen := map[int]bool{first: true}
+		picture.Find("source[srcset]").Each(func(_ int, s *goquery.Selection) {
+			if s.AttrOr("media", "") != "" || !strings.EqualFold(s.AttrOr("type", ""), "image/webp") {
+				return
+			}
+			urls, ok := strictPictureSrcset(s.AttrOr("srcset", ""), base)
+			if !ok {
+				return
+			}
+			for _, u := range urls {
+				parsed, e := url.Parse(u)
+				if e != nil || !strings.EqualFold(parsed.Host, p.Host) || parsed.Scheme != p.Scheme || parsed.RawQuery != "" || parsed.Fragment != "" {
+					continue
+				}
+				if i, ok := indexes[u]; ok && !seen[i] {
+					members = append(members, i)
+					seen[i] = true
+				}
+			}
+		})
+		if len(members) < 2 {
+			return
+		}
+		for _, i := range members {
+			if _, exists := media[i].Data["canonical_url"]; exists {
+				return
+			}
+		}
+		prior := make([]map[string]any, len(members))
+		for j, i := range members {
+			prior[j] = media[i].Data
+			copyData := make(map[string]any, len(media[i].Data)+1)
+			for k, v := range media[i].Data {
+				copyData[k] = v
+			}
+			copyData["canonical_url"] = primary
+			media[i].Data = copyData
+		}
+		encoded, err := json.Marshal(media)
+		if err != nil || len(encoded) > maxArticleMediaJSONBytes {
+			for j, i := range members {
+				media[i].Data = prior[j]
+			}
+			truncated = true
+		}
+	})
+	return truncated
+}
+
+var pictureWidthDescriptor = regexp.MustCompile(`^[1-9][0-9]*w$`)
+var pictureDensityDescriptor = regexp.MustCompile(`^(?:[0-9]+(?:\.[0-9]+)?|\.[0-9]+)x$`)
+
+// Only accept a complete, unambiguous subset: a URL plus one positive w/x
+// descriptor per candidate. A comma inside a URL makes the whole set invalid.
+func strictPictureSrcset(raw, base string) ([]string, bool) {
+	var urls []string
+	for _, part := range strings.Split(raw, ",") {
+		fields := strings.Fields(part)
+		if len(fields) != 2 {
+			return nil, false
+		}
+		descriptor := fields[1]
+		valid := pictureWidthDescriptor.MatchString(descriptor)
+		if !valid && pictureDensityDescriptor.MatchString(descriptor) {
+			n, err := strconv.ParseFloat(strings.TrimSuffix(descriptor, "x"), 64)
+			valid = err == nil && n > 0
+		}
+		if !valid {
+			return nil, false
+		}
+		u := safeRSSHTTPURL(fields[0], base)
+		if u == "" {
+			return nil, false
+		}
+		urls = append(urls, u)
+	}
+	return urls, len(urls) > 0
+}
+
+// scopedArticleMedia retains the legacy bounded candidates for rollback. Scope
+// is asserted only when the selected body's complete media list was obtained.
+func scopedArticleMedia(page, base string, body *goquery.Selection) ([]Media, bool) {
+	raw, rawTruncated := boundedArticleMedia(page, base)
+	if body == nil || body.Length() == 0 {
+		return raw, rawTruncated
+	}
+	selected, selectedTruncated, selectedIncomplete := articleMediaFromBody(body, base)
+	if selectedIncomplete {
+		return raw, true
+	}
+	inBody := make(map[string]Media, len(selected))
+	for _, m := range selected {
+		inBody[m.URL] = m
+	}
+	annotated := make([]Media, len(raw))
+	copy(annotated, raw)
+	for i := range annotated {
+		annotated[i].Data = nil
+	}
+	encoded, err := json.Marshal(annotated)
+	if err != nil {
+		return raw, true
+	}
+	bytes := len(encoded)
+	setData := func(i int, data map[string]any) bool {
+		before, _ := json.Marshal(annotated[i])
+		candidate := annotated[i]
+		candidate.Data = data
+		after, e := json.Marshal(candidate)
+		if e != nil || bytes-len(before)+len(after) > maxArticleMediaJSONBytes {
+			return false
+		}
+		bytes += len(after) - len(before)
+		annotated[i] = candidate
+		return true
+	}
+	// Scope takes priority over optional evidence; never sacrifice raw URLs.
+	for i, m := range annotated {
+		if _, ok := inBody[m.URL]; !ok && !setData(i, map[string]any{"article_body_scope": "outside"}) {
+			rawTruncated = true
+		}
+	}
+	for i := range annotated {
+		m := annotated[i]
+		data := make(map[string]any, len(raw[i].Data)+1)
+		for k, v := range m.Data {
+			data[k] = v
+		}
+		if selectedMedia, ok := inBody[m.URL]; ok {
+			for k, v := range selectedMedia.Data {
+				data[k] = v
+			}
+		} else {
+			for k, v := range raw[i].Data {
+				data[k] = v
+			}
+		}
+		if len(data) > 0 && !setData(i, data) {
+			rawTruncated = true
+		}
+	}
+	return annotated, rawTruncated || selectedTruncated
+}
+
 func boundedArticleMedia(h, base string) ([]Media, bool) {
+	out, truncated, _ := boundedArticleMediaDetailed(h, base)
+	return out, truncated
+}
+
+func boundedArticleMediaDetailed(h, base string) ([]Media, bool, bool) {
 	d := parse(h)
 	var out []Media
 	seen := map[string]bool{}
 	truncated := false
+	incomplete := false
+	var evidence []map[string]any
 	encodedBytes := 2 // The serialized array's opening and closing brackets.
 	add := func(m Media) bool {
 		m.URL = strings.TrimSpace(m.URL)
@@ -36,6 +244,7 @@ func boundedArticleMedia(h, base string) ([]Media, bool) {
 		}
 		if len(m.URL) > maxArticleMediaURLBytes {
 			truncated = true
+			incomplete = true
 			return true
 		}
 		reference, err := url.Parse(m.URL)
@@ -44,6 +253,7 @@ func boundedArticleMedia(h, base string) ([]Media, bool) {
 		}
 		if !reference.IsAbs() && reference.Host == "" && len(base) > maxArticleMediaURLBytes {
 			truncated = true
+			incomplete = true
 			return true
 		}
 		u := resolve(base, m.URL)
@@ -53,13 +263,17 @@ func boundedArticleMedia(h, base string) ([]Media, bool) {
 		}
 		if len(u) > maxArticleMediaURLBytes {
 			truncated = true
+			incomplete = true
 			return true
 		}
 		if len(out) >= maxArticleMediaCount {
 			truncated = true
+			incomplete = true
 			return false
 		}
 		m.URL = u
+		data := m.Data
+		m.Data = nil
 		if len(m.AltText) > maxArticleMediaAltTextBytes {
 			m.AltText = truncateUTF8(m.AltText, maxArticleMediaAltTextBytes)
 			truncated = true
@@ -67,6 +281,7 @@ func boundedArticleMedia(h, base string) ([]Media, bool) {
 		encoded, err := json.Marshal(m)
 		if err != nil {
 			truncated = true
+			incomplete = true
 			return true
 		}
 		nextBytes := encodedBytes + len(encoded)
@@ -75,10 +290,12 @@ func boundedArticleMedia(h, base string) ([]Media, bool) {
 		}
 		if nextBytes > maxArticleMediaJSONBytes {
 			truncated = true
+			incomplete = true
 			return false
 		}
 		seen[u] = true
 		out = append(out, m)
+		evidence = append(evidence, data)
 		encodedBytes = nextBytes
 		return true
 	}
@@ -131,7 +348,11 @@ func boundedArticleMedia(h, base string) ([]Media, bool) {
 				}
 			}
 		}
-		stopped = !add(Media{Type: "image", URL: u, AltText: s.AttrOr("alt", ""), MediaType: kind, Source: "img_tag"})
+		attrs := map[string]string{}
+		for _, name := range []string{"width", "height", "role", "aria-hidden", "data-canonical-src"} {
+			attrs[name] = s.AttrOr(name, "")
+		}
+		stopped = !add(Media{Type: "image", URL: u, AltText: s.AttrOr("alt", ""), MediaType: kind, Source: "img_tag", Data: imageEvidence(attrs, base)})
 		return !stopped
 	})
 	for _, kind := range []string{"video", "source"} {
@@ -168,6 +389,7 @@ func boundedArticleMedia(h, base string) ([]Media, bool) {
 			if len(u) > maxArticleMediaURLBytes {
 				if hasMediaExtension(u) {
 					truncated = true
+					incomplete = true
 				}
 				return true
 			}
@@ -191,7 +413,23 @@ func boundedArticleMedia(h, base string) ([]Media, bool) {
 			return !stopped
 		})
 	}
-	return out, truncated
+	// Allocate optional evidence only after reserving the legacy bounded list.
+	for i, data := range evidence {
+		if len(data) == 0 {
+			continue
+		}
+		before, _ := json.Marshal(out[i])
+		m := out[i]
+		m.Data = data
+		after, err := json.Marshal(m)
+		if err != nil || encodedBytes-len(before)+len(after) > maxArticleMediaJSONBytes {
+			truncated = true
+			continue
+		}
+		encodedBytes += len(after) - len(before)
+		out[i] = m
+	}
+	return out, truncated, incomplete
 }
 
 func truncateUTF8(s string, maxBytes int) string {

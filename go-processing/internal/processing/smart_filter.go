@@ -1,13 +1,9 @@
 package processing
 
 import (
-	"crypto/md5"
-	"encoding/hex"
 	"fmt"
 	"regexp"
 	"strings"
-	"sync"
-	"time"
 	"unicode"
 	"unicode/utf8"
 
@@ -56,8 +52,7 @@ var (
 
 var extractionSkipDomains = []string{"t.me", "telegram.me", "twitter.com", "x.com", "instagram.com"}
 
-// shouldProcess ports SmartFilter.should_process_with_ai with duplicate detection
-// kept separate so the caller can consult the durable hash_content index.
+// shouldProcess ports SmartFilter's local content checks.
 func shouldProcess(title, content, rawURL, sourceType string, allowExtraction bool) (bool, string) {
 	trimmedContent := strings.TrimSpace(content)
 	contentLength := utf8.RuneCountInString(trimmedContent)
@@ -319,81 +314,4 @@ func matchesPythonWordBoundaryPattern(text string, pattern *regexp.Regexp) bool 
 		}
 	}
 	return false
-}
-
-// DuplicateCache mirrors SmartFilter's 24-hour process-local MD5 hash cache.
-// Durable hash_content lookups remain the caller's responsibility.
-type DuplicateCache struct {
-	mu     sync.Mutex
-	recent map[string]duplicateCacheEntry
-	window time.Duration
-}
-
-type duplicateCacheEntry struct {
-	seenAt time.Time
-	owner  *int64
-}
-
-func NewDuplicateCache() *DuplicateCache {
-	return &DuplicateCache{recent: make(map[string]duplicateCacheEntry), window: 24 * time.Hour}
-}
-
-// Lookup reports a recent duplicate or returns the content hash for a durable
-// lookup. cacheHit distinguishes owner replays from cache misses.
-func (c *DuplicateCache) Lookup(content string, articleID int64, now time.Time) (hash string, duplicate, cacheHit bool) {
-	if strings.TrimSpace(content) == "" {
-		return "", false, false
-	}
-	if c == nil {
-		return contentHash(content), false, false
-	}
-	c.mu.Lock()
-	defer c.mu.Unlock()
-	if c.window <= 0 {
-		c.window = 24 * time.Hour
-	}
-	if c.recent == nil {
-		c.recent = make(map[string]duplicateCacheEntry)
-	}
-	cutoff := now.Add(-c.window)
-	for key, entry := range c.recent {
-		if !entry.seenAt.After(cutoff) {
-			delete(c.recent, key)
-		}
-	}
-	hash = contentHash(content)
-	entry, ok := c.recent[hash]
-	if !ok {
-		return hash, false, false
-	}
-	if articleID > 0 && entry.owner != nil && *entry.owner == articleID {
-		return hash, false, true
-	}
-	return hash, true, true
-}
-
-func (c *DuplicateCache) Remember(hash string, owner *int64, now time.Time) {
-	if c == nil || hash == "" {
-		return
-	}
-	c.mu.Lock()
-	defer c.mu.Unlock()
-	if c.recent == nil {
-		c.recent = make(map[string]duplicateCacheEntry)
-	}
-	if c.window <= 0 {
-		c.window = 24 * time.Hour
-	}
-	var copyOwner *int64
-	if owner != nil {
-		id := *owner
-		copyOwner = &id
-	}
-	c.recent[hash] = duplicateCacheEntry{seenAt: now, owner: copyOwner}
-}
-
-func contentHash(content string) string {
-	clean := lower(strings.TrimSpace(content))
-	sum := md5.Sum([]byte(clean))
-	return hex.EncodeToString(sum[:])
 }

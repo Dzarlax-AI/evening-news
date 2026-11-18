@@ -21,6 +21,11 @@ type Analysis struct {
 	PageType         string             `json:"page_type"`
 	Reasoning        string             `json:"reasoning"`
 	SuggestedConfig  map[string]any     `json:"suggested_config"`
+	PageKind         string             `json:"page_kind,omitempty"`
+	ArticleBody      string             `json:"article_body_selector,omitempty"`
+	EditorialCover   string             `json:"editorial_cover_selector,omitempty"`
+	ExcludeBlocks    []string           `json:"exclude_selectors,omitempty"`
+	pageKindProvided bool
 }
 type TextGenerator interface {
 	GenerateText(context.Context, string, string) (string, error)
@@ -119,18 +124,25 @@ func (a *Analyzer) put(key string, v *Analysis) {
 	a.size += size
 }
 func parseAnalysis(text string) (*Analysis, error) {
+	if len(text) > 64*1024 {
+		return nil, errors.New("selector analysis exceeds limit")
+	}
 	start, end := strings.IndexByte(text, '{'), strings.LastIndexByte(text, '}')
 	if start < 0 || end < start {
 		return nil, errors.New("invalid selector analysis")
 	}
 	var v struct {
-		Content   *[]string          `json:"content_selectors"`
-		Title     *[]string          `json:"title_selectors"`
-		Date      []string           `json:"date_selectors"`
-		Scores    map[string]float64 `json:"confidence_scores"`
-		PageType  *string            `json:"page_type"`
-		Reasoning string             `json:"reasoning"`
-		Config    map[string]any     `json:"suggested_config"`
+		Content        *[]string          `json:"content_selectors"`
+		Title          *[]string          `json:"title_selectors"`
+		Date           []string           `json:"date_selectors"`
+		Scores         map[string]float64 `json:"confidence_scores"`
+		PageType       *string            `json:"page_type"`
+		Reasoning      string             `json:"reasoning"`
+		Config         map[string]any     `json:"suggested_config"`
+		PageKind       *string            `json:"page_kind"`
+		ArticleBody    string             `json:"article_body_selector"`
+		EditorialCover string             `json:"editorial_cover_selector"`
+		ExcludeBlocks  []string           `json:"exclude_selectors"`
 	}
 	if json.Unmarshal([]byte(text[start:end+1]), &v) != nil || v.Content == nil || v.Title == nil || v.PageType == nil {
 		return nil, errors.New("invalid selector analysis")
@@ -154,7 +166,12 @@ func parseAnalysis(text string) (*Analysis, error) {
 	if v.Config == nil {
 		v.Config = map[string]any{}
 	}
-	return &Analysis{ContentSelectors: content, TitleSelectors: title, DateSelectors: v.Date, ConfidenceScores: v.Scores, PageType: *v.PageType, Reasoning: v.Reasoning, SuggestedConfig: v.Config}, nil
+	result := &Analysis{ContentSelectors: content, TitleSelectors: title, DateSelectors: v.Date, ConfidenceScores: v.Scores, PageType: *v.PageType, Reasoning: v.Reasoning, SuggestedConfig: v.Config, ArticleBody: v.ArticleBody, EditorialCover: v.EditorialCover, ExcludeBlocks: v.ExcludeBlocks}
+	if v.PageKind != nil {
+		result.PageKind = *v.PageKind
+		result.pageKindProvided = true
+	}
+	return result, nil
 }
 func (a *Analyzer) Analyze(ctx context.Context, url, htmlText, contextName, domain string) (*Analysis, error) {
 	return a.analyze(ctx, url, htmlText, contextName, domain, true)
@@ -162,16 +179,18 @@ func (a *Analyzer) Analyze(ctx context.Context, url, htmlText, contextName, doma
 func (a *Analyzer) analyze(ctx context.Context, url, htmlText, contextName, domain string, publish bool) (*Analysis, error) {
 	key := cacheKey(url, contextName)
 	if cached, ok := a.get(key); ok {
+		cached.pageKindProvided = cached.PageKind != ""
+		validatePageStudy(cached, htmlText)
 		return cached, nil
 	}
 	if a.Generator == nil {
 		return nil, errors.New("selector generator unavailable")
 	}
-	prepared, err := PrepareHTML(htmlText)
+	prepared, err := PrepareStudyHTML(htmlText)
 	if err != nil {
 		return nil, err
 	}
-	text, err := a.Generator.GenerateText(ctx, StructurePrompt(url, prepared, contextName), domain)
+	text, err := a.Generator.GenerateText(ctx, StudyPrompt(url, prepared, contextName), domain)
 	if err != nil {
 		return nil, err
 	}
@@ -179,8 +198,31 @@ func (a *Analyzer) analyze(ctx context.Context, url, htmlText, contextName, doma
 	if err != nil {
 		return nil, err
 	}
+	validatePageStudy(value, htmlText)
 	if publish {
 		a.put(key, value)
 	}
+	return value, nil
+}
+
+// AnalyzeSnapshot studies this exact HTML without consulting the URL-based
+// selector cache. The caller owns snapshot identity and response admission.
+func (a *Analyzer) AnalyzeSnapshot(ctx context.Context, url, htmlText, contextName, domain string) (*Analysis, error) {
+	if a.Generator == nil {
+		return nil, errors.New("selector generator unavailable")
+	}
+	prepared, err := PrepareStudyHTML(htmlText)
+	if err != nil {
+		return nil, err
+	}
+	text, err := a.Generator.GenerateText(ctx, StudyPrompt(url, prepared, contextName), domain)
+	if err != nil {
+		return nil, err
+	}
+	value, err := parseAnalysis(text)
+	if err != nil {
+		return nil, err
+	}
+	validatePageStudy(value, htmlText)
 	return value, nil
 }

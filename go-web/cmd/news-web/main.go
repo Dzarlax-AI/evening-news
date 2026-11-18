@@ -37,6 +37,9 @@ func run() error {
 	ctx, cancel := context.WithTimeout(context.Background(), 8*time.Second)
 	db, err := repositories.OpenPostgres(ctx, cfg.DatabaseURL, 8)
 	if err == nil {
+		if cfg.FilterArticleMedia {
+			db.EnableArticleMediaPolicy()
+		}
 		err = db.CheckSchema(ctx)
 	}
 	cancel()

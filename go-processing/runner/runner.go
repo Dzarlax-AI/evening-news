@@ -22,31 +22,32 @@ var ErrRunConflict = store.ErrRunConflict
 var ErrInvalidConfig = errors.New("component configuration is invalid")
 
 type Config struct {
-	DatabaseURL             string
-	Token                   string
-	AIURL                   string
-	AIToken                 string
-	ExtractorURL            string
-	ExtractorToken          string
-	ListenAddr              string
-	DBMaxConns              int32
-	MaxWorkers              int
-	MaxBatch                int
-	MaxAttempts             int
-	AttemptTimeoutSeconds   int
-	RetryInitialSeconds     int
-	RetryLaterSeconds       int
-	TextLimit               int
-	MaxBytes                int
-	BrowserMaxBytes         int
-	ExtractorTimeoutSeconds int
-	TotalBudgetSeconds      int
-	CycleMax                int
-	PerSourceLimit          int
-	NativeBrowser           bool
-	DateFrom                *time.Time
-	DateTo                  *time.Time
-	LoadOperationalSnapshot func(context.Context, string, int64) (OperationalSnapshot, error)
+	DatabaseURL               string
+	Token                     string
+	AIURL                     string
+	AIToken                   string
+	ExtractorURL              string
+	ExtractorToken            string
+	ListenAddr                string
+	DBMaxConns                int32
+	MaxWorkers                int
+	MaxBatch                  int
+	MaxAttempts               int
+	AttemptTimeoutSeconds     int
+	RetryInitialSeconds       int
+	RetryLaterSeconds         int
+	TextLimit                 int
+	MaxBytes                  int
+	BrowserMaxBytes           int
+	ExtractorTimeoutSeconds   int
+	TotalBudgetSeconds        int
+	CycleMax                  int
+	PerSourceLimit            int
+	NativeBrowser             bool
+	DedupTrial, SelectorStudy bool
+	DateFrom                  *time.Time
+	DateTo                    *time.Time
+	LoadOperationalSnapshot   func(context.Context, string, int64) (OperationalSnapshot, error)
 }
 
 type OperationalSnapshot struct {
@@ -138,6 +139,9 @@ func LoadConfig(env func(string) string) (Config, error) {
 		return c, e
 	}
 	c.NativeBrowser = b
+	if c.DedupTrial, e = boolean("ARTICLE_DEDUP_TRIAL"); e != nil {
+		return c, e
+	}
 	b, e = boolean("NEWS_LIMIT_ENABLED")
 	if e != nil {
 		return c, e
@@ -166,7 +170,8 @@ func LoadConfig(env func(string) string) (Config, error) {
 			}
 		}
 	}
-	return c, nil
+	c.SelectorStudy, e = boolean("ARTICLE_SELECTOR_STUDY")
+	return c, e
 }
 func ConfigFromEnv() (Config, error) { return LoadConfig(os.Getenv) }
 func validURL(s string) bool {
@@ -202,6 +207,7 @@ func Run(ctx context.Context, c Config, onReady func()) error {
 	ex.BrowserMaxBytes = c.BrowserMaxBytes
 	ex.MaxChars = c.TextLimit
 	ex.UseBrowser = c.NativeBrowser
+	ex.EnablePageStudy = c.SelectorStudy
 	ex.AttemptTimeout = time.Duration(c.ExtractorTimeoutSeconds) * time.Second
 	ex.TotalBudget = time.Duration(c.TotalBudgetSeconds) * time.Second
 	p := &processing.Processor{
@@ -219,7 +225,7 @@ func Run(ctx context.Context, c Config, onReady func()) error {
 		PerSourceLimit: c.PerSourceLimit,
 		DateFrom:       c.DateFrom,
 		DateTo:         c.DateTo,
-		Duplicates:     processing.NewDuplicateCache(),
+		DedupTrial:     c.DedupTrial,
 	}
 	if c.LoadOperationalSnapshot != nil {
 		p.LoadOperationalSnapshot = func(ctx context.Context, f store.Fence) (processing.OperationalSnapshot, error) {

@@ -2,6 +2,21 @@ package selectors
 
 import "fmt"
 
+func StudyPrompt(url, prepared, context string) string {
+	return StructurePrompt(url, prepared, context) + `
+
+Also return page_kind as "article", "listing", or "unknown". The existing
+content_selectors continue to select list entries, never a single article body.
+For a listing, choose selectors for the repeated sibling cards across all list
+branches, not just a single featured card. In the structural outline, count=N
+shows how often a path occurs; verify that list selectors match multiple items.
+For an article, optionally return article_body_selector, editorial_cover_selector
+(an actual img element), and exclude_selectors (author, share, and related blocks).
+Check the article header and hero near its headline for the editorial cover,
+even when the text body is nested more deeply. Ignore images in other cards.
+Use only CSS present in the HTML; when uncertain use "unknown" and empty values.`
+}
+
 type promptContext struct{ description, patterns, examples string }
 
 func StructurePrompt(url, prepared, context string) string {

@@ -222,10 +222,14 @@ func qualityScore(s string) float64 {
 	return q
 }
 func enhanced(d *goquery.Document, max int) (string, string) {
+	s, selector, _ := enhancedWithBody(d, max)
+	return s, selector
+}
+func enhancedWithBody(d *goquery.Document, max int) (string, string, *goquery.Selection) {
 	if body := editorialBody(d.Selection); body.Length() > 0 {
 		v := restoreIntroduction(d, text(body), meta(d, `meta[property="og:title"]`, "title"))
 		if good(v, false, max) {
-			return v, "editorial_body"
+			return v, "editorial_body", body
 		}
 	}
 	for _, q := range selectors {
@@ -237,16 +241,21 @@ func enhanced(d *goquery.Document, max int) (string, string) {
 			}
 			v := text(candidate)
 			if good(v, false, max) {
-				return v, q
+				return v, q, candidate
 			}
 		}
 	}
-	return "", ""
+	return "", "", nil
 }
 func heuristic(d *goquery.Document, max int) string {
+	s, _ := heuristicWithBody(d, max)
+	return s
+}
+func heuristicWithBody(d *goquery.Document, max int) (string, *goquery.Selection) {
 	type candidate struct {
 		s     string
 		score float64
+		body  *goquery.Selection
 	}
 	var top []candidate
 	d.Find("p,div,article,section").Each(func(_ int, e *goquery.Selection) {
@@ -289,7 +298,7 @@ func heuristic(d *goquery.Document, max int) string {
 			}
 		}
 		score += min(float64(e.Find("p").Length())*0.5, 3)
-		top = append(top, candidate{s, score})
+		top = append(top, candidate{s, score, e})
 		sort.SliceStable(top, func(i, j int) bool { return top[i].score > top[j].score })
 		if len(top) > 5 {
 			top = top[:5]
@@ -297,20 +306,26 @@ func heuristic(d *goquery.Document, max int) string {
 	})
 	for _, c := range top {
 		if good(c.s, false, max) {
-			return c.s
+			return c.s, c.body
 		}
 	}
 	var parts []string
+	var bodies *goquery.Selection
 	for _, c := range top[:min(len(top), 3)] {
 		if c.score > 1 {
 			parts = append(parts, c.s)
+			if bodies == nil {
+				bodies = c.body
+			} else {
+				bodies = bodies.AddSelection(c.body)
+			}
 		}
 	}
 	s := strings.Join(parts, " ")
 	if good(s, false, max) {
-		return s
+		return s, bodies
 	}
-	return ""
+	return "", nil
 }
 func jsonItems(d *goquery.Document) []map[string]any {
 	var out []map[string]any
@@ -408,6 +423,7 @@ func extractWeb(ctx context.Context, in Input, r Result) Result {
 		}
 		r.Trace = append(r.Trace, method)
 		var s, sel string
+		var mediaBody *goquery.Selection
 		md := d
 		switch method {
 		case "learned_pattern":
@@ -416,6 +432,7 @@ func extractWeb(ctx context.Context, in Input, r Result) Result {
 				candidate := selectSafe(d.Selection, sel).First()
 				if !insideRecommendationContainer(candidate) {
 					s = text(candidate)
+					mediaBody = candidate
 				}
 			}
 			if !good(s, true, in.MaxChars) {
@@ -437,10 +454,10 @@ func extractWeb(ctx context.Context, in Input, r Result) Result {
 			}
 			md = parse(in.RenderedHTML)
 			if method != "browser_heuristics" {
-				s, sel = enhanced(md, in.MaxChars)
+				s, sel, mediaBody = enhancedWithBody(md, in.MaxChars)
 			}
 			if s == "" {
-				s = heuristic(md, in.MaxChars)
+				s, mediaBody = heuristicWithBody(md, in.MaxChars)
 				sel = "heuristics"
 			}
 			if method == "learned_pattern_browser_rendering" && in.LearnedSelector != "" {
@@ -452,11 +469,12 @@ func extractWeb(ctx context.Context, in Input, r Result) Result {
 				if runeLen(v) > runeLen(s) {
 					s = v
 					sel = in.LearnedSelector
+					mediaBody = candidate
 				}
 			}
 			r.Method = method
 		case "enhanced_selectors":
-			s, sel = enhanced(d, in.MaxChars)
+			s, sel, mediaBody = enhancedWithBody(d, in.MaxChars)
 			r.Method = method
 		case "readability":
 			u, _ := url.Parse(in.URL)
@@ -486,6 +504,7 @@ func extractWeb(ctx context.Context, in Input, r Result) Result {
 				return false
 			}
 			s = restoreIntroduction(d, text(goquery.NewDocumentFromNode(a.Node).Selection), r.Title)
+			mediaBody = goquery.NewDocumentFromNode(a.Node).Selection
 			sel = "readability"
 			r.Method = method
 		case "json_ld":
@@ -501,7 +520,7 @@ func extractWeb(ctx context.Context, in Input, r Result) Result {
 			sel = method
 			r.Method = "fallback_extraction"
 		case "enhanced_heuristics":
-			s = heuristic(d, in.MaxChars)
+			s, mediaBody = heuristicWithBody(d, in.MaxChars)
 			sel = "heuristics"
 			r.Method = "fallback_extraction"
 		case "fallback_extraction":
@@ -512,7 +531,7 @@ func extractWeb(ctx context.Context, in Input, r Result) Result {
 				sel = "open_graph"
 			}
 			if runeLen(s) <= 200 {
-				s = heuristic(d, in.MaxChars)
+				s, mediaBody = heuristicWithBody(d, in.MaxChars)
 				sel = "heuristics"
 			}
 			r.Method = method
@@ -532,6 +551,23 @@ func extractWeb(ctx context.Context, in Input, r Result) Result {
 		r.Content = s
 		r.SelectorUsed = sel
 		metadata(md, &r)
+		if in.SourceType == "article" || in.SourceType == "web" || in.SourceType == "" {
+			if mediaBody != nil && mediaBody.Length() > 0 && strings.EqualFold(strings.TrimSpace(meta(md, `meta[property="og:type"]`)), "article") {
+				cover := safeRSSHTTPURL(meta(md, `meta[property="og:image"]`), in.URL)
+				if cover != "" && len(cover) <= 2048 && len(in.URL) <= 2048 && bodyContainsImage(mediaBody, in.URL, cover) {
+					r.MediaEvidence = &MediaEvidence{Version: 1, EditorialCover: EditorialCoverEvidence{URL: cover, Source: "og_image", ArticleURL: in.URL}}
+				}
+			}
+			var truncated bool
+			page := in.HTML
+			if md != d {
+				page = in.RenderedHTML
+			}
+			r.Media, truncated = scopedArticleMedia(page, in.URL, mediaBody)
+			if truncated {
+				r.Trace = append(r.Trace, "media_truncated")
+			}
+		}
 		return true
 	}
 	if auto && in.RenderedHTML != "" && hasPopulatedTableCounterpart(d, parse(in.RenderedHTML)) {

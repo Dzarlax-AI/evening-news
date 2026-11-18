@@ -1,4 +1,4 @@
--- Operator-run after migration 013_article_processing succeeds.
+-- Operator-run after migrations through 024_article_media_evidence succeed.
 -- Connect as the News database administrator. No password is stored here.
 \set ON_ERROR_STOP on
 \if :{?news_schema}
@@ -59,16 +59,18 @@ TO news_processing_runtime;
 GRANT UPDATE (state, result, error_code, updated_at, finished_at)
 ON :"news_schema".article_processing_runs TO news_processing_runtime;
 GRANT INSERT, UPDATE ON :"news_schema".article_processing_items TO news_processing_runtime;
-GRANT SELECT (id, title, url, content, summary, source_id,
+GRANT SELECT, INSERT, UPDATE ON :"news_schema".article_dedup_observations TO news_processing_runtime;
+GRANT SELECT ON :"news_schema".article_localizations TO news_processing_runtime;
+GRANT SELECT (id, title, source_title, url, content, summary, source_id,
               published_at, summary_processed, category_processed, ad_processed,
               is_advertisement, processing_attempts, processing_state, next_attempt_at,
               last_processing_error, fetched_at, image_url, media_files, hash_content, ad_confidence, ad_type,
-              ad_reasoning, processed)
+              ad_reasoning, processed, completed_processing_claim, telegram_context)
 ON :"news_schema".articles TO news_processing_runtime;
 GRANT UPDATE (title, content, summary, summary_processed, category_processed, ad_processed,
               is_advertisement, processing_attempts, processing_state, next_attempt_at,
-              last_processing_error, image_url, media_files, ad_confidence, ad_type,
-              ad_reasoning, published_at, processed)
+              last_processing_error, image_url, media_files, media_evidence, ad_confidence, ad_type,
+              ad_reasoning, published_at, processed, completed_processing_claim)
 ON :"news_schema".articles TO news_processing_runtime;
 GRANT SELECT ON :"news_schema".sources, :"news_schema".categories, :"news_schema".category_mapping
 TO news_processing_runtime;

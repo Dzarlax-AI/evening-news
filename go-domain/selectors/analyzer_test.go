@@ -74,3 +74,19 @@ func TestUnvalidatedAnalysisDoesNotPopulateCache(t *testing.T) {
 		t.Fatalf("validated result not cached: calls=%d err=%v", g.calls, err)
 	}
 }
+
+func TestAnalyzeSnapshotBypassesURLCache(t *testing.T) {
+	g := &generator{}
+	a := NewAnalyzer(g)
+	ctx := context.Background()
+	url := "https://example.test/news"
+	if _, err := a.Analyze(ctx, url, "<p>cached</p>", "news", "example.test"); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := a.AnalyzeSnapshot(ctx, url, "<p>new snapshot</p>", "news", "example.test"); err != nil {
+		t.Fatal(err)
+	}
+	if g.calls != 2 || !strings.Contains(g.prompt, "new snapshot") {
+		t.Fatalf("snapshot reused URL cache: calls=%d prompt=%q", g.calls, g.prompt)
+	}
+}

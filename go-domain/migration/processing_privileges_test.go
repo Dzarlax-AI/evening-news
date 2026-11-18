@@ -81,23 +81,7 @@ func newProcessingFixture(t *testing.T) processingFixture {
 	if err != nil || len(result.Errors) > 0 {
 		t.Fatalf("apply migrations: %+v %v", result, err)
 	}
-	_, testPath, _, ok := goruntime.Caller(0)
-	if !ok {
-		t.Fatal("cannot locate provisioning SQL")
-	}
-	data, err := os.ReadFile(filepath.Join(filepath.Dir(testPath), "..", "..", "deploy", "news-processing", "provision-runtime-role.sql"))
-	if err != nil {
-		t.Fatal(err)
-	}
-	lines := []string{}
-	for _, line := range strings.Split(string(data), "\n") {
-		if strings.HasPrefix(strings.TrimSpace(line), `\`) || strings.TrimSpace(line) == "SELECT 1 / 0;" {
-			continue
-		}
-		lines = append(lines, line)
-	}
-	sql := strings.Join(lines, "\n")
-	sql = strings.ReplaceAll(sql, ` :"news_schema"`, ` `+ident(schema))
+	sql := operatorProvisionSQL(t, "news-processing", schema)
 	sql = strings.ReplaceAll(sql, `:'news_callback_role'`, `'`+callback+`'`)
 	sql = strings.ReplaceAll(sql, `:"news_callback_role"`, ident(callback))
 	sql = strings.ReplaceAll(sql, "news_processing_fence_owner", owner)
@@ -115,6 +99,29 @@ func newProcessingFixture(t *testing.T) processingFixture {
 	}
 	return processingFixture{ctx, pool, runtime, owner, callback, schema}
 }
+func operatorProvisionSQL(t *testing.T, service, schema string) string {
+	t.Helper()
+	_, testPath, _, ok := goruntime.Caller(0)
+	if !ok {
+		t.Fatal("cannot locate provisioning SQL")
+	}
+	data, err := os.ReadFile(filepath.Join(filepath.Dir(testPath), "..", "..", "deploy", service, "provision-runtime-role.sql"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	lines := []string{}
+	for _, line := range strings.Split(string(data), "\n") {
+		trimmed := strings.TrimSpace(line)
+		if strings.HasPrefix(trimmed, `\`) || strings.HasPrefix(trimmed, "--") || trimmed == "SELECT 1 / 0;" {
+			continue
+		}
+		lines = append(lines, line)
+	}
+	sql := strings.Join(lines, "\n")
+	sql = strings.ReplaceAll(sql, ` :"news_schema"`, ` `+pgx.Identifier{schema}.Sanitize())
+	return sql
+}
+
 func (f processingFixture) roleTx(t *testing.T, role string) pgx.Tx {
 	t.Helper()
 	tx, err := f.pool.Begin(f.ctx)
@@ -138,6 +145,50 @@ func requireDenied(t *testing.T, err error) {
 func TestProcessingPrivileges(t *testing.T) {
 	f := newProcessingFixture(t)
 	ctx := f.ctx
+	t.Run("telegram context on manually provisioned roles", func(t *testing.T) {
+		ingestion := f.runtime + "_ingest"
+		owner := f.owner + "_ingest"
+		for _, role := range []string{ingestion, owner} {
+			t.Cleanup(func() {
+				// Both roles and every object they own belong to this fixture.
+				_, _ = f.pool.Exec(ctx, "DROP OWNED BY "+pgx.Identifier{role}.Sanitize())
+				_, _ = f.pool.Exec(ctx, "DROP ROLE IF EXISTS "+pgx.Identifier{role}.Sanitize())
+			})
+		}
+		sql := operatorProvisionSQL(t, "news-ingestion", f.schema)
+		sql = strings.ReplaceAll(sql, "news_ingestion_fence_owner", owner)
+		sql = strings.ReplaceAll(sql, "news_ingestion_runtime", ingestion)
+		for _, stmt := range strings.Split(sql, ";") {
+			if strings.TrimSpace(stmt) != "" {
+				if _, err := f.pool.Exec(ctx, stmt); err != nil {
+					t.Fatal(err)
+				}
+			}
+		}
+		for _, check := range []struct{ role, permission string }{
+			{ingestion, "SELECT"}, {ingestion, "INSERT"}, {ingestion, "UPDATE"}, {f.runtime, "SELECT"},
+		} {
+			var ok bool
+			err := f.pool.QueryRow(ctx, "SELECT has_column_privilege($1,$2,'telegram_context',$3)", check.role, f.schema+".articles", check.permission).Scan(&ok)
+			if err != nil || !ok {
+				t.Errorf("missing telegram_context %s on %s: %v", check.permission, check.role, err)
+			}
+		}
+		write := f.roleTx(t, ingestion)
+		if _, err := write.Exec(ctx, `UPDATE articles SET telegram_context='{"text":"fixture"}' WHERE id=1`); err != nil {
+			t.Fatal(err)
+		}
+		if err := write.Commit(ctx); err != nil {
+			t.Fatal(err)
+		}
+		read := f.roleTx(t, f.runtime)
+		var text string
+		if err := read.QueryRow(ctx, `SELECT telegram_context->>'text' FROM articles WHERE id=1`).Scan(&text); err != nil || text != "fixture" {
+			t.Fatalf("processing could not read collected context: %v", err)
+		}
+		_, err := read.Exec(ctx, `UPDATE articles SET telegram_context='{}' WHERE id=1`)
+		requireDenied(t, err)
+	})
 	t.Run("permitted writes", func(t *testing.T) {
 		tx := f.roleTx(t, f.runtime)
 		if _, err := tx.Exec(ctx, `SELECT id,kind,payload,state,attempt_generation FROM background_jobs LIMIT 1`); err != nil {

@@ -57,9 +57,10 @@ type Learning interface {
 	Feedback(context.Context, Request, authority.Fence, Feedback) (bool, error)
 }
 type ArticleCompute struct {
-	Runtime      *airuntime.Server
-	Learning     Learning
-	MaxTextChars int
+	Runtime          *airuntime.Server
+	SelectorAnalyzer SnapshotAnalyzer
+	Learning         Learning
+	MaxTextChars     int
 }
 
 func object(raw json.RawMessage, required, optional []string) (map[string]json.RawMessage, error) {
@@ -144,13 +145,19 @@ func URLHostname(raw string) (string, bool) {
 func (c *ArticleCompute) Validate(op string, raw json.RawMessage) error {
 	switch op {
 	case "analyze":
-		m, e := object(raw, []string{"title", "content", "url"}, []string{"original_context", "locales"})
+		m, e := object(raw, []string{"title", "content", "url"}, []string{"original_context", "locales", "source_type"})
 		if e != nil {
 			return e
 		}
 		if rawLocales, ok := m["locales"]; ok {
 			var locales []string
 			if json.Unmarshal(rawLocales, &locales) != nil || !(len(locales) == 1 && locales[0] == "sr-Latn") && !(len(locales) == 2 && ((locales[0] == "ru" && locales[1] == "sr-Latn") || (locales[1] == "ru" && locales[0] == "sr-Latn"))) {
+				return invalidInput
+			}
+		}
+		if rawSourceType, ok := m["source_type"]; ok {
+			sourceType, valid := stringField(rawSourceType)
+			if !valid || sourceType != "telegram" && sourceType != "rss" && sourceType != "custom" {
 				return invalidInput
 			}
 		}
@@ -181,6 +188,9 @@ func (c *ArticleCompute) Validate(op string, raw json.RawMessage) error {
 		if !validURL(values["url"]) {
 			return invalidInput
 		}
+	case extractionStudy:
+		_, err := decodeStudyInput(raw)
+		return err
 	case "extraction_context":
 		m, e := object(raw, []string{"url"}, nil)
 		if e != nil {
@@ -266,16 +276,19 @@ func (c *ArticleCompute) Run(ctx context.Context, r Request, f authority.Fence) 
 			return nil, errors.New("analysis runtime unavailable")
 		}
 		var v struct {
-			Title    string   `json:"title"`
-			Content  string   `json:"content"`
-			URL      string   `json:"url"`
-			Original *string  `json:"original_context"`
-			Locales  []string `json:"locales"`
+			Title      string   `json:"title"`
+			Content    string   `json:"content"`
+			URL        string   `json:"url"`
+			SourceType string   `json:"source_type"`
+			Original   *string  `json:"original_context"`
+			Locales    []string `json:"locales"`
 		}
 		if json.Unmarshal(r.Input, &v) != nil {
 			return nil, invalidInput
 		}
-		return c.Runtime.AnalyzeCallback(ctx, airuntime.ArticleInput{Title: v.Title, Content: v.Content, URL: v.URL, OriginalContext: v.Original, Locales: v.Locales, MaxTextChars: c.MaxTextChars})
+		return c.Runtime.AnalyzeCallback(ctx, airuntime.ArticleInput{Title: v.Title, Content: v.Content, URL: v.URL, SourceType: v.SourceType, OriginalContext: v.Original, Locales: v.Locales, MaxTextChars: c.MaxTextChars})
+	case extractionStudy:
+		return c.runExtractionStudy(ctx, r.Input)
 	case "extraction_context":
 		if c.Learning == nil {
 			return nil, ErrNotImplemented

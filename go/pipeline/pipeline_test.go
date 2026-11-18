@@ -158,7 +158,7 @@ func TestTransportFailuresAreClassified(t *testing.T) {
 }
 
 func TestRedirectProvenanceAndRelativeMedia(t *testing.T) {
-	markup := `<html><head><title>Redirected report</title><meta property="article:published_time" content="2026-10-14T10:00:00Z"></head><body><article>` + body + `<img src="photo.jpg"></article></body></html>`
+	markup := `<html><head><title>Redirected report</title><meta property="og:type" content="article"><meta property="og:image" content="photo.jpg"><meta property="article:published_time" content="2026-10-14T10:00:00Z"></head><body><article>` + body + `<img src="photo.jpg"></article></body></html>`
 	for _, browser := range []bool{false, true} {
 		r := Runner{Fetch: func(context.Context, string, transport.Options) (transport.Document, error) {
 			if browser {
@@ -175,6 +175,9 @@ func TestRedirectProvenanceAndRelativeMedia(t *testing.T) {
 		got := r.Extract(context.Background(), Request{Input: extractor.Input{URL: "https://short.example/start"}, ChromeEndpoint: "http://configured:9222"})
 		if got.Result.URL != "https://short.example/start" || got.Result.ExtractedFrom != "https://publisher.example/reports/final" || got.Result.Title != "Redirected report" || got.Result.PublicationDate == "" || len(got.Result.Media) != 1 || got.Result.Media[0].URL != "https://publisher.example/reports/photo.jpg" {
 			t.Fatalf("browser=%v: %+v", browser, got)
+		}
+		if cover := got.Result.MediaEvidence; cover == nil || cover.EditorialCover.ArticleURL != got.Result.URL || cover.EditorialCover.URL != got.Result.Media[0].URL {
+			t.Fatalf("browser=%v: cover evidence did not retain article identity", browser)
 		}
 	}
 }
@@ -349,5 +352,18 @@ func TestUnavailableBrowserAdmissionIsNotPolicyDenial(t *testing.T) {
 	got := r.Extract(context.Background(), Request{Input: extractor.Input{URL: "https://news.example/report", LearnedMethod: "browser_rendering"}})
 	if got.Result.Error != "admission_unavailable" || got.NeedsSelectorStudy || len(got.Observations) != 0 {
 		t.Fatalf("DNS outage delegated or made permanent: %+v", got)
+	}
+}
+
+func TestOptionalStudySnapshotFailureAndRedirect(t *testing.T) {
+	const original = "https://news.example/start"
+	const final = "https://news.example/redirected"
+	html := `<html><body><main>Small response without an extractable article.</main></body></html>`
+	r := Runner{HTTPOnly: true, Fetch: func(context.Context, string, transport.Options) (transport.Document, error) {
+		return transport.Document{HTML: []byte(html), URL: final, StatusCode: 200}, nil
+	}}
+	out := r.Extract(context.Background(), Request{Input: extractor.Input{URL: original}, EnablePageStudy: true})
+	if out.StudyHTML != html || out.StudyDocumentURL != final {
+		t.Fatalf("snapshot did not preserve redirected document: URL=%q HTML=%d", out.StudyDocumentURL, len(out.StudyHTML))
 	}
 }
