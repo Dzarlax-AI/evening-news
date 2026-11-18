@@ -272,7 +272,12 @@ func parseTelegramPost(original *goquery.Selection, pageURL, channel, sourceName
 // admission must fail open when a meaningful href or attachment wrapper was
 // omitted by the narrower historical metadata extraction.
 func telegramAdmissionUncertain(msg *goquery.Selection, messageURL string) bool {
+	const channelChrome = ".tgme_widget_message_user,.tgme_widget_message_user_photo,.tgme_widget_message_owner_photo,.tgme_widget_message_owner_name,.tgme_widget_message_author,.message_author_photo"
+	const editorial = ".tgme_widget_message_text,.message-text,.tgme_widget_message_text_wrapper,.tgme_widget_message_link_preview,.link_preview,.tgme_widget_message_document,.tgme_widget_message_photo,.tgme_widget_message_video,.tgme_widget_message_forwarded_from"
 	if msg.Find("a[href]").FilterFunction(func(_ int, anchor *goquery.Selection) bool {
+		if anchor.Closest(channelChrome).Length() > 0 && anchor.Closest(editorial).Length() == 0 {
+			return false
+		}
 		href := strings.TrimSpace(anchor.AttrOr("href", ""))
 		if href == "" {
 			return false

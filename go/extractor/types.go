@@ -122,6 +122,20 @@ type Result struct {
 	TruncationPolicy string         `json:"truncation_policy,omitempty"`
 }
 
+// RestoreArticleURL keeps extracted evidence under the requested article's
+// identity after the caller has extracted from a redirected document.
+func (r *Result) RestoreArticleURL(original string) {
+	if r.URL != "" && r.URL != original && r.ExtractedFrom == "" {
+		r.ExtractedFrom = r.URL
+	}
+	if r.MediaEvidence != nil && r.MediaEvidence.EditorialCover.ArticleURL == cleanURL(r.URL) {
+		evidence := *r.MediaEvidence
+		evidence.EditorialCover.ArticleURL = original
+		r.MediaEvidence = &evidence
+	}
+	r.URL = original
+}
+
 type MediaEvidence struct {
 	Version        int                    `json:"version"`
 	EditorialCover EditorialCoverEvidence `json:"editorial_cover"`

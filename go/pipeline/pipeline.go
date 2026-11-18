@@ -462,10 +462,7 @@ func (r Runner) Extract(ctx context.Context, request Request) Outcome {
 			}
 		}
 		out.Result = extractor.Extract(ctx, candidate)
-		if out.Result.URL != u {
-			out.Result.ExtractedFrom = out.Result.URL
-			out.Result.URL = u
-		}
+		out.Result.RestoreArticleURL(u)
 		return out
 	}
 	out.Result = page(in)
@@ -495,10 +492,7 @@ func (r Runner) Extract(ctx context.Context, request Request) Outcome {
 				return finishFailure(stopFailure)
 			}
 			if got.State == "extracted" {
-				if got.ExtractedFrom == "" {
-					got.ExtractedFrom = got.URL
-				}
-				got.URL = u
+				got.RestoreArticleURL(u)
 				out.Result = got
 				trace = append(trace, "alternative_url_success")
 				break
@@ -520,10 +514,7 @@ func (r Runner) Extract(ctx context.Context, request Request) Outcome {
 		out.Result = failed(u, classifyFailure(fetchFailure))
 	}
 	out.Result.Trace = trace
-	if out.Result.URL != u {
-		out.Result.ExtractedFrom = out.Result.URL
-		out.Result.URL = u
-	}
+	out.Result.RestoreArticleURL(u)
 	out.NeedsSelectorStudy = out.Result.State != "extracted" && out.Result.Error != "browser_required" && out.StudyHTML != "" && ctx.Err() == nil
 	if out.Result.State == "extracted" {
 		if !request.EnablePageStudy {

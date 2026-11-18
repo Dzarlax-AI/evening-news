@@ -101,6 +101,31 @@ func TestTelegramAdmissionSignalFindsNonPreviewLinksAndUnknownAttachments(t *tes
 	}
 }
 
+func TestTelegramAdmissionIgnoresChannelChromeAndChecksEditorialLinks(t *testing.T) {
+	const header = `<a class="tgme_widget_message_user_photo" href="https://t.me/channel"><img src="/avatar.jpg"></a><div class="tgme_widget_message_author"><a class="tgme_widget_message_owner_name" href="https://t.me/channel">Channel</a></div>`
+	const text = `<div class="tgme_widget_message_text">A short, substantive post.</div>`
+	for _, tc := range []struct {
+		name      string
+		extra     string
+		uncertain bool
+	}{
+		{name: "channel links alone"},
+		{name: "post link", extra: `<div class="tgme_widget_message_text"><a href="https://t.me/channel">Source</a></div>`, uncertain: true},
+		{name: "preview", extra: `<a class="tgme_widget_message_link_preview" href="https://example.test/story">Preview</a>`, uncertain: true},
+		{name: "attachment", extra: `<div class="tgme_widget_message_document"><a href="https://example.test/file.pdf">File</a></div>`, uncertain: true},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			doc, err := goquery.NewDocumentFromReader(strings.NewReader(header + text + tc.extra))
+			if err != nil {
+				t.Fatal(err)
+			}
+			if got := telegramAdmissionUncertain(doc.Selection, "https://t.me/channel/123"); got != tc.uncertain {
+				t.Fatalf("uncertain=%v, want %v", got, tc.uncertain)
+			}
+		})
+	}
+}
+
 func telegramPythonDateString(value time.Time) string {
 	value = value.UTC().Truncate(time.Microsecond)
 	if value.Nanosecond() == 0 {

@@ -113,10 +113,7 @@ func nativeArticleResponse(ctx context.Context, r service.Request, render native
 		strategy = "learned_pattern_browser_rendering"
 	}
 	result := extractor.Extract(ctx, extractor.Input{URL: final, HTML: string(doc.HTML), RenderedHTML: string(doc.HTML), Title: r.Title, SourceType: r.SourceType, Strategy: strategy, Selectors: r.Selectors, LearnedSelector: r.LearnedSelector, LearnedMethod: "browser_rendering", MaxBytes: limit, MaxChars: r.MaxChars})
-	result.URL = r.URL
-	if final != r.URL {
-		result.ExtractedFrom = final
-	}
+	result.RestoreArticleURL(r.URL)
 	resp := service.Response{Outcome: "success", Result: result, FinalURL: final}
 	if r.EnablePageStudy && len(doc.HTML) > 0 && len(doc.HTML) <= 2*1024*1024 && (result.State != "extracted" || extractor.StrongListingSignal(string(doc.HTML))) {
 		resp.StudyHTML, resp.StudyDocumentURL = string(doc.HTML), final
@@ -222,10 +219,7 @@ func recoverNativeResourceFailure(ctx context.Context, r service.Request, reason
 	if ctx.Err() != nil || result.State != "extracted" || result.Content == "" || !extractor.HasArticleBodyProvenance(string(doc.HTML), result.Content) {
 		return service.Response{}
 	}
-	result.URL = r.URL
-	if final != r.URL {
-		result.ExtractedFrom = final
-	}
+	result.RestoreArticleURL(r.URL)
 	result.Trace = append(result.Trace, "native_resource_recovered:"+reason)
 	return service.Response{Outcome: "success", Result: result, FinalURL: final}
 }

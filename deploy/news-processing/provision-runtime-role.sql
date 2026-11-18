@@ -1,4 +1,4 @@
--- Operator-run after migrations through 022_article_dedup_trial succeed.
+-- Operator-run after migrations through 024_article_media_evidence succeed.
 -- Connect as the News database administrator. No password is stored here.
 \set ON_ERROR_STOP on
 \if :{?news_schema}
@@ -65,7 +65,7 @@ GRANT SELECT (id, title, source_title, url, content, summary, source_id,
               published_at, summary_processed, category_processed, ad_processed,
               is_advertisement, processing_attempts, processing_state, next_attempt_at,
               last_processing_error, fetched_at, image_url, media_files, hash_content, ad_confidence, ad_type,
-              ad_reasoning, processed, completed_processing_claim)
+              ad_reasoning, processed, completed_processing_claim, telegram_context)
 ON :"news_schema".articles TO news_processing_runtime;
 GRANT UPDATE (title, content, summary, summary_processed, category_processed, ad_processed,
               is_advertisement, processing_attempts, processing_state, next_attempt_at,

@@ -380,12 +380,6 @@ func reparseArticle(ctx context.Context, r service.Request) service.Response {
 	if !ok || ctx.Err() != nil {
 		return fallback
 	}
-	result.URL = r.URL
-	if result.MediaEvidence != nil {
-		result.MediaEvidence.EditorialCover.ArticleURL = r.URL
-	}
-	if p.DocumentURL != r.URL {
-		result.ExtractedFrom = p.DocumentURL
-	}
+	result.RestoreArticleURL(r.URL)
 	return service.Response{Applied: true, Outcome: "success", Result: result, FinalURL: p.DocumentURL}
 }
