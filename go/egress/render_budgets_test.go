@@ -95,18 +95,28 @@ func TestRenderBudgetScopedBudgetAggregatesAndPreservesNeighbor(t *testing.T) {
 	if status != 200 {
 		t.Fatal("neighbor rejected")
 	}
+	// Connect both tunnels before sending traffic. Otherwise the first
+	// can exhaust the budget while the other is reading its CONNECT reply.
+	tunnels := make([]struct {
+		conn   net.Conn
+		reader *bufio.Reader
+	}, 2)
+	for i := range tunnels {
+		c, reader, status := testScopedConnect(t, server.URL, bad)
+		defer c.Close()
+		if status != 200 {
+			t.Fatalf("shared-budget tunnel %d rejected: %d", i, status)
+		}
+		tunnels[i].conn, tunnels[i].reader = c, reader
+	}
 	var wg sync.WaitGroup
-	for i := 0; i < 2; i++ {
+	for _, tunnel := range tunnels {
 		wg.Add(1)
 		go func() {
 			defer wg.Done()
-			c, r, status := testScopedConnect(t, server.URL, bad)
-			defer c.Close()
-			if status != 200 {
-				return
-			}
-			go c.Write(bytes.Repeat([]byte("x"), 2048))
-			io.Copy(io.Discard, r)
+			// One echo charges at most 800 bytes. Two cannot fit in 1024.
+			go tunnel.conn.Write(bytes.Repeat([]byte("x"), 400))
+			io.Copy(io.Discard, tunnel.reader)
 		}()
 	}
 	wg.Wait()
