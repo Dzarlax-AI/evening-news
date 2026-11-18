@@ -43,7 +43,7 @@ type ContextReader interface {
 	Get(context.Context, string, int) (authority.ExecutionContext, error)
 }
 
-// Compute must implement all three operations and their precise input semantics.
+// Compute must implement all supported operations and their precise input semantics.
 // It is invoked only after a successful current-claim check and must not hold a
 // database connection over network calls. It is responsible for fencing writes.
 type Compute interface {
@@ -183,7 +183,7 @@ func (h *Handler) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	var req Request
-	if privateapi.DecodeJSON(raw, &req) != nil || req.Version != 1 || !uuidRE.MatchString(req.RunID) || req.ArticleID <= 0 || req.ArticleAttempt <= 0 || !hashRE.MatchString(req.InputFingerprint) || (req.Operation != "analyze" && req.Operation != "extraction_context" && req.Operation != "extraction_feedback") || h.Compute == nil || h.Admission == nil || h.Pool == nil || h.Authority == nil {
+	if privateapi.DecodeJSON(raw, &req) != nil || req.Version != 1 || !uuidRE.MatchString(req.RunID) || req.ArticleID <= 0 || req.ArticleAttempt <= 0 || !hashRE.MatchString(req.InputFingerprint) || (req.Operation != "analyze" && req.Operation != "extraction_context" && req.Operation != "extraction_feedback" && req.Operation != extractionStudy) || h.Compute == nil || h.Admission == nil || h.Pool == nil || h.Authority == nil {
 		detail(w, 422, "Article AI callback request is invalid")
 		return
 	}

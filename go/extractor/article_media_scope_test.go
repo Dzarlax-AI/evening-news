@@ -132,17 +132,17 @@ func TestScopeEvidenceSurvivesJSONTransport(t *testing.T) {
 	}
 }
 
-func TestBlicArticleExcludesAuthorAndLinksPictureVariants(t *testing.T) {
-	page := `<html><body><article><p>` + prose + `</p><figure><picture><source type="image/webp" srcset="https://ocdn.eu/photo-small.webp 1x, https://ocdn.eu/photo-small.webp 2x"><img src="https://ocdn.eu/photo.jpg"></picture></figure><div class="article__author"><img src="https://ocdn.eu/logo.svg"></div><div class="article__images"><img src="https://ocdn.eu/photo-small.webp"><img src="https://ocdn.eu/second.jpg"></div></article></body></html>`
-	r := Extract(context.Background(), Input{URL: "https://www.blic.rs/story", HTML: page, SourceType: "web"})
-	if len(r.Media) != 4 || r.Media[1].Data["article_body_scope"] != "outside" || r.Media[0].Data["canonical_url"] != "https://ocdn.eu/photo.jpg" || r.Media[2].Data["canonical_url"] != "https://ocdn.eu/photo.jpg" || r.Media[3].Data["canonical_url"] != nil {
+func TestArticleExcludesSemanticAuthorAndLinksPictureVariants(t *testing.T) {
+	page := `<html><body><article><p>` + prose + `</p><figure><picture><source type="image/webp" srcset="https://images.example.test/photo-small.webp 1x, https://images.example.test/photo-small.webp 2x"><img src="https://images.example.test/photo.jpg"></picture></figure><div itemprop="author"><img src="https://images.example.test/logo.svg"></div><div class="article__images"><img src="https://images.example.test/photo-small.webp"><img src="https://images.example.test/second.jpg"></div></article></body></html>`
+	r := Extract(context.Background(), Input{URL: "https://publisher.example.test/story", HTML: page, SourceType: "web"})
+	if len(r.Media) != 4 || r.Media[1].Data["article_body_scope"] != "outside" || r.Media[0].Data["canonical_url"] != "https://images.example.test/photo.jpg" || r.Media[2].Data["canonical_url"] != "https://images.example.test/photo.jpg" || r.Media[3].Data["canonical_url"] != nil {
 		t.Fatalf("media: %+v", r.Media)
 	}
 }
 
 func TestPictureEvidenceSkipsArtDirectionAndSignedURLs(t *testing.T) {
-	page := `<article><p>` + prose + `</p><picture><source type="image/webp" media="(max-width: 500px)" srcset="https://ocdn.eu/mobile.jpg 1x"><img src="https://ocdn.eu/wide.jpg"></picture><img src="https://ocdn.eu/mobile.jpg"><picture><source type="image/webp" srcset="https://ocdn.eu/other.jpg?sig=x 1x"><img src="https://ocdn.eu/lead.jpg"></picture><img src="https://ocdn.eu/other.jpg?sig=x"></article>`
-	r := Extract(context.Background(), Input{URL: "https://www.blic.rs/story", HTML: page, SourceType: "web"})
+	page := `<article><p>` + prose + `</p><picture><source type="image/webp" media="(max-width: 500px)" srcset="https://images.example.test/mobile.jpg 1x"><img src="https://images.example.test/wide.jpg"></picture><img src="https://images.example.test/mobile.jpg"><picture><source type="image/webp" srcset="https://images.example.test/other.jpg?sig=x 1x"><img src="https://images.example.test/lead.jpg"></picture><img src="https://images.example.test/other.jpg?sig=x"></article>`
+	r := Extract(context.Background(), Input{URL: "https://publisher.example.test/story", HTML: page, SourceType: "web"})
 	for _, m := range r.Media {
 		if m.Data["canonical_url"] != nil {
 			t.Fatalf("unsafe association: %+v", r.Media)
@@ -151,64 +151,46 @@ func TestPictureEvidenceSkipsArtDirectionAndSignedURLs(t *testing.T) {
 }
 
 func TestPictureEvidenceRejectsInvalidDescriptor(t *testing.T) {
-	page := `<article><p>` + prose + `</p><picture><source type="image/webp" srcset="https://ocdn.eu/detail.webp bogus"><img src="https://ocdn.eu/cover.jpg"></picture><img src="https://ocdn.eu/detail.webp"></article>`
-	r := Extract(context.Background(), Input{URL: "https://www.blic.rs/story", HTML: page, SourceType: "web"})
+	page := `<article><p>` + prose + `</p><picture><source type="image/webp" srcset="https://images.example.test/detail.webp bogus"><img src="https://images.example.test/cover.jpg"></picture><img src="https://images.example.test/detail.webp"></article>`
+	r := Extract(context.Background(), Input{URL: "https://publisher.example.test/story", HTML: page, SourceType: "web"})
 	if len(r.Media) != 2 || r.Media[0].Data["canonical_url"] != nil || r.Media[1].Data["canonical_url"] != nil {
 		t.Fatalf("invalid descriptor linked: %+v", r.Media)
 	}
 }
 
 func TestPictureEvidenceRejectsAmbiguousCommaInURL(t *testing.T) {
-	page := `<article><p>` + prose + `</p><picture><source type="image/webp" srcset="https://ocdn.eu/path,https://ocdn.eu/detail.webp 1x"><img src="https://ocdn.eu/cover.jpg"></picture><img src="https://ocdn.eu/detail.webp"></article>`
-	r := Extract(context.Background(), Input{URL: "https://www.blic.rs/story", HTML: page, SourceType: "web"})
+	page := `<article><p>` + prose + `</p><picture><source type="image/webp" srcset="https://images.example.test/path,https://images.example.test/detail.webp 1x"><img src="https://images.example.test/cover.jpg"></picture><img src="https://images.example.test/detail.webp"></article>`
+	r := Extract(context.Background(), Input{URL: "https://publisher.example.test/story", HTML: page, SourceType: "web"})
 	if len(r.Media) != 2 || r.Media[0].Data["canonical_url"] != nil || r.Media[1].Data["canonical_url"] != nil {
 		t.Fatalf("ambiguous srcset linked: %+v", r.Media)
 	}
 }
 
 func TestEditorialCoverEvidenceRequiresTrustedArticle(t *testing.T) {
-	page := `<html><head><meta property="og:type" content="article"><meta property="og:image" content="https://cdn.test/cover.jpg"></head><body><article><p>` + prose + `</p></article></body></html>`
-	r := Extract(context.Background(), Input{URL: "https://aisecret.us/story", HTML: page, SourceType: "web"})
-	if r.MediaEvidence == nil || r.MediaEvidence.EditorialCover.URL != "https://cdn.test/cover.jpg" || r.MediaEvidence.EditorialCover.ArticleURL != "https://aisecret.us/story" {
-		t.Fatalf("missing evidence: %+v", r.MediaEvidence)
+	const page = "https://publisher.example.test/story"
+	const cover = "https://cdn.test/cover.jpg"
+	articleHTML := `<html><head><meta property="og:type" content="article"><meta property="og:image" content="` + cover + `"></head><body><article><p>` + prose + `</p><img src="` + cover + `"></article></body></html>`
+	r := Extract(context.Background(), Input{URL: page, HTML: articleHTML, SourceType: "web"})
+	if r.MediaEvidence == nil || r.MediaEvidence.EditorialCover.URL != cover || r.MediaEvidence.EditorialCover.ArticleURL != page {
+		t.Fatalf("missing corroborated cover: %+v", r.MediaEvidence)
 	}
-	for _, tc := range []struct{ url, html string }{{"https://aisecret.us/list", strings.Replace(page, `content="article"`, `content="website"`, 1)}, {"https://other.test/story", page}} {
-		got := Extract(context.Background(), Input{URL: tc.url, HTML: tc.html, SourceType: "web"})
+	for _, html := range []string{
+		strings.Replace(articleHTML, `content="article"`, `content="website"`, 1),
+		strings.Replace(articleHTML, `<img src="`+cover+`">`, `<aside><img src="`+cover+`"></aside>`, 1),
+		strings.Replace(articleHTML, `<img src="`+cover+`">`, `<img src="/some-other-photo.jpg">`, 1),
+	} {
+		got := Extract(context.Background(), Input{URL: page, HTML: html, SourceType: "web"})
 		if got.MediaEvidence != nil {
-			t.Fatalf("untrusted evidence: %+v", got.MediaEvidence)
-		}
-	}
-	noBody := `<html><head><meta property="og:type" content="article"><meta property="og:image" content="https://cdn.test/cover.jpg"><meta name="description" content="` + prose + `"></head><body><img src="/logo.svg"></body></html>`
-	got := Extract(context.Background(), Input{URL: "https://aisecret.us/story", HTML: noBody, SourceType: "web", Strategy: "meta_description"})
-	if got.MediaEvidence != nil {
-		t.Fatalf("metadata-only fallback produced evidence: %+v", got.MediaEvidence)
-	}
-}
-
-func TestN1ServiceControlsAndHuggingFaceBadgesDoNotHideEditorialSVG(t *testing.T) {
-	tests := []struct{ url, body string }{
-		{"https://n1info.rs/story", `<div class="social-share-bar"><img src="/facebook.svg"></div><section class="live-blog"><div class="header"><img src="/static/images/footer.avif"></div></section><img src="/media/images/Follow_Us.original.svg"><img src="/chart.svg">`},
-		{"https://huggingface.co/team/model", `<img src="https://cdn-avatars.huggingface.co/avatar.png"><img src="https://img.shields.io/badge/test.svg"><img src="/chart.svg">`},
-	}
-	for _, tc := range tests {
-		r := Extract(context.Background(), Input{URL: tc.url, HTML: article(prose + tc.body), SourceType: "web"})
-		_, selected := mediaViews(r.Media)
-		if len(selected) != 1 || !strings.HasSuffix(selected[0], "/chart.svg") {
-			t.Fatalf("%s selected=%v", tc.url, selected)
+			t.Fatalf("untrusted cover evidence: %+v", got.MediaEvidence)
 		}
 	}
 }
 
-func TestHuggingFaceBlobWrapperRequiresMatchingResolveImage(t *testing.T) {
-	page := `<article><p>` + prose + `</p><a href="/owner/model/blob/main/plot.png"><img src="/owner/model/resolve/main/plot.png"></a><a href="/owner/model/blob/main/other.png"><img src="/owner/model/resolve/main/different.png"></a><a href="/owner/model/blob/main/signed.png?x=1"><img src="/owner/model/resolve/main/signed.png"></a></article>`
-	r := Extract(context.Background(), Input{URL: "https://huggingface.co/owner/model", HTML: page, SourceType: "web"})
-	got := map[string]bool{}
-	for _, m := range r.Media {
-		if m.Data["html_wrapper"] == true {
-			got[m.URL] = true
-		}
-	}
-	if len(got) != 1 || !got["https://huggingface.co/owner/model/blob/main/plot.png"] {
-		t.Fatalf("wrapper evidence=%v media=%+v", got, r.Media)
+func TestArticleScopeKeepsEditorialSVGAndExcludesShareControls(t *testing.T) {
+	body := prose + `<div class="social-share-bar"><img src="/social.svg"></div><img src="/chart.svg">`
+	r := Extract(context.Background(), Input{URL: "https://publisher.example.test/story", HTML: article(body), SourceType: "web"})
+	_, selected := mediaViews(r.Media)
+	if len(selected) != 1 || !strings.HasSuffix(selected[0], "/chart.svg") {
+		t.Fatalf("selected=%v", selected)
 	}
 }

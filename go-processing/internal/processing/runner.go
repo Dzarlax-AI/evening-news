@@ -740,6 +740,12 @@ func (p *Processor) extract(ctx context.Context, f store.Fence, a store.Article,
 	if err != nil {
 		return out, err
 	}
+	if candidate, applied := p.applyExtractionStudy(ctx, f, a, attempt, fp, out); applied {
+		// Applied selectors are specific to this snapshot. Do not train the
+		// domain-wide learned selector from this result.
+		return candidate, nil
+	}
+	out.study = nil
 	observations := make([]map[string]any, 0, len(out.Observations))
 	for _, o := range out.Observations {
 		if len(observations) == 64 {

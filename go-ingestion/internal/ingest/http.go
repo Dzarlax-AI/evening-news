@@ -1360,9 +1360,6 @@ func normalize(r collectResult, src store.Source, page *store.PageState) []store
 			if page != nil && !include[index] {
 				continue
 			}
-			if samePageMonitorSourceURL(src.URL, a.Link) {
-				continue
-			}
 			c := a.Description
 			out = append(out, store.Article{Title: a.Title, URL: a.Link, Content: &c, PublishedAt: a.Published, SourceType: r.Type, SourceName: src.Name, MediaFiles: json.RawMessage(`[]`), RawData: map[string]any{}})
 		}
@@ -1371,22 +1368,6 @@ func normalize(r collectResult, src store.Source, page *store.PageState) []store
 	return []store.Article{}
 }
 
-// This particular monitored source was confirmed to be a listing page.
-// Other monitors can legitimately publish updates at their own URL.
-func samePageMonitorSourceURL(source, candidate string) bool {
-	a, e1 := url.Parse(source)
-	b, e2 := url.Parse(candidate)
-	if e1 != nil || e2 != nil || !validHTTPURL(source) || !validHTTPURL(candidate) {
-		return false
-	}
-	if !strings.EqualFold(a.Hostname(), "studenti.org.rs") || strings.TrimRight(a.EscapedPath(), "/") != "/vesti" || a.RawQuery != "" {
-		return false
-	}
-	if !strings.EqualFold(a.Scheme, b.Scheme) || !strings.EqualFold(a.Host, b.Host) || a.RawQuery != b.RawQuery {
-		return false
-	}
-	return strings.TrimRight(a.EscapedPath(), "/") == strings.TrimRight(b.EscapedPath(), "/")
-}
 func pageState(old store.PageState, r *pageMonitorResult, cfg map[string]any) *store.PageState {
 	limit, ok := positiveConfig(cfg, "max_articles_per_check", 100)
 	if !ok || limit == 0 {

@@ -599,19 +599,3 @@ func TestPageArticleHashMatchesPythonUnicodeCodepointPrefix(t *testing.T) {
 		t.Fatalf("Python-compatible Unicode hash mismatch: got %s want %s", got, want)
 	}
 }
-
-func TestPageMonitorRejectsOwnSourceButKeepsStudentiArticle(t *testing.T) {
-	source := store.Source{Name: "Studenti", Type: "custom", URL: "https://studenti.org.rs/vesti/"}
-	input := collectResult{Type: "custom", PageMonitor: &pageMonitorResult{Items: []pageMonitorItem{{Title: "Listing", Link: "https://studenti.org.rs/vesti/"}, {Title: "Article", Link: "https://studenti.org.rs/vesti/cupic_gasic/"}}}}
-	page := &store.PageState{CandidateIndexes: []int{0, 1}}
-	got := normalize(input, source, page)
-	if len(got) != 1 || got[0].URL != "https://studenti.org.rs/vesti/cupic_gasic/" {
-		t.Fatalf("articles=%+v", got)
-	}
-	if !samePageMonitorSourceURL(source.URL, "https://STUDENTI.ORG.RS/vesti#top") || samePageMonitorSourceURL(source.URL, "https://studenti.org.rs/vesti/?page=2") {
-		t.Fatal("incorrect source comparison")
-	}
-	if samePageMonitorSourceURL("https://example.test/updates", "https://example.test/updates") {
-		t.Fatal("ordinary single-page monitor was suppressed")
-	}
-}

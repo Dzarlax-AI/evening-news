@@ -415,11 +415,6 @@ func extractWeb(ctx context.Context, in Input, r Result) Result {
 		r.Error = "invalid_html"
 		return r
 	}
-	if (in.SourceType == "article" || in.SourceType == "web" || in.SourceType == "") && (confirmedStudentiListing(d, in.URL) || (in.RenderedHTML != "" && confirmedStudentiListing(parse(in.RenderedHTML), in.URL))) {
-		r.State = "unsupported"
-		r.Error = "non_article_listing"
-		return r
-	}
 	metadata(d, &r)
 	try := func(method string) bool {
 		if ctx.Err() != nil {
@@ -430,31 +425,6 @@ func extractWeb(ctx context.Context, in Input, r Result) Result {
 		var s, sel string
 		var mediaBody *goquery.Selection
 		md := d
-		browserMethod := method == "learned_pattern_browser_rendering" || method == "browser_rendering" || method == "browser_heuristics"
-		if browserMethod && in.RenderedHTML != "" {
-			md = parse(in.RenderedHTML)
-		}
-		if (in.SourceType == "article" || in.SourceType == "web" || in.SourceType == "") && (!browserMethod || in.RenderedHTML != "") {
-			if content, selector, cover, body, ok := verifiedSourceLayout(md, in.URL, in.MaxChars); ok {
-				r.Content, r.SelectorUsed = content, selector
-				r.Method = "enhanced_selectors"
-				if browserMethod {
-					r.Method = "browser_rendering"
-				}
-				metadata(md, &r)
-				r.ImageURL = cover
-				page := in.HTML
-				if browserMethod {
-					page = in.RenderedHTML
-				}
-				var truncated bool
-				r.Media, truncated = scopedArticleMedia(page, in.URL, body)
-				if truncated {
-					r.Trace = append(r.Trace, "media_truncated")
-				}
-				return true
-			}
-		}
 		switch method {
 		case "learned_pattern":
 			sel = in.LearnedSelector
@@ -582,10 +552,9 @@ func extractWeb(ctx context.Context, in Input, r Result) Result {
 		r.SelectorUsed = sel
 		metadata(md, &r)
 		if in.SourceType == "article" || in.SourceType == "web" || in.SourceType == "" {
-			publisher, _ := url.Parse(in.URL)
-			if publisher != nil && (publisher.Hostname() == "aisecret.us" || publisher.Hostname() == "www.aisecret.us") && mediaBody != nil && mediaBody.Length() > 0 && strings.EqualFold(strings.TrimSpace(meta(md, `meta[property="og:type"]`)), "article") {
+			if mediaBody != nil && mediaBody.Length() > 0 && strings.EqualFold(strings.TrimSpace(meta(md, `meta[property="og:type"]`)), "article") {
 				cover := safeRSSHTTPURL(meta(md, `meta[property="og:image"]`), in.URL)
-				if cover != "" && len(cover) <= 2048 && len(in.URL) <= 2048 {
+				if cover != "" && len(cover) <= 2048 && len(in.URL) <= 2048 && bodyContainsImage(mediaBody, in.URL, cover) {
 					r.MediaEvidence = &MediaEvidence{Version: 1, EditorialCover: EditorialCoverEvidence{URL: cover, Source: "og_image", ArticleURL: in.URL}}
 				}
 			}

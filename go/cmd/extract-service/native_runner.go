@@ -2,6 +2,8 @@ package main
 
 import (
 	"context"
+	"crypto/sha256"
+	"encoding/hex"
 	"errors"
 	"net/url"
 	"strings"
@@ -116,6 +118,12 @@ func nativeArticleResponse(ctx context.Context, r service.Request, render native
 		result.ExtractedFrom = final
 	}
 	resp := service.Response{Outcome: "success", Result: result, FinalURL: final}
+	if r.EnablePageStudy && len(doc.HTML) > 0 && len(doc.HTML) <= 2*1024*1024 && (result.State != "extracted" || extractor.StrongListingSignal(string(doc.HTML))) {
+		resp.StudyHTML, resp.StudyDocumentURL = string(doc.HTML), final
+		sum := sha256.Sum256(doc.HTML)
+		resp.SnapshotDigest = hex.EncodeToString(sum[:])
+	}
+
 	if result.State == "resource_limit" {
 		resp.Outcome, resp.Error = "rejected", &service.Failure{Code: "resource_limit"}
 		resp.Error.Reason = extractedResourceReason(result.Error)

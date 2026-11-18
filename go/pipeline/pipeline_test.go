@@ -3,7 +3,6 @@ package pipeline
 import (
 	"context"
 	"errors"
-	"fmt"
 	"strings"
 	"testing"
 
@@ -353,24 +352,15 @@ func TestUnavailableBrowserAdmissionIsNotPolicyDenial(t *testing.T) {
 	}
 }
 
-func TestStudentiListingIsTerminalBeforeAlternativeOrContentFallback(t *testing.T) {
-	list := `<main><section><ul>`
-	for i := 0; i < 12; i++ {
-		list += fmt.Sprintf(`<li><a class="clear" href="/vesti/story-%d/">Story</a></li>`, i)
-	}
-	list += `</ul></section></main>`
-	for _, strategy := range []string{"auto", "readability"} {
-		fetches := 0
-		r := Runner{Admit: func(context.Context, string) error { return nil }, Fetch: func(context.Context, string, transport.Options) (transport.Document, error) {
-			fetches++
-			return doc(list), nil
-		}, Render: func(context.Context, string, string, transport.BrowserOptions) (transport.RenderedDocument, error) {
-			t.Fatal("listing triggered browser")
-			return transport.RenderedDocument{}, nil
-		}}
-		got := r.Extract(context.Background(), Request{Input: extractor.Input{URL: "https://studenti.org.rs/vesti/", SourceType: "article", Strategy: strategy, Content: body, LearnedSelector: "main", LearnedMethod: "enhanced_selectors"}})
-		if got.Result.State != "unsupported" || got.Result.Error != "non_article_listing" || got.Result.Content != "" || got.Result.ImageURL != "" || got.NeedsSelectorStudy || fetches != 1 {
-			t.Fatalf("%s result=%+v fetches=%d", strategy, got, fetches)
-		}
+func TestOptionalStudySnapshotFailureAndRedirect(t *testing.T) {
+	const original = "https://news.example/start"
+	const final = "https://news.example/redirected"
+	html := `<html><body><main>Small response without an extractable article.</main></body></html>`
+	r := Runner{HTTPOnly: true, Fetch: func(context.Context, string, transport.Options) (transport.Document, error) {
+		return transport.Document{HTML: []byte(html), URL: final, StatusCode: 200}, nil
+	}}
+	out := r.Extract(context.Background(), Request{Input: extractor.Input{URL: original}, EnablePageStudy: true})
+	if out.StudyHTML != html || out.StudyDocumentURL != final {
+		t.Fatalf("snapshot did not preserve redirected document: URL=%q HTML=%d", out.StudyDocumentURL, len(out.StudyHTML))
 	}
 }

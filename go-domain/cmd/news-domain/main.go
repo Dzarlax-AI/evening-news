@@ -262,8 +262,9 @@ func run() error {
 	ops.Source = &sourceprobe.Probe{Client: extractorClient}
 	memory := learning.New(pool)
 	memory.Guard = guard
-	mux.Handle("POST /internal/v1/article-ai", &callbacks.Handler{Token: aiToken, Guard: guard, Authority: execution, Pool: pool, Admission: callbacks.NewAdmission(16, 64, 1024*1024), Compute: &callbacks.ArticleCompute{Runtime: runtime, Learning: memory, MaxTextChars: limit}})
-	mux.Handle("POST /internal/v1/ingestion/selectors", &selectors.Handler{Token: jobToken, Guard: guard, Authority: execution, Pool: pool, Store: memory, Analyzer: selectors.NewAnalyzer(runtime)})
+	selectorAnalyzer := selectors.NewAnalyzer(runtime)
+	mux.Handle("POST /internal/v1/article-ai", &callbacks.Handler{Token: aiToken, Guard: guard, Authority: execution, Pool: pool, Admission: callbacks.NewAdmission(16, 64, 1024*1024), Compute: &callbacks.ArticleCompute{Runtime: runtime, SelectorAnalyzer: selectorAnalyzer, Learning: memory, MaxTextChars: limit}})
+	mux.Handle("POST /internal/v1/ingestion/selectors", &selectors.Handler{Token: jobToken, Guard: guard, Authority: execution, Pool: pool, Store: memory, Analyzer: selectorAnalyzer})
 	allowCreateAll := true
 	if raw, present := source.lookup("ALLOW_CREATE_ALL"); present && raw != "" {
 		allowCreateAll, err = strconv.ParseBool(raw)

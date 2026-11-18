@@ -18,7 +18,7 @@ func validatedMediaEvidence(raw json.RawMessage, articleURL string) json.RawMess
 		} `json:"editorial_cover"`
 	}
 	if json.Unmarshal(raw, &evidence) != nil || evidence.Version != 1 ||
-		evidence.Cover.Source != "og_image" || evidence.Cover.ArticleURL != articleURL {
+		(evidence.Cover.Source != "og_image" && evidence.Cover.Source != "selector_study") || evidence.Cover.ArticleURL != articleURL {
 		return nil
 	}
 	u, err := url.Parse(evidence.Cover.URL)

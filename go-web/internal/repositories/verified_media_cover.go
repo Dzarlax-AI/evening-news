@@ -21,7 +21,7 @@ func projectArticleMediaWithCover(raw []any, sourceType, articleURL string, evid
 		} `json:"editorial_cover"`
 	}
 	if json.Unmarshal(evidence, &item) != nil || item.Version != 1 ||
-		item.Cover.Source != "og_image" || item.Cover.ArticleURL != articleURL {
+		(item.Cover.Source != "og_image" && item.Cover.Source != "selector_study") || item.Cover.ArticleURL != articleURL {
 		return media, cover
 	}
 	u, err := url.Parse(item.Cover.URL)

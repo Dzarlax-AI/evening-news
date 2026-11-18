@@ -53,16 +53,6 @@ func TestProjectArticleMediaRollbackAndSelectedView(t *testing.T) {
 	}
 }
 
-func TestVergeOnlyConfirmedFullFrameVariantsMerge(t *testing.T) {
-	mk := func(u string) any { return map[string]any{"type": "image", "source": "rss_feed", "url": u} }
-	base := "https://platform.theverge.com/wp-content/uploads/sites/2/2026/11/EA-Sports-FC-27.png"
-	raw := []any{mk(base + "?quality=90&strip=all&crop=0,0,100,100"), mk(base + "?w=300"), mk(base + "?crop=10,0,80,100&w=300"), mk(base + "?w=300&signature=abc"), mk("https://other.test/_next/image?url=one"), mk("https://other.test/_next/image?url=two")}
-	got, _ := projectArticleMedia(raw, "rss")
-	if len(got) != 5 || !reflect.DeepEqual(got, []any{raw[0], raw[2], raw[3], raw[4], raw[5]}) {
-		t.Fatalf("projection=%v", got)
-	}
-}
-
 func TestProjectArticleMediaOmitsConfirmedHTMLWrapper(t *testing.T) {
 	raw := []any{map[string]any{"type": "image", "url": "https://huggingface.co/a/b/resolve/main/chart.png"}, map[string]any{"type": "image", "url": "https://huggingface.co/a/b/blob/main/chart.png", "data": map[string]any{"html_wrapper": true}}}
 	got, _ := projectArticleMedia(raw, "web")
@@ -71,15 +61,18 @@ func TestProjectArticleMediaOmitsConfirmedHTMLWrapper(t *testing.T) {
 	}
 }
 
-func TestVergeFullSizeReplacesEarlierThumbnailInPlace(t *testing.T) {
-	base := "https://platform.theverge.com/wp-content/uploads/sites/2/2026/11/photo.png"
-	mk := func(u string) any { return map[string]any{"type": "image", "source": "rss_feed", "url": u} }
-	raw := []any{mk(base + "?w=300"), mk("https://example.test/second.png"), mk(base + "?quality=90&strip=all&crop=0,0,100,100")}
-	got, primary := projectArticleMedia(raw, "rss")
-	if len(got) != 2 || !reflect.DeepEqual(got, []any{raw[2], raw[1]}) || primary == nil || *primary != base+"?quality=90&strip=all&crop=0,0,100,100" {
-		t.Fatalf("got=%v primary=%v", got, primary)
+func TestSelectorStudyCoverDoesNotDependOnGalleryOrder(t *testing.T) {
+	media := []any{
+		map[string]any{"type": "image", "url": "https://images.example/body.jpg"},
+		map[string]any{"type": "image", "url": "https://images.example/cover.jpg"},
 	}
-	if raw[0].(map[string]any)["url"] != base+"?w=300" {
-		t.Fatal("raw changed")
+	evidence := []byte(`{"version":1,"editorial_cover":{"source":"selector_study","url":"https://images.example/cover.jpg","article_url":"https://publisher.example/story"}}`)
+	projected, cover := projectArticleMediaWithCover(media, "custom", "https://publisher.example/story", evidence)
+	if cover == nil || *cover != "https://images.example/cover.jpg" || !reflect.DeepEqual(projected, media) {
+		t.Fatal("verified cover should be used with unchanged gallery order")
+	}
+	_, foreignCover := projectArticleMediaWithCover(media, "custom", "https://publisher.example/another", evidence)
+	if foreignCover == nil || *foreignCover != "https://images.example/body.jpg" {
+		t.Fatal("a cover verified for another article was used")
 	}
 }

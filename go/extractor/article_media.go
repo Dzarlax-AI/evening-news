@@ -32,18 +32,7 @@ func articleMediaFromBody(body *goquery.Selection, base string) ([]Media, bool, 
 	}
 	clone := body.Clone()
 	pruneRecommendationControls(clone)
-	clone.Find("script,style,template,nav,aside,footer,form,dialog,[role=dialog],[aria-modal=true],[role=navigation],[role=contentinfo],[data-native-ad-id],.newsletter-signup,.subscription-widget,.subscribe-widget,.ad-container,.advertisement").Remove()
-	if u, err := url.Parse(base); err == nil && (u.Hostname() == "blic.rs" || u.Hostname() == "www.blic.rs") {
-		clone.Find(".article__author").Remove()
-	}
-	if u, err := url.Parse(base); err == nil {
-		switch u.Hostname() {
-		case "n1info.rs", "www.n1info.rs":
-			clone.Find(`.social-share-bar, section.live-blog > .header, img[src^="/media/images/Follow_Us"], img[src="/media/images/x.original.original.svg"], img[src="/static/images/footer.avif"]`).Remove()
-		case "huggingface.co", "www.huggingface.co":
-			clone.Find(`img[src^="https://cdn-avatars.huggingface.co/"], img[src^="https://img.shields.io/badge/"]`).Remove()
-		}
-	}
+	clone.Find("script,style,template,nav,aside,footer,form,dialog,[role=dialog],[aria-modal=true],[role=navigation],[role=contentinfo],[data-native-ad-id],.newsletter-signup,.subscription-widget,.subscribe-widget,.ad-container,.advertisement,.social-share-bar,[itemprop=author]").Remove()
 	var parts []string
 	clone.Each(func(_ int, s *goquery.Selection) {
 		if h, err := goquery.OuterHtml(s); err == nil {
@@ -54,60 +43,21 @@ func articleMediaFromBody(body *goquery.Selection, base string) ([]Media, bool, 
 	if addPictureEvidence(clone, media, base) {
 		truncated = true
 	}
-	if markHuggingFaceHTMLWrappers(clone, media, base) {
-		truncated = true
-	}
 	return media, truncated, incomplete
 }
 
-// The confirmed Hugging Face blob link wraps the corresponding resolve image;
-// blob serves HTML, not an image. Require exact, query-free same-page paths.
-func markHuggingFaceHTMLWrappers(body *goquery.Selection, media []Media, base string) bool {
-	page, err := url.Parse(base)
-	if err != nil || page.Hostname() != "huggingface.co" {
-		return false
-	}
-	wrappers := map[string]bool{}
-	body.Find("a[href]").Each(func(_ int, a *goquery.Selection) {
-		href := safeRSSHTTPURL(a.AttrOr("href", ""), base)
-		u, err := url.Parse(href)
-		if err != nil || u.Hostname() != "huggingface.co" || u.RawQuery != "" || u.Fragment != "" || strings.Count(u.Path, "/blob/") != 1 {
-			return
-		}
-		img := safeRSSHTTPURL(a.Find("img[src]").First().AttrOr("src", ""), base)
-		v, err := url.Parse(img)
-		if err != nil || v.Hostname() != "huggingface.co" || v.RawQuery != "" || v.Fragment != "" || v.Path != strings.Replace(u.Path, "/blob/", "/resolve/", 1) {
-			return
-		}
-		wrappers[href] = true
-	})
-	for i := range media {
-		if media[i].Source != "href_link" || !wrappers[media[i].URL] {
-			continue
-		}
-		old := media[i].Data
-		data := make(map[string]any, len(old)+1)
-		for k, v := range old {
-			data[k] = v
-		}
-		data["html_wrapper"] = true
-		media[i].Data = data
-		encoded, err := json.Marshal(media)
-		if err != nil || len(encoded) > maxArticleMediaJSONBytes {
-			media[i].Data = old
-			return true
-		}
-	}
-	return false
+// Require an Open Graph cover to also appear in the selected editorial body.
+func bodyContainsImage(body *goquery.Selection, base, target string) bool {
+	return body.Find("img[src],img[data-src]").AddBackFiltered("img[src],img[data-src]").FilterFunction(func(_ int, img *goquery.Selection) bool {
+		return safeRSSHTTPURL(img.AttrOr("src", img.AttrOr("data-src", "")), base) == target &&
+			img.ParentsFiltered("aside,nav,footer,[itemprop=author],[role=navigation]").Length() == 0 &&
+			!insideRecommendationContainer(img)
+	}).Length() > 0
 }
 
 // addPictureEvidence links only candidates explicitly present in the same
 // picture's unconditional src/srcset. Query-bearing URLs remain independent.
 func addPictureEvidence(body *goquery.Selection, media []Media, base string) bool {
-	publisher, err := url.Parse(base)
-	if err != nil || (publisher.Hostname() != "blic.rs" && publisher.Hostname() != "www.blic.rs") {
-		return false
-	}
 	indexes := make(map[string]int, len(media))
 	for i, m := range media {
 		if m.Type == "image" {
@@ -122,7 +72,7 @@ func addPictureEvidence(body *goquery.Selection, media []Media, base string) boo
 		}
 		primary := safeRSSHTTPURL(img.AttrOr("src", ""), base)
 		p, err := url.Parse(primary)
-		if err != nil || p.Hostname() != "ocdn.eu" || p.RawQuery != "" || p.Fragment != "" {
+		if err != nil || p.RawQuery != "" || p.Fragment != "" {
 			return
 		}
 		first, exists := indexes[primary]
@@ -141,7 +91,7 @@ func addPictureEvidence(body *goquery.Selection, media []Media, base string) boo
 			}
 			for _, u := range urls {
 				parsed, e := url.Parse(u)
-				if e != nil || parsed.Hostname() != "ocdn.eu" || parsed.RawQuery != "" || parsed.Fragment != "" {
+				if e != nil || !strings.EqualFold(parsed.Host, p.Host) || parsed.Scheme != p.Scheme || parsed.RawQuery != "" || parsed.Fragment != "" {
 					continue
 				}
 				if i, ok := indexes[u]; ok && !seen[i] {

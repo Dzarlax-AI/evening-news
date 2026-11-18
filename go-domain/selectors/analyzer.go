@@ -204,3 +204,25 @@ func (a *Analyzer) analyze(ctx context.Context, url, htmlText, contextName, doma
 	}
 	return value, nil
 }
+
+// AnalyzeSnapshot studies this exact HTML without consulting the URL-based
+// selector cache. The caller owns snapshot identity and response admission.
+func (a *Analyzer) AnalyzeSnapshot(ctx context.Context, url, htmlText, contextName, domain string) (*Analysis, error) {
+	if a.Generator == nil {
+		return nil, errors.New("selector generator unavailable")
+	}
+	prepared, err := PrepareStudyHTML(htmlText)
+	if err != nil {
+		return nil, err
+	}
+	text, err := a.Generator.GenerateText(ctx, StudyPrompt(url, prepared, contextName), domain)
+	if err != nil {
+		return nil, err
+	}
+	value, err := parseAnalysis(text)
+	if err != nil {
+		return nil, err
+	}
+	validatePageStudy(value, htmlText)
+	return value, nil
+}

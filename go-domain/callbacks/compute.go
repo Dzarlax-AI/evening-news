@@ -57,9 +57,10 @@ type Learning interface {
 	Feedback(context.Context, Request, authority.Fence, Feedback) (bool, error)
 }
 type ArticleCompute struct {
-	Runtime      *airuntime.Server
-	Learning     Learning
-	MaxTextChars int
+	Runtime          *airuntime.Server
+	SelectorAnalyzer SnapshotAnalyzer
+	Learning         Learning
+	MaxTextChars     int
 }
 
 func object(raw json.RawMessage, required, optional []string) (map[string]json.RawMessage, error) {
@@ -187,6 +188,9 @@ func (c *ArticleCompute) Validate(op string, raw json.RawMessage) error {
 		if !validURL(values["url"]) {
 			return invalidInput
 		}
+	case extractionStudy:
+		_, err := decodeStudyInput(raw)
+		return err
 	case "extraction_context":
 		m, e := object(raw, []string{"url"}, nil)
 		if e != nil {
@@ -283,6 +287,8 @@ func (c *ArticleCompute) Run(ctx context.Context, r Request, f authority.Fence) 
 			return nil, invalidInput
 		}
 		return c.Runtime.AnalyzeCallback(ctx, airuntime.ArticleInput{Title: v.Title, Content: v.Content, URL: v.URL, SourceType: v.SourceType, OriginalContext: v.Original, Locales: v.Locales, MaxTextChars: c.MaxTextChars})
+	case extractionStudy:
+		return c.runExtractionStudy(ctx, r.Input)
 	case "extraction_context":
 		if c.Learning == nil {
 			return nil, ErrNotImplemented

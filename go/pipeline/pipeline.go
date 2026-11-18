@@ -16,8 +16,9 @@ import (
 )
 
 type Request struct {
-	Input          extractor.Input
-	ChromeEndpoint string
+	Input           extractor.Input
+	ChromeEndpoint  string
+	EnablePageStudy bool
 }
 type Observation struct {
 	Selector string `json:"selector"`
@@ -30,8 +31,9 @@ type Outcome struct {
 	Observations       []Observation    `json:"observations"`
 	NeedsSelectorStudy bool             `json:"needs_selector_study"`
 	// StudyHTML is bounded input for the caller's optional AI round trip. It is
-	// returned only on failure and must never be included in logs or metrics.
+	// exposed only through the opted-in private path and never logged.
 	StudyHTML         string `json:"study_html,omitempty"`
+	StudyDocumentURL  string `json:"study_document_url,omitempty"`
 	UpstreamStatus    int    `json:"upstream_status,omitempty"`
 	RetryAfterSeconds *int   `json:"retry_after_seconds,omitempty"`
 	Reason            string `json:"reason,omitempty"`
@@ -329,11 +331,22 @@ func (r Runner) Extract(ctx context.Context, request Request) Outcome {
 				candidate.URL = browserURL
 			}
 			got := extractor.Extract(ctx, candidate)
+			if request.EnablePageStudy && got.State == "extracted" {
+				snapshot := candidate.HTML
+				if strings.Contains(method, "browser") {
+					snapshot = candidate.RenderedHTML
+				}
+				if len(snapshot) <= 2*1024*1024 && extractor.StrongListingSignal(snapshot) {
+					out.StudyHTML, out.StudyDocumentURL = snapshot, candidate.URL
+				} else {
+					out.StudyHTML, out.StudyDocumentURL = "", ""
+				}
+			}
 			if got.State == "resource_limit" {
 				stopFailure = extractor.ErrOutputLimit
 			}
 			trace = append(trace, got.Trace...)
-			if method == "learned_pattern" && got.Error != "non_article_listing" && !strings.HasPrefix(got.Method, "learned_pattern_") {
+			if method == "learned_pattern" && !strings.HasPrefix(got.Method, "learned_pattern_") {
 				got.State = "failed"
 				got.Content = ""
 			}
@@ -353,9 +366,6 @@ func (r Runner) Extract(ctx context.Context, request Request) Outcome {
 			if extractor.HasPopulatedTableCounterpart(pageInput.HTML, pageInput.RenderedHTML) {
 				trace = append(trace, "rendered_table_ready")
 				got = attempt("browser_rendering")
-				if got.Error == "non_article_listing" {
-					return got
-				}
 				if got.State == "extracted" {
 					return got
 				}
@@ -364,9 +374,6 @@ func (r Runner) Extract(ctx context.Context, request Request) Outcome {
 		if pageInput.LearnedMethod == "browser_rendering" || pageInput.LearnedMethod == "learned_pattern_browser_rendering" {
 			render()
 			got = attempt("learned_pattern_browser_rendering")
-			if got.Error == "non_article_listing" {
-				return got
-			}
 			if pageInput.RenderedHTML != "" {
 				out.Observations = append(out.Observations, Observation{Selector: pageInput.LearnedSelector, Method: "browser_rendering", Success: got.State == "extracted", Reason: got.Error})
 			}
@@ -375,9 +382,6 @@ func (r Runner) Extract(ctx context.Context, request Request) Outcome {
 			}
 		} else if pageInput.LearnedSelector != "" {
 			got = attempt("learned_pattern")
-			if got.Error == "non_article_listing" {
-				return got
-			}
 			if pageInput.HTML != "" {
 				out.Observations = append(out.Observations, Observation{Selector: pageInput.LearnedSelector, Method: pageInput.LearnedMethod, Success: got.State == "extracted", Reason: got.Error})
 			}
@@ -387,9 +391,6 @@ func (r Runner) Extract(ctx context.Context, request Request) Outcome {
 		}
 		for _, method := range []string{"enhanced_selectors", "readability"} {
 			got = attempt(method)
-			if got.Error == "non_article_listing" {
-				return got
-			}
 			if got.State == "extracted" {
 				return got
 			}
@@ -399,9 +400,6 @@ func (r Runner) Extract(ctx context.Context, request Request) Outcome {
 		}
 		render()
 		got = attempt("browser_rendering")
-		if got.Error == "non_article_listing" {
-			return got
-		}
 		if got.State == "extracted" {
 			return got
 		}
@@ -434,6 +432,7 @@ func (r Runner) Extract(ctx context.Context, request Request) Outcome {
 		got = attempt("fallback_extraction")
 		if got.State != "extracted" && out.StudyHTML == "" {
 			out.StudyHTML = pageInput.HTML
+			out.StudyDocumentURL = pageInput.URL
 		}
 		return got
 	}
@@ -473,7 +472,7 @@ func (r Runner) Extract(ctx context.Context, request Request) Outcome {
 	if stopFailure != nil {
 		return finishFailure(stopFailure)
 	}
-	if out.Result.State != "extracted" && out.Result.Error != "browser_required" && out.Result.Error != "non_article_listing" && ctx.Err() == nil {
+	if out.Result.State != "extracted" && out.Result.Error != "browser_required" && ctx.Err() == nil {
 		// The first two candidates are intentional, including a canonical self
 		// link. No recursive expansion or unbounded retry queue is permitted.
 		base := out.Result.URL
@@ -513,7 +512,7 @@ func (r Runner) Extract(ctx context.Context, request Request) Outcome {
 		out.Result = failed(u, transportLimit.Error())
 		out.Result.State = "resource_limit"
 		out.StudyHTML = ""
-	} else if out.Result.State != "extracted" && out.Result.Error != "non_article_listing" && in.Content != "" && !r.HTTPOnly {
+	} else if out.Result.State != "extracted" && in.Content != "" && !r.HTTPOnly {
 		in.Strategy = "source_content"
 		out.Result = extractor.Extract(ctx, in)
 		trace = append(trace, "source_content_fallback")
@@ -525,9 +524,12 @@ func (r Runner) Extract(ctx context.Context, request Request) Outcome {
 		out.Result.ExtractedFrom = out.Result.URL
 		out.Result.URL = u
 	}
-	out.NeedsSelectorStudy = out.Result.State != "extracted" && out.Result.Error != "browser_required" && out.Result.Error != "non_article_listing" && out.StudyHTML != "" && ctx.Err() == nil
+	out.NeedsSelectorStudy = out.Result.State != "extracted" && out.Result.Error != "browser_required" && out.StudyHTML != "" && ctx.Err() == nil
 	if out.Result.State == "extracted" {
-		out.StudyHTML = ""
+		if !request.EnablePageStudy {
+			out.StudyHTML = ""
+			out.StudyDocumentURL = ""
+		}
 		if out.Result.SelectorUsed != "" {
 			out.Observations = append(out.Observations, Observation{Selector: out.Result.SelectorUsed, Method: out.Result.MethodUsed, Success: true})
 		}

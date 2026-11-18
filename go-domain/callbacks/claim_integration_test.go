@@ -17,6 +17,7 @@ import (
 
 	"github.com/Dzarlax-AI/evening-news/go-domain/airuntime"
 	"github.com/Dzarlax-AI/evening-news/go-domain/authority"
+	"github.com/Dzarlax-AI/evening-news/go-domain/selectors"
 	"github.com/jackc/pgx/v5"
 	"github.com/jackc/pgx/v5/pgxpool"
 )
@@ -205,6 +206,28 @@ func TestClaimPostgresRejectsChangedArticle(t *testing.T) {
 	if _, err = admin.Exec(ctx, `UPDATE `+q+`.articles SET processing_attempts=1 WHERE id=7`); err != nil {
 		t.Fatal(err)
 	}
+	studyHTML := `<main><article><p>` + strings.Repeat("Synthetic news article about a public event. ", 8) + `</p></article></main>`
+	studyDigest := hash([]byte(studyHTML))
+	studyAnalyzer := &claimStudyAnalyzer{}
+	h.Compute = &ArticleCompute{SelectorAnalyzer: studyAnalyzer}
+	h.Admission = NewAdmission(16, 64, 1024*1024)
+	request.Operation = extractionStudy
+	request.Input, _ = json.Marshal(studyInput{URL: "https://example.test/story", DocumentURL: "https://example.test/story", HTML: studyHTML, SnapshotDigest: studyDigest})
+	wire, _ = json.Marshal(request)
+	for i := 0; i < 2; i++ {
+		if got := call("fixture-ai"); got.Code != 200 || !strings.Contains(got.Body.String(), studyDigest) || !strings.Contains(got.Body.String(), `"article_body_selector":"article"`) || studyAnalyzer.calls != 1 {
+			t.Fatalf("study delivery %d: status=%d model calls=%d", i, got.Code, studyAnalyzer.calls)
+		}
+	}
+	if _, err = admin.Exec(ctx, `UPDATE `+q+`.articles SET processing_attempts=2 WHERE id=7`); err != nil {
+		t.Fatal(err)
+	}
+	if got := call("fixture-ai"); got.Code != 409 || studyAnalyzer.calls != 1 {
+		t.Fatalf("stale study replay status=%d model calls=%d", got.Code, studyAnalyzer.calls)
+	}
+	if _, err = admin.Exec(ctx, `UPDATE `+q+`.articles SET processing_attempts=1 WHERE id=7`); err != nil {
+		t.Fatal(err)
+	}
 	var providerCalls atomic.Int32
 	provider := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		providerCalls.Add(1)
@@ -244,4 +267,11 @@ func (f *fixtureCompute) Run(context.Context, Request, authority.Fence) (any, er
 		f.during()
 	}
 	return map[string]any{"selector": nil, "method": nil}, nil
+}
+
+type claimStudyAnalyzer struct{ calls int }
+
+func (s *claimStudyAnalyzer) AnalyzeSnapshot(_ context.Context, _, _, _, _ string) (*selectors.Analysis, error) {
+	s.calls++
+	return &selectors.Analysis{PageKind: "article", ArticleBody: "article"}, nil
 }

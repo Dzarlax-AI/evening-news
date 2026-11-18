@@ -245,9 +245,6 @@ func Extract(ctx context.Context, in Input) (r Result) {
 		r.Error = err.Error()
 		return r
 	}
-	if r.Error == "non_article_listing" {
-		return r
-	}
 	if r.Content == "" && in.Content != "" && (in.Strategy == "" || in.Strategy == "auto" || in.Strategy == "pipeline") {
 		r.Content = in.Content
 		r.Method = "source_content"

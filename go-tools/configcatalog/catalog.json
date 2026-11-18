@@ -175,7 +175,7 @@
     "migration": "preserve effective value and consuming role during adoption; verify managed parity before switching",
     "precedence": "selected role manifest takes precedence without environment fallback; legacy environment when no file is selected; component default if absent",
     "sources": [
-      "go-domain/cmd/news-domain/main.go:268",
+      "go-domain/cmd/news-domain/main.go:269",
       "go-domain/cmd/news-domain/runtime_config.go:25",
       "go-domain/cmd/news-migrate/main.go:26"
     ],
@@ -479,6 +479,25 @@
     "managed_roles": []
   },
   {
+    "key": "ARTICLE_SELECTOR_STUDY",
+    "owner": "processing",
+    "type": "boolean",
+    "default": "false",
+    "secret": false,
+    "store": "legacy process environment; managed role manifest for background",
+    "reload": "process startup; restart after changing the setting",
+    "migration": "enable only for an authorized article selector study trial",
+    "precedence": "selected role manifest takes precedence without environment fallback; legacy environment when no file is selected; component default if absent",
+    "sources": [
+      "go-background/cmd/news-background/runtime_config.go:13",
+      "go-processing/runner/runner.go:173"
+    ],
+    "class": "runtime",
+    "managed_roles": [
+      "background"
+    ]
+  },
+  {
     "key": "BACKGROUND_EXECUTION_MODE",
     "owner": "domain, web",
     "type": "string",
@@ -489,7 +508,7 @@
     "migration": "preserve effective value and consuming role during adoption; verify managed parity before switching",
     "precedence": "selected role manifest takes precedence without environment fallback; legacy environment when no file is selected; component default if absent",
     "sources": [
-      "go-domain/cmd/news-domain/main.go:274",
+      "go-domain/cmd/news-domain/main.go:275",
       "go-domain/cmd/news-domain/runtime_config.go:25",
       "go-web/internal/config/config.go:145",
       "go-web/internal/config/config.go:51"
@@ -703,7 +722,7 @@
     "migration": "preserve effective value and consuming role during adoption; verify managed parity before switching",
     "precedence": "selected role manifest takes precedence without environment fallback; legacy environment when no file is selected; component default if absent",
     "sources": [
-      "go/cmd/extract-service/main.go:74",
+      "go/cmd/extract-service/main.go:76",
       "go/runtimefile/lookup.go:21"
     ],
     "class": "runtime",
@@ -1338,7 +1357,7 @@
     "precedence": "selected role manifest takes precedence without environment fallback; legacy environment when no file is selected; component default if absent",
     "sources": [
       "go-background/cmd/news-background/runtime_config.go:13",
-      "go-domain/cmd/news-domain/main.go:410",
+      "go-domain/cmd/news-domain/main.go:411",
       "go-domain/cmd/news-domain/runtime_config.go:25",
       "go-processing/runner/runner.go:121"
     ],
@@ -1508,7 +1527,7 @@
     "precedence": "selected role manifest takes precedence without environment fallback; legacy environment when no file is selected; component default if absent",
     "sources": [
       "go-background/cmd/news-background/runtime_config.go:13",
-      "go-domain/cmd/news-domain/main.go:398",
+      "go-domain/cmd/news-domain/main.go:399",
       "go-domain/cmd/news-domain/runtime_config.go:25",
       "go-processing/runner/runner.go:120"
     ],
@@ -1548,7 +1567,7 @@
     "migration": "preserve effective value and consuming role during adoption; verify managed parity before switching",
     "precedence": "selected role manifest takes precedence without environment fallback; legacy environment when no file is selected; component default if absent",
     "sources": [
-      "go/cmd/extract-service/main.go:70",
+      "go/cmd/extract-service/main.go:72",
       "go/runtimefile/lookup.go:21"
     ],
     "class": "runtime",
@@ -1567,7 +1586,7 @@
     "migration": "preserve effective value and consuming role during adoption; verify managed parity before switching",
     "precedence": "selected role manifest takes precedence without environment fallback; legacy environment when no file is selected; component default if absent",
     "sources": [
-      "go/cmd/extract-service/main.go:75",
+      "go/cmd/extract-service/main.go:77",
       "go/runtimefile/lookup.go:21"
     ],
     "class": "runtime",
@@ -1586,7 +1605,7 @@
     "migration": "preserve effective value and consuming role during adoption; verify managed parity before switching",
     "precedence": "selected role manifest takes precedence without environment fallback; legacy environment when no file is selected; component default if absent",
     "sources": [
-      "go/cmd/extract-service/main.go:66",
+      "go/cmd/extract-service/main.go:68",
       "go/runtimefile/lookup.go:21"
     ],
     "class": "runtime",
@@ -1682,7 +1701,7 @@
     "migration": "preserve effective value and consuming role during adoption; verify managed parity before switching",
     "precedence": "selected role manifest takes precedence without environment fallback; legacy environment when no file is selected; component default if absent",
     "sources": [
-      "go/cmd/extract-service/main.go:89",
+      "go/cmd/extract-service/main.go:91",
       "go/cmd/extract-service/native_runtime.go:23",
       "go/runtimefile/lookup.go:21"
     ],
@@ -1702,7 +1721,7 @@
     "migration": "preserve effective value and consuming role during adoption; verify managed parity before switching",
     "precedence": "selected role manifest takes precedence without environment fallback; legacy environment when no file is selected; component default if absent",
     "sources": [
-      "go/cmd/extract-service/main.go:164",
+      "go/cmd/extract-service/main.go:175",
       "go/runtimefile/lookup.go:21"
     ],
     "class": "runtime",
@@ -1993,7 +2012,7 @@
     "migration": "preserve effective value and consuming role during adoption; verify managed parity before switching",
     "precedence": "selected role manifest takes precedence without environment fallback; legacy environment when no file is selected; component default if absent",
     "sources": [
-      "go-domain/cmd/news-domain/main.go:327",
+      "go-domain/cmd/news-domain/main.go:328",
       "go-domain/cmd/news-domain/runtime_config.go:25"
     ],
     "class": "runtime",
@@ -2032,7 +2051,7 @@
     "precedence": "selected role manifest takes precedence without environment fallback; legacy environment when no file is selected; component default if absent",
     "sources": [
       "go-domain/cmd/news-domain/healthcheck.go:31",
-      "go-domain/cmd/news-domain/main.go:331",
+      "go-domain/cmd/news-domain/main.go:332",
       "go-domain/cmd/news-domain/runtime_config.go:25"
     ],
     "class": "runtime",
@@ -2139,7 +2158,7 @@
     "sources": [
       "go-scheduler/cmd/scheduler/main.go:19",
       "go-scheduler/internal/config/config.go:40",
-      "go/cmd/extract-service/main.go:62",
+      "go/cmd/extract-service/main.go:64",
       "go/runtimefile/lookup.go:21"
     ],
     "class": "runtime",
@@ -3968,7 +3987,7 @@
     "migration": "preserve effective value and consuming role during adoption; verify managed parity before switching",
     "precedence": "selected role manifest takes precedence without environment fallback; legacy environment when no file is selected; component default if absent",
     "sources": [
-      "go-domain/cmd/news-domain/main.go:302",
+      "go-domain/cmd/news-domain/main.go:303",
       "go-domain/cmd/news-domain/runtime_config.go:25",
       "go-domain/cmd/news-domain/runtime_config.go:26",
       "go-web/internal/backend/backend.go:113",
