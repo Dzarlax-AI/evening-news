@@ -273,6 +273,8 @@ func leadMediaAllowed(root, n *goquery.Selection) bool {
 	case n.Is("audio"), n.Is("source") && n.Closest("audio").Length() > 0:
 		// A narration player can precede the title inside the article.
 		return true
+	case n.Is("video"):
+		return containsSelection(root, n.Closest("figure"))
 	case n.Is("img,picture,source"):
 		parent := n.Parent()
 		return n.Closest("figure,picture,header").Length() > 0 ||

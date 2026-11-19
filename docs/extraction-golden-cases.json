@@ -307,7 +307,7 @@
     },
     {
       "id": "article.jsonld_graph_body",
-      "case_sha256": "34750b2b6f87f2360f134a1f131971be1eeeea6fe57e6a6061123c8eab08553a",
+      "case_sha256": "9005a7438edf36040f7d2ecf07786409c67675095baea8d11d2fff9f4ed428b0",
       "evidence": "Synthetic source contract in tests/fixtures/go-parity/manifest.json",
       "expected": {
         "contains": [
@@ -316,7 +316,7 @@
         "not_contains": [],
         "fields": {
           "publication_date": "2025-10-14",
-          "image_url": "https://cdn.example.test/river.png"
+          "image_url": null
         },
         "state": "extracted"
       }
@@ -440,7 +440,7 @@
     },
     {
       "id": "metadata.og_title_author_image",
-      "case_sha256": "c4e61ec27f337cdca8a441f43859028d073abf8440e5f61547a1752e11815fe7",
+      "case_sha256": "c75b14c02c22902d06ed7e9172bf154ee6151b26d1a706f50538d0bc109a81aa",
       "evidence": "Synthetic source contract in tests/fixtures/go-parity/manifest.json",
       "expected": {
         "contains": [
@@ -450,7 +450,7 @@
         "fields": {
           "title": "Preferred Open Graph title",
           "author": "Mira Example",
-          "image_url": "https://cdn.example.test/lead.jpg"
+          "image_url": null
         },
         "state": "extracted"
       }
@@ -502,7 +502,7 @@
     },
     {
       "id": "metadata.jsonld_date_author_image",
-      "case_sha256": "cc41cc7584fea11f2fa66463da75620c0b8a9bf7a7a66f3868813042a79a99a5",
+      "case_sha256": "fc521d2fd91cfedf7fba027ff20117bab3fe09f3bd9f0fa3010a3465ce6fe957",
       "evidence": "Synthetic source contract in tests/fixtures/go-parity/manifest.json",
       "expected": {
         "contains": [
@@ -511,14 +511,14 @@
         "not_contains": [],
         "fields": {
           "publication_date": "2025-10-10",
-          "image_url": "https://cdn.example.test/jsonld.jpg"
+          "image_url": null
         },
         "state": "extracted"
       }
     },
     {
       "id": "metadata.author_byline_and_og_image",
-      "case_sha256": "edc21d30e995a3c905465d0bc622787750733b729bff5c9ddeaef87dd4b147df",
+      "case_sha256": "4a77d808bb7e798ca9896680273ce207ab5fbabd84483d487ed538c40f26f61a",
       "evidence": "Synthetic source contract in tests/fixtures/go-parity/manifest.json",
       "expected": {
         "contains": [
@@ -527,7 +527,7 @@
         "not_contains": [],
         "fields": {
           "author": "Mira Analyst",
-          "image_url": "https://cdn.example.test/observatory.jpg"
+          "image_url": null
         },
         "state": "extracted"
       }

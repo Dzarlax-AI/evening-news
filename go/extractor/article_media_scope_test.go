@@ -251,3 +251,25 @@ func TestEditorialMediaUsesProseAndCardBoundaries(t *testing.T) {
 		})
 	}
 }
+
+func TestEditorialVideoInFigureBesideProse(t *testing.T) {
+	const page = "https://fixture.test/report"
+	markup := `<article><h1>Bridge repairs</h1><div><p>` + prose + `</p></div>
+		<figure><video src="/bridge.mp4"><source src="/bridge.webm" type="video/webm"></video>
+		<figcaption>Bridge repairs in progress</figcaption></figure>
+		<aside><figure><video src="/related.mp4"></video></figure></aside>
+		</article>`
+	got := Extract(context.Background(), Input{URL: page, HTML: markup})
+	if got.State != "extracted" || got.MediaEvidence == nil || got.MediaEvidence.ArticleScope != "verified" {
+		t.Fatalf("state=%s evidence=%+v", got.State, got.MediaEvidence)
+	}
+	var videos []string
+	for _, candidate := range got.Media {
+		if order, _ := candidate.Data["editorial_order"].(int); candidate.Type == "video" && order > 0 {
+			videos = append(videos, candidate.URL)
+		}
+	}
+	if want := "https://fixture.test/bridge.mp4,https://fixture.test/bridge.webm"; strings.Join(videos, ",") != want {
+		t.Fatalf("editorial videos=%v, want %s", videos, want)
+	}
+}
