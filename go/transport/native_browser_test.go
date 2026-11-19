@@ -27,7 +27,7 @@ type nativeFixture struct {
 	budgetNext                                                                                                         int
 	budgetRevokeDelay                                                                                                  time.Duration
 	budgetReceipts                                                                                                     map[string]nativeBudgetReceipt
-	responsePolicy, failResponse, stallResponse                                                                        bool
+	responsePolicy, failResponse, stallResponse, exhaustBudgetOnFulfill                                                bool
 	responseParams                                                                                                     map[string]any
 	responseSessions                                                                                                   []string
 	childGuardFail, childRequestURL, childDetach                                                                       string
@@ -493,6 +493,14 @@ func newNativeFixture(t *testing.T) *nativeFixture {
 				result["data"] = "<html><body>Original synthetic document</body></html>"
 				result["eof"] = true
 			case "Fetch.fulfillRequest", "Fetch.continueResponse":
+				if msg.Method == "Fetch.fulfillRequest" && f.exhaustBudgetOnFulfill {
+					f.budgetMu.Lock()
+					id := fmt.Sprintf("%032x", f.budgetNext)
+					receipt := f.budgetReceipts[id]
+					receipt.Exhausted = true
+					f.budgetReceipts[id] = receipt
+					f.budgetMu.Unlock()
+				}
 				f.responseParams = msg.Params
 				f.responseSessions = append(f.responseSessions, msg.Session)
 				protocolErr = f.failResponse
@@ -978,6 +986,34 @@ func TestNativeRPCAdmissionPreservesConcurrentPolicyAndAuthCauses(t *testing.T) 
 				}
 			}
 		})
+	}
+}
+
+func TestNativeWireBudgetCancellationDuringResponseFulfillmentKeepsWorkerReady(t *testing.T) {
+	f := newNativeFixture(t)
+	w := f.worker(t)
+	if err := w.Probe(context.Background()); err != nil {
+		t.Fatal(err)
+	}
+	f.mu.Lock()
+	f.responsePolicy = true
+	f.stallResponse = true
+	f.exhaustBudgetOnFulfill = true
+	f.mu.Unlock()
+
+	got, err := w.Fetch(context.Background(), "https://origin.example/", NativeBrowserOptions{BrowserOptions: BrowserOptions{Timeout: 4 * time.Second}})
+	if NativeResourceLimitReason(err) != "wire_bytes" || errors.Is(err, ErrNativeOwnershipLost) || len(got.HTML) != 0 || !w.Ready() {
+		t.Fatalf("exhausted render: error=%v reason=%q bytes=%d worker ready=%t", err, NativeResourceLimitReason(err), len(got.HTML), w.Ready())
+	}
+
+	f.mu.Lock()
+	f.responsePolicy = false
+	f.stallResponse = false
+	f.exhaustBudgetOnFulfill = false
+	f.mu.Unlock()
+	got, err = w.Fetch(context.Background(), "https://origin.example/", NativeBrowserOptions{BrowserOptions: BrowserOptions{Timeout: 4 * time.Second}})
+	if err != nil || len(got.HTML) == 0 || !w.Ready() {
+		t.Fatalf("fresh render: error=%v bytes=%d worker ready=%t", err, len(got.HTML), w.Ready())
 	}
 }
 
