@@ -26,7 +26,7 @@
     "migration": "retain effective value per consuming role; no automatic adoption implied",
     "precedence": "explicit value, then component default; see source locations for validation",
     "sources": [
-      "go-web/internal/config/config.go:134"
+      "go-web/internal/config/config.go:135"
     ],
     "class": "runtime",
     "managed_roles": []
@@ -42,8 +42,8 @@
     "migration": "preserve effective value and consuming role during adoption; verify managed parity before switching",
     "precedence": "selected role manifest takes precedence without environment fallback; legacy environment when no file is selected; component default if absent",
     "sources": [
-      "go-web/internal/config/config.go:133",
-      "go-web/internal/config/config.go:51"
+      "go-web/internal/config/config.go:134",
+      "go-web/internal/config/config.go:52"
     ],
     "class": "runtime",
     "managed_roles": [
@@ -156,8 +156,8 @@
     "migration": "preserve effective value and consuming role during adoption; verify managed parity before switching",
     "precedence": "selected role manifest takes precedence without environment fallback; legacy environment when no file is selected; component default if absent",
     "sources": [
-      "go-web/internal/config/config.go:150",
-      "go-web/internal/config/config.go:51"
+      "go-web/internal/config/config.go:151",
+      "go-web/internal/config/config.go:52"
     ],
     "class": "runtime",
     "managed_roles": [
@@ -531,8 +531,8 @@
     "sources": [
       "go-domain/cmd/news-domain/main.go:275",
       "go-domain/cmd/news-domain/runtime_config.go:25",
-      "go-web/internal/config/config.go:145",
-      "go-web/internal/config/config.go:51"
+      "go-web/internal/config/config.go:146",
+      "go-web/internal/config/config.go:52"
     ],
     "class": "runtime",
     "managed_roles": [
@@ -835,9 +835,9 @@
       "go-domain/cmd/news-migrate/main.go:22",
       "go-ingestion/runner/runner.go:43",
       "go-processing/runner/runner.go:93",
-      "go-web/internal/config/config.go:131",
-      "go-web/internal/config/config.go:51",
+      "go-web/internal/config/config.go:132",
       "go-web/internal/config/config.go:52",
+      "go-web/internal/config/config.go:53",
       "go-worker/internal/config/config.go:31"
     ],
     "class": "runtime",
@@ -911,8 +911,8 @@
     "migration": "preserve effective value and consuming role during adoption; verify managed parity before switching",
     "precedence": "selected role manifest takes precedence without environment fallback; legacy environment when no file is selected; component default if absent",
     "sources": [
-      "go-web/internal/config/config.go:107",
-      "go-web/internal/config/config.go:51"
+      "go-web/internal/config/config.go:108",
+      "go-web/internal/config/config.go:52"
     ],
     "class": "runtime",
     "managed_roles": [
@@ -1794,8 +1794,8 @@
     "migration": "keep the legacy public projection unless explicitly enabling the article media policy",
     "precedence": "selected role manifest takes precedence without environment fallback; legacy environment when no file is selected; component default if absent",
     "sources": [
-      "go-web/internal/config/config.go:51",
-      "go-web/internal/config/config.go:123"
+      "go-web/internal/config/config.go:52",
+      "go-web/internal/config/config.go:124"
     ],
     "class": "runtime",
     "managed_roles": [
@@ -1969,6 +1969,25 @@
     ],
     "class": "operator_or_ci",
     "managed_roles": []
+  },
+  {
+    "key": "HIDE_EXACT_FEED_DUPLICATES",
+    "owner": "web",
+    "type": "boolean",
+    "default": "false",
+    "secret": false,
+    "store": "legacy process environment; managed role manifest for web",
+    "reload": "process startup",
+    "migration": "apply migration 025 before enabling in the web runtime",
+    "precedence": "selected role manifest takes precedence without environment fallback; legacy environment when no file is selected; component default if absent",
+    "sources": [
+      "go-web/internal/config/config.go:52",
+      "go-web/internal/config/config.go:197"
+    ],
+    "class": "runtime",
+    "managed_roles": [
+      "web"
+    ]
   },
   {
     "key": "HOME",
@@ -2157,9 +2176,9 @@
     "migration": "preserve effective value and consuming role during adoption; verify managed parity before switching",
     "precedence": "selected role manifest takes precedence without environment fallback; legacy environment when no file is selected; component default if absent",
     "sources": [
-      "go-web/internal/config/config.go:135",
-      "go-web/internal/config/config.go:51",
-      "go-web/internal/config/config.go:52"
+      "go-web/internal/config/config.go:136",
+      "go-web/internal/config/config.go:52",
+      "go-web/internal/config/config.go:53"
     ],
     "class": "runtime",
     "managed_roles": [
@@ -2217,8 +2236,8 @@
     "migration": "not applicable; loopback HTTP setup exception only",
     "precedence": "managed web role value when NEWS_RUNTIME_FILE is set; otherwise process environment",
     "sources": [
-      "go-web/internal/config/config.go:119",
-      "go-web/internal/config/config.go:51"
+      "go-web/internal/config/config.go:120",
+      "go-web/internal/config/config.go:52"
     ],
     "class": "runtime",
     "managed_roles": [
@@ -2599,7 +2618,7 @@
     "precedence": "Compose interpolation source then template default/required rule; inspect actual file",
     "sources": [
       "deploy/news-ingestion/compose.ingestion.yml:35",
-      "deploy/config/full.env.example:214"
+      "deploy/config/full.env.example:216"
     ],
     "class": "compose_input",
     "managed_roles": []
@@ -2809,7 +2828,7 @@
     "precedence": "Compose interpolation source then template default/required rule; inspect actual file",
     "sources": [
       "deploy/news-processing/compose.processing.yml:49",
-      "deploy/config/full.env.example:238"
+      "deploy/config/full.env.example:240"
     ],
     "class": "compose_input",
     "managed_roles": []
@@ -2866,7 +2885,7 @@
       "go-background/cmd/news-background/main.go:55",
       "go-background/cmd/news-background/runtime_config.go:9",
       "go-domain/cmd/news-domain/runtime_config.go:21",
-      "go-web/internal/config/config.go:50",
+      "go-web/internal/config/config.go:51",
       "go/runtimefile/lookup.go:10",
       "go/runtimefile/lookup.go:32"
     ],
@@ -3277,8 +3296,8 @@
     "migration": "preserve effective value and consuming role during adoption; verify managed parity before switching",
     "precedence": "selected role manifest takes precedence without environment fallback; legacy environment when no file is selected; component default if absent",
     "sources": [
-      "go-web/internal/config/config.go:144",
-      "go-web/internal/config/config.go:51"
+      "go-web/internal/config/config.go:145",
+      "go-web/internal/config/config.go:52"
     ],
     "class": "runtime",
     "managed_roles": [
@@ -3296,9 +3315,9 @@
     "migration": "preserve effective value and consuming role during adoption; verify managed parity before switching",
     "precedence": "selected role manifest takes precedence without environment fallback; legacy environment when no file is selected; component default if absent",
     "sources": [
-      "go-web/internal/config/config.go:143",
-      "go-web/internal/config/config.go:51",
-      "go-web/internal/config/config.go:52"
+      "go-web/internal/config/config.go:144",
+      "go-web/internal/config/config.go:52",
+      "go-web/internal/config/config.go:53"
     ],
     "class": "runtime",
     "managed_roles": [
@@ -3335,8 +3354,8 @@
     "migration": "preserve effective value and consuming role during adoption; verify managed parity before switching",
     "precedence": "selected role manifest takes precedence without environment fallback; legacy environment when no file is selected; component default if absent",
     "sources": [
-      "go-web/internal/config/config.go:115",
-      "go-web/internal/config/config.go:51",
+      "go-web/internal/config/config.go:116",
+      "go-web/internal/config/config.go:52",
       "go-web/internal/schedules/client.go:65"
     ],
     "class": "runtime",
@@ -3359,9 +3378,9 @@
       "go-background/cmd/news-background/runtime_config.go:14",
       "go-scheduler/internal/config/config.go:39",
       "go-tools/cmd/scheduler-bridge/main.go:37",
-      "go-web/internal/config/config.go:130",
-      "go-web/internal/config/config.go:51",
+      "go-web/internal/config/config.go:131",
       "go-web/internal/config/config.go:52",
+      "go-web/internal/config/config.go:53",
       "go-web/internal/schedules/client.go:80"
     ],
     "class": "runtime",
@@ -3381,9 +3400,9 @@
     "migration": "preserve effective value and consuming role during adoption; verify managed parity before switching",
     "precedence": "selected role manifest takes precedence without environment fallback; legacy environment when no file is selected; component default if absent",
     "sources": [
-      "go-web/internal/config/config.go:130",
-      "go-web/internal/config/config.go:51",
+      "go-web/internal/config/config.go:131",
       "go-web/internal/config/config.go:52",
+      "go-web/internal/config/config.go:53",
       "go-web/internal/schedules/client.go:80"
     ],
     "class": "runtime",
@@ -3730,8 +3749,8 @@
     "migration": "preserve effective value and consuming role during adoption; verify managed parity before switching",
     "precedence": "selected role manifest takes precedence without environment fallback; legacy environment when no file is selected; component default if absent",
     "sources": [
-      "go-web/internal/config/config.go:146",
-      "go-web/internal/config/config.go:51"
+      "go-web/internal/config/config.go:147",
+      "go-web/internal/config/config.go:52"
     ],
     "class": "runtime",
     "managed_roles": [
@@ -3771,8 +3790,8 @@
       "go-domain/airuntime/server.go:93",
       "go-domain/cmd/news-domain/runtime_config.go:25",
       "go-domain/cmd/newsctl/external.go:72",
-      "go-web/internal/config/config.go:153",
-      "go-web/internal/config/config.go:51"
+      "go-web/internal/config/config.go:154",
+      "go-web/internal/config/config.go:52"
     ],
     "class": "runtime",
     "managed_roles": [
@@ -3951,8 +3970,8 @@
     "migration": "preserve effective value and consuming role during adoption; verify managed parity before switching",
     "precedence": "selected role manifest takes precedence without environment fallback; legacy environment when no file is selected; component default if absent",
     "sources": [
-      "go-web/internal/config/config.go:151",
-      "go-web/internal/config/config.go:51"
+      "go-web/internal/config/config.go:152",
+      "go-web/internal/config/config.go:52"
     ],
     "class": "runtime",
     "managed_roles": [
@@ -3970,8 +3989,8 @@
     "migration": "preserve effective value and consuming role during adoption; verify managed parity before switching",
     "precedence": "selected role manifest takes precedence without environment fallback; legacy environment when no file is selected; component default if absent",
     "sources": [
-      "go-web/internal/config/config.go:152",
-      "go-web/internal/config/config.go:51"
+      "go-web/internal/config/config.go:153",
+      "go-web/internal/config/config.go:52"
     ],
     "class": "runtime",
     "managed_roles": [
@@ -3989,8 +4008,8 @@
     "migration": "preserve effective value and consuming role during adoption; verify managed parity before switching",
     "precedence": "selected role manifest takes precedence without environment fallback; legacy environment when no file is selected; component default if absent",
     "sources": [
-      "go-web/internal/config/config.go:111",
-      "go-web/internal/config/config.go:51"
+      "go-web/internal/config/config.go:112",
+      "go-web/internal/config/config.go:52"
     ],
     "class": "runtime",
     "managed_roles": [
@@ -4012,9 +4031,9 @@
       "go-domain/cmd/news-domain/runtime_config.go:25",
       "go-domain/cmd/news-domain/runtime_config.go:26",
       "go-web/internal/backend/backend.go:113",
-      "go-web/internal/config/config.go:148",
-      "go-web/internal/config/config.go:51",
-      "go-web/internal/config/config.go:52"
+      "go-web/internal/config/config.go:149",
+      "go-web/internal/config/config.go:52",
+      "go-web/internal/config/config.go:53"
     ],
     "class": "runtime",
     "managed_roles": [
@@ -4034,9 +4053,9 @@
     "precedence": "selected role manifest takes precedence without environment fallback; legacy environment when no file is selected; component default if absent",
     "sources": [
       "go-web/internal/backend/backend.go:112",
-      "go-web/internal/config/config.go:147",
-      "go-web/internal/config/config.go:51",
-      "go-web/internal/config/config.go:52"
+      "go-web/internal/config/config.go:148",
+      "go-web/internal/config/config.go:52",
+      "go-web/internal/config/config.go:53"
     ],
     "class": "runtime",
     "managed_roles": [
@@ -4070,8 +4089,8 @@
     "migration": "preserve effective value and consuming role during adoption; verify managed parity before switching",
     "precedence": "selected role manifest takes precedence without environment fallback; legacy environment when no file is selected; component default if absent",
     "sources": [
-      "go-web/internal/config/config.go:132",
-      "go-web/internal/config/config.go:51"
+      "go-web/internal/config/config.go:133",
+      "go-web/internal/config/config.go:52"
     ],
     "class": "runtime",
     "managed_roles": [

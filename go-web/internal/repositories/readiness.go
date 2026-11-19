@@ -43,5 +43,12 @@ func (p *Postgres) CheckSchema(ctx context.Context) error {
 	if !ready {
 		return errors.New("database schema is not ready; run the migration bootstrap")
 	}
+	if p.hideExactFeedDuplicates {
+		err = p.pool.QueryRow(ctx, `SELECT has_table_privilege(to_regclass(
+			format('%I.article_feed_duplicate_predecessors', current_schema())), 'SELECT') IS TRUE`).Scan(&ready)
+		if err != nil || !ready {
+			return errors.New("feed duplicate view is unavailable; run the migration bootstrap and verify web privileges")
+		}
+	}
 	return nil
 }

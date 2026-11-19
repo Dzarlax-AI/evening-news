@@ -17,8 +17,9 @@ import (
 
 // Postgres is the bounded-pool read adapter for the public site.
 type Postgres struct {
-	pool               *pgxpool.Pool
-	filterArticleMedia bool
+	pool                    *pgxpool.Pool
+	filterArticleMedia      bool
+	hideExactFeedDuplicates bool
 }
 
 func (*Postgres) SupportsPublicLocale(locale string) bool {
@@ -54,6 +55,9 @@ func OpenPostgres(ctx context.Context, databaseURL string, maxConns int32) (*Pos
 
 // EnableArticleMediaPolicy selects the filtered public projection before serving traffic.
 func (p *Postgres) EnableArticleMediaPolicy() { p.filterArticleMedia = true }
+
+// EnableExactFeedDuplicateFilter enables suppression in list queries only.
+func (p *Postgres) EnableExactFeedDuplicateFilter() { p.hideExactFeedDuplicates = true }
 
 func (p *Postgres) Close() {
 	if p != nil && p.pool != nil {
@@ -102,6 +106,23 @@ func published(includeAds bool) string {
 	return `a.processing_state='completed'`
 }
 
+func (p *Postgres) feedEligibility(conditions []string) string {
+	eligible := strings.Join(conditions, " AND ")
+	if p.hideExactFeedDuplicates {
+		// Match the predecessor against the same filters. A bounded scalar
+		// lookup keeps the view correlated with each candidate on the page.
+		eligible += ` AND (
+			SELECT true FROM article_feed_duplicate_predecessors d
+			WHERE d.article_id=a.id AND EXISTS (
+				SELECT 1 FROM articles a LEFT JOIN sources s ON s.id=a.source_id
+				WHERE a.id=d.predecessor_id AND ` + eligible + `
+			)
+			LIMIT 1
+		) IS NULL`
+	}
+	return eligible
+}
+
 func (p *Postgres) Feed(ctx context.Context, q FeedQuery) (FeedResponse, error) {
 	where := []string{published(q.Category == "advertisements" || !q.HideAds)}
 	if isSerbian(ctx) {
@@ -146,8 +167,9 @@ func (p *Postgres) Feed(ctx context.Context, q FeedQuery) (FeedResponse, error) 
 			add(`s.name=ANY($%d::text[])`, names)
 		}
 	}
+	eligible := p.feedEligibility(where)
 	args = append(args, q.Limit, q.Offset)
-	sql := `SELECT ` + p.localizedProjection(ctx) + ` FROM articles a LEFT JOIN sources s ON s.id=a.source_id WHERE ` + strings.Join(where, " AND ") + fmt.Sprintf(` ORDER BY a.published_at DESC OFFSET $%d LIMIT $%d`, len(args), len(args)-1)
+	sql := `SELECT ` + p.localizedProjection(ctx) + ` FROM articles a LEFT JOIN sources s ON s.id=a.source_id WHERE ` + eligible + fmt.Sprintf(` ORDER BY a.published_at DESC,a.id DESC OFFSET $%d LIMIT $%d`, len(args), len(args)-1)
 	rows, err := p.pool.Query(ctx, sql, args...)
 	if err != nil {
 		return FeedResponse{}, err
@@ -686,7 +708,7 @@ func (p *Postgres) APIFeed(ctx context.Context, q APIFeedQuery) (APIFeedResponse
 		}
 	}
 	args = append(args, q.Offset, q.Limit)
-	rows, err := p.pool.Query(ctx, `SELECT `+p.localizedProjection(ctx)+` FROM articles a LEFT JOIN sources s ON s.id=a.source_id WHERE `+strings.Join(conditions, " AND ")+fmt.Sprintf(` ORDER BY a.fetched_at DESC OFFSET $%d LIMIT $%d`, len(args)-1, len(args)), args...)
+	rows, err := p.pool.Query(ctx, `SELECT `+p.localizedProjection(ctx)+` FROM articles a LEFT JOIN sources s ON s.id=a.source_id WHERE `+p.feedEligibility(conditions)+fmt.Sprintf(` ORDER BY a.fetched_at DESC,a.id DESC OFFSET $%d LIMIT $%d`, len(args)-1, len(args)), args...)
 	if err != nil {
 		return APIFeedResponse{}, err
 	}

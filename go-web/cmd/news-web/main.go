@@ -40,6 +40,9 @@ func run() error {
 		if cfg.FilterArticleMedia {
 			db.EnableArticleMediaPolicy()
 		}
+		if cfg.HideExactFeedDuplicates {
+			db.EnableExactFeedDuplicateFilter()
+		}
 		err = db.CheckSchema(ctx)
 	}
 	cancel()

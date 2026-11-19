@@ -246,6 +246,7 @@ func TestPostgresPublicReaderMultiCategoryAndReadPaths(t *testing.T) {
 		t.Fatalf("latest editorial edition lookup failed: edition=%#v err=%v", latest, err)
 	}
 	testPublicRSSImagePolicy(t, ctx, reader, pool)
+	testPublicExactFeedDuplicatePolicy(t, ctx, reader, pool)
 }
 
 func TestPostgresEditorialDigestStatusDoesNotNeedLegacySummaries(t *testing.T) {
@@ -436,5 +437,74 @@ func testPublicRSSImagePolicy(t *testing.T, ctx context.Context, reader *Postgre
 				t.Fatal("reader rewrote stored media")
 			}
 		})
+	}
+}
+
+func testPublicExactFeedDuplicatePolicy(t *testing.T, ctx context.Context, reader *Postgres, pool *pgxpool.Pool) {
+	t.Helper()
+	if _, err := pool.Exec(ctx, `
+		INSERT INTO articles(id,source_id,title,url,published_at,fetched_at,is_advertisement,processing_state)
+		VALUES (43,7,'Duplicate story','https://example.test/story/43','2026-10-26 09:00','2026-10-26 09:10',false,'completed'),
+		       (44,7,'Material update','https://example.test/story/44','2026-10-26 09:12','2026-10-26 09:12',false,'completed');
+		INSERT INTO categories(id,name,display_name,color) VALUES (3,'local','Local','#123456');
+		INSERT INTO article_categories(id,article_id,category_id,confidence) VALUES (99,43,3,0.9);
+		INSERT INTO article_localizations VALUES (43,'sr-Latn','Duplikat','Sažetak','completed');
+		CREATE VIEW article_feed_duplicate_predecessors AS SELECT 43::bigint AS article_id, 42::bigint AS predecessor_id;
+	`); err != nil {
+		t.Fatal(err)
+	}
+
+	filtered := &Postgres{pool: reader.pool}
+	filtered.EnableExactFeedDuplicateFilter()
+	for _, tc := range []struct {
+		name     string
+		reader   *Postgres
+		ctx      context.Context
+		category string
+		web, api []int64
+	}{
+		{"off", reader, ctx, "", []int64{44, 43, 42}, []int64{44, 43, 42}},
+		{"on", filtered, ctx, "", []int64{44, 42}, []int64{44, 42}},
+		{"predecessor outside selected category", filtered, ctx, "local", []int64{43}, []int64{43}},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			ids := func(articles []map[string]any) []int64 {
+				out := make([]int64, 0, len(articles))
+				for _, item := range articles {
+					out = append(out, item["article_id"].(int64))
+				}
+				return out
+			}
+			web, err := tc.reader.Feed(tc.ctx, FeedQuery{Limit: 20, Category: tc.category, Source: "Fixture source", HideAds: true})
+			if err != nil || !reflect.DeepEqual(ids(web.Articles), tc.web) {
+				t.Fatalf("web feed IDs = %v, err=%v", ids(web.Articles), err)
+			}
+			api, err := tc.reader.APIFeed(tc.ctx, APIFeedQuery{Limit: 20, Category: tc.category})
+			if err != nil || !reflect.DeepEqual(ids(api.Items), tc.api) {
+				t.Fatalf("mobile feed IDs = %v, err=%v", ids(api.Items), err)
+			}
+		})
+	}
+	if _, err := pool.Exec(ctx, `UPDATE article_localizations SET status='retry_wait' WHERE article_id=42`); err != nil {
+		t.Fatal(err)
+	}
+	sr := WithPublicLocale(ctx, "sr-Latn")
+	localized, err := filtered.APIFeed(sr, APIFeedQuery{Limit: 20})
+	if err != nil || len(localized.Items) != 1 || localized.Items[0]["article_id"] != int64(43) {
+		t.Fatalf("localized feed lost the only eligible copy: %+v, %v", localized.Pagination, err)
+	}
+	web, err := filtered.Feed(ctx, FeedQuery{Limit: 1, Offset: 1, HideAds: true})
+	if err != nil || len(web.Articles) != 1 || web.Articles[0]["article_id"] != int64(42) {
+		t.Fatalf("web feed pagination: count=%d, err=%v", len(web.Articles), err)
+	}
+	api, err := filtered.APIFeed(ctx, APIFeedQuery{Limit: 1, Offset: 1})
+	if err != nil || len(api.Items) != 1 || api.Items[0]["article_id"] != int64(42) {
+		t.Fatalf("mobile feed pagination: %+v, %v", api.Pagination, err)
+	}
+	for _, id := range []int64{42, 43} {
+		article, err := filtered.Article(ctx, id, false)
+		if err != nil || article["article_id"] != id {
+			t.Fatalf("direct link to %d returned article ID %v, err=%v", id, article["article_id"], err)
+		}
 	}
 }
