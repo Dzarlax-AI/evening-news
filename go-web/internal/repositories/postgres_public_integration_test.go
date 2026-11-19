@@ -502,8 +502,9 @@ func testPublicExactFeedDuplicatePolicy(t *testing.T, ctx context.Context, reade
 		t.Fatalf("mobile feed pagination: %+v, %v", api.Pagination, err)
 	}
 	for _, id := range []int64{42, 43} {
-		if _, err = filtered.Article(ctx, id, false); err != nil {
-			t.Fatalf("direct link to %d: %v", id, err)
+		article, err := filtered.Article(ctx, id, false)
+		if err != nil || article["article_id"] != id {
+			t.Fatalf("direct link to %d returned article ID %v, err=%v", id, article["article_id"], err)
 		}
 	}
 }
