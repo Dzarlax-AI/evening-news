@@ -18,6 +18,7 @@ type Config struct {
 	Managed                      bool
 	LocalHTTPSetup               bool
 	FilterArticleMedia           bool
+	HideExactFeedDuplicates      bool
 	InstallationID               string
 	SchedulerURL, SchedulerToken string
 	SchedulerAllowHTTP           bool
@@ -48,7 +49,7 @@ type Config struct {
 
 func Load() (Config, error) {
 	if path, present := os.LookupEnv("NEWS_RUNTIME_FILE"); present {
-		allowed := []string{"DATABASE_URL", "LOCAL_HTTP_SETUP", "FILTER_ARTICLE_MEDIA", "WEB_LISTEN_ADDRESS", "ADMIN_USERNAME", "JWT_SECRET", "DEVELOPMENT", "TRUST_FORWARD_AUTH", "TRUSTED_PROXY_CIDRS", "BACKGROUND_EXECUTION_MODE", "SCHEDULE_DISPATCH_MODE", "SCHEDULED_JOBS_TOKEN", "SCHEDULED_JOBS_RECEIPT_LIMIT", "WEB_BACKEND_URL", "WEB_BACKEND_TOKEN", "SCHEDULER_API_URL", "SCHEDULER_API_TOKEN", "SCHEDULER_API_ALLOW_HTTP", "SITE_BASE_URL", "ALLOWED_ORIGINS", "TRUSTED_HOSTS"}
+		allowed := []string{"DATABASE_URL", "LOCAL_HTTP_SETUP", "FILTER_ARTICLE_MEDIA", "HIDE_EXACT_FEED_DUPLICATES", "WEB_LISTEN_ADDRESS", "ADMIN_USERNAME", "JWT_SECRET", "DEVELOPMENT", "TRUST_FORWARD_AUTH", "TRUSTED_PROXY_CIDRS", "BACKGROUND_EXECUTION_MODE", "SCHEDULE_DISPATCH_MODE", "SCHEDULED_JOBS_TOKEN", "SCHEDULED_JOBS_RECEIPT_LIMIT", "WEB_BACKEND_URL", "WEB_BACKEND_TOKEN", "SCHEDULER_API_URL", "SCHEDULER_API_TOKEN", "SCHEDULER_API_ALLOW_HTTP", "SITE_BASE_URL", "ALLOWED_ORIGINS", "TRUSTED_HOSTS"}
 		required := []string{"DATABASE_URL", "JWT_SECRET", "WEB_BACKEND_URL", "WEB_BACKEND_TOKEN", "SCHEDULED_JOBS_TOKEN", "SCHEDULER_API_URL", "SCHEDULER_API_TOKEN"}
 		manifest, err := runtimeconfig.Load(path, "web", allowed, required)
 		if err != nil {
@@ -192,6 +193,10 @@ func load(values map[string]string, managed bool, installationID string) (Config
 	}
 	if c.WebBackendURL == "" || strings.TrimSpace(c.WebBackendToken) == "" {
 		return Config{}, errors.New("WEB_BACKEND_URL and WEB_BACKEND_TOKEN are required")
+	}
+	c.HideExactFeedDuplicates, err = boolEnv("HIDE_EXACT_FEED_DUPLICATES", false)
+	if err != nil {
+		return Config{}, err
 	}
 	return c, nil
 }

@@ -250,6 +250,17 @@ GOCACHE=/tmp/news-configcatalog-cache CONFIG_CATALOG_DISCOVER=1 go test -count=1
 
 The scanner checks Go environment reads and helper calls, table-driven configuration, role allowlists, dynamic scheduler targets, Compose interpolation, container environment outputs, and checked-in deployment examples. It is bounded rather than a whole-program data-flow analysis: new helpers, scripts, or table layouts require updating discovery rules. The test verifies coverage and source references, not whether every default, secret classification, or precedence description is semantically correct; review those values against the source and profile when configuration changes.
 
+## Optional exact duplicate filtering
+
+The web runtime setting `HIDE_EXACT_FEED_DUPLICATES` defaults to `false`.
+Apply migration 025 before enabling it in the private web role manifest or web
+process environment. The web feed and public mobile feed keep the earliest
+eligible copy when two articles have the same source, published timestamp, and
+exact fingerprint from the completed processing attempt. Filters apply before
+choosing the visible copy. Direct article links, search, and digests remain
+available with their existing behavior. Set the switch to `false` and restart
+the web process to restore both cards without changing article data.
+
 ## Optional Telegram content filter
 
 `ARTICLE_TELEGRAM_CONTENT_FILTER` defaults to `false`. In managed mode set

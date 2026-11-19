@@ -91,7 +91,7 @@ func TestManagedRolePrivileges(t *testing.T) {
 	}
 	for name, queries := range map[string][]string{
 		"news_web_runtime":        {"SELECT * FROM article_dedup_observations", "SELECT * FROM viber_test_receipts", "SELECT * FROM viber_digest_deliveries", "SELECT * FROM push_installations", "SELECT * FROM push_deliveries", "SELECT enqueue_viber_digest_delivery()", "SELECT * FROM integration_credentials", "UPDATE background_worker_status SET generation=99", "UPDATE articles SET content='changed'"},
-		"news_domain_runtime":     {"SELECT * FROM managed_admin", "SELECT * FROM setup_tokens", "UPDATE background_worker_status SET generation=99", "UPDATE background_jobs SET state='failed'", "DELETE FROM articles"},
+		"news_domain_runtime":     {"SELECT * FROM article_feed_duplicate_predecessors", "SELECT * FROM managed_admin", "SELECT * FROM setup_tokens", "UPDATE background_worker_status SET generation=99", "UPDATE background_jobs SET state='failed'", "DELETE FROM articles"},
 		"news_worker_runtime":     {"SELECT * FROM viber_test_receipts", "SELECT * FROM viber_digest_parts", "SELECT * FROM integration_credentials", "SELECT * FROM managed_admin", "UPDATE articles SET content='changed'"},
 		"news_execution_runtime":  {"SELECT * FROM viber_digest_parts", "SELECT enqueue_viber_digest_delivery()", "SELECT * FROM integration_credentials", "UPDATE background_worker_status SET generation=99", "INSERT INTO articles(title,url) VALUES('x','https://fixture.invalid')"},
 		"news_ingestion_runtime":  {"SELECT * FROM article_dedup_observations", "UPDATE articles SET completed_processing_claim=NULL", "SELECT * FROM integration_credentials", "UPDATE background_jobs SET state='failed'", "UPDATE articles SET summary='changed'"},
@@ -134,6 +134,41 @@ func TestManagedRolePrivileges(t *testing.T) {
 		var attempt int
 		if err = tx.QueryRow(ctx, `SELECT article_attempt FROM article_dedup_observations WHERE article_id=17`).Scan(&attempt); err != nil || attempt != 2 {
 			t.Fatal("managed processing role could not read the updated dedup observation")
+		}
+	})
+
+	t.Run("web/exact feed duplicate view", func(t *testing.T) {
+		tx, err := pool.Begin(ctx)
+		if err != nil {
+			t.Fatal(err)
+		}
+		defer tx.Rollback(ctx)
+		if _, err = tx.Exec(ctx, `
+			INSERT INTO sources(id,name,source_type,url)
+			VALUES (701,'First publisher','telegram','https://fixture.invalid/first'),
+			       (702,'Second publisher','telegram','https://fixture.invalid/second');
+			INSERT INTO articles(id,source_id,title,url,published_at,fetched_at,processing_state,completed_processing_claim)
+			SELECT 700+i, CASE WHEN i=3 THEN 702 ELSE 701 END,
+			       'Title '||i, 'https://fixture.invalid/feed/'||i,
+			       CASE WHEN i=7 THEN NULL ELSE timestamp '2026-11-19 11:31' + CASE WHEN i=4 THEN interval '1 minute' ELSE interval '0' END END,
+			       timestamp '2026-11-19 11:32' + CASE WHEN i=2 THEN interval '20 minutes' ELSE interval '0' END,
+			       'completed', md5(i::text)::uuid
+			FROM generate_series(1,8) AS i;
+			INSERT INTO article_dedup_observations(article_id,version,article_attempt,claim_token,exact_hash)
+			SELECT 700+i,1,1,md5(CASE WHEN i=5 THEN 'stale' ELSE i::text END)::uuid,
+			       decode(repeat(CASE WHEN i=6 THEN 'bb' ELSE 'aa' END,32),'hex')
+			FROM generate_series(1,7) AS i;
+		`); err != nil {
+			t.Fatal(err)
+		}
+		if _, err = tx.Exec(ctx, "SET LOCAL ROLE "+ident(roles["news_web_runtime"])); err != nil {
+			t.Fatal(err)
+		}
+		var pairs string
+		err = tx.QueryRow(ctx, `SELECT string_agg(article_id || ':' || predecessor_id, ',' ORDER BY article_id)
+			FROM article_feed_duplicate_predecessors`).Scan(&pairs)
+		if err != nil || pairs != "702:701" {
+			t.Fatalf("expected only the matching pair, got %q, %v", pairs, err)
 		}
 	})
 
