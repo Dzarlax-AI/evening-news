@@ -656,7 +656,7 @@ func extractWeb(ctx context.Context, in Input, r Result) Result {
 			rr := extractWeb(ctx, ni, Result{URL: u, State: "failed", Trace: r.Trace})
 			if rr.Content != "" {
 				rr.ExtractedFrom = u
-				rr.URL = r.URL
+				rr.RestoreArticleURL(r.URL)
 				rr.Trace = append(rr.Trace, "alternative_url_success")
 				return rr
 			}

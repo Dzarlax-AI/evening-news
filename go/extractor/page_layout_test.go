@@ -52,3 +52,17 @@ func TestReparseArticleLayoutCannotPromoteCardCover(t *testing.T) {
 		t.Fatalf("a card occurrence became the cover: ok=%t cover=%q evidence=%+v", ok, got.ImageURL, got.MediaEvidence)
 	}
 }
+
+func TestLayoutCoverCannotCrossNestedArticleInUnmarkedBody(t *testing.T) {
+	for _, nested := range []string{`<article><img class="teaser" src="/teaser.jpg"></article>`, `<section role="article"><img class="teaser" src="/teaser.jpg"></section>`} {
+		html := `<main><h1>Road reconstruction</h1><div class="story"><p>` + prose + `</p><p>` + prose + `</p>
+			<img class="editorial" src="/lead.jpg">` + nested + `</div></main>`
+		for selector, want := range map[string]string{".teaser": "", ".editorial": ".editorial"} {
+			layout := pagelayout.Layout{PageKind: "article", ArticleBody: ".story", EditorialCover: selector}
+			pagelayout.Validate(&layout, html)
+			if layout.PageKind != "article" || layout.EditorialCover != want {
+				t.Fatalf("cover selector %s: layout=%+v, want %q", selector, layout, want)
+			}
+		}
+	}
+}

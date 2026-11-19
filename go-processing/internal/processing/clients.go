@@ -195,6 +195,9 @@ func (c *ExtractorClient) Extract(ctx context.Context, rawURL, title, sourceType
 			return result, nil
 		}
 		rendered, renderErr := c.admittedAttempt(retryCtx, rawURL, title, sourceType, "", "", maxChars, true, browserBytes, nil)
+		if renderErr == nil {
+			rendered = classifyInvalidSuccessfulContent(rendered, maxChars)
+		}
 		if renderErr == nil && retryCtx.Err() == nil && betterEditorialSnapshot(result, rendered) {
 			rendered.Observations = appendObservationSets(result.Observations, rendered.Observations)
 			return rendered, nil

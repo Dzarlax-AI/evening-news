@@ -273,3 +273,16 @@ func TestEditorialVideoInFigureBesideProse(t *testing.T) {
 		t.Fatalf("editorial videos=%v, want %s", videos, want)
 	}
 }
+
+func TestEditorialMediaKeepsArticleQueryIdentity(t *testing.T) {
+	const page = "https://fixture.test/story?id=1&edition=evening"
+	markup := `<article><h1>Bridge repairs</h1><p>` + prose + `</p>
+		<figure><a href="?id=2&amp;edition=evening"><img src="/other.jpg"></a></figure>
+		<a href="?edition=evening&amp;id=1&amp;utm_source=newsletter#photo"><img id="photo" src="/editorial.jpg"></a>
+		</article>`
+	got := Extract(context.Background(), Input{URL: page, HTML: markup})
+	_, selected := mediaViews(got.Media)
+	if want := "https://fixture.test/editorial.jpg"; got.ImageURL != want || strings.Join(selected, ",") != want {
+		t.Fatalf("cover=%q editorial media=%v, want %s", got.ImageURL, selected, want)
+	}
+}

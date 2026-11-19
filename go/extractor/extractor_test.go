@@ -124,9 +124,18 @@ func TestLimitsRunesBytesAndNoSilentTruncation(t *testing.T) {
 	}
 }
 func TestAlternativeURLRecovery(t *testing.T) {
-	r := Extract(context.Background(), Input{URL: "https://example.test/blocked", HTML: `<link rel="canonical" href="/full"><p>Unavailable</p>`, AlternativeHTML: map[string]string{"https://example.test/full": article(prose)}})
-	if r.State != "extracted" || r.URL != "https://example.test/blocked" || r.Trace[len(r.Trace)-1] != "alternative_url_success" {
+	const original = "https://example.test/blocked"
+	const alternative = "https://example.test/full"
+	const cover = "https://example.test/hero.jpg"
+	html := `<meta property="og:type" content="article"><meta property="og:image" content="` + cover + `">
+		<article><p>` + prose + `</p><figure><img src="/hero.jpg"></figure></article>`
+	r := Extract(context.Background(), Input{URL: original, HTML: `<link rel="canonical" href="/full"><p>Unavailable</p>`, AlternativeHTML: map[string]string{alternative: html}})
+	if r.State != "extracted" || r.URL != original || r.ExtractedFrom != alternative || r.Trace[len(r.Trace)-1] != "alternative_url_success" {
 		t.Fatalf("%+v", r)
+	}
+	if e := r.MediaEvidence; e == nil || e.ArticleScope != "verified" || e.ArticleURL != original ||
+		e.EditorialCover.URL != cover || e.EditorialCover.ArticleURL != original {
+		t.Fatalf("alternative cover evidence: %+v", e)
 	}
 }
 

@@ -144,7 +144,25 @@ func articleDestination(s *goquery.Selection, base string) string {
 	case ".jpg", ".jpeg", ".png", ".gif", ".webp", ".svg", ".avif", ".bmp", ".tiff", ".mp4", ".webm", ".mp3", ".pdf":
 		return ""
 	}
-	return strings.ToLower(target.Host) + target.EscapedPath()
+	return articleLinkIdentity(target)
+}
+
+func articleLinkIdentity(u *url.URL) string {
+	identity := strings.ToLower(u.Host) + strings.TrimRight(u.EscapedPath(), "/")
+	query, err := url.ParseQuery(u.RawQuery)
+	if err != nil {
+		return identity + "?" + u.RawQuery
+	}
+	for key := range query {
+		lower := strings.ToLower(key)
+		if strings.HasPrefix(lower, "utm_") || lower == "fbclid" || lower == "gclid" {
+			delete(query, key)
+		}
+	}
+	if encoded := query.Encode(); encoded != "" {
+		identity += "?" + encoded
+	}
+	return identity
 }
 
 // Cards may have arbitrary names, or different modifier classes. Their linked
@@ -157,8 +175,13 @@ func articleMediaLink(link *goquery.Selection, base string) bool {
 		return false
 	}
 	article, err := url.Parse(base)
-	if err == nil && strings.TrimRight(destination, "/") == strings.TrimRight(strings.ToLower(article.Host)+article.EscapedPath(), "/") {
-		return false
+	if err == nil {
+		current := articleLinkIdentity(article)
+		destinationPath, _, _ := strings.Cut(destination, "?")
+		currentPath, _, _ := strings.Cut(current, "?")
+		if destinationPath == currentPath {
+			return destination != current
+		}
 	}
 	return link.Closest("figure").Length() == 0 || clean(link.Text()) != "" ||
 		link.Find("h1,h2,h3,h4,h5,h6").Length() > 0 || link.Find("img").Length() != 1

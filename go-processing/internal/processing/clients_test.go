@@ -6,6 +6,7 @@ import (
 	"io"
 	"net/http"
 	"net/http/httptest"
+	"strings"
 	"testing"
 	"time"
 
@@ -338,6 +339,7 @@ func TestExtractorClientOptionalEditorialMediaRetry(t *testing.T) {
 		{"resource_limit", true, true, 2, false},
 		{"incomplete", true, true, 2, false},
 		{"different_page", true, true, 2, false},
+		{"invalid_rendered_content", true, true, 2, false},
 		{"missing_original_audio", true, true, 2, false},
 		{"disabled", true, false, 1, false},
 		{"no_placeholder", false, true, 1, false},
@@ -370,6 +372,8 @@ func TestExtractorClientOptionalEditorialMediaRetry(t *testing.T) {
 						return
 					case "different_page":
 						reply["final_url"] = "https://fixture.invalid/other"
+					case "invalid_rendered_content":
+						result["content"] = syntheticExtractedArticle + " " + strings.Repeat("a", 2000)
 					case "missing_original_audio":
 						files = nil
 					}

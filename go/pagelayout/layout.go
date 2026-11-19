@@ -195,24 +195,29 @@ func inCoverChrome(s *goquery.Selection) bool {
 	return s.Parents().FilterFunction(func(_ int, p *goquery.Selection) bool { return hasRelatedSignal(p) }).Length() > 0
 }
 func sameArticle(body, cover *goquery.Selection) bool {
-	if containsNode(body.Nodes[0], cover.Nodes[0]) && body.Closest("article,[role=article]").Length() == 0 {
-		return true
+	bodyNode, coverNode := body.Nodes[0], cover.Nodes[0]
+	if containsNode(bodyNode, coverNode) && body.Closest("article,[role=article]").Length() == 0 {
+		return withinArticleBoundary(bodyNode, coverNode)
 	}
 	// An inner prose article can belong to the same outer editorial article as
 	// its hero. Do not cross a different nested article on the cover's path.
-	for n := body.Nodes[0]; n != nil; n = n.Parent {
-		if n.Type != html.ElementNode || !(n.Data == "article" || nodeHasArticleRole(n)) || !containsNode(n, cover.Nodes[0]) {
-			continue
+	for n := bodyNode; n != nil; n = n.Parent {
+		if n.Type == html.ElementNode && (n.Data == "article" || nodeHasArticleRole(n)) && containsNode(n, coverNode) {
+			return withinArticleBoundary(n, coverNode)
 		}
-		for p := cover.Nodes[0].Parent; p != nil && p != n; p = p.Parent {
-			if p.Type == html.ElementNode && (p.Data == "article" || nodeHasArticleRole(p)) {
-				return false
-			}
-		}
-		return true
 	}
 	return false
 }
+
+func withinArticleBoundary(boundary, cover *html.Node) bool {
+	for p := cover.Parent; p != nil && p != boundary; p = p.Parent {
+		if p.Type == html.ElementNode && (p.Data == "article" || nodeHasArticleRole(p)) {
+			return false
+		}
+	}
+	return true
+}
+
 func nodeHasArticleRole(n *html.Node) bool {
 	for _, a := range n.Attr {
 		if a.Key == "role" && strings.EqualFold(a.Val, "article") {
