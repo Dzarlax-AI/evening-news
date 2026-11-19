@@ -97,7 +97,7 @@ func TestTelegramAllRichMediaFamilies(t *testing.T) {
 func TestMetadataPriorityAndArticleMedia(t *testing.T) {
 	h := `<html><head><meta property="og:title" content="OG heading"><meta name="twitter:title" content="Twitter heading"><meta name="author" content="A. Writer"><meta property="og:image" content="//cdn.test/cover.jpg"></head><body><article><p>` + prose + `</p><time datetime="2026-10-15">Date</time><img src="/photo.png" alt="River"><video><source src="/film.webm"></video><a href="/report.pdf">Report</a></article></body></html>`
 	r := Extract(context.Background(), Input{URL: "https://example.test/story", HTML: h})
-	if r.Title != "OG heading" || r.Author != "A. Writer" || r.ImageURL != "https://cdn.test/cover.jpg" || r.PublicationDate != "2026-10-15T00:00:00" || len(r.Media) != 3 {
+	if r.Title != "OG heading" || r.Author != "A. Writer" || r.ImageURL != "https://example.test/photo.png" || r.PublicationDate != "2026-10-15T00:00:00" || len(r.Media) != 3 {
 		t.Fatalf("%+v", r)
 	}
 }

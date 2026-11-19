@@ -1336,9 +1336,17 @@ func (w *NativeBrowser) Fetch(ctx context.Context, raw string, opts NativeBrowse
 						continue
 					}
 					if event.ResponseErrorReason != "" {
+						var terminal error
+						knownFrame := requestFrames[event.NetworkID]
+						// A failed response in an owned subframe carries no content to
+						// admit. Keep the failure local to that frame.
+						if event.ResourceType != "Document" || event.FrameID == "" || !ownedFrames[event.FrameID] ||
+							event.FrameID == mainFrame.Load().(string) || (knownFrame != "" && knownFrame != event.FrameID) {
+							terminal = errors.New("native_browser_response_failed")
+						}
 						if !eventRPCs.submit(func() error {
 							return client.call(work, eventSession, "Fetch.continueResponse", map[string]any{"requestId": event.ID}, nil)
-						}, errors.New("native_browser_response_failed"), true) {
+						}, terminal, true) {
 							stopForLimit("event_rpc_admission")
 							return
 						}

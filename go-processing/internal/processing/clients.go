@@ -115,25 +115,27 @@ type ExtractorObservation struct {
 	Success  bool   `json:"success"`
 }
 type Extracted struct {
-	Content           string                 `json:"content"`
-	Title             string                 `json:"title"`
-	PublicationDate   string                 `json:"publication_date"`
-	ImageURL          string                 `json:"image_url"`
-	MediaFiles        []map[string]any       `json:"media_files"`
-	MediaEvidence     json.RawMessage        `json:"media_evidence,omitempty"`
-	Method            string                 `json:"method"`
-	MethodUsed        string                 `json:"method_used"`
-	SelectorUsed      string                 `json:"selector_used"`
-	State             string                 `json:"state"`
-	Error             string                 `json:"error"`
-	Outcome           string                 `json:"outcome"`
-	RetryAfterSeconds any                    `json:"retry_after_seconds"`
-	Observations      []ExtractorObservation `json:"-"`
-	Retryable         bool                   `json:"-"`
-	Terminal          bool                   `json:"-"`
-	study             *extractionStudySnapshot
-	applied           bool
-	failureReason     string
+	Content               string                 `json:"content"`
+	Title                 string                 `json:"title"`
+	PublicationDate       string                 `json:"publication_date"`
+	ImageURL              string                 `json:"image_url"`
+	MediaFiles            []map[string]any       `json:"media_files"`
+	MediaEvidence         json.RawMessage        `json:"media_evidence,omitempty"`
+	Method                string                 `json:"method"`
+	MethodUsed            string                 `json:"method_used"`
+	SelectorUsed          string                 `json:"selector_used"`
+	State                 string                 `json:"state"`
+	Error                 string                 `json:"error"`
+	Outcome               string                 `json:"outcome"`
+	RetryAfterSeconds     any                    `json:"retry_after_seconds"`
+	Observations          []ExtractorObservation `json:"-"`
+	Retryable             bool                   `json:"-"`
+	Terminal              bool                   `json:"-"`
+	study                 *extractionStudySnapshot
+	applied               bool
+	failureReason         string
+	pendingEditorialMedia bool
+	documentURL           string
 }
 
 func (c *ExtractorClient) Extract(ctx context.Context, rawURL, title, sourceType, selector, method string, maxChars int) (Extracted, error) {
@@ -175,12 +177,29 @@ func (c *ExtractorClient) Extract(ctx context.Context, rawURL, title, sourceType
 		}
 		result = classifyInvalidSuccessfulContent(result, maxChars)
 	}
-	if result.Error == "busy" || !c.UseBrowser || !browserEligible(rawURL) || !nativeBrowserRetryAllowed(result.Error) {
+	mediaRetry := sourceType != "rss" && result.Outcome == "success" && result.Error == "" && result.pendingEditorialMedia
+	if !c.UseBrowser || !browserEligible(rawURL) || (!mediaRetry && !nativeBrowserRetryAllowed(result.Error)) {
 		return result, nil
 	}
 	browserBytes := c.BrowserMaxBytes
 	if browserBytes <= 0 || browserBytes > 5*1024*1024 {
 		browserBytes = maxBytes
+	}
+	if mediaRetry {
+		// Keep the successful HTTP result even when optional browser admission
+		// waits or reaches its own deadline.
+		deadline, _ := totalCtx.Deadline()
+		retryCtx, stop := context.WithDeadline(totalCtx, deadline.Add(-250*time.Millisecond))
+		defer stop()
+		if retryCtx.Err() != nil {
+			return result, nil
+		}
+		rendered, renderErr := c.admittedAttempt(retryCtx, rawURL, title, sourceType, "", "", maxChars, true, browserBytes, nil)
+		if renderErr == nil && retryCtx.Err() == nil && betterEditorialSnapshot(result, rendered) {
+			rendered.Observations = appendObservationSets(result.Observations, rendered.Observations)
+			return rendered, nil
+		}
+		return result, nil
 	}
 	firstObservations := result.Observations
 	result, err = c.admittedAttempt(totalCtx, rawURL, title, sourceType, selector, method, maxChars, true, browserBytes, nil)
@@ -340,15 +359,16 @@ func (c *ExtractorClient) extractOnce(ctx context.Context, rawURL, title, source
 		StudyDocumentURL string `json:"study_document_url"`
 		SnapshotDigest   string `json:"snapshot_digest"`
 		Result           struct {
-			Content         string           `json:"content"`
-			Title           string           `json:"title"`
-			PublicationDate string           `json:"publication_date"`
-			ImageURL        string           `json:"image_url"`
-			Media           []map[string]any `json:"media"`
-			MediaEvidence   json.RawMessage  `json:"media_evidence"`
-			Method          string           `json:"method"`
-			MethodUsed      string           `json:"method_used"`
-			SelectorUsed    string           `json:"selector_used"`
+			Content               string           `json:"content"`
+			Title                 string           `json:"title"`
+			PublicationDate       string           `json:"publication_date"`
+			ImageURL              string           `json:"image_url"`
+			Media                 []map[string]any `json:"media"`
+			MediaEvidence         json.RawMessage  `json:"media_evidence"`
+			PendingEditorialMedia bool             `json:"pending_editorial_media"`
+			Method                string           `json:"method"`
+			MethodUsed            string           `json:"method_used"`
+			SelectorUsed          string           `json:"selector_used"`
 		} `json:"result"`
 		Error *struct {
 			Code              string `json:"code"`
@@ -362,6 +382,8 @@ func (c *ExtractorClient) extractOnce(ctx context.Context, rawURL, title, source
 		return Extracted{}, fatal("extractor_protocol")
 	}
 	out := Extracted{Content: envelope.Result.Content, Title: envelope.Result.Title, PublicationDate: envelope.Result.PublicationDate, ImageURL: envelope.Result.ImageURL, MediaFiles: envelope.Result.Media, MediaEvidence: validatedMediaEvidence(envelope.Result.MediaEvidence, rawURL), Method: envelope.Result.Method, MethodUsed: envelope.Result.MethodUsed, SelectorUsed: envelope.Result.SelectorUsed, Outcome: envelope.Outcome, Observations: envelope.Observations}
+	out.pendingEditorialMedia = envelope.Result.PendingEditorialMedia
+	out.documentURL = envelope.FinalURL
 	out.applied = envelope.Applied
 	if c.EnablePageStudy && replay == nil && (envelope.StudyDocumentURL == rawURL || envelope.StudyDocumentURL == envelope.FinalURL) {
 		snapshot := extractionStudySnapshot{DocumentURL: envelope.StudyDocumentURL, HTML: envelope.StudyHTML, SnapshotDigest: envelope.SnapshotDigest}

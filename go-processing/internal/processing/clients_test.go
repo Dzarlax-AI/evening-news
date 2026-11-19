@@ -321,3 +321,77 @@ func TestAIClientStaleFenceIsFatal(t *testing.T) {
 		t.Fatalf("stale callback fence must abort the run: %v", err)
 	}
 }
+
+func TestExtractorClientOptionalEditorialMediaRetry(t *testing.T) {
+	const article = "https://fixture.invalid/story"
+	const photo = "https://fixture.invalid/editorial.jpg"
+	const audio = "https://fixture.invalid/narration.mp3"
+	for _, tc := range []struct {
+		name             string
+		pending, enabled bool
+		calls            int
+		wantRendered     bool
+	}{
+		{"recovered", true, true, 2, true},
+		{"busy", true, true, 2, false},
+		{"timeout", true, true, 2, false},
+		{"resource_limit", true, true, 2, false},
+		{"incomplete", true, true, 2, false},
+		{"different_page", true, true, 2, false},
+		{"missing_original_audio", true, true, 2, false},
+		{"disabled", true, false, 1, false},
+		{"no_placeholder", false, true, 1, false},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			var calls int
+			server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+				var body map[string]any
+				_ = json.NewDecoder(r.Body).Decode(&body)
+				calls++
+				result := map[string]any{"content": syntheticExtractedArticle, "title": "Bridge repairs", "pending_editorial_media": tc.pending, "method": "enhanced_selectors"}
+				media := func(kind, url string, order int) map[string]any {
+					return map[string]any{"type": kind, "url": url, "data": map[string]any{"editorial_order": order}}
+				}
+				files := []map[string]any{media("audio", audio, 1)}
+				reply := map[string]any{"contract_version": "1", "request_id": body["request_id"], "original_url": article, "final_url": article, "outcome": "success", "result": result}
+				if body["use_browser"] == true {
+					result["pending_editorial_media"] = tc.name == "incomplete"
+					result["method"] = "browser_rendering"
+					switch tc.name {
+					case "busy", "resource_limit":
+						code := "native_browser_busy"
+						if tc.name == "resource_limit" {
+							code = "resource_limit"
+						}
+						reply["outcome"] = "rejected"
+						reply["error"] = map[string]any{"code": code, "retryable": tc.name == "busy"}
+					case "timeout":
+						<-r.Context().Done()
+						return
+					case "different_page":
+						reply["final_url"] = "https://fixture.invalid/other"
+					case "missing_original_audio":
+						files = nil
+					}
+					files = append(files, media("image", photo, 2))
+				}
+				result["media"] = files
+				_ = json.NewEncoder(w).Encode(reply)
+			}))
+			defer server.Close()
+			client := NewExtractorClient(server.URL, "fixture-token")
+			client.UseBrowser = tc.enabled
+			client.AttemptTimeout = 400 * time.Millisecond
+			client.TotalBudget = 2 * time.Second
+			got, err := client.Extract(context.Background(), article, "", "telegram", "", "", 10000)
+			if err != nil || got.Error != "" || got.Content != syntheticExtractedArticle || (got.Method == "browser_rendering") != tc.wantRendered ||
+				len(got.MediaFiles) == 0 || got.MediaFiles[0]["url"] != audio {
+				t.Fatalf("optional retry returned method=%s error=%q media_count=%d err=%v", got.Method, got.Error, len(got.MediaFiles), err)
+			}
+			server.Close()
+			if calls != tc.calls {
+				t.Fatalf("attempts=%d want %d", calls, tc.calls)
+			}
+		})
+	}
+}

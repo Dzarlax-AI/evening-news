@@ -38,3 +38,17 @@ func TestReparseArticleLayoutRequiresSnapshotAndPreservesFallback(t *testing.T) 
 		}
 	}
 }
+
+func TestReparseArticleLayoutCannotPromoteCardCover(t *testing.T) {
+	html := `<article><h1>Road reconstruction</h1><div class="story"><p>` + prose + `</p>
+	<div><section><img class="suggested" src="/duplicate.jpg"><h3><a href="/other">An unrelated investigation</a></h3></section>
+	<section><img src="/wrong.jpg"><h3><a href="/third">A different local report</a></h3></section></div>
+	<p>` + prose + `</p><figure><img src="/lead.jpg"></figure><figure><img src="/duplicate.jpg"></figure></div></article>`
+	sum := sha256.Sum256([]byte(html))
+	got, ok := ReparseArticleLayout(Input{URL: "https://fixture.test/story", HTML: html}, Result{}, hex.EncodeToString(sum[:]), pagelayout.Layout{
+		PageKind: "article", ArticleBody: "article", EditorialCover: ".suggested",
+	})
+	if !ok || got.ImageURL != "https://fixture.test/lead.jpg" || got.MediaEvidence.EditorialCover.URL != "" {
+		t.Fatalf("a card occurrence became the cover: ok=%t cover=%q evidence=%+v", ok, got.ImageURL, got.MediaEvidence)
+	}
+}

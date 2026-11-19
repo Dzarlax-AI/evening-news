@@ -320,6 +320,10 @@ func testPublicRSSImagePolicy(t *testing.T, ctx context.Context, reader *Postgre
 	const coverEvidence = `{"version":1,"editorial_cover":{"source":"og_image","article_url":"https://example.test/story/42","url":"https://fixture.test/editorial.jpg"}}`
 	const cardLogo = `[{"type":"image","source":"img_tag","url":"https://fixture.test/logo.svg","data":{"article_body_scope":"outside"}}]`
 	const legacy = `[{"type":"image","url":"https://fixture.test/legacy.jpg"}]`
+	const scoped = `{"version":1,"article_url":"https://example.test/story/42","article_scope":"verified"}`
+	const unknown = `{"version":1,"article_url":"https://example.test/story/42","article_scope":"unknown"}`
+	const ordered = `[{"type":"image","url":"https://fixture.test/card.jpg"},{"type":"image","url":"https://fixture.test/second.jpg","data":{"editorial_order":2}},{"type":"image","url":"https://fixture.test/first.jpg","data":{"editorial_order":1}},{"type":"audio","url":"https://fixture.test/narration.mp3","data":{"editorial_order":3}}]`
+	const telegram = `[{"type":"image","url":"https://fixture.test/attachment.jpg","thumbnail":"https://fixture.test/attachment.jpg"},{"type":"audio","url":"https://fixture.test/voice.mp3","source":"direct_audio"}]`
 	for _, tc := range []struct {
 		name, source, media, evidence string
 		filter                        bool
@@ -333,6 +337,10 @@ func testPublicRSSImagePolicy(t *testing.T, ctx context.Context, reader *Postgre
 		{"telegram", "telegram", legacy, "", false, []string{"https://fixture.test/legacy.jpg"}, "https://fixture.test/cover.jpg"},
 		{"rss_filtered", "rss", decorated, "", true, []string{"https://fixture.test/photo.jpg"}, "https://fixture.test/photo.jpg"},
 		{"rss_previous_projection", "rss", decorated, "", false, []string{"https://fixture.test/icon.svg", "https://fixture.test/photo.jpg"}, "https://fixture.test/icon.svg"},
+		{"custom_editorial_order", "custom", ordered, scoped, true, []string{"https://fixture.test/first.jpg", "https://fixture.test/second.jpg", "https://fixture.test/narration.mp3"}, "https://fixture.test/first.jpg"},
+		{"custom_verified_empty", "custom", legacy, scoped, true, []string{}, ""},
+		{"custom_unknown_scope", "custom", legacy, unknown, true, []string{}, ""},
+		{"telegram_existing_attachments", "telegram", telegram, "", true, []string{"https://fixture.test/attachment.jpg", "https://fixture.test/voice.mp3"}, "https://fixture.test/attachment.jpg"},
 		{"custom_filtered", "custom", legacy, "", true, []string{"https://fixture.test/legacy.jpg"}, "https://fixture.test/legacy.jpg"},
 		{"custom_verified", "custom", cardLogo, coverEvidence, true, []string{}, "https://fixture.test/editorial.jpg"},
 		{"custom_verified_prioritizes_cover", "custom", legacy, coverEvidence, true, []string{"https://fixture.test/legacy.jpg"}, "https://fixture.test/editorial.jpg"},

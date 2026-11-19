@@ -26,6 +26,8 @@ var (
 	ErrAdmissionUnavailable = errors.New("egress_admission_unavailable")
 )
 
+const tunnelAdmissionWait = 1500 * time.Millisecond
+
 // Resolver and Dialer are trusted process dependencies, never request options.
 type Resolver interface {
 	LookupNetIP(context.Context, string, string) ([]netip.Addr, error)
@@ -66,6 +68,8 @@ type Gateway struct {
 	mu           sync.Mutex
 	draining     bool
 	active       map[*operation]struct{}
+	waiting      chan struct{}
+	capacity     chan struct{}
 	wg           sync.WaitGroup
 	tunnels      atomic.Uint64
 	denied       atomic.Uint64
@@ -147,7 +151,7 @@ func New(cfg Config) (*Gateway, error) {
 	controlHash := sha256.Sum256([]byte(cfg.Token))
 	hash := sha256.Sum256([]byte("extractor:" + cfg.Token))
 	cfg.Token = ""
-	return &Gateway{controlHash: controlHash, budgets: map[string]*renderBudget{}, budgetTokens: map[[32]byte]*renderBudget{}, cfg: cfg, authHash: hash, active: make(map[*operation]struct{})}, nil
+	return &Gateway{controlHash: controlHash, budgets: map[string]*renderBudget{}, budgetTokens: map[[32]byte]*renderBudget{}, cfg: cfg, authHash: hash, active: make(map[*operation]struct{}), waiting: make(chan struct{}, cfg.MaxConcurrent), capacity: make(chan struct{})}, nil
 }
 
 // destination accepts only an authority with an explicit HTTPS port.
@@ -231,23 +235,60 @@ func (g *Gateway) authorized(r *http.Request) bool {
 	return subtle.ConstantTimeCompare(hash[:], g.authHash[:]) == 1
 }
 
-// begin admits a tunnel only when gateway capacity, drain state and its scoped budget all permit
-// it.
-func (g *Gateway) begin(ctx context.Context, budget *renderBudget) (*operation, bool) {
+// tryBegin returns a notification only when the global tunnel cap is full.
+func (g *Gateway) tryBegin(ctx context.Context, budget *renderBudget) (*operation, <-chan struct{}) {
 	g.mu.Lock()
 	defer g.mu.Unlock()
-	if g.draining || len(g.active) >= g.cfg.MaxConcurrent {
-		return nil, false
+	if g.draining || ctx.Err() != nil {
+		return nil, nil
+	}
+	if len(g.active) >= g.cfg.MaxConcurrent {
+		return nil, g.capacity
 	}
 	ctx, cancel := context.WithTimeout(ctx, g.cfg.MaxLifetime)
 	op := &operation{ctx: ctx, cancel: cancel, budget: budget}
 	if !budget.attach(op) {
 		cancel()
-		return nil, false
+		return nil, nil
 	}
 	g.active[op] = struct{}{}
 	g.wg.Add(1)
-	return op, true
+	return op, nil
+}
+
+// Give a bounded burst of authenticated CONNECTs time to reuse capacity
+// without increasing the number of active tunnels.
+func (g *Gateway) begin(ctx context.Context, budget *renderBudget) *operation {
+	op, capacity := g.tryBegin(ctx, budget)
+	if capacity == nil {
+		return op
+	}
+	select {
+	case g.waiting <- struct{}{}:
+		defer func() { <-g.waiting }()
+	default:
+		return nil
+	}
+	wait, cancel := context.WithTimeout(ctx, min(tunnelAdmissionWait, time.Until(budget.expires)))
+	defer cancel()
+	for capacity != nil {
+		select {
+		case <-wait.Done():
+			return nil
+		case <-capacity:
+			if wait.Err() != nil {
+				return nil
+			}
+			op, capacity = g.tryBegin(ctx, budget)
+		}
+	}
+	return op
+}
+
+// notifyCapacity is called under g.mu.
+func (g *Gateway) notifyCapacity() {
+	close(g.capacity)
+	g.capacity = make(chan struct{})
 }
 
 func (g *Gateway) end(op *operation) {
@@ -255,6 +296,7 @@ func (g *Gateway) end(op *operation) {
 	op.close()
 	g.mu.Lock()
 	delete(g.active, op)
+	g.notifyCapacity()
 	g.mu.Unlock()
 	op.budget.detach(op)
 	g.wg.Done()
@@ -295,8 +337,8 @@ func (g *Gateway) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 		http.Error(w, "connect_required", http.StatusBadRequest)
 		return
 	}
-	op, ok := g.begin(r.Context(), budget)
-	if !ok {
+	op := g.begin(r.Context(), budget)
+	if op == nil {
 		w.Header().Set("Retry-After", "1")
 		http.Error(w, "egress_busy", http.StatusServiceUnavailable)
 		return
@@ -401,6 +443,7 @@ func (g *Gateway) Snapshot() Stats {
 func (g *Gateway) Drain(ctx context.Context) error {
 	g.mu.Lock()
 	g.draining = true
+	g.notifyCapacity()
 	g.mu.Unlock()
 	done := make(chan struct{})
 	go func() { g.wg.Wait(); close(done) }()

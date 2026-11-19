@@ -249,3 +249,18 @@ GOCACHE=/tmp/news-configcatalog-cache CONFIG_CATALOG_DISCOVER=1 go test -count=1
 ```
 
 The scanner checks Go environment reads and helper calls, table-driven configuration, role allowlists, dynamic scheduler targets, Compose interpolation, container environment outputs, and checked-in deployment examples. It is bounded rather than a whole-program data-flow analysis: new helpers, scripts, or table layouts require updating discovery rules. The test verifies coverage and source references, not whether every default, secret classification, or precedence description is semantically correct; review those values against the source and profile when configuration changes.
+
+## Optional Telegram content filter
+
+`ARTICLE_TELEGRAM_CONTENT_FILTER` defaults to `false`. In managed mode set
+`"ARTICLE_TELEGRAM_CONTENT_FILTER": "true"` under `values` in the private
+background runtime manifest. The standalone processing and legacy development
+profiles accept `ARTICLE_TELEGRAM_CONTENT_FILTER=true` in their Compose
+environment. The processing service reads the setting at startup.
+
+When enabled, processing rejects Telegram posts with an effective `exclude`
+verdict when the original text and attachment and link metadata support it.
+Missing context, external links and attachments prevent automatic rejection.
+When disabled, the verdict is recorded for review. Rejected posts remain in
+storage. Disabling the filter affects future processing, and a previously
+rejected post requires reprocessing to be evaluated again.

@@ -49,6 +49,7 @@ type nativeFixture struct {
 	downloadFrame                                                                                                      string
 	navigateDownload, statusAfterFailure, sameRequestNoFrame                                                           bool
 	navigationError, loadingFailure, loadingFailureType, loadingFailureFrame                                           string
+	responseFailureFrame, responseFailureURL                                                                           string
 	evaluationException                                                                                                bool
 	requestBurst                                                                                                       int
 	pausedBurst                                                                                                        int
@@ -414,6 +415,14 @@ func newNativeFixture(t *testing.T) *nativeFixture {
 				}
 				if f.childStatus != 0 {
 					write(map[string]any{"method": "Network.responseReceived", "sessionId": sessionID, "params": map[string]any{"requestId": "child-request", "frameId": "child-frame", "type": "Document", "response": map[string]any{"status": f.childStatus, "headers": map[string]string{}}}})
+				}
+				if f.responseFailureFrame != "" {
+					frame := f.responseFailureFrame
+					write(map[string]any{"method": "Network.requestWillBeSent", "sessionId": sessionID, "params": map[string]string{"requestId": "failed-document", "frameId": frame, "type": "Document"}})
+					params := map[string]any{"requestId": "failed-fetch", "networkId": "failed-document", "frameId": frame, "resourceType": "Document", "responseErrorReason": "Failed",
+						"request": map[string]string{"url": f.responseFailureURL}}
+					write(map[string]any{"method": "Fetch.requestPaused", "sessionId": sessionID, "params": params})
+					write(map[string]any{"method": "Network.loadingFailed", "sessionId": sessionID, "params": map[string]string{"requestId": "failed-document", "errorText": "net::ERR_FAILED"}})
 				}
 				if f.downloadFrame != "" {
 					write(map[string]any{"method": "Browser.downloadWillBegin", "params": map[string]string{"frameId": f.downloadFrame}})
@@ -2630,6 +2639,36 @@ func TestNativeNavigationErrorPreservesPendingPolicyAndDownload(t *testing.T) {
 			}
 			if tc.download && !errors.Is(err, ErrNativeUnsupported) {
 				t.Fatalf("download lost: %v", err)
+			}
+		})
+	}
+}
+
+func TestNativeDocumentResponseFailureByFrame(t *testing.T) {
+	for _, tc := range []struct {
+		name, frame, url string
+		allowed          bool
+	}{
+		{"owned child frame", "child-frame", "https://assets.example/embedded.html", true},
+		{"main frame", "main-frame", "https://origin.example/", false},
+		{"unknown frame", "unknown-frame", "https://assets.example/embedded.html", false},
+		{"unsafe child URL", "child-frame", "http://127.0.0.1/blocked", false},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			f := newNativeFixture(t)
+			f.childStatus = http.StatusOK
+			f.responseFailureFrame, f.responseFailureURL = tc.frame, tc.url
+			w := f.worker(t)
+			if err := w.Probe(context.Background()); err != nil {
+				t.Fatal(err)
+			}
+			doc, err := w.Fetch(context.Background(), "https://origin.example/", NativeBrowserOptions{})
+			if tc.allowed {
+				if err != nil || len(doc.HTML) == 0 {
+					t.Fatalf("owned child failure discarded the main document: %v", err)
+				}
+			} else if err == nil || len(doc.HTML) != 0 {
+				t.Fatalf("unsafe or unverified document failure did not terminate rendering: %v", err)
 			}
 		})
 	}

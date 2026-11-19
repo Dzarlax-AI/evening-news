@@ -38,7 +38,8 @@ func TestWebMediaPreservesRollbackAndEvidence(t *testing.T) {
 func TestWebMediaNoTrustedBodyKeepsCandidatesUnmarked(t *testing.T) {
 	page := `<html><head><meta name="description" content="` + prose + `"></head><body><img src="/author.jpg"></body></html>`
 	r := Extract(context.Background(), Input{URL: "https://example.test/story", HTML: page, SourceType: "web", Strategy: "meta_description"})
-	if r.State != "extracted" || len(r.Media) != 1 || r.Media[0].Data["article_body_scope"] != nil {
+	if r.State != "extracted" || len(r.Media) != 1 || r.Media[0].Data["article_body_scope"] != nil ||
+		r.MediaEvidence == nil || r.MediaEvidence.ArticleScope != "unknown" || r.ImageURL != "" {
 		t.Fatalf("unknown scope: %+v", r)
 	}
 }
@@ -180,7 +181,7 @@ func TestEditorialCoverEvidenceRequiresTrustedArticle(t *testing.T) {
 		strings.Replace(articleHTML, `<img src="`+cover+`">`, `<img src="/some-other-photo.jpg">`, 1),
 	} {
 		got := Extract(context.Background(), Input{URL: page, HTML: html, SourceType: "web"})
-		if got.MediaEvidence != nil {
+		if got.MediaEvidence != nil && got.MediaEvidence.EditorialCover.URL != "" {
 			t.Fatalf("untrusted cover evidence: %+v", got.MediaEvidence)
 		}
 	}
@@ -192,5 +193,61 @@ func TestArticleScopeKeepsEditorialSVGAndExcludesShareControls(t *testing.T) {
 	_, selected := mediaViews(r.Media)
 	if len(selected) != 1 || !strings.HasSuffix(selected[0], "/chart.svg") {
 		t.Fatalf("selected=%v", selected)
+	}
+}
+
+func TestEditorialMediaUsesProseAndCardBoundaries(t *testing.T) {
+	const story = "https://fixture.test/report"
+	const before = `<p><!--<slot left 123 media>--></p>`
+	const after = `<div><img src="/inline.jpg"><div>Bridge reconstruction</div></div>`
+	source := `<meta property="og:type" content="article"><meta property="og:image" content="/wrong.jpg">
+	<div id="content"><div><a href="/wrong-story"><img src="/wrong.jpg">An unrelated adjacent article</a></div>
+	<article><audio><source src="/narration.mp3" type="audio/mpeg"></audio><h1>Bridge repairs</h1>
+	<div class="renamed-prose"><p>` + prose + `</p>` + before +
+		`<div class="renamed-widgets"><div class="alpha"><img src="/second.jpg"><h3><a href="/other">An unrelated older report</a></h3></div>
+		<div class="beta"><img src="/wrong.jpg"><h3><a href="/third">A different regional story</a></h3></div></div>
+		<p>` + prose + `</p>
+		<figure><a href="/full-size?id=42"><img src="/first.jpg"></a><figcaption>An editorial photograph</figcaption></figure>
+		<figure><a href="/second-large.jpg"><img src="/second.jpg"></a></figure>
+		</div></article></div>`
+	for _, tc := range []struct {
+		name, markup, cover string
+		pending             bool
+		images              []string
+	}{
+		{"static", source, "/first.jpg", true, []string{"/first.jpg", "/second.jpg", "/second-large.jpg"}},
+		{"rendered", strings.Replace(source, before, after, 1), "/inline.jpg", false, []string{"/inline.jpg", "/first.jpg", "/second.jpg", "/second-large.jpg"}},
+		{"text_with_no_placeholder", strings.Replace(source, before, "<p></p>", 1), "/first.jpg", false, []string{"/first.jpg", "/second.jpg", "/second-large.jpg"}},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			got := Extract(context.Background(), Input{URL: story, HTML: tc.markup})
+			if got.State != "extracted" || got.PendingEditorialMedia != tc.pending ||
+				got.ImageURL != "https://fixture.test"+tc.cover || got.MediaEvidence == nil ||
+				got.MediaEvidence.ArticleScope != "verified" || got.MediaEvidence.EditorialCover.URL != "" {
+				t.Fatalf("state=%s pending=%t cover=%q evidence=%+v", got.State, got.PendingEditorialMedia, got.ImageURL, got.MediaEvidence)
+			}
+			images := make(map[string]int)
+			audio := 0
+			for _, candidate := range got.Media {
+				order, _ := candidate.Data["editorial_order"].(int)
+				switch {
+				case candidate.URL == "https://fixture.test/narration.mp3":
+					if order > 0 && candidate.Type == "audio" && candidate.MediaType == "audio/mpeg" {
+						audio++
+					}
+				case order > 0 && candidate.Type == "image":
+					images[strings.TrimPrefix(candidate.URL, "https://fixture.test")] = order
+				}
+			}
+			if audio != 1 || len(images) != len(tc.images) {
+				t.Fatalf("images=%v, audio=%d", images, audio)
+			}
+			// Full-size image links are scanned separately from img occurrences.
+			for index, image := range tc.images {
+				if images[image] == 0 || (index > 0 && images[image] <= images[tc.images[index-1]]) {
+					t.Fatalf("editorial image order=%v, want %v", images, tc.images)
+				}
+			}
+		})
 	}
 }

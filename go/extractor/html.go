@@ -552,21 +552,20 @@ func extractWeb(ctx context.Context, in Input, r Result) Result {
 		r.SelectorUsed = sel
 		metadata(md, &r)
 		if in.SourceType == "article" || in.SourceType == "web" || in.SourceType == "" {
-			if mediaBody != nil && mediaBody.Length() > 0 && strings.EqualFold(strings.TrimSpace(meta(md, `meta[property="og:type"]`)), "article") {
-				cover := safeRSSHTTPURL(meta(md, `meta[property="og:image"]`), in.URL)
-				if cover != "" && len(cover) <= 2048 && len(in.URL) <= 2048 && bodyContainsImage(mediaBody, in.URL, cover) {
-					r.MediaEvidence = &MediaEvidence{Version: 1, EditorialCover: EditorialCoverEvidence{URL: cover, Source: "og_image", ArticleURL: in.URL}}
-				}
-			}
-			var truncated bool
 			page := in.HTML
 			if md != d {
 				page = in.RenderedHTML
 			}
-			r.Media, truncated = scopedArticleMedia(page, in.URL, mediaBody)
-			if truncated {
-				r.Trace = append(r.Trace, "media_truncated")
+			// Readability's sanitized nodes can lose ancestry and placeholders.
+			// Prefer a matching original DOM body when available.
+			if method == "readability" {
+				if textBody, _, originalBody := enhancedWithBody(md, in.MaxChars); originalBody != nil && strings.Contains(textBody, s[:min(len(s), 80)]) {
+					mediaBody = originalBody
+				} else {
+					mediaBody = matchingProseBody(md, s)
+				}
 			}
+			applyEditorialMedia(&r, md, page, in.URL, mediaBody, nil)
 		}
 		return true
 	}

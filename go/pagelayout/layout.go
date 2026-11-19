@@ -97,7 +97,8 @@ func Validate(a *Layout, raw string) {
 		a.PageKind = "listing"
 	case "article":
 		body := find(bodySelector)
-		if body == nil || body.Length() != 1 || inChrome(body) || body.Is("html,body") || (!body.Is("article,[itemprop=articleBody],[role=article]") && body.ParentsFiltered("article,[role=article]").Length() == 0) || utf8.RuneCountInString(strings.TrimSpace(body.Text())) < 100 {
+		if body == nil || body.Length() != 1 || inChrome(body) || inCoverChrome(body) || body.Is("html,body") ||
+			utf8.RuneCountInString(strings.TrimSpace(body.Text())) < 100 || !plausibleArticleBody(body) {
 			return
 		}
 		var cover *goquery.Selection
@@ -135,6 +136,41 @@ func Validate(a *Layout, raw string) {
 	}
 }
 
+// An unmarked body needs several coherent paragraphs near a unique headline.
+// This permits editorial markup without a semantic article element.
+func plausibleArticleBody(body *goquery.Selection) bool {
+	if body.Closest("article,[itemprop=articleBody],[role=article]").Length() > 0 {
+		return true
+	}
+	count, prose := 0, 0
+	body.Find("p").Each(func(_ int, p *goquery.Selection) {
+		if inChrome(p) || inCoverChrome(p) {
+			return
+		}
+		length := utf8.RuneCountInString(strings.TrimSpace(p.Text()))
+		linked := 0
+		p.Find("a[href]").Each(func(_ int, link *goquery.Selection) {
+			linked += utf8.RuneCountInString(strings.TrimSpace(link.Text()))
+		})
+		if length >= 45 && linked*2 < length {
+			count++
+			prose += length
+		}
+	})
+	if count < 2 || prose < 200 {
+		return false
+	}
+	for current, depth := body, 0; current.Length() == 1 && depth < 6 && !current.Is("html,body"); current, depth = current.Parent(), depth+1 {
+		headings := current.Find("h1").FilterFunction(func(_ int, heading *goquery.Selection) bool {
+			return !inChrome(heading) && !inCoverChrome(heading) && heading.Closest("a[href]").Length() == 0 && heading.Find("a[href]").Length() == 0
+		})
+		if headings.Length() > 0 {
+			return headings.Length() == 1
+		}
+	}
+	return false
+}
+
 func semanticRelatedAside(s *goquery.Selection) bool {
 	if !s.Is("aside") {
 		return false
@@ -159,6 +195,9 @@ func inCoverChrome(s *goquery.Selection) bool {
 	return s.Parents().FilterFunction(func(_ int, p *goquery.Selection) bool { return hasRelatedSignal(p) }).Length() > 0
 }
 func sameArticle(body, cover *goquery.Selection) bool {
+	if containsNode(body.Nodes[0], cover.Nodes[0]) && body.Closest("article,[role=article]").Length() == 0 {
+		return true
+	}
 	// An inner prose article can belong to the same outer editorial article as
 	// its hero. Do not cross a different nested article on the cover's path.
 	for n := body.Nodes[0]; n != nil; n = n.Parent {

@@ -66,6 +66,43 @@ func proxyAuth() string {
 	return "Basic " + base64.StdEncoding.EncodeToString([]byte("extractor:"+testToken))
 }
 
+func TestTunnelAdmissionWaitsForCapacity(t *testing.T) {
+	g, err := New(Config{Token: testToken, MaxConcurrent: 1})
+	if err != nil {
+		t.Fatal(err)
+	}
+	budget := &renderBudget{remaining: 1024, expires: time.Now().Add(time.Minute), ops: map[*operation]struct{}{}}
+	first := g.begin(context.Background(), budget)
+	if first == nil {
+		t.Fatal("initial tunnel denied")
+	}
+	ctx, cancel := context.WithTimeout(context.Background(), time.Second)
+	defer cancel()
+	next := make(chan *operation, 1)
+	go func() { next <- g.begin(ctx, budget) }()
+	deadline := time.Now().Add(500 * time.Millisecond)
+	for len(g.waiting) == 0 && time.Now().Before(deadline) {
+		time.Sleep(time.Millisecond)
+	}
+	if len(g.waiting) != 1 || g.Snapshot().Active != 1 {
+		t.Fatal("second tunnel did not wait behind the active tunnel")
+	}
+	if overflow := g.begin(ctx, budget); overflow != nil {
+		g.end(overflow)
+		t.Fatal("full wait queue admitted another tunnel")
+	}
+	g.end(first)
+	select {
+	case op := <-next:
+		if op == nil {
+			t.Fatal("waiting tunnel was denied after capacity was released")
+		}
+		g.end(op)
+	case <-ctx.Done():
+		t.Fatal("waiting tunnel was not woken")
+	}
+}
+
 func TestExpiredDialCannotReportSuccessfulCONNECT(t *testing.T) {
 	_, server := newGateway(t, Config{MaxLifetime: 5 * time.Millisecond, Dialer: dialerFunc(func(ctx context.Context, _, _ string) (net.Conn, error) {
 		<-ctx.Done()
@@ -311,7 +348,7 @@ func TestWireBudgetClosesTunnelAndReleasesSlot(t *testing.T) {
 	}
 }
 
-func TestLifetimeCancellationBusyAndDrainCloseOwnedTunnels(t *testing.T) {
+func TestLifetimeCancellationAndDrainCloseOwnedTunnels(t *testing.T) {
 	for _, mode := range []string{"lifetime", "client_disconnect", "drain"} {
 		t.Run(mode, func(t *testing.T) {
 			closed := make(chan struct{})
@@ -324,11 +361,6 @@ func TestLifetimeCancellationBusyAndDrainCloseOwnedTunnels(t *testing.T) {
 			c, b, status := connect(t, server.URL, "8.8.8.8:443", proxyAuth())
 			if status != 200 {
 				t.Fatal(status)
-			}
-			other, _, busy := connect(t, server.URL, "8.8.4.4:443", proxyAuth())
-			other.Close()
-			if busy != 503 {
-				t.Fatal("unbounded tunnel admission", busy)
 			}
 			switch mode {
 			case "client_disconnect":

@@ -859,6 +859,64 @@ func TestProcessorRunPostgresTelegramReprocessUsesOriginalContext(t *testing.T) 
 	}
 }
 
+func TestProcessorRunPostgresTelegramContentFilter(t *testing.T) {
+	for _, tc := range []struct {
+		name, modelVerdict, wantState, wantVerdict string
+		enabled, hasMedia                          bool
+	}{
+		{name: "disabled records exclude", modelVerdict: "exclude", wantState: "completed", wantVerdict: "exclude"},
+		{name: "enabled rejects text only", modelVerdict: "exclude", wantState: "rejected", wantVerdict: "exclude", enabled: true},
+		{name: "enabled keeps attachment", modelVerdict: "exclude", wantState: "completed", wantVerdict: "uncertain", enabled: true, hasMedia: true},
+		{name: "enabled keeps useful notice", modelVerdict: "keep", wantState: "completed", wantVerdict: "keep", enabled: true},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			pg := newPipelinePG(t, false)
+			const articleID = int64(730)
+			const sourceText = "Synthetic Telegram fixture about a street closure."
+			pg.seedArticle(t, articleID)
+			if _, err := pg.admin.Exec(context.Background(), `INSERT INTO `+pg.schema+`.sources(id,source_type,name) VALUES(1,'telegram','Synthetic Telegram')`); err != nil {
+				t.Fatal(err)
+			}
+			source := fmt.Sprintf(`{"source_text":%q,"metadata_known":true,"has_media":%t,"external_links":[]}`, sourceText, tc.hasMedia)
+			if _, err := pg.admin.Exec(context.Background(), `UPDATE `+pg.schema+`.articles SET source_id=1,url='https://t.me/synthetic/730',telegram_context=$2::jsonb WHERE id=$1`, articleID, source); err != nil {
+				t.Fatal(err)
+			}
+			extractor, _ := newFixtureExtractor(t)
+			ai := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+				var request aiEnvelope
+				if json.NewDecoder(r.Body).Decode(&request) != nil || request.Operation != "analyze" || request.Input["original_context"] != sourceText {
+					http.Error(w, "unexpected Telegram analysis input", http.StatusUnprocessableEntity)
+					return
+				}
+				result := map[string]any{"summary": "Synthetic Telegram summary.", "categories": []any{"technology"}, "is_advertisement": false,
+					"content_admission": map[string]any{"verdict": tc.modelVerdict, "reason": "Synthetic verdict."}}
+				w.Header().Set("Content-Type", "application/json")
+				_ = json.NewEncoder(w).Encode(analysisResponse(request, result))
+			}))
+			defer ai.Close()
+			p := newIntegrationProcessor(pg, ai.URL, extractor.URL)
+			p.ApplyTelegramContentAdmission = tc.enabled
+			f := pg.newRun(t, articleID)
+			if _, err := p.Run(context.Background(), f); err != nil {
+				t.Fatal(err)
+			}
+			var state, reason, verdict string
+			err := pg.admin.QueryRow(context.Background(), `SELECT a.processing_state, COALESCE(a.last_processing_error,''), i.result->'content_admission'->>'verdict'
+				FROM `+pg.schema+`.articles a JOIN `+pg.schema+`.article_processing_items i ON i.article_id=a.id WHERE a.id=$1`, articleID).Scan(&state, &reason, &verdict)
+			if err != nil {
+				t.Fatal(err)
+			}
+			wantReason := ""
+			if tc.wantState == "rejected" {
+				wantReason = "insufficient_content"
+			}
+			if state != tc.wantState || reason != wantReason || verdict != tc.wantVerdict {
+				t.Fatalf("state=%q reason=%q verdict=%q, want %q/%q/%q", state, reason, verdict, tc.wantState, wantReason, tc.wantVerdict)
+			}
+		})
+	}
+}
+
 func TestProcessorRunPostgresSummaryClassificationOmitsOriginalContext(t *testing.T) {
 	pg := newPipelinePG(t, false)
 	const articleID = int64(728)
@@ -1370,11 +1428,14 @@ func TestProcessorRunPostgresExistingMediaIsPreserved(t *testing.T) {
 	pg := newPipelinePG(t, false)
 	const articleID = int64(851)
 	pg.seedArticle(t, articleID)
-	existing := `[ {"type":"image","url":"https://example.test/existing.jpg"} ]`
-	if _, err := pg.admin.Exec(context.Background(), `UPDATE `+pg.schema+`.articles SET media_files=$2::jsonb WHERE id=$1`, articleID, existing); err != nil {
+	existing := `[{"type":"image","url":"https://example.test/existing.jpg"},{"type":"audio","url":"https://example.test/voice.mp3","source":"direct_audio"}]`
+	if _, err := pg.admin.Exec(context.Background(), `INSERT INTO `+pg.schema+`.sources(id,source_type,name) VALUES(1,'telegram','Synthetic Telegram')`); err != nil {
 		t.Fatal(err)
 	}
-	extractor, _ := newFixtureExtractor(t)
+	if _, err := pg.admin.Exec(context.Background(), `UPDATE `+pg.schema+`.articles SET source_id=1,media_files=$2::jsonb WHERE id=$1`, articleID, existing); err != nil {
+		t.Fatal(err)
+	}
+	extractor, extractionCalls := newFixtureExtractor(t)
 	ai := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		var request aiEnvelope
 		if err := json.NewDecoder(r.Body).Decode(&request); err != nil {
@@ -1393,11 +1454,13 @@ func TestProcessorRunPostgresExistingMediaIsPreserved(t *testing.T) {
 		t.Fatalf("existing media processing: %v", err)
 	}
 	var media []map[string]any
-	if err := pg.admin.QueryRow(context.Background(), `SELECT media_files FROM `+pg.schema+`.articles WHERE id=$1`, articleID).Scan(&media); err != nil {
+	var evidence *string
+	if err := pg.admin.QueryRow(context.Background(), `SELECT media_files,media_evidence::text FROM `+pg.schema+`.articles WHERE id=$1`, articleID).Scan(&media, &evidence); err != nil {
 		t.Fatal(err)
 	}
-	if len(media) != 1 || media[0]["url"] != "https://example.test/existing.jpg" {
-		t.Fatalf("existing media was replaced: %#v", media)
+	if extractionCalls.Load() != 1 || len(media) != 2 || media[0]["url"] != "https://example.test/existing.jpg" ||
+		media[1]["url"] != "https://example.test/voice.mp3" || media[1]["type"] != "audio" || evidence != nil {
+		t.Fatalf("existing Telegram attachments or their projection changed: calls=%d media_count=%d evidence_written=%t", extractionCalls.Load(), len(media), evidence != nil)
 	}
 }
 
