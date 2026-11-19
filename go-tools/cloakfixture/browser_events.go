@@ -41,6 +41,7 @@ func nativeFailureReceipts(logs string) []string {
 	for _, reason := range []string{"child_target_close_unsupported", "child_target_close_missing", "child_target_close_rejected", "child_target_close_unconfirmed", "child_target_close_failed", "child_target_invalid", "child_target_unpaused", "child_target_unsupported",
 		"response_policy_invalid", "response_policy_failed", "worker_policy_header_seen", "worker_policy_applied", "child_frame_guard_failed", "child_detach_unconfirmed", "iframe_guarded", "child_frame_unsupported", "child_page_denied", "child_target_activity", "context_timeout",
 		"protocol_error", "operation_failed", "unsupported", "ownership_loss",
+		"client_disconnected", "malformed_detach", "owned_detach", "target_crashed", "event_overflow", "transport_error",
 		"paused_worker_dom_ready", "paused_worker_dom_unready", "paused_worker_requests_pending"} {
 		if strings.Contains(logs, " reason="+reason+"\n") {
 			out = append(out, reason)
