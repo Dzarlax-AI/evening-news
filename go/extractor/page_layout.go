@@ -3,9 +3,9 @@ package extractor
 import (
 	"crypto/sha256"
 	"encoding/hex"
-	"strings"
 
 	"github.com/Dzarlax-AI/evening-news/go/pagelayout"
+	"github.com/PuerkitoBio/goquery"
 )
 
 // ReparseArticleLayout applies a layout only to the exact snapshot it was
@@ -43,32 +43,18 @@ func ReparseArticleLayout(in Input, original Result, snapshotDigest string, layo
 		return original, false
 	}
 	result := original
+	result.Trace = append([]string(nil), original.Trace...)
 	result.Content = content
 	result.State = "extracted"
 	result.Error = ""
 	result.Method = "ai_selectors"
 	result.MethodUsed = "ai_selectors"
 	result.SelectorUsed = layout.ArticleBody
-	result.MediaEvidence = nil
-	mediaScope := body
+	var cover *goquery.Selection
 	if layout.EditorialCover != "" {
-		cover := selectSafe(doc.Selection, layout.EditorialCover)
-		raw := strings.TrimSpace(cover.AttrOr("src", cover.AttrOr("data-src", "")))
-		if image := safeRSSHTTPURL(raw, in.URL); image != "" && len(image) <= maxArticleImageURLBytes {
-			result.ImageURL = image
-			result.MediaEvidence = &MediaEvidence{Version: 1, EditorialCover: EditorialCoverEvidence{URL: image, Source: "selector_study", ArticleURL: in.URL}}
-			if picture := cover.Closest("picture"); picture.Length() == 1 {
-				mediaScope = mediaScope.AddSelection(picture)
-			} else {
-				mediaScope = mediaScope.AddSelection(cover)
-			}
-		}
+		cover = selectSafe(doc.Selection, layout.EditorialCover)
 	}
-	var mediaTruncated bool
-	result.Media, mediaTruncated = scopedArticleMedia(in.HTML, in.URL, mediaScope)
-	if mediaTruncated {
-		result.Trace = append(append([]string(nil), result.Trace...), "media_truncated")
-	}
+	applyEditorialMedia(&result, doc, in.HTML, in.URL, body, cover)
 	result.Quality = qualityScore(content)
 	result.OriginalChars = runeLen(content)
 	result.Truncated = false

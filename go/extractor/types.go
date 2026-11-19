@@ -100,26 +100,27 @@ func (r Result) MarshalJSON() ([]byte, error) {
 }
 
 type Result struct {
-	URL              string         `json:"url"`
-	ExtractedFrom    string         `json:"extracted_from,omitempty"`
-	Content          string         `json:"content"`
-	Title            string         `json:"title"`
-	PublicationDate  string         `json:"publication_date"`
-	Author           string         `json:"author"`
-	Description      string         `json:"description"`
-	ImageURL         string         `json:"image_url"`
-	MediaEvidence    *MediaEvidence `json:"media_evidence,omitempty"`
-	Media            []Media        `json:"media"`
-	Method           string         `json:"method"`
-	MethodUsed       string         `json:"method_used"`
-	SelectorUsed     string         `json:"selector_used"`
-	State            string         `json:"state"`
-	Error            string         `json:"error,omitempty"`
-	Trace            []string       `json:"trace"`
-	Quality          float64        `json:"quality"`
-	OriginalChars    int            `json:"original_chars"`
-	Truncated        bool           `json:"truncated"`
-	TruncationPolicy string         `json:"truncation_policy,omitempty"`
+	URL                   string         `json:"url"`
+	ExtractedFrom         string         `json:"extracted_from,omitempty"`
+	Content               string         `json:"content"`
+	Title                 string         `json:"title"`
+	PublicationDate       string         `json:"publication_date"`
+	Author                string         `json:"author"`
+	Description           string         `json:"description"`
+	ImageURL              string         `json:"image_url"`
+	MediaEvidence         *MediaEvidence `json:"media_evidence,omitempty"`
+	PendingEditorialMedia bool           `json:"pending_editorial_media,omitempty"`
+	Media                 []Media        `json:"media"`
+	Method                string         `json:"method"`
+	MethodUsed            string         `json:"method_used"`
+	SelectorUsed          string         `json:"selector_used"`
+	State                 string         `json:"state"`
+	Error                 string         `json:"error,omitempty"`
+	Trace                 []string       `json:"trace"`
+	Quality               float64        `json:"quality"`
+	OriginalChars         int            `json:"original_chars"`
+	Truncated             bool           `json:"truncated"`
+	TruncationPolicy      string         `json:"truncation_policy,omitempty"`
 }
 
 // RestoreArticleURL keeps extracted evidence under the requested article's
@@ -128,9 +129,14 @@ func (r *Result) RestoreArticleURL(original string) {
 	if r.URL != "" && r.URL != original && r.ExtractedFrom == "" {
 		r.ExtractedFrom = r.URL
 	}
-	if r.MediaEvidence != nil && r.MediaEvidence.EditorialCover.ArticleURL == cleanURL(r.URL) {
+	if r.MediaEvidence != nil {
 		evidence := *r.MediaEvidence
-		evidence.EditorialCover.ArticleURL = original
+		if evidence.EditorialCover.ArticleURL == cleanURL(r.URL) {
+			evidence.EditorialCover.ArticleURL = original
+		}
+		if evidence.ArticleURL == cleanURL(r.URL) {
+			evidence.ArticleURL = original
+		}
 		r.MediaEvidence = &evidence
 	}
 	r.URL = original
@@ -138,6 +144,8 @@ func (r *Result) RestoreArticleURL(original string) {
 
 type MediaEvidence struct {
 	Version        int                    `json:"version"`
+	ArticleScope   string                 `json:"article_scope,omitempty"`
+	ArticleURL     string                 `json:"article_url,omitempty"`
 	EditorialCover EditorialCoverEvidence `json:"editorial_cover"`
 }
 type EditorialCoverEvidence struct {

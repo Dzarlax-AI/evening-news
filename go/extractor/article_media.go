@@ -32,7 +32,7 @@ func articleMediaFromBody(body *goquery.Selection, base string) ([]Media, bool, 
 	}
 	clone := body.Clone()
 	pruneRecommendationControls(clone)
-	clone.Find("script,style,template,nav,aside,footer,form,dialog,[role=dialog],[aria-modal=true],[role=navigation],[role=contentinfo],[data-native-ad-id],.newsletter-signup,.subscription-widget,.subscribe-widget,.ad-container,.advertisement,.social-share-bar,[itemprop=author]").Remove()
+	clone.Find(mediaChrome).Remove()
 	var parts []string
 	clone.Each(func(_ int, s *goquery.Selection) {
 		if h, err := goquery.OuterHtml(s); err == nil {
@@ -44,15 +44,6 @@ func articleMediaFromBody(body *goquery.Selection, base string) ([]Media, bool, 
 		truncated = true
 	}
 	return media, truncated, incomplete
-}
-
-// Require an Open Graph cover to also appear in the selected editorial body.
-func bodyContainsImage(body *goquery.Selection, base, target string) bool {
-	return body.Find("img[src],img[data-src]").AddBackFiltered("img[src],img[data-src]").FilterFunction(func(_ int, img *goquery.Selection) bool {
-		return safeRSSHTTPURL(img.AttrOr("src", img.AttrOr("data-src", "")), base) == target &&
-			img.ParentsFiltered("aside,nav,footer,[itemprop=author],[role=navigation]").Length() == 0 &&
-			!insideRecommendationContainer(img)
-	}).Length() > 0
 }
 
 // addPictureEvidence links only candidates explicitly present in the same
@@ -161,18 +152,20 @@ func strictPictureSrcset(raw, base string) ([]string, bool) {
 
 // scopedArticleMedia retains the legacy bounded candidates for rollback. Scope
 // is asserted only when the selected body's complete media list was obtained.
-func scopedArticleMedia(page, base string, body *goquery.Selection) ([]Media, bool) {
+func scopedArticleMedia(page, base string, body *goquery.Selection) ([]Media, bool, bool) {
 	raw, rawTruncated := boundedArticleMedia(page, base)
 	if body == nil || body.Length() == 0 {
-		return raw, rawTruncated
+		return raw, rawTruncated, false
 	}
 	selected, selectedTruncated, selectedIncomplete := articleMediaFromBody(body, base)
 	if selectedIncomplete {
-		return raw, true
+		return raw, true, false
 	}
-	inBody := make(map[string]Media, len(selected))
-	for _, m := range selected {
-		inBody[m.URL] = m
+	inBody := make(map[string]int, len(selected))
+	for index, m := range selected {
+		if m.Type != "image" || !decorativeArticleImage(m) {
+			inBody[m.URL] = index
+		}
 	}
 	annotated := make([]Media, len(raw))
 	copy(annotated, raw)
@@ -181,7 +174,7 @@ func scopedArticleMedia(page, base string, body *goquery.Selection) ([]Media, bo
 	}
 	encoded, err := json.Marshal(annotated)
 	if err != nil {
-		return raw, true
+		return raw, true, false
 	}
 	bytes := len(encoded)
 	setData := func(i int, data map[string]any) bool {
@@ -196,32 +189,37 @@ func scopedArticleMedia(page, base string, body *goquery.Selection) ([]Media, bo
 		annotated[i] = candidate
 		return true
 	}
-	// Scope takes priority over optional evidence; never sacrifice raw URLs.
+	// Reserve positive and negative scope before optional display evidence.
+	// Rollback candidates keep their original order and bounded storage.
 	for i, m := range annotated {
-		if _, ok := inBody[m.URL]; !ok && !setData(i, map[string]any{"article_body_scope": "outside"}) {
+		data := map[string]any{"article_body_scope": "outside"}
+		if order, ok := inBody[m.URL]; ok {
+			data = map[string]any{"editorial_order": order + 1}
+		}
+		if !setData(i, data) {
 			rawTruncated = true
 		}
 	}
-	for i := range annotated {
-		m := annotated[i]
-		data := make(map[string]any, len(raw[i].Data)+1)
+	for i, m := range annotated {
+		display := raw[i].Data
+		if order, ok := inBody[m.URL]; ok {
+			display = selected[order].Data
+		}
+		if len(display) == 0 {
+			continue
+		}
+		data := make(map[string]any, len(display)+len(m.Data))
 		for k, v := range m.Data {
 			data[k] = v
 		}
-		if selectedMedia, ok := inBody[m.URL]; ok {
-			for k, v := range selectedMedia.Data {
-				data[k] = v
-			}
-		} else {
-			for k, v := range raw[i].Data {
-				data[k] = v
-			}
+		for k, v := range display {
+			data[k] = v
 		}
-		if len(data) > 0 && !setData(i, data) {
+		if !setData(i, data) {
 			rawTruncated = true
 		}
 	}
-	return annotated, rawTruncated || selectedTruncated
+	return annotated, rawTruncated || selectedTruncated, true
 }
 
 func boundedArticleMedia(h, base string) ([]Media, bool) {
@@ -299,7 +297,7 @@ func boundedArticleMediaDetailed(h, base string) ([]Media, bool, bool) {
 		encodedBytes = nextBytes
 		return true
 	}
-	extensions := map[string][]string{"image": {".jpg", ".jpeg", ".png", ".gif", ".webp", ".svg", ".bmp", ".tiff", ".ico"}, "video": {".mp4", ".avi", ".mov", ".webm", ".mkv", ".flv", ".wmv", ".m4v"}, "document": {".pdf", ".doc", ".docx", ".xls", ".xlsx", ".ppt", ".pptx", ".txt", ".rtf"}}
+	extensions := map[string][]string{"image": {".jpg", ".jpeg", ".png", ".gif", ".webp", ".svg", ".bmp", ".tiff", ".ico"}, "audio": {".mp3", ".wav", ".aac", ".m4a", ".flac", ".opus", ".oga", ".ogg"}, "video": {".mp4", ".avi", ".mov", ".webm", ".mkv", ".flv", ".wmv", ".m4v"}, "document": {".pdf", ".doc", ".docx", ".xls", ".xlsx", ".ppt", ".pptx", ".txt", ".rtf"}}
 	hasMediaExtension := func(raw string) bool {
 		pathEnd := len(raw)
 		if delimiter := strings.IndexAny(raw, "?#"); delimiter >= 0 {
@@ -355,12 +353,31 @@ func boundedArticleMediaDetailed(h, base string) ([]Media, bool, bool) {
 		stopped = !add(Media{Type: "image", URL: u, AltText: s.AttrOr("alt", ""), MediaType: kind, Source: "img_tag", Data: imageEvidence(attrs, base)})
 		return !stopped
 	})
-	for _, kind := range []string{"video", "source"} {
+	for _, tag := range []string{"video", "audio", "source"} {
 		if stopped {
 			break
 		}
-		d.Find(kind + "[src]").EachWithBreak(func(_ int, s *goquery.Selection) bool {
-			stopped = !add(Media{Type: "video", URL: s.AttrOr("src", ""), MediaType: "video", Source: kind + "_tag"})
+		d.Find(tag + "[src]").EachWithBreak(func(_ int, s *goquery.Selection) bool {
+			raw := s.AttrOr("src", "")
+			kind := tag
+			mime := strings.TrimSpace(strings.ToLower(strings.SplitN(s.AttrOr("type", ""), ";", 2)[0]))
+			if tag == "source" {
+				switch {
+				case s.Parent().Is("picture"), strings.HasPrefix(mime, "image/"):
+					return true
+				case strings.HasPrefix(mime, "audio/"), mediaType("audio", raw) != "audio", s.Parent().Is("audio"):
+					kind = "audio"
+				case strings.HasPrefix(mime, "video/"), s.Parent().Is("video"), mediaType("video", raw) != "video":
+					kind = "video"
+				default:
+					return true
+				}
+			}
+			format := mediaType(kind, raw)
+			if strings.HasPrefix(mime, kind+"/") {
+				format = mime
+			}
+			stopped = !add(Media{Type: kind, URL: raw, MediaType: format, Source: tag + "_tag"})
 			return !stopped
 		})
 	}

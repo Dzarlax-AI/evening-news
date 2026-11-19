@@ -27,7 +27,7 @@ type nativeFixture struct {
 	budgetNext                                                                                                         int
 	budgetRevokeDelay                                                                                                  time.Duration
 	budgetReceipts                                                                                                     map[string]nativeBudgetReceipt
-	responsePolicy, failResponse, stallResponse                                                                        bool
+	responsePolicy, failResponse, stallResponse, exhaustBudgetOnFulfill                                                bool
 	responseParams                                                                                                     map[string]any
 	responseSessions                                                                                                   []string
 	childGuardFail, childRequestURL, childDetach                                                                       string
@@ -49,6 +49,7 @@ type nativeFixture struct {
 	downloadFrame                                                                                                      string
 	navigateDownload, statusAfterFailure, sameRequestNoFrame                                                           bool
 	navigationError, loadingFailure, loadingFailureType, loadingFailureFrame                                           string
+	responseFailureFrame, responseFailureURL                                                                           string
 	evaluationException                                                                                                bool
 	requestBurst                                                                                                       int
 	pausedBurst                                                                                                        int
@@ -415,6 +416,14 @@ func newNativeFixture(t *testing.T) *nativeFixture {
 				if f.childStatus != 0 {
 					write(map[string]any{"method": "Network.responseReceived", "sessionId": sessionID, "params": map[string]any{"requestId": "child-request", "frameId": "child-frame", "type": "Document", "response": map[string]any{"status": f.childStatus, "headers": map[string]string{}}}})
 				}
+				if f.responseFailureFrame != "" {
+					frame := f.responseFailureFrame
+					write(map[string]any{"method": "Network.requestWillBeSent", "sessionId": sessionID, "params": map[string]string{"requestId": "failed-document", "frameId": frame, "type": "Document"}})
+					params := map[string]any{"requestId": "failed-fetch", "networkId": "failed-document", "frameId": frame, "resourceType": "Document", "responseErrorReason": "Failed",
+						"request": map[string]string{"url": f.responseFailureURL}}
+					write(map[string]any{"method": "Fetch.requestPaused", "sessionId": sessionID, "params": params})
+					write(map[string]any{"method": "Network.loadingFailed", "sessionId": sessionID, "params": map[string]string{"requestId": "failed-document", "errorText": "net::ERR_FAILED"}})
+				}
 				if f.downloadFrame != "" {
 					write(map[string]any{"method": "Browser.downloadWillBegin", "params": map[string]string{"frameId": f.downloadFrame}})
 				}
@@ -484,6 +493,14 @@ func newNativeFixture(t *testing.T) *nativeFixture {
 				result["data"] = "<html><body>Original synthetic document</body></html>"
 				result["eof"] = true
 			case "Fetch.fulfillRequest", "Fetch.continueResponse":
+				if msg.Method == "Fetch.fulfillRequest" && f.exhaustBudgetOnFulfill {
+					f.budgetMu.Lock()
+					id := fmt.Sprintf("%032x", f.budgetNext)
+					receipt := f.budgetReceipts[id]
+					receipt.Exhausted = true
+					f.budgetReceipts[id] = receipt
+					f.budgetMu.Unlock()
+				}
 				f.responseParams = msg.Params
 				f.responseSessions = append(f.responseSessions, msg.Session)
 				protocolErr = f.failResponse
@@ -969,6 +986,34 @@ func TestNativeRPCAdmissionPreservesConcurrentPolicyAndAuthCauses(t *testing.T) 
 				}
 			}
 		})
+	}
+}
+
+func TestNativeWireBudgetCancellationDuringResponseFulfillmentKeepsWorkerReady(t *testing.T) {
+	f := newNativeFixture(t)
+	w := f.worker(t)
+	if err := w.Probe(context.Background()); err != nil {
+		t.Fatal(err)
+	}
+	f.mu.Lock()
+	f.responsePolicy = true
+	f.stallResponse = true
+	f.exhaustBudgetOnFulfill = true
+	f.mu.Unlock()
+
+	got, err := w.Fetch(context.Background(), "https://origin.example/", NativeBrowserOptions{BrowserOptions: BrowserOptions{Timeout: 4 * time.Second}})
+	if NativeResourceLimitReason(err) != "wire_bytes" || errors.Is(err, ErrNativeOwnershipLost) || len(got.HTML) != 0 || !w.Ready() {
+		t.Fatalf("exhausted render: error=%v reason=%q bytes=%d worker ready=%t", err, NativeResourceLimitReason(err), len(got.HTML), w.Ready())
+	}
+
+	f.mu.Lock()
+	f.responsePolicy = false
+	f.stallResponse = false
+	f.exhaustBudgetOnFulfill = false
+	f.mu.Unlock()
+	got, err = w.Fetch(context.Background(), "https://origin.example/", NativeBrowserOptions{BrowserOptions: BrowserOptions{Timeout: 4 * time.Second}})
+	if err != nil || len(got.HTML) == 0 || !w.Ready() {
+		t.Fatalf("fresh render: error=%v bytes=%d worker ready=%t", err, len(got.HTML), w.Ready())
 	}
 }
 
@@ -2630,6 +2675,36 @@ func TestNativeNavigationErrorPreservesPendingPolicyAndDownload(t *testing.T) {
 			}
 			if tc.download && !errors.Is(err, ErrNativeUnsupported) {
 				t.Fatalf("download lost: %v", err)
+			}
+		})
+	}
+}
+
+func TestNativeDocumentResponseFailureByFrame(t *testing.T) {
+	for _, tc := range []struct {
+		name, frame, url string
+		allowed          bool
+	}{
+		{"owned child frame", "child-frame", "https://assets.example/embedded.html", true},
+		{"main frame", "main-frame", "https://origin.example/", false},
+		{"unknown frame", "unknown-frame", "https://assets.example/embedded.html", false},
+		{"unsafe child URL", "child-frame", "http://127.0.0.1/blocked", false},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			f := newNativeFixture(t)
+			f.childStatus = http.StatusOK
+			f.responseFailureFrame, f.responseFailureURL = tc.frame, tc.url
+			w := f.worker(t)
+			if err := w.Probe(context.Background()); err != nil {
+				t.Fatal(err)
+			}
+			doc, err := w.Fetch(context.Background(), "https://origin.example/", NativeBrowserOptions{})
+			if tc.allowed {
+				if err != nil || len(doc.HTML) == 0 {
+					t.Fatalf("owned child failure discarded the main document: %v", err)
+				}
+			} else if err == nil || len(doc.HTML) != 0 {
+				t.Fatalf("unsafe or unverified document failure did not terminate rendering: %v", err)
 			}
 		})
 	}

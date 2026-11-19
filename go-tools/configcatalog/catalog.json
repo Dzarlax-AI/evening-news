@@ -200,7 +200,7 @@
       "go-domain/cmd/news-domain/main.go:161",
       "go-domain/cmd/news-domain/runtime_config.go:25",
       "go-domain/cmd/news-domain/runtime_config.go:26",
-      "go-processing/runner/runner.go:95"
+      "go-processing/runner/runner.go:96"
     ],
     "class": "runtime",
     "managed_roles": [
@@ -220,7 +220,7 @@
     "precedence": "selected role manifest takes precedence without environment fallback; legacy environment when no file is selected; component default if absent",
     "sources": [
       "go-background/cmd/news-background/runtime_config.go:13",
-      "go-processing/runner/runner.go:94"
+      "go-processing/runner/runner.go:95"
     ],
     "class": "runtime",
     "managed_roles": [
@@ -256,7 +256,7 @@
     "precedence": "selected role manifest takes precedence without environment fallback; legacy environment when no file is selected; component default if absent",
     "sources": [
       "go-background/cmd/news-background/runtime_config.go:13",
-      "go-processing/runner/runner.go:142"
+      "go-processing/runner/runner.go:143"
     ],
     "class": "runtime",
     "managed_roles": [
@@ -399,7 +399,7 @@
     "precedence": "selected role manifest takes precedence without environment fallback; legacy environment when no file is selected; component default if absent",
     "sources": [
       "go-background/cmd/news-background/runtime_config.go:13",
-      "go-processing/runner/runner.go:113"
+      "go-processing/runner/runner.go:114"
     ],
     "class": "runtime",
     "managed_roles": [
@@ -435,7 +435,7 @@
     "precedence": "selected role manifest takes precedence without environment fallback; legacy environment when no file is selected; component default if absent",
     "sources": [
       "go-background/cmd/news-background/runtime_config.go:13",
-      "go-processing/runner/runner.go:98"
+      "go-processing/runner/runner.go:99"
     ],
     "class": "runtime",
     "managed_roles": [
@@ -455,7 +455,7 @@
     "sources": [
       "go-background/cmd/news-background/runtime_config.go:13",
       "go-background/cmd/news-background/runtime_config.go:14",
-      "go-processing/runner/runner.go:93"
+      "go-processing/runner/runner.go:94"
     ],
     "class": "runtime",
     "managed_roles": [
@@ -490,7 +490,28 @@
     "precedence": "selected role manifest takes precedence without environment fallback; legacy environment when no file is selected; component default if absent",
     "sources": [
       "go-background/cmd/news-background/runtime_config.go:13",
-      "go-processing/runner/runner.go:173"
+      "go-processing/runner/runner.go:174"
+    ],
+    "class": "runtime",
+    "managed_roles": [
+      "background"
+    ]
+  },
+  {
+    "key": "ARTICLE_TELEGRAM_CONTENT_FILTER",
+    "owner": "processing",
+    "type": "boolean",
+    "default": "false",
+    "secret": false,
+    "store": "legacy process environment; managed role manifest for background",
+    "reload": "process startup; restart after changing the setting",
+    "migration": "enable to reject Telegram posts with a confirmed exclude verdict; disabling does not reprocess rejected posts",
+    "precedence": "selected role manifest takes precedence without environment fallback; legacy environment when no file is selected; component default if absent",
+    "sources": [
+      "go-background/cmd/news-background/runtime_config.go:13",
+      "go-processing/runner/runner.go:177",
+      "deploy/news-processing/compose.processing.yml:15",
+      "deploy/compose/development.yml:185"
     ],
     "class": "runtime",
     "managed_roles": [
@@ -813,7 +834,7 @@
       "go-domain/cmd/news-domain/runtime_config.go:26",
       "go-domain/cmd/news-migrate/main.go:22",
       "go-ingestion/runner/runner.go:43",
-      "go-processing/runner/runner.go:92",
+      "go-processing/runner/runner.go:93",
       "go-web/internal/config/config.go:131",
       "go-web/internal/config/config.go:51",
       "go-web/internal/config/config.go:52",
@@ -855,7 +876,7 @@
     "migration": "retain effective value per consuming role; no automatic adoption implied",
     "precedence": "Compose interpolation source then template default/required rule; inspect actual file",
     "sources": [
-      "deploy/compose/development.yml:226"
+      "deploy/compose/development.yml:227"
     ],
     "class": "compose_input",
     "managed_roles": []
@@ -1338,7 +1359,7 @@
     "precedence": "selected role manifest takes precedence without environment fallback; legacy environment when no file is selected; component default if absent",
     "sources": [
       "go-background/cmd/news-background/runtime_config.go:13",
-      "go-processing/runner/runner.go:122"
+      "go-processing/runner/runner.go:123"
     ],
     "class": "runtime",
     "managed_roles": [
@@ -1359,7 +1380,7 @@
       "go-background/cmd/news-background/runtime_config.go:13",
       "go-domain/cmd/news-domain/main.go:411",
       "go-domain/cmd/news-domain/runtime_config.go:25",
-      "go-processing/runner/runner.go:121"
+      "go-processing/runner/runner.go:122"
     ],
     "class": "runtime",
     "managed_roles": [
@@ -1401,7 +1422,7 @@
     "sources": [
       "go-background/cmd/news-background/runtime_config.go:13",
       "go-ingestion/runner/runner.go:59",
-      "go-processing/runner/runner.go:137"
+      "go-processing/runner/runner.go:138"
     ],
     "class": "runtime",
     "managed_roles": [
@@ -1440,7 +1461,7 @@
     "precedence": "selected role manifest takes precedence without environment fallback; legacy environment when no file is selected; component default if absent",
     "sources": [
       "go-background/cmd/news-background/runtime_config.go:13",
-      "go-processing/runner/runner.go:123"
+      "go-processing/runner/runner.go:124"
     ],
     "class": "runtime",
     "managed_roles": [
@@ -1464,7 +1485,7 @@
       "go-domain/cmd/news-domain/runtime_config.go:25",
       "go-domain/cmd/news-domain/runtime_config.go:26",
       "go-ingestion/runner/runner.go:47",
-      "go-processing/runner/runner.go:97"
+      "go-processing/runner/runner.go:98"
     ],
     "class": "runtime",
     "managed_roles": [
@@ -1484,7 +1505,7 @@
     "precedence": "selected role manifest takes precedence without environment fallback; legacy environment when no file is selected; component default if absent",
     "sources": [
       "go-background/cmd/news-background/runtime_config.go:13",
-      "go-processing/runner/runner.go:124"
+      "go-processing/runner/runner.go:125"
     ],
     "class": "runtime",
     "managed_roles": [
@@ -1507,7 +1528,7 @@
       "go-domain/cmd/news-domain/runtime_config.go:25",
       "go-domain/cmd/news-domain/runtime_config.go:26",
       "go-ingestion/runner/runner.go:46",
-      "go-processing/runner/runner.go:96"
+      "go-processing/runner/runner.go:97"
     ],
     "class": "runtime",
     "managed_roles": [
@@ -1529,7 +1550,7 @@
       "go-background/cmd/news-background/runtime_config.go:13",
       "go-domain/cmd/news-domain/main.go:399",
       "go-domain/cmd/news-domain/runtime_config.go:25",
-      "go-processing/runner/runner.go:120"
+      "go-processing/runner/runner.go:121"
     ],
     "class": "runtime",
     "managed_roles": [
@@ -2232,7 +2253,7 @@
     "precedence": "selected role manifest takes precedence without environment fallback; legacy environment when no file is selected; component default if absent",
     "sources": [
       "go-background/cmd/news-background/runtime_config.go:13",
-      "go-processing/runner/runner.go:114"
+      "go-processing/runner/runner.go:115"
     ],
     "class": "runtime",
     "managed_roles": [
@@ -2595,7 +2616,7 @@
     "precedence": "selected role manifest takes precedence without environment fallback; legacy environment when no file is selected; component default if absent",
     "sources": [
       "go-background/cmd/news-background/runtime_config.go:13",
-      "go-processing/runner/runner.go:158"
+      "go-processing/runner/runner.go:159"
     ],
     "class": "runtime",
     "managed_roles": [
@@ -2614,7 +2635,7 @@
     "precedence": "selected role manifest takes precedence without environment fallback; legacy environment when no file is selected; component default if absent",
     "sources": [
       "go-background/cmd/news-background/runtime_config.go:13",
-      "go-processing/runner/runner.go:145"
+      "go-processing/runner/runner.go:146"
     ],
     "class": "runtime",
     "managed_roles": [
@@ -2633,7 +2654,7 @@
     "precedence": "selected role manifest takes precedence without environment fallback; legacy environment when no file is selected; component default if absent",
     "sources": [
       "go-background/cmd/news-background/runtime_config.go:13",
-      "go-processing/runner/runner.go:150"
+      "go-processing/runner/runner.go:151"
     ],
     "class": "runtime",
     "managed_roles": [
@@ -2652,7 +2673,7 @@
     "precedence": "selected role manifest takes precedence without environment fallback; legacy environment when no file is selected; component default if absent",
     "sources": [
       "go-background/cmd/news-background/runtime_config.go:13",
-      "go-processing/runner/runner.go:166"
+      "go-processing/runner/runner.go:167"
     ],
     "class": "runtime",
     "managed_roles": [
@@ -2671,7 +2692,7 @@
     "precedence": "selected role manifest takes precedence without environment fallback; legacy environment when no file is selected; component default if absent",
     "sources": [
       "go-background/cmd/news-background/runtime_config.go:13",
-      "go-processing/runner/runner.go:154"
+      "go-processing/runner/runner.go:155"
     ],
     "class": "runtime",
     "managed_roles": [
@@ -2787,7 +2808,7 @@
     "migration": "retain effective value per consuming role; no automatic adoption implied",
     "precedence": "Compose interpolation source then template default/required rule; inspect actual file",
     "sources": [
-      "deploy/news-processing/compose.processing.yml:48",
+      "deploy/news-processing/compose.processing.yml:49",
       "deploy/config/full.env.example:238"
     ],
     "class": "compose_input",
@@ -3036,8 +3057,8 @@
     "migration": "profile-specific container output; preserve only if its actual consumer requires it",
     "precedence": "explicit Compose environment mapping; its interpolated inputs are separate catalog keys",
     "sources": [
-      "deploy/compose/development.yml:224",
-      "deploy/compose/development.yml:259"
+      "deploy/compose/development.yml:225",
+      "deploy/compose/development.yml:260"
     ],
     "class": "compose_output",
     "managed_roles": []
@@ -3053,8 +3074,8 @@
     "migration": "profile-specific container output; preserve only if its actual consumer requires it",
     "precedence": "explicit Compose environment mapping; its interpolated inputs are separate catalog keys",
     "sources": [
-      "deploy/compose/development.yml:226",
-      "deploy/compose/development.yml:261"
+      "deploy/compose/development.yml:227",
+      "deploy/compose/development.yml:262"
     ],
     "class": "compose_output",
     "managed_roles": []
@@ -3086,8 +3107,8 @@
     "migration": "profile-specific container output; preserve only if its actual consumer requires it",
     "precedence": "explicit Compose environment mapping; its interpolated inputs are separate catalog keys",
     "sources": [
-      "deploy/compose/development.yml:225",
-      "deploy/compose/development.yml:260"
+      "deploy/compose/development.yml:226",
+      "deploy/compose/development.yml:261"
     ],
     "class": "compose_output",
     "managed_roles": []
@@ -3104,7 +3125,7 @@
     "precedence": "selected role manifest takes precedence without environment fallback; legacy environment when no file is selected; component default if absent",
     "sources": [
       "go-background/cmd/news-background/runtime_config.go:13",
-      "go-processing/runner/runner.go:117"
+      "go-processing/runner/runner.go:118"
     ],
     "class": "runtime",
     "managed_roles": [
@@ -3123,7 +3144,7 @@
     "precedence": "selected role manifest takes precedence without environment fallback; legacy environment when no file is selected; component default if absent",
     "sources": [
       "go-background/cmd/news-background/runtime_config.go:13",
-      "go-processing/runner/runner.go:115"
+      "go-processing/runner/runner.go:116"
     ],
     "class": "runtime",
     "managed_roles": [
@@ -3162,7 +3183,7 @@
     "precedence": "selected role manifest takes precedence without environment fallback; legacy environment when no file is selected; component default if absent",
     "sources": [
       "go-background/cmd/news-background/runtime_config.go:13",
-      "go-processing/runner/runner.go:116"
+      "go-processing/runner/runner.go:117"
     ],
     "class": "runtime",
     "managed_roles": [
@@ -3181,7 +3202,7 @@
     "precedence": "selected role manifest takes precedence without environment fallback; legacy environment when no file is selected; component default if absent",
     "sources": [
       "go-background/cmd/news-background/runtime_config.go:13",
-      "go-processing/runner/runner.go:118"
+      "go-processing/runner/runner.go:119"
     ],
     "class": "runtime",
     "managed_roles": [
@@ -3200,7 +3221,7 @@
     "precedence": "selected role manifest takes precedence without environment fallback; legacy environment when no file is selected; component default if absent",
     "sources": [
       "go-background/cmd/news-background/runtime_config.go:13",
-      "go-processing/runner/runner.go:119"
+      "go-processing/runner/runner.go:120"
     ],
     "class": "runtime",
     "managed_roles": [
@@ -3421,7 +3442,7 @@
     "migration": "retain effective value per consuming role; no automatic adoption implied",
     "precedence": "Compose interpolation source then template default/required rule; inspect actual file",
     "sources": [
-      "deploy/compose/development.yml:261"
+      "deploy/compose/development.yml:262"
     ],
     "class": "compose_input",
     "managed_roles": []

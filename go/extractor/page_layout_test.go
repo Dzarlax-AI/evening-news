@@ -38,3 +38,31 @@ func TestReparseArticleLayoutRequiresSnapshotAndPreservesFallback(t *testing.T) 
 		}
 	}
 }
+
+func TestReparseArticleLayoutCannotPromoteCardCover(t *testing.T) {
+	html := `<article><h1>Road reconstruction</h1><div class="story"><p>` + prose + `</p>
+	<div><section><img class="suggested" src="/duplicate.jpg"><h3><a href="/other">An unrelated investigation</a></h3></section>
+	<section><img src="/wrong.jpg"><h3><a href="/third">A different local report</a></h3></section></div>
+	<p>` + prose + `</p><figure><img src="/lead.jpg"></figure><figure><img src="/duplicate.jpg"></figure></div></article>`
+	sum := sha256.Sum256([]byte(html))
+	got, ok := ReparseArticleLayout(Input{URL: "https://fixture.test/story", HTML: html}, Result{}, hex.EncodeToString(sum[:]), pagelayout.Layout{
+		PageKind: "article", ArticleBody: "article", EditorialCover: ".suggested",
+	})
+	if !ok || got.ImageURL != "https://fixture.test/lead.jpg" || got.MediaEvidence.EditorialCover.URL != "" {
+		t.Fatalf("a card occurrence became the cover: ok=%t cover=%q evidence=%+v", ok, got.ImageURL, got.MediaEvidence)
+	}
+}
+
+func TestLayoutCoverCannotCrossNestedArticleInUnmarkedBody(t *testing.T) {
+	for _, nested := range []string{`<article><img class="teaser" src="/teaser.jpg"></article>`, `<section role="article"><img class="teaser" src="/teaser.jpg"></section>`} {
+		html := `<main><h1>Road reconstruction</h1><div class="story"><p>` + prose + `</p><p>` + prose + `</p>
+			<img class="editorial" src="/lead.jpg">` + nested + `</div></main>`
+		for selector, want := range map[string]string{".teaser": "", ".editorial": ".editorial"} {
+			layout := pagelayout.Layout{PageKind: "article", ArticleBody: ".story", EditorialCover: selector}
+			pagelayout.Validate(&layout, html)
+			if layout.PageKind != "article" || layout.EditorialCover != want {
+				t.Fatalf("cover selector %s: layout=%+v, want %q", selector, layout, want)
+			}
+		}
+	}
+}

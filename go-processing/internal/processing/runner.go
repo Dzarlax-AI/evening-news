@@ -516,11 +516,13 @@ func (p *Processor) processOne(ctx context.Context, f store.Fence, a store.Artic
 				if a.SourceType != "rss" && a.ImageURL == "" && fresh.ImageURL != "" {
 					fields["image_url"] = fresh.ImageURL
 				}
-				if a.SourceType != "rss" && len(fresh.MediaEvidence) > 0 {
-					fields["media_evidence"] = fresh.MediaEvidence
-				}
-				if a.SourceType != "rss" && !hasMediaFiles(a.MediaFiles) && len(fresh.MediaFiles) > 0 {
-					fields["media_files"] = fresh.MediaFiles
+				if a.SourceType != "rss" && !hasMediaFiles(a.MediaFiles) {
+					if len(fresh.MediaEvidence) > 0 {
+						fields["media_evidence"] = fresh.MediaEvidence
+					}
+					if len(fresh.MediaFiles) > 0 {
+						fields["media_files"] = fresh.MediaFiles
+					}
 				}
 				if a.PublishedAt == nil || a.PublishedAt.Year() < 2020 {
 					if d := parseDate(fresh.PublicationDate); d != nil {
@@ -635,7 +637,7 @@ func (p *Processor) processOne(ctx context.Context, f store.Fence, a store.Artic
 	if a.SourceType == "telegram" {
 		if effective := effectiveTelegramAdmission(analysis["content_admission"], admissionContext, telegramMetadata); effective != nil {
 			fields["content_admission"] = effective
-			if p.ApplyTelegramContentAdmission && effective["verdict"] == "exclude" {
+			if p.ApplyTelegramContentAdmission && shouldRejectTelegramContent(effective) {
 				return p.finish(ctx, f, a, attempt, fp, Outcome{State: StateRejected, Fields: fields, Error: "insufficient_content"})
 			}
 		}

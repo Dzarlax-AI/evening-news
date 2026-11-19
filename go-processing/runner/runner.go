@@ -45,6 +45,7 @@ type Config struct {
 	PerSourceLimit            int
 	NativeBrowser             bool
 	DedupTrial, SelectorStudy bool
+	TelegramContentFilter     bool
 	DateFrom                  *time.Time
 	DateTo                    *time.Time
 	LoadOperationalSnapshot   func(context.Context, string, int64) (OperationalSnapshot, error)
@@ -170,7 +171,10 @@ func LoadConfig(env func(string) string) (Config, error) {
 			}
 		}
 	}
-	c.SelectorStudy, e = boolean("ARTICLE_SELECTOR_STUDY")
+	if c.SelectorStudy, e = boolean("ARTICLE_SELECTOR_STUDY"); e != nil {
+		return c, e
+	}
+	c.TelegramContentFilter, e = boolean("ARTICLE_TELEGRAM_CONTENT_FILTER")
 	return c, e
 }
 func ConfigFromEnv() (Config, error) { return LoadConfig(os.Getenv) }
@@ -225,7 +229,9 @@ func Run(ctx context.Context, c Config, onReady func()) error {
 		PerSourceLimit: c.PerSourceLimit,
 		DateFrom:       c.DateFrom,
 		DateTo:         c.DateTo,
-		DedupTrial:     c.DedupTrial,
+
+		DedupTrial:                    c.DedupTrial,
+		ApplyTelegramContentAdmission: c.TelegramContentFilter,
 	}
 	if c.LoadOperationalSnapshot != nil {
 		p.LoadOperationalSnapshot = func(ctx context.Context, f store.Fence) (processing.OperationalSnapshot, error) {

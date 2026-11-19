@@ -175,6 +175,11 @@ func nativeReplayResponse(ctx context.Context, client *browserCDP, session strin
 	// Publisher bytes are bounded by the shared decoded-body budget. The normal
 	// relay forwards bounded chunks; its synthetic parser has a separate test cap.
 	if err := client.call(ctx, session, "Fetch.fulfillRequest", params, nil); err != nil {
+		// A confirmed wire limit cancels the pending reply. The owned context
+		// is still discarded and verified by the normal cleanup path.
+		if cause := context.Cause(ctx); err == context.Canceled && errors.Is(cause, extractor.ErrWireLimit) {
+			return cause
+		}
 		return errors.Join(ErrNativePolicy, ErrNativeOwnershipLost, err)
 	}
 	return nil

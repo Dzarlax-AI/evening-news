@@ -75,6 +75,16 @@ func TestClosedWorkerReceiptsAndProtocolCodesAreFinite(t *testing.T) {
 	}
 }
 
+func TestNativeFailureReceiptsRetainWorkerShutdownReasons(t *testing.T) {
+	logs := "native_browser_diagnostic stage=events reason=owned_detach\n" +
+		"native_browser_diagnostic stage=cleanup reason=client_disconnected\n" +
+		"native_browser_diagnostic stage=events reason=malformed_detach CANARY\n"
+	got := strings.Join(nativeFailureReceipts(logs), ",")
+	if got != "client_disconnected,owned_detach" {
+		t.Fatalf("unexpected bounded worker failure receipts: %s", got)
+	}
+}
+
 // TestPaddedGzipSeparatesEncodedAndDecodedBudgets demonstrates that valid tiny decoded content
 // can exceed the encoded byte allowance.
 func TestPaddedGzipSeparatesEncodedAndDecodedBudgets(t *testing.T) {

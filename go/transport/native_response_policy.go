@@ -17,6 +17,7 @@ type nativeResponseHeader struct {
 type nativeFetchPaused struct {
 	NetworkID string `json:"networkId"`
 	ID        string `json:"requestId"`
+	FrameID   string `json:"frameId"`
 	Request   struct {
 		URL string `json:"url"`
 	} `json:"request"`

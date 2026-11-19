@@ -796,7 +796,7 @@
         "not_contains": [],
         "fields": {
           "publication_date": "2025-10-14",
-          "image_url": "https://cdn.example.test/river.png"
+          "image_url": null
         },
         "state": "extracted",
         "trace_contains": [
@@ -1109,7 +1109,7 @@
         "fields": {
           "title": "Preferred Open Graph title",
           "author": "Mira Example",
-          "image_url": "https://cdn.example.test/lead.jpg"
+          "image_url": null
         },
         "method": "enhanced_selectors",
         "state": "extracted",
@@ -1247,7 +1247,7 @@
         "not_contains": [],
         "fields": {
           "publication_date": "2025-10-10",
-          "image_url": "https://cdn.example.test/jsonld.jpg"
+          "image_url": null
         },
         "method": "fallback_extraction",
         "state": "extracted",
@@ -1282,7 +1282,7 @@
         "not_contains": [],
         "fields": {
           "author": "Mira Analyst",
-          "image_url": "https://cdn.example.test/observatory.jpg"
+          "image_url": null
         },
         "method": "enhanced_selectors",
         "state": "extracted",

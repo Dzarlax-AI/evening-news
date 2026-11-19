@@ -11,13 +11,22 @@ func TestLoadConfigUsesLookupAndReturnsErrorsForInvalidValues(t *testing.T) {
 	if e != nil {
 		t.Fatal(e)
 	}
-	if c.DatabaseURL != v["DATABASE_URL"] || c.DBMaxConns != 5 || c.MaxWorkers != 5 || c.DedupTrial {
+	if c.DatabaseURL != v["DATABASE_URL"] || c.DBMaxConns != 5 || c.MaxWorkers != 5 || c.DedupTrial || c.TelegramContentFilter {
 		t.Fatalf("unexpected config: %+v", c)
 	}
 	v["ARTICLE_DEDUP_TRIAL"] = "true"
 	if c, e = LoadConfig(func(k string) string { return v[k] }); e != nil || !c.DedupTrial {
 		t.Fatalf("dedup trial flag missing from processing config: %v", e)
 	}
+	v["ARTICLE_TELEGRAM_CONTENT_FILTER"] = "true"
+	if c, e = LoadConfig(func(k string) string { return v[k] }); e != nil || !c.TelegramContentFilter {
+		t.Fatalf("Telegram content filter missing from processing config: %v", e)
+	}
+	v["ARTICLE_TELEGRAM_CONTENT_FILTER"] = "invalid"
+	if _, e = LoadConfig(func(k string) string { return v[k] }); !errors.Is(e, ErrInvalidConfig) {
+		t.Fatalf("invalid Telegram content filter error = %v", e)
+	}
+	delete(v, "ARTICLE_TELEGRAM_CONTENT_FILTER")
 	v["MAX_WORKERS"] = "oops"
 	if _, e = LoadConfig(func(k string) string { return v[k] }); !errors.Is(e, ErrInvalidConfig) {
 		t.Fatalf("invalid config error = %v", e)
