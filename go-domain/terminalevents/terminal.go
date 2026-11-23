@@ -318,7 +318,7 @@ func (s *Server) process(ctx context.Context, e Event) (string, error) {
 			kind = "recovery"
 		}
 	}
-	if suppressGenericAlert(job.Kind, s.DigestWatchdogOwnsAlerts) {
+	if suppressGenericAlert(job.Kind, job.State, kind, s.DigestWatchdogOwnsAlerts) {
 		kind = ""
 	}
 	if notice == nil && kind == "" {
@@ -393,6 +393,7 @@ func (s *Server) process(ctx context.Context, e Event) (string, error) {
 	return state, nil
 }
 
-func suppressGenericAlert(kind string, digestWatchdogOwnsAlerts bool) bool {
-	return kind == "news_processing" || (digestWatchdogOwnsAlerts && (kind == "news_digest" || kind == "telegram_digest"))
+func suppressGenericAlert(kind, state, notification string, digestWatchdogOwnsAlerts bool) bool {
+	return (kind == "news_processing" && state == "succeeded" && notification == "failure") ||
+		(digestWatchdogOwnsAlerts && (kind == "news_digest" || kind == "telegram_digest"))
 }

@@ -433,9 +433,8 @@ func run() error {
 		if msg == "" {
 			continue
 		}
-		s.Alerted[k] = true
-		if e = save(path, s); e != nil {
-			return errors.New("cannot persist notification reservation")
+		if e = reserveAlert(ctx, path, s, k); e != nil {
+			return e
 		}
 		msg = fmt.Sprintf("Evening News: %s\nSchedule: %s\nDue: %s", msg, o.Key, o.Due.UTC().Format(time.RFC3339))
 		if archive != "" {
@@ -447,6 +446,20 @@ func run() error {
 	}
 	if e = save(path, s); e != nil {
 		return errors.New("cannot persist state")
+	}
+	if readErr != nil {
+		return errors.New("cannot read digest schedules")
+	}
+	return nil
+}
+
+func reserveAlert(ctx context.Context, path string, s state, key string) error {
+	if ctx.Err() != nil {
+		return errors.New("watchdog run deadline reached before notification")
+	}
+	s.Alerted[key] = true
+	if err := save(path, s); err != nil {
+		return errors.New("cannot persist notification reservation")
 	}
 	return nil
 }

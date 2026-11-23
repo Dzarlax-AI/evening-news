@@ -51,6 +51,20 @@ func TestStateSurvivesRestart(t *testing.T) {
 	}
 }
 
+func TestExpiredRunDoesNotReserveAlert(t *testing.T) {
+	path := filepath.Join(t.TempDir(), "state.json")
+	s := state{map[string]occurrence{}, map[string]bool{}}
+	ctx, cancel := context.WithDeadline(context.Background(), time.Now().Add(-time.Second))
+	defer cancel()
+	if err := reserveAlert(ctx, path, s, "missed"); err == nil {
+		t.Fatal("expired watchdog run reserved an alert")
+	}
+	persisted, err := load(path)
+	if err != nil || s.Alerted["missed"] || persisted.Alerted["missed"] {
+		t.Fatalf("expired run changed alert state: %v", err)
+	}
+}
+
 type roundTripFunc func(*http.Request) (*http.Response, error)
 
 func (f roundTripFunc) RoundTrip(r *http.Request) (*http.Response, error) { return f(r) }

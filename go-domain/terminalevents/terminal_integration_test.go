@@ -183,7 +183,7 @@ func TestFinalizedSourceWarningAndNoReplayPostgres(t *testing.T) {
 		return transport.Send(ctx, "sendMessage", map[string]any{"chat_id": "fixture", "text": message}).State == telegramdelivery.Sent
 	})
 	networkJob := "10000000-0000-4000-8000-000000000099"
-	if _, err = pool.Exec(ctx, `INSERT INTO background_jobs(id,kind,payload,idempotency_key,state,owner_generation,attempt_generation,result,schedule_key) VALUES($1::uuid,'source_test','{}',$2,'failed',1,1,'{"status":"warning"}'::jsonb,'fixture-network')`, networkJob, networkJob); err != nil {
+	if _, err = pool.Exec(ctx, `INSERT INTO background_jobs(id,kind,payload,idempotency_key,state,owner_generation,attempt_generation,result,schedule_key) VALUES($1::uuid,'news_processing','{}',$2,'failed',1,1,'{"status":"warning"}'::jsonb,'fixture-network')`, networkJob, networkJob); err != nil {
 		t.Fatal(err)
 	}
 	if _, err = pool.Exec(ctx, `INSERT INTO background_job_executions(job_id,attempt_generation,envelope_sha256,executor_instance_id,state,legacy_completion_applied_at,legacy_alert_state) VALUES($1,1,$2,$3,'failed',now(),'pending')`, networkJob, hash, instance); err != nil {

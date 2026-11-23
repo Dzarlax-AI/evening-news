@@ -5,6 +5,7 @@ import (
 	"crypto/sha256"
 	"fmt"
 	"os"
+	"path/filepath"
 	"testing"
 	"time"
 
@@ -161,4 +162,17 @@ func TestPostgresReader(t *testing.T) {
 	if decision(time.Now(), st.Occurrences[key(o)], a, false) != "" {
 		t.Fatal("disabled/paused schedule alerted")
 	}
+
+	t.Setenv("WATCHDOG_STATE_FILE", filepath.Join(t.TempDir(), "state.json"))
+	t.Setenv("WATCHDOG_SCHEDULER_DATABASE_URL", dsn)
+	t.Setenv("WATCHDOG_NEWS_DATABASE_URL", dsn)
+	t.Setenv("WATCHDOG_TELEGRAM_TOKEN", "fixture")
+	t.Setenv("WATCHDOG_TELEGRAM_CHAT_ID", "fixture")
+	t.Setenv("WATCHDOG_MONITOR_FROM", due.Format(time.RFC3339))
+	t.Setenv("WATCHDOG_SCHEDULER_SCHEMA", schema+"_missing")
+	t.Setenv("WATCHDOG_ARCHIVE_URL", "")
+	if err := run(); err == nil || err.Error() != "cannot read digest schedules" {
+		t.Fatalf("scheduler startup error reported incorrectly: %v", err)
+	}
+
 }

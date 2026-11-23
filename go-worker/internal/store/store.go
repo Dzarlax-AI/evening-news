@@ -480,20 +480,8 @@ func (s *Store) Claim(ctx context.Context, maxAttempts int64) (Job, error) {
 	}
 	retryCondition := ""
 	if retryAvailable {
-		if _, err = tx.Exec(ctx, `WITH expired AS (
-			UPDATE background_jobs SET state='failed', digest_retry_at=NULL,
-				finished_at=timezone('UTC', statement_timestamp()), error_code='worker_recovery_exhausted',
-				result='{"status":"incomplete"}'::jsonb WHERE occurrence_id IS NOT NULL AND kind IN ('news_digest','telegram_digest')
-				AND (state='interrupted' OR (state='failed' AND digest_retry_at IS NOT NULL
-					AND (scheduled_for + interval '30 minutes' <= timezone('UTC', statement_timestamp())
-						OR attempt_generation >= $1)))
-			RETURNING id,attempt_generation
-		)
-		UPDATE background_job_executions e SET
-			legacy_completion_applied_at=timezone('UTC', statement_timestamp()), legacy_alert_state='not_needed'
-		FROM expired x WHERE e.job_id=x.id AND e.attempt_generation=x.attempt_generation
-			AND e.legacy_completion_applied_at IS NULL`, maxAttempts); err != nil {
-			return Job{}, errors.New("scheduled digest retry expiry failed")
+		if err := expireDigestRetries(ctx, tx, info, maxAttempts); err != nil {
+			return Job{}, err
 		}
 		retryCondition = " OR (state='failed' AND digest_retry_at <= timezone('UTC', statement_timestamp()))"
 	}

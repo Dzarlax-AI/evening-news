@@ -69,3 +69,43 @@ func scheduleDigestRetry(ctx context.Context, tx pgx.Tx, job Job, info LeaseInfo
 		WHERE job_id=$1 AND attempt_generation=$2`, job.ID, job.AttemptGeneration)
 	return err == nil, err
 }
+
+// Expiry is a queue-level outcome. Give it a fresh terminal receipt so prior
+// execution history stays intact and the normal finalizer sees it once.
+func expireDigestRetries(ctx context.Context, tx pgx.Tx, info LeaseInfo, maxAttempts int64) error {
+	code := "worker_recovery_exhausted"
+	result := []byte(`{"status":"incomplete"}`)
+	rows, err := tx.Query(ctx, `WITH expired AS (
+		UPDATE background_jobs SET state='failed', digest_retry_at=NULL,
+			finished_at=timezone('UTC', statement_timestamp()), error_code=$2, result=$3::jsonb,
+			owner_generation=$4, attempt_generation=attempt_generation+1
+		WHERE occurrence_id IS NOT NULL AND kind IN ('news_digest','telegram_digest')
+			AND (state='interrupted' OR (state='failed' AND digest_retry_at IS NOT NULL
+				AND (scheduled_for + interval '30 minutes' <= timezone('UTC', statement_timestamp())
+					OR attempt_generation >= $1)))
+		RETURNING id,attempt_generation
+	), suppressed AS (
+		UPDATE background_job_executions e SET
+			legacy_completion_applied_at=timezone('UTC', statement_timestamp()), legacy_alert_state='not_needed'
+		FROM expired x WHERE e.job_id=x.id AND e.attempt_generation=x.attempt_generation-1
+			AND e.legacy_completion_applied_at IS NULL
+	)
+	SELECT id::text,attempt_generation FROM expired`, maxAttempts, code, result, info.Generation)
+	if err != nil {
+		return errors.New("scheduled digest retry expiry failed")
+	}
+	expired, err := pgx.CollectRows(rows, func(row pgx.CollectableRow) (Job, error) {
+		var job Job
+		err := row.Scan(&job.ID, &job.AttemptGeneration)
+		return job, err
+	})
+	if err != nil {
+		return errors.New("scheduled digest retry expiry read failed")
+	}
+	for _, job := range expired {
+		if err := insertEventReceipt(ctx, tx, job, "failed", result, &code, info); err != nil {
+			return err
+		}
+	}
+	return nil
+}

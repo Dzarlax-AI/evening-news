@@ -70,6 +70,29 @@ func TestScheduledDigestRetryRequiresDeliveryProof(t *testing.T) {
 			if _, err := owner.Claim(ctx, 3); !errors.Is(err, ErrNoJob) {
 				t.Fatalf("retry must wait: %v", err)
 			}
+			if tc.recovered {
+				if _, err := owner.Pool.Exec(ctx, `UPDATE background_jobs
+					SET scheduled_for=timezone('UTC',clock_timestamp())-interval '31 minutes' WHERE id=$1`, jobID); err != nil {
+					t.Fatal(err)
+				}
+				for range 2 {
+					if _, err := owner.Claim(ctx, 3); !errors.Is(err, ErrNoJob) {
+						t.Fatalf("expired retry claimed: %v", err)
+					}
+				}
+				pending, err := owner.TerminalJobsNeedingEvents(ctx, 10)
+				if err != nil || len(pending) != 1 || pending[0].ID != jobID ||
+					pending[0].State != "failed" || pending[0].AttemptGeneration != 2 {
+					t.Fatalf("expiry did not produce one terminal event: %+v %v", pending, err)
+				}
+				var oldState, oldAlert string
+				if err := owner.Pool.QueryRow(ctx, `SELECT state,legacy_alert_state FROM background_job_executions
+					WHERE job_id=$1 AND attempt_generation=1`, jobID).Scan(&oldState, &oldAlert); err != nil ||
+					oldState != tc.state || oldAlert != "not_needed" {
+					t.Fatalf("intermediate receipt changed: %q %q %v", oldState, oldAlert, err)
+				}
+				return
+			}
 			if err := owner.Release(ctx); err != nil {
 				t.Fatal(err)
 			}

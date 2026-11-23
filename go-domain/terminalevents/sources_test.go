@@ -126,16 +126,22 @@ func TestDeferredSourceNoticeRemainsEligible(t *testing.T) {
 
 func TestGenericAlertSuppression(t *testing.T) {
 	for _, tc := range []struct {
-		kind           string
-		watchdog, want bool
+		kind, state, notification string
+		watchdog, want            bool
 	}{
-		{"news_processing", false, true}, {"news_processing", true, true},
-		{"news_digest", false, false}, {"news_digest", true, true},
-		{"telegram_digest", false, false}, {"telegram_digest", true, true},
-		{"backup", true, false},
+		{"news_processing", "succeeded", "failure", false, true},
+		{"news_processing", "succeeded", "failure", true, true},
+		{"news_processing", "failed", "failure", true, false},
+		{"news_processing", "interrupted", "failure", false, false},
+		{"news_processing", "succeeded", "recovery", true, false},
+		{"news_digest", "failed", "failure", false, false},
+		{"news_digest", "failed", "failure", true, true},
+		{"telegram_digest", "failed", "failure", false, false},
+		{"telegram_digest", "failed", "failure", true, true},
+		{"backup", "failed", "failure", true, false},
 	} {
-		if got := suppressGenericAlert(tc.kind, tc.watchdog); got != tc.want {
-			t.Errorf("%s watchdog=%v got %v", tc.kind, tc.watchdog, got)
+		if got := suppressGenericAlert(tc.kind, tc.state, tc.notification, tc.watchdog); got != tc.want {
+			t.Errorf("%s/%s %s watchdog=%v got %v", tc.kind, tc.state, tc.notification, tc.watchdog, got)
 		}
 	}
 }
