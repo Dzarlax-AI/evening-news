@@ -407,13 +407,13 @@ func run() error {
 			}
 		}
 		readErr = refreshControls(schedCtx, sched, schema, &s)
-		if readErr == nil {
-			if e = save(path, s); e != nil {
-				return errors.New("cannot persist observations")
-			}
-		}
 	}
 	schedCancel()
+	if readErr == nil {
+		if e = save(path, s); e != nil {
+			return errors.New("cannot persist observations")
+		}
+	}
 	for k, o := range s.Occurrences {
 		if !trackOccurrence(o, monitorFrom) || now.After(o.Due.Add(48*time.Hour)) {
 			delete(s.Occurrences, k)
