@@ -49,6 +49,15 @@ func (s *Server) runAttempt(ctx context.Context, key attemptKey, e Envelope, kin
 		}
 		return
 	}
+	if kind == "news_digest" || kind == "telegram_digest" {
+		guard, err := s.prepareDigestDeliveryGuard(ctx, key, x)
+		if err != nil {
+			logExecutionFailure("digest_delivery_guard", "authority_fence_failed", err)
+			s.finish(context.Background(), key, "failed", "worker_error", json.RawMessage(`{"status":"warning"}`))
+			return
+		}
+		x.BeforeDigestPublish = guard
+	}
 	if kind == "article_reprocess" {
 		if err = s.initializeArticleReprocess(ctx, key, x, payload); err != nil {
 			if errors.Is(err, ErrLeaseLost) || errors.Is(err, ErrStaleAttempt) {
@@ -256,11 +265,14 @@ func (s *Server) fencedUpdate(ctx context.Context, key attemptKey, x ExecutionCo
 	if e = s.fenceTx(q, tx, key, x, true); e != nil {
 		return e
 	}
-	_, e = tx.Exec(q, sql, key.job, key.attempt, s.instance)
-	if e == nil {
-		e = tx.Commit(q)
+	tag, err := tx.Exec(q, sql, key.job, key.attempt, s.instance)
+	if err != nil {
+		return err
 	}
-	return e
+	if tag.RowsAffected() != 1 {
+		return ErrStaleAttempt
+	}
+	return tx.Commit(q)
 }
 func (s *Server) fenceTx(ctx context.Context, tx pgx.Tx, key attemptKey, x ExecutionContext, enforceDeadline bool) error {
 	if x.ExecutorInstanceID != s.instance.String() || x.ExecutorBackendPID != s.guardPID {

@@ -54,20 +54,21 @@ func (e *HeartbeatError) Error() string {
 func (e *HeartbeatError) Unwrap() error { return ErrLeaseLost }
 
 type Job struct {
-	ID                string
-	Kind              string
-	Payload           json.RawMessage
-	Result            json.RawMessage
-	QueuePosition     int64
-	State             string
-	OwnerGeneration   *int64
-	AttemptGeneration int64
-	CreatedAt         time.Time
-	StartedAt         *time.Time
-	FinishedAt        *time.Time
-	ErrorCode         *string
-	ScheduleKey       *string
-	ScheduleRevision  *int64
+	ID                  string
+	Kind                string
+	Payload             json.RawMessage
+	Result              json.RawMessage
+	QueuePosition       int64
+	State               string
+	OwnerGeneration     *int64
+	AttemptGeneration   int64
+	CreatedAt           time.Time
+	StartedAt           *time.Time
+	FinishedAt          *time.Time
+	ErrorCode           *string
+	ScheduleKey         *string
+	ScheduleRevision    *int64
+	DigestRetryDeadline *time.Time
 }
 
 type LeaseInfo struct {
@@ -473,10 +474,21 @@ func (s *Store) Claim(ctx context.Context, maxAttempts int64) (Job, error) {
 			}
 		}
 	}
+	retryAvailable, err := digestRetryAvailable(ctx, tx)
+	if err != nil {
+		return Job{}, errors.New("scheduled digest admission unavailable")
+	}
+	retryCondition := ""
+	if retryAvailable {
+		if err := expireDigestRetries(ctx, tx, info, maxAttempts); err != nil {
+			return Job{}, err
+		}
+		retryCondition = " OR (state='failed' AND digest_retry_at <= timezone('UTC', statement_timestamp()))"
+	}
 	job, err := scanJob(tx.QueryRow(ctx, `SELECT id::text,kind,payload,result,queue_position,state,owner_generation,
 		attempt_generation,created_at,started_at,finished_at,error_code,schedule_key,schedule_revision
-		FROM background_jobs WHERE state='queued' OR (state='interrupted' AND attempt_generation < $1)
-		ORDER BY queue_position LIMIT 1 FOR UPDATE SKIP LOCKED`, maxAttempts))
+		FROM background_jobs WHERE state='queued' OR (state='interrupted' AND attempt_generation < $1)`+
+		retryCondition+` ORDER BY queue_position LIMIT 1 FOR UPDATE SKIP LOCKED`, maxAttempts))
 	if errors.Is(err, pgx.ErrNoRows) {
 		// Admission can reconcile a waiting or terminal delivery without enqueuing a job.
 		if err = tx.Commit(ctx); err != nil {
@@ -487,9 +499,17 @@ func (s *Store) Claim(ctx context.Context, maxAttempts int64) (Job, error) {
 	if err != nil {
 		return Job{}, errors.New("job claim failed")
 	}
+	clearRetry := ""
+	if retryAvailable {
+		if err = tx.QueryRow(ctx, `SELECT CASE WHEN digest_retry_at IS NOT NULL THEN scheduled_for+interval '30 minutes' END
+			FROM background_jobs WHERE id=$1`, job.ID).Scan(&job.DigestRetryDeadline); err != nil {
+			return Job{}, errors.New("scheduled digest retry deadline unavailable")
+		}
+		clearRetry = ", digest_retry_at=NULL"
+	}
 	err = tx.QueryRow(ctx, `UPDATE background_jobs SET state='running', started_at=clock_timestamp() AT TIME ZONE 'UTC',
-		finished_at=NULL,error_code=NULL,owner_generation=$2,attempt_generation=attempt_generation+1
-		WHERE id=$1 RETURNING attempt_generation`, job.ID, info.Generation).Scan(&job.AttemptGeneration)
+		finished_at=NULL,error_code=NULL,owner_generation=$2,attempt_generation=attempt_generation+1`+
+		clearRetry+` WHERE id=$1 RETURNING attempt_generation`, job.ID, info.Generation).Scan(&job.AttemptGeneration)
 	if err != nil {
 		return Job{}, errors.New("job claim update failed")
 	}
@@ -583,6 +603,16 @@ func (s *Store) finish(ctx context.Context, job Job, state string, result map[st
 	if errors.Is(err, pgx.ErrNoRows) || attempt != job.AttemptGeneration || !validCurrentState || (!recovered && (ownerGeneration == nil || *ownerGeneration != info.Generation)) {
 		return ErrLeaseLost
 	}
+	retry, err := scheduleDigestRetry(ctx, tx, job, info, state, result, body, errorCode, recovered)
+	if err != nil {
+		return errors.New("scheduled digest retry persistence failed")
+	}
+	if retry {
+		if err := tx.Commit(ctx); err != nil {
+			return errors.New("scheduled digest retry commit failed")
+		}
+		return ErrDigestRetryScheduled
+	}
 	_, err = tx.Exec(ctx, `UPDATE background_jobs SET state=$2,result=$3::jsonb,error_code=$4,
 		finished_at=clock_timestamp() AT TIME ZONE 'UTC', owner_generation=$5 WHERE id=$1`,
 		job.ID, state, string(body), errorCode, info.Generation)
@@ -662,10 +692,19 @@ func (s *Store) FailExhaustedInterrupted(ctx context.Context, maxAttempts int64,
 	if err != nil {
 		return 0, err
 	}
+	retryAvailable, err := digestRetryAvailable(ctx, tx)
+	if err != nil {
+		return 0, errors.New("scheduled digest recovery unavailable")
+	}
+	excludeScheduledDigests := ""
+	if retryAvailable {
+		// The digest admission path resolves its own interrupted occurrences.
+		excludeScheduledDigests = " AND (occurrence_id IS NULL OR kind NOT IN ('news_digest','telegram_digest'))"
+	}
 	rows, err := tx.Query(ctx, `SELECT id::text,kind,payload,result,queue_position,state,owner_generation,
 		attempt_generation,created_at,started_at,finished_at,error_code,schedule_key,schedule_revision
-		FROM background_jobs WHERE state='interrupted' AND attempt_generation >= $1
-		ORDER BY queue_position LIMIT $2 FOR UPDATE SKIP LOCKED`, maxAttempts, batch)
+		FROM background_jobs WHERE state='interrupted' AND attempt_generation >= $1`+
+		excludeScheduledDigests+` ORDER BY queue_position LIMIT $2 FOR UPDATE SKIP LOCKED`, maxAttempts, batch)
 	if err != nil {
 		return 0, errors.New("exhausted job scan failed")
 	}

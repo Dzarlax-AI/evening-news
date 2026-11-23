@@ -100,8 +100,8 @@ func TestPostgresAcceptFenceContextCancelAndDuplicate(t *testing.T) {
 	defer pool.Close()
 	for _, ddl := range []string{
 		`CREATE TABLE background_worker_status(id integer PRIMARY KEY,generation integer NOT NULL,owner_id uuid,lock_backend_pid integer,heartbeat_at timestamp,status text NOT NULL)`,
-		`CREATE TABLE background_jobs(id uuid PRIMARY KEY,kind text NOT NULL,payload jsonb NOT NULL,result jsonb,state text NOT NULL,owner_generation integer,attempt_generation integer NOT NULL,initialized_at timestamp)`,
-		`CREATE TABLE background_job_executions(job_id uuid NOT NULL REFERENCES background_jobs(id),attempt_generation integer NOT NULL,envelope_sha256 text NOT NULL,executor_instance_id uuid NOT NULL,owner_id uuid,worker_generation integer,deadline_at timestamp,state text NOT NULL,accepted_at timestamp NOT NULL DEFAULT clock_timestamp(),started_at timestamp,finished_at timestamp,result jsonb,error_code text,legacy_completion_applied_at timestamp,PRIMARY KEY(job_id,attempt_generation))`,
+		`CREATE TABLE background_jobs(id uuid PRIMARY KEY,kind text NOT NULL,payload jsonb NOT NULL,result jsonb,state text NOT NULL,owner_generation integer,attempt_generation integer NOT NULL,initialized_at timestamp,occurrence_id uuid,scheduled_for timestamp)`,
+		`CREATE TABLE background_job_executions(job_id uuid NOT NULL REFERENCES background_jobs(id),attempt_generation integer NOT NULL,envelope_sha256 text NOT NULL,executor_instance_id uuid NOT NULL,owner_id uuid,worker_generation integer,deadline_at timestamp,state text NOT NULL,accepted_at timestamp NOT NULL DEFAULT clock_timestamp(),started_at timestamp,finished_at timestamp,result jsonb,error_code text,legacy_completion_applied_at timestamp,digest_delivery_started boolean,PRIMARY KEY(job_id,attempt_generation))`,
 		`CREATE TABLE articles(id bigint PRIMARY KEY,processing_state text,processing_attempts integer,next_attempt_at timestamp,last_processing_error text,processed boolean,summary_processed boolean,category_processed boolean,ad_processed boolean)`,
 	} {
 		if _, err := pool.Exec(ctx, ddl); err != nil {
@@ -133,7 +133,20 @@ func TestPostgresAcceptFenceContextCancelAndDuplicate(t *testing.T) {
 	var releasePipelineOnce sync.Once
 	release := func() { releasePipelineOnce.Do(func() { close(releasePipeline) }) }
 	defer release()
+	digestGuardResult := make(chan error, 1)
 	pipe := PipelineFunc(func(c context.Context, x ExecutionContext, kind string, _ json.RawMessage) (Result, error) {
+		if kind == "telegram_digest" {
+			var started bool
+			err := pool.QueryRow(c, `SELECT digest_delivery_started FROM background_job_executions WHERE job_id=$1 AND attempt_generation=$2`, x.JobID, x.AttemptGeneration).Scan(&started)
+			if err == nil && (started || x.BeforeDigestPublish == nil) {
+				err = errors.New("digest did not enter the guarded pre-publish state")
+			}
+			if err == nil {
+				err = x.BeforeDigestPublish(c)
+			}
+			digestGuardResult <- err
+			return Result{Value: json.RawMessage(`{"parts_sent":1}`)}, err
+		}
 		if kind == "article_reprocess" {
 			return Result{Value: json.RawMessage(`{"status":"incomplete","success":false,"article_outcomes":[{"article_id":9,"state":"rejected","reason":"advertisement"}],"article_outcomes_total":1,"article_outcomes_omitted":0}`)}, nil
 		}
@@ -309,6 +322,43 @@ func TestPostgresAcceptFenceContextCancelAndDuplicate(t *testing.T) {
 	conflict := request("POST", "/internal/v1/job-executions", conflictBody)
 	if conflict.Code != 409 {
 		t.Fatalf("conflict response status=%d body=%s", conflict.Code, conflict.Body.String())
+	}
+
+	digestJob := uuid.New()
+	if _, err = pool.Exec(ctx, `INSERT INTO background_jobs(id,kind,payload,state,owner_generation,attempt_generation,occurrence_id,scheduled_for)
+		VALUES($1,'telegram_digest','{}','running',8,1,$1,timezone('UTC',clock_timestamp()))`, digestJob); err != nil {
+		t.Fatal(err)
+	}
+	digestDeadline := time.Now().UTC().Add(2 * time.Minute).Format(time.RFC3339Nano)
+	digestEnvelope := fmt.Sprintf(`{"version":1,"job_id":%q,"owner_id":%q,"generation":8,"attempt_generation":1,"deadline_at":%q}`, digestJob.String(), newOwner.String(), digestDeadline)
+	if rr := request("POST", "/internal/v1/job-executions", digestEnvelope); rr.Code != 202 {
+		t.Fatalf("digest accept: %d %s", rr.Code, rr.Body.String())
+	}
+	select {
+	case err = <-digestGuardResult:
+		if err != nil {
+			t.Fatal(err)
+		}
+	case <-ctx.Done():
+		t.Fatalf("guard callback unavailable: %v", ctx.Err())
+	}
+	var publishStarted bool
+	if err = pool.QueryRow(ctx, `SELECT digest_delivery_started FROM background_job_executions
+		WHERE job_id=$1 AND attempt_generation=1`, digestJob).Scan(&publishStarted); err != nil || !publishStarted {
+		t.Fatalf("guard returned before persisting publication phase: %v %v", publishStarted, err)
+	}
+	for {
+		srv.mu.Lock()
+		_, active := srv.active[attemptKey{digestJob, 1}]
+		srv.mu.Unlock()
+		if !active {
+			break
+		}
+		select {
+		case <-ctx.Done():
+			t.Fatal("guarded digest execution did not finish")
+		case <-time.After(10 * time.Millisecond):
+		}
 	}
 
 	// Selected article state is initialized once for the durable job, then left

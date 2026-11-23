@@ -97,7 +97,17 @@ func TestFinalizedSourceWarningAndNoReplayPostgres(t *testing.T) {
 		return true
 	})
 	var last Event
-	for i := 1; i <= 4; i++ {
+	for i := 1; i <= 5; i++ {
+		if i == 5 {
+			if count != 1 {
+				t.Fatalf("cooldown allowed %d alerts", count)
+			}
+			_, err = pool.Exec(ctx, `UPDATE settings SET value=json_build_object('reserved_epoch',extract(epoch FROM clock_timestamp())-86401) WHERE key='scheduled_source_alerts:global_cooldown:v1'`)
+			if err != nil {
+				t.Fatal(err)
+			}
+			server = New("fixture-token", pool, fixtureGuard{}, fixtureAuthority{instance}, server.Alerts.send)
+		}
 		job := fmt.Sprintf("10000000-0000-4000-8000-%012d", i)
 		run := fmt.Sprintf("40000000-0000-4000-8000-%012d", i)
 		result := `{"status":"warning","errors_count":1,"sources_completed":1,"sources_total":1,"source_outcomes":{"transport_failed":1}}`
@@ -172,8 +182,8 @@ func TestFinalizedSourceWarningAndNoReplayPostgres(t *testing.T) {
 	networkServer := New("fixture-token", pool, fixtureGuard{}, fixtureAuthority{instance}, func(ctx context.Context, title, message string) bool {
 		return transport.Send(ctx, "sendMessage", map[string]any{"chat_id": "fixture", "text": message}).State == telegramdelivery.Sent
 	})
-	networkJob := "10000000-0000-4000-8000-000000000005"
-	if _, err = pool.Exec(ctx, `INSERT INTO background_jobs(id,kind,payload,idempotency_key,state,owner_generation,attempt_generation,result,schedule_key) VALUES($1::uuid,'source_test','{}',$2,'failed',1,1,'{"status":"warning"}'::jsonb,'fixture-network')`, networkJob, networkJob); err != nil {
+	networkJob := "10000000-0000-4000-8000-000000000099"
+	if _, err = pool.Exec(ctx, `INSERT INTO background_jobs(id,kind,payload,idempotency_key,state,owner_generation,attempt_generation,result,schedule_key) VALUES($1::uuid,'news_processing','{}',$2,'failed',1,1,'{"status":"warning"}'::jsonb,'fixture-network')`, networkJob, networkJob); err != nil {
 		t.Fatal(err)
 	}
 	if _, err = pool.Exec(ctx, `INSERT INTO background_job_executions(job_id,attempt_generation,envelope_sha256,executor_instance_id,state,legacy_completion_applied_at,legacy_alert_state) VALUES($1,1,$2,$3,'failed',now(),'pending')`, networkJob, hash, instance); err != nil {

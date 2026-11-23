@@ -305,6 +305,7 @@ func run() error {
 		result, err := runtime.SendServiceTest(ctx, "🚨 <b>"+title+"</b>\n\n"+message)
 		return err == nil && result.State == telegramdelivery.Sent
 	})
+	terminal.DigestWatchdogOwnsAlerts = source.get("DIGEST_WATCHDOG_OWNS_ALERTS") == "true"
 	mux.Handle("POST /internal/v1/domain-events/finalized", terminal)
 	mux.HandleFunc("POST /internal/v1/domain-operations", ops.Post)
 	mux.HandleFunc("GET /internal/v1/domain-operations/{job}/{attempt}/{operation}/{id}", ops.Get)

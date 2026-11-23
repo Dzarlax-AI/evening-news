@@ -97,3 +97,51 @@ func TestSourceTracesMatchLegacy(t *testing.T) {
 		})
 	}
 }
+
+func TestDeferredSourceNoticeRemainsEligible(t *testing.T) {
+	state := sourceLedger{Version: 1, Sources: map[string]*sourceState{}}
+	item := sourceObservation{ID: 1, Type: "rss", Config: strings.Repeat("a", 64), State: "warning", Code: "transport_failed"}
+	prepareSourceNotice(&state, 1, "j1", []sourceObservation{item}, nil, nil)
+	prev := int64(1)
+	notice, _ := prepareSourceNotice(&state, 2, "j2", []sourceObservation{item}, &prev, nil)
+	deferSourceNotice(&state, notice.Events, "j2")
+	prev = 2
+	notice, _ = prepareSourceNotice(&state, 3, "j3", []sourceObservation{item}, &prev, nil)
+	if notice == nil {
+		t.Fatal("deferred warning was lost")
+	}
+	finishSourceNotice(&state, notice.Events, "j3", true)
+	item.State = "healthy"
+	prev = 3
+	prepareSourceNotice(&state, 4, "j4", []sourceObservation{item}, &prev, nil)
+	prev = 4
+	notice, _ = prepareSourceNotice(&state, 5, "j5", []sourceObservation{item}, &prev, nil)
+	deferSourceNotice(&state, notice.Events, "j5")
+	prev = 5
+	notice, _ = prepareSourceNotice(&state, 6, "j6", []sourceObservation{item}, &prev, nil)
+	if notice == nil || !notice.Events[0].Recovery {
+		t.Fatal("deferred recovery was lost")
+	}
+}
+
+func TestGenericAlertSuppression(t *testing.T) {
+	for _, tc := range []struct {
+		kind, state, notification string
+		watchdog, want            bool
+	}{
+		{"news_processing", "succeeded", "failure", false, true},
+		{"news_processing", "succeeded", "failure", true, true},
+		{"news_processing", "failed", "failure", true, false},
+		{"news_processing", "interrupted", "failure", false, false},
+		{"news_processing", "succeeded", "recovery", true, false},
+		{"news_digest", "failed", "failure", false, false},
+		{"news_digest", "failed", "failure", true, true},
+		{"telegram_digest", "failed", "failure", false, false},
+		{"telegram_digest", "failed", "failure", true, true},
+		{"backup", "failed", "failure", true, false},
+	} {
+		if got := suppressGenericAlert(tc.kind, tc.state, tc.notification, tc.watchdog); got != tc.want {
+			t.Errorf("%s/%s %s watchdog=%v got %v", tc.kind, tc.state, tc.notification, tc.watchdog, got)
+		}
+	}
+}

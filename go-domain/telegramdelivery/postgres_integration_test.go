@@ -82,7 +82,7 @@ func TestReceiptAndFencePostgres(t *testing.T) {
 	}
 	defer pool.Close()
 	ddl := `CREATE TABLE background_worker_status(id int primary key,owner_id uuid,generation int,status text,lock_backend_pid int,heartbeat_at timestamp);
- CREATE TABLE background_jobs(id uuid primary key,state text,owner_generation int,attempt_generation int,kind text,payload jsonb);
+ CREATE TABLE background_jobs(id uuid primary key,state text,owner_generation int,attempt_generation int,kind text,payload jsonb,scheduled_for timestamp,occurrence_id uuid);
  CREATE TABLE background_job_executions(job_id uuid,attempt_generation int,executor_instance_id uuid,owner_id uuid,worker_generation int,deadline_at timestamp,state text,primary key(job_id,attempt_generation));
  CREATE TABLE IF NOT EXISTS sources(id int primary key,name text);
  CREATE TABLE IF NOT EXISTS articles(id int primary key,source_id int,title text,summary text,content text,url text,fetched_at timestamp,processing_state text,is_advertisement boolean);

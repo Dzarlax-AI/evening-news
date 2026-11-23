@@ -46,15 +46,16 @@ type Config struct {
 // handlers. BackendPID is read from the locked worker status row, never from the
 // worker's six-field envelope.
 type ExecutionContext struct {
-	Version            int    `json:"version"`
-	JobID              string `json:"job_id"`
-	AttemptGeneration  int64  `json:"attempt_generation"`
-	OwnerID            string `json:"owner_id"`
-	Generation         int64  `json:"generation"`
-	BackendPID         int32  `json:"backend_pid"`
-	ExecutorInstanceID string `json:"executor_instance_id"`
-	DeadlineAt         string `json:"deadline_at"`
-	ExecutorBackendPID int32  `json:"-"`
+	Version             int                         `json:"version"`
+	JobID               string                      `json:"job_id"`
+	AttemptGeneration   int64                       `json:"attempt_generation"`
+	OwnerID             string                      `json:"owner_id"`
+	Generation          int64                       `json:"generation"`
+	BackendPID          int32                       `json:"backend_pid"`
+	ExecutorInstanceID  string                      `json:"executor_instance_id"`
+	DeadlineAt          string                      `json:"deadline_at"`
+	ExecutorBackendPID  int32                       `json:"-"`
+	BeforeDigestPublish func(context.Context) error `json:"-"`
 }
 
 type Result struct{ Value json.RawMessage }

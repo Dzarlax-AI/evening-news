@@ -509,3 +509,49 @@ VALUES ('6c215a61-23ad-58af-bab2-2db2df086401','synthetic-destination',true,true
 		t.Fatal(err)
 	}
 }
+
+func TestSnapshotUsesScheduledEditionDateAcrossMidnight(t *testing.T) {
+	pool := localizedPG(t)
+	ctx := context.Background()
+	scheduled := time.Date(2026, 11, 11, 23, 30, 0, 0, time.UTC)
+	cutoff := scheduled.Add(2 * time.Hour)
+	_, err := pool.Exec(ctx, `INSERT INTO sources(id,name,source_type,url) VALUES(90100,'Fixture','rss','https://source.fixture/feed'); INSERT INTO categories(id,name,display_name) VALUES(90100,'fixture-category','Категория'); INSERT INTO articles(id,title,url,summary,source_id,fetched_at,processing_state) VALUES(90100,'First','https://source.fixture/first','Город начал строительство моста.',90100,$1,'completed'),(90101,'Second','https://source.fixture/second','Second summary',90100,$2,'completed'); INSERT INTO article_categories(article_id,category_id,confidence) VALUES(90100,90100,1),(90101,90100,1)`, pgx.QueryExecModeSimpleProtocol, scheduled, cutoff)
+	if err != nil {
+		t.Fatal(err)
+	}
+	wf := Workflow{Pool: pool, Fence: localeTestFence{}, SiteBase: "https://news.fixture", EditionDate: scheduled}
+	snap, _, err := wf.Snapshot(ctx, cutoff, "fixture")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if snap.Date != "2026-11-11" || !snap.CutoffUTC.Equal(cutoff) || len(snap.Articles) != 1 || snap.Articles[0].ID != "90100" {
+		t.Fatalf("wrong scheduled snapshot: date=%s cutoff=%s articles=%d", snap.Date, snap.CutoffUTC, len(snap.Articles))
+	}
+	const jobID = "10000000-0000-4000-8000-000000000009"
+	const operationID = "20000000-0000-4000-8000-000000000001"
+	provider := localeTestProvider(func(context.Context, ai.Request) (ai.Response, error) {
+		raw, err := json.Marshal(draftFor([]string{"90100"}, map[string]string{"90100": "Город начал строительство моста."}, false))
+		return ai.Response{Status: ai.Complete, Text: string(raw), Model: "fixture", Provider: "fixture"}, err
+	})
+	wf.Provider = editorial.ProviderConfig{Provider: provider, Model: "fixture"}
+	if n, err := wf.Generate(ctx, jobID, 2, operationID, cutoff); err != nil || n != 1 {
+		t.Fatalf("regenerate original scheduled edition: %d %v", n, err)
+	}
+	published, err := wf.Publication(ctx, Identity{JobID: jobID, Attempt: 2}, cutoff)
+	if err != nil || published.Edition.Date != "2026-11-11" {
+		t.Fatalf("publish selected the wrong date: %s %v", published.Edition.Date, err)
+	}
+	var actualPublicationTime time.Time
+	if err := pool.QueryRow(ctx, `SELECT (value->>'publication_at')::timestamptz FROM settings WHERE key=$1`,
+		"managed_digest_publication:"+jobID+":2").Scan(&actualPublicationTime); err != nil || !actualPublicationTime.Equal(cutoff) {
+		t.Fatalf("publication did not preserve actual time: %v %v", actualPublicationTime, err)
+	}
+	wf.EditionDate = time.Time{}
+	snap, _, err = wf.Snapshot(ctx, cutoff, "fixture")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if snap.Date != "2026-11-12" || len(snap.Articles) != 1 || snap.Articles[0].ID != "90101" {
+		t.Fatalf("wrong manual snapshot: date=%s articles=%d", snap.Date, len(snap.Articles))
+	}
+}
