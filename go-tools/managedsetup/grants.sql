@@ -64,6 +64,7 @@ GRANT USAGE, SELECT ON SEQUENCE news.extraction_patterns_id_seq,
 GRANT SELECT, UPDATE ON news.background_worker_status TO news_worker_runtime;
 GRANT SELECT, UPDATE, DELETE ON news.background_jobs TO news_worker_runtime;
 GRANT SELECT, INSERT ON news.background_job_executions TO news_worker_runtime;
+GRANT UPDATE (legacy_completion_applied_at, legacy_alert_state) ON news.background_job_executions TO news_worker_runtime;
 GRANT SELECT ON news.background_worker_status, news.background_jobs,
  news.schedule_settings, news.articles TO news_execution_runtime;
 GRANT UPDATE (id) ON news.background_worker_status TO news_execution_runtime;

@@ -117,7 +117,7 @@ func TestDomainProcessStartupAndDrainPostgres(t *testing.T) {
 	statements := []string{
 		`CREATE TABLE ` + ident + `.settings(key text primary key,value json not null,updated_at timestamp)`,
 		`CREATE TABLE ` + ident + `.background_worker_status(id integer primary key,owner_id uuid,generation integer,status text,lock_backend_pid integer,heartbeat_at timestamp)`,
-		`CREATE TABLE ` + ident + `.background_jobs(id uuid primary key,state text,owner_generation integer,attempt_generation integer,kind text,payload jsonb)`,
+		`CREATE TABLE ` + ident + `.background_jobs(id uuid primary key,state text,owner_generation integer,attempt_generation integer,kind text,payload jsonb,scheduled_for timestamp,occurrence_id uuid)`,
 		`CREATE TABLE ` + ident + `.background_job_executions(job_id uuid,attempt_generation integer,executor_instance_id uuid,owner_id uuid,worker_generation integer,deadline_at timestamp,state text)`,
 		`CREATE TABLE ` + ident + `.article_processing_runs(id uuid,job_id uuid,attempt_generation integer,envelope_sha256 text,state text)`,
 		`CREATE TABLE ` + ident + `.article_processing_items(run_id uuid,article_id bigint,article_attempt integer,input_fingerprint text,state text)`,

@@ -22,6 +22,7 @@ var ErrExecutorAuth = errors.New("executor authentication failed; worker stopped
 const (
 	leaseAcquireWait     = 20 * time.Second
 	leaseAcquireInterval = time.Second
+	heartbeatTimeout     = 10 * time.Second
 )
 
 type Worker struct {
@@ -254,7 +255,7 @@ func (w *Worker) runJobWithDrain(shutdownCtx, leaseCtx context.Context, job stor
 		case <-jobDone:
 		}
 	}()
-	err := w.runJob(attemptCtx, job)
+	err := digestRetryResult(w.runJob(attemptCtx, job))
 	close(jobDone)
 	cancelAttempt()
 	return err
@@ -268,7 +269,7 @@ func (w *Worker) heartbeatLoop(ctx context.Context, cancelRun context.CancelFunc
 		case <-ctx.Done():
 			return
 		case <-ticker.C:
-			heartbeatCtx, cancel := context.WithTimeout(context.Background(), w.config.RequestTimeout)
+			heartbeatCtx, cancel := context.WithTimeout(context.Background(), heartbeatTimeout)
 			var once sync.Once
 			var failureAt time.Time
 			notifyLoss := func() { once.Do(func() { failureAt = time.Now().UTC(); cancelRun(); close(lost) }) }
@@ -346,6 +347,13 @@ func (w *Worker) runJob(ctx context.Context, job store.Job) error {
 		return err
 	}
 	deadline := startedAt.Add(time.Duration(policy.TimeoutSeconds) * time.Second)
+	if job.DigestRetryDeadline != nil && job.DigestRetryDeadline.Before(deadline) {
+		deadline = *job.DigestRetryDeadline
+		if !deadline.After(startedAt) {
+			code := "worker_recovery_exhausted"
+			return w.store.Finish(ctx, job, "failed", map[string]any{"status": "incomplete"}, &code)
+		}
+	}
 	info := w.store.Info()
 	envelope := executor.Envelope{
 		Version: 1, JobID: job.ID, OwnerID: info.OwnerID,
@@ -574,13 +582,20 @@ func (w *Worker) recoverJob(ctx context.Context, job store.Job) error {
 				return w.persistReceipt(ctx, job, stopped, true)
 			}
 			state, result, code := w.recoveredOutcome(job)
-			return w.store.FinishRecovered(ctx, job, state, result, &code)
+			return digestRetryResult(w.store.FinishRecovered(ctx, job, state, result, &code))
 		}
 		// A different authenticated instance ID proves the accepted executor
 		// process exited; its task and child tasks cannot still be running.
 	}
 	state, result, code := w.recoveredOutcome(job)
-	return w.store.FinishRecovered(ctx, job, state, result, &code)
+	return digestRetryResult(w.store.FinishRecovered(ctx, job, state, result, &code))
+}
+
+func digestRetryResult(err error) error {
+	if errors.Is(err, store.ErrDigestRetryScheduled) {
+		return nil
+	}
+	return err
 }
 
 func (w *Worker) recoveredOutcome(job store.Job) (string, map[string]any, string) {
@@ -624,7 +639,7 @@ func (w *Worker) persistReceipt(ctx context.Context, job store.Job, receipt exec
 		err = w.store.Finish(ctx, job, state, result, code)
 	}
 	if err != nil {
-		return err
+		return digestRetryResult(err)
 	}
 	if state != "interrupted" {
 		callCtx, cancel := context.WithTimeout(context.Background(), w.config.RequestTimeout)

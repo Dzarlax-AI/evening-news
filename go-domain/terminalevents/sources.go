@@ -234,3 +234,19 @@ func finishSourceNotice(v *sourceLedger, events []sourceEvent, job string, deliv
 		}
 	}
 }
+
+// deferSourceNotice preserves eligible transitions for a later observation.
+func deferSourceNotice(v *sourceLedger, events []sourceEvent, job string) {
+	for _, event := range events {
+		s := v.Sources[strconv.FormatInt(event.ID, 10)]
+		if s == nil || s.EventJob == nil || *s.EventJob != job {
+			continue
+		}
+		if event.Recovery && s.Incident == "recovering" {
+			s.Incident = "active"
+		} else if !event.Recovery && s.Incident == "attempting" {
+			s.Incident = "none"
+		}
+		s.EventJob = nil
+	}
+}

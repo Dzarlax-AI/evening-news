@@ -120,3 +120,20 @@ func abandonLedger(v *sourceLedger, job string) {
 		}
 	}
 }
+
+// reserveSourceNotice serializes all schedules and persists the attempt before
+// delivery, including uncertain outcomes, to avoid duplicate notifications.
+func reserveSourceNotice(ctx context.Context, tx pgx.Tx) (bool, error) {
+	const key = "scheduled_source_alerts:global_cooldown:v1"
+	_, err := tx.Exec(ctx, `INSERT INTO settings(key,value,description) VALUES($1,'{}'::json,'Reserved source alert cooldown') ON CONFLICT (key) DO NOTHING`, key)
+	if err != nil {
+		return false, err
+	}
+	var eligible bool
+	err = tx.QueryRow(ctx, `SELECT CASE WHEN value::jsonb = '{}'::jsonb THEN true WHEN jsonb_typeof(value::jsonb->'reserved_epoch') = 'number' THEN (value::jsonb->>'reserved_epoch')::numeric <= extract(epoch FROM clock_timestamp())-86400 ELSE false END FROM settings WHERE key=$1 FOR UPDATE`, key).Scan(&eligible)
+	if err != nil || !eligible {
+		return false, err
+	}
+	_, err = tx.Exec(ctx, `UPDATE settings SET value=json_build_object('reserved_epoch',extract(epoch FROM clock_timestamp())), updated_at=clock_timestamp() AT TIME ZONE 'UTC' WHERE key=$1`, key)
+	return err == nil, err
+}

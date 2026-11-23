@@ -939,6 +939,24 @@
     ]
   },
   {
+    "key": "DIGEST_WATCHDOG_OWNS_ALERTS",
+    "owner": "domain",
+    "type": "boolean",
+    "default": "false",
+    "secret": false,
+    "store": "legacy process environment; managed role manifest for domain",
+    "reload": "process startup; restart or recreate after changing configuration",
+    "migration": "enable only when the separately deployed watchdog owns scheduled digest delivery alerts",
+    "precedence": "selected role manifest takes precedence without environment fallback; legacy environment when no file is selected; default false if absent",
+    "sources": [
+      "go-domain/cmd/news-domain/runtime_config.go:25"
+    ],
+    "class": "runtime",
+    "managed_roles": [
+      "domain"
+    ]
+  },
+  {
     "key": "DOCKER_CONFIG",
     "owner": "operator tools",
     "type": "path",
@@ -1378,7 +1396,7 @@
     "precedence": "selected role manifest takes precedence without environment fallback; legacy environment when no file is selected; component default if absent",
     "sources": [
       "go-background/cmd/news-background/runtime_config.go:13",
-      "go-domain/cmd/news-domain/main.go:411",
+      "go-domain/cmd/news-domain/main.go:412",
       "go-domain/cmd/news-domain/runtime_config.go:25",
       "go-processing/runner/runner.go:122"
     ],
@@ -1548,7 +1566,7 @@
     "precedence": "selected role manifest takes precedence without environment fallback; legacy environment when no file is selected; component default if absent",
     "sources": [
       "go-background/cmd/news-background/runtime_config.go:13",
-      "go-domain/cmd/news-domain/main.go:399",
+      "go-domain/cmd/news-domain/main.go:400",
       "go-domain/cmd/news-domain/runtime_config.go:25",
       "go-processing/runner/runner.go:121"
     ],
@@ -2052,7 +2070,7 @@
     "migration": "preserve effective value and consuming role during adoption; verify managed parity before switching",
     "precedence": "selected role manifest takes precedence without environment fallback; legacy environment when no file is selected; component default if absent",
     "sources": [
-      "go-domain/cmd/news-domain/main.go:328",
+      "go-domain/cmd/news-domain/main.go:329",
       "go-domain/cmd/news-domain/runtime_config.go:25"
     ],
     "class": "runtime",
@@ -2091,7 +2109,7 @@
     "precedence": "selected role manifest takes precedence without environment fallback; legacy environment when no file is selected; component default if absent",
     "sources": [
       "go-domain/cmd/news-domain/healthcheck.go:31",
-      "go-domain/cmd/news-domain/main.go:332",
+      "go-domain/cmd/news-domain/main.go:333",
       "go-domain/cmd/news-domain/runtime_config.go:25"
     ],
     "class": "runtime",
@@ -2618,7 +2636,7 @@
     "precedence": "Compose interpolation source then template default/required rule; inspect actual file",
     "sources": [
       "deploy/news-ingestion/compose.ingestion.yml:35",
-      "deploy/config/full.env.example:216"
+      "deploy/config/full.env.example:218"
     ],
     "class": "compose_input",
     "managed_roles": []
@@ -2828,7 +2846,7 @@
     "precedence": "Compose interpolation source then template default/required rule; inspect actual file",
     "sources": [
       "deploy/news-processing/compose.processing.yml:49",
-      "deploy/config/full.env.example:240"
+      "deploy/config/full.env.example:242"
     ],
     "class": "compose_input",
     "managed_roles": []
@@ -4015,6 +4033,134 @@
     "managed_roles": [
       "web"
     ]
+  },
+  {
+    "key": "WATCHDOG_ARCHIVE_URL",
+    "owner": "digest watchdog operator",
+    "type": "string",
+    "default": "empty",
+    "secret": false,
+    "store": "operator/CI private watchdog service environment",
+    "reload": "read on each timer invocation",
+    "migration": "provision independently before the watchdog takes ownership of digest alerts",
+    "precedence": "process environment; local defaults where documented",
+    "sources": [
+      "go-tools/cmd/digest-watchdog/main.go:356"
+    ],
+    "class": "operator_or_ci",
+    "managed_roles": []
+  },
+  {
+    "key": "WATCHDOG_MONITOR_FROM",
+    "owner": "digest watchdog operator",
+    "type": "string",
+    "default": "empty; required RFC3339 lower bound",
+    "secret": false,
+    "store": "operator/CI private watchdog service environment",
+    "reload": "read on each timer invocation",
+    "migration": "provision independently before the watchdog takes ownership of digest alerts",
+    "precedence": "process environment; local defaults where documented",
+    "sources": [
+      "go-tools/cmd/digest-watchdog/main.go:351"
+    ],
+    "class": "operator_or_ci",
+    "managed_roles": []
+  },
+  {
+    "key": "WATCHDOG_NEWS_DATABASE_URL",
+    "owner": "digest watchdog operator",
+    "type": "string",
+    "default": "empty; required",
+    "secret": true,
+    "store": "operator/CI private watchdog service environment",
+    "reload": "read on each timer invocation",
+    "migration": "provision independently before the watchdog takes ownership of digest alerts",
+    "precedence": "process environment; local defaults where documented",
+    "sources": [
+      "go-tools/cmd/digest-watchdog/main.go:348"
+    ],
+    "class": "operator_or_ci",
+    "managed_roles": []
+  },
+  {
+    "key": "WATCHDOG_SCHEDULER_DATABASE_URL",
+    "owner": "digest watchdog operator",
+    "type": "string",
+    "default": "empty; required",
+    "secret": true,
+    "store": "operator/CI private watchdog service environment",
+    "reload": "read on each timer invocation",
+    "migration": "provision independently before the watchdog takes ownership of digest alerts",
+    "precedence": "process environment; local defaults where documented",
+    "sources": [
+      "go-tools/cmd/digest-watchdog/main.go:347"
+    ],
+    "class": "operator_or_ci",
+    "managed_roles": []
+  },
+  {
+    "key": "WATCHDOG_SCHEDULER_SCHEMA",
+    "owner": "digest watchdog operator",
+    "type": "string",
+    "default": "public",
+    "secret": false,
+    "store": "operator/CI private watchdog service environment",
+    "reload": "read on each timer invocation",
+    "migration": "provision independently before the watchdog takes ownership of digest alerts",
+    "precedence": "process environment; local defaults where documented",
+    "sources": [
+      "go-tools/cmd/digest-watchdog/main.go:355"
+    ],
+    "class": "operator_or_ci",
+    "managed_roles": []
+  },
+  {
+    "key": "WATCHDOG_STATE_FILE",
+    "owner": "digest watchdog operator",
+    "type": "path",
+    "default": "empty; required",
+    "secret": false,
+    "store": "operator/CI private watchdog service environment",
+    "reload": "read on each timer invocation",
+    "migration": "provision independently before the watchdog takes ownership of digest alerts",
+    "precedence": "process environment; local defaults where documented",
+    "sources": [
+      "go-tools/cmd/digest-watchdog/main.go:346"
+    ],
+    "class": "operator_or_ci",
+    "managed_roles": []
+  },
+  {
+    "key": "WATCHDOG_TELEGRAM_CHAT_ID",
+    "owner": "digest watchdog operator",
+    "type": "string",
+    "default": "empty; required",
+    "secret": true,
+    "store": "operator/CI private watchdog service environment",
+    "reload": "read on each timer invocation",
+    "migration": "provision independently before the watchdog takes ownership of digest alerts",
+    "precedence": "process environment; local defaults where documented",
+    "sources": [
+      "go-tools/cmd/digest-watchdog/main.go:350"
+    ],
+    "class": "operator_or_ci",
+    "managed_roles": []
+  },
+  {
+    "key": "WATCHDOG_TELEGRAM_TOKEN",
+    "owner": "digest watchdog operator",
+    "type": "secret string",
+    "default": "empty; required",
+    "secret": true,
+    "store": "operator/CI private watchdog service environment",
+    "reload": "read on each timer invocation",
+    "migration": "provision independently before the watchdog takes ownership of digest alerts",
+    "precedence": "process environment; local defaults where documented",
+    "sources": [
+      "go-tools/cmd/digest-watchdog/main.go:349"
+    ],
+    "class": "operator_or_ci",
+    "managed_roles": []
   },
   {
     "key": "WEB_BACKEND_TOKEN",

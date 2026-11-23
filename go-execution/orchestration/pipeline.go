@@ -337,6 +337,11 @@ func (p *Pipeline) digest(ctx context.Context, f execution.ExecutionContext, cal
 	if !ok || !canonicalUUID(token) {
 		return 0, digestStageError{stage: "prepare_result"}
 	}
+	if f.BeforeDigestPublish != nil {
+		if err := f.BeforeDigestPublish(ctx); err != nil {
+			return 0, digestStageError{stage: "publish", failureReason: "digest_delivery_guard_failed"}
+		}
+	}
 	published, err := call("digest_publish", "digest_publish", map[string]any{"prepared_token": token, "serbian_incomplete_code": serbianIncomplete})
 	if err != nil {
 		var domainErr *DomainOperationError

@@ -34,6 +34,7 @@ type Workflow struct {
 	PriceUsage      func(editorial.ProviderUsage) *float64
 	SiteBase        string
 	RetryPolicy     *SerbianRetryPolicy
+	EditionDate     time.Time
 }
 
 // SerbianRetryPolicy is fixed with the original edition, not the retry job.
@@ -74,7 +75,7 @@ func (w Workflow) Snapshot(ctx context.Context, cutoff time.Time, id string) (ed
 		return empty, nil, ErrInvalid
 	}
 	cutoff = cutoff.UTC().Truncate(time.Microsecond)
-	date := cutoff.Format("2006-01-02")
+	date := w.editionDate(cutoff)
 	snap := editorial.Snapshot{Date: date, CutoffUTC: cutoff, SiteBaseURL: base, EditionURL: base + "/digest/" + date + "?edition=" + id, Articles: []editorial.Article{}}
 	tx, err := w.Pool.Begin(ctx)
 	if err != nil {
@@ -144,4 +145,12 @@ func (w Workflow) Snapshot(ctx context.Context, cutoff time.Time, id string) (ed
 		return empty, nil, ErrLimit
 	}
 	return snap, raw, nil
+}
+
+// editionDate preserves the actual snapshot cutoff while selecting the scheduled day.
+func (w Workflow) editionDate(cutoff time.Time) string {
+	if !w.EditionDate.IsZero() {
+		return w.EditionDate.UTC().Format("2006-01-02")
+	}
+	return cutoff.UTC().Format("2006-01-02")
 }

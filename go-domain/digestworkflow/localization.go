@@ -333,7 +333,7 @@ func (w Workflow) MarkRussianPublicationAttempted(ctx context.Context, russianID
 	return tx.Commit(ctx)
 }
 func (w Workflow) generateLocalized(ctx context.Context, job string, attempt int, operation string, cutoff time.Time, expectedID string) (int, error) {
-	id, ru, plan, err := w.loadRussian(ctx, cutoff.UTC().Format("2006-01-02"), job, attempt, expectedID)
+	id, ru, plan, err := w.loadRussian(ctx, w.editionDate(cutoff), job, attempt, expectedID)
 	existing := err == nil
 	if expectedID != "" && !existing {
 		return 0, ErrNotReady

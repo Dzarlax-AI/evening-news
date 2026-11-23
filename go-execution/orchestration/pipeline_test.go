@@ -695,6 +695,25 @@ func TestDigestStopsWhenDomainRestartsAfterPreparation(t *testing.T) {
 	}
 }
 
+func TestDigestDoesNotPublishWithoutCommittedDeliveryGuard(t *testing.T) {
+	f := &fakeServices{}
+	p := testPipeline(t, f)
+	fence := testFence()
+	calls := 0
+	fence.BeforeDigestPublish = func(context.Context) error {
+		calls++
+		return errors.New("guard commit could not be confirmed")
+	}
+	if _, err := p.Execute(context.Background(), fence, "telegram_digest", json.RawMessage(`{}`)); err == nil {
+		t.Fatal("publication guard failure must stop the pipeline")
+	}
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	if calls != 1 || !contains(f.calls, "digest_prepare") || contains(f.calls, "digest_publish") {
+		t.Fatalf("guard calls=%d, domain operations=%v", calls, f.calls)
+	}
+}
+
 func TestDigestLostPublishAckAfterRestartIsNeverResent(t *testing.T) {
 	f := &fakeServices{lostAck: true, restartOnLostPublishAck: true}
 	p := testPipeline(t, f)

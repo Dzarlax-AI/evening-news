@@ -1,0 +1,20 @@
+[Unit]
+Description=Check Evening News scheduled digest delivery
+After=network-online.target
+Wants=network-online.target
+
+[Service]
+Type=oneshot
+User=news-watchdog
+Group=news-watchdog
+EnvironmentFile=/etc/news-digest-watchdog/watchdog.env
+StateDirectory=news-digest-watchdog
+Environment=WATCHDOG_STATE_FILE=/var/lib/news-digest-watchdog/state.json
+ExecStart=/usr/local/bin/news-digest-watchdog
+TimeoutStartSec=55
+NoNewPrivileges=true
+PrivateTmp=true
+ProtectSystem=strict
+ProtectHome=true
+RestrictSUIDSGID=true
+LockPersonality=true

@@ -60,11 +60,39 @@ func (s *Server) executeDigest(ctx context.Context, v digestInput, f authority.F
 	}
 	deadline, _ := time.Parse(time.RFC3339Nano, v.Envelope.Deadline)
 	identity := digestworkflow.Identity{JobID: v.Envelope.JobID, Attempt: v.Envelope.Attempt, DomainInstanceID: v.DomainInstanceID, Deadline: deadline}
+	// Scheduled occurrences keep their original UTC edition date across attempts.
+	// Read it from the fenced job row rather than trusting the request payload.
+	editionTime := time.Now()
+	if v.Operation == "summary_status" || v.Operation == "summaries_generate" || v.Operation == "digest_prepare" {
+		tx, err := s.db.Begin(ctx)
+		if err != nil {
+			return nil, err
+		}
+		defer tx.Rollback(ctx)
+		if err = f.Validate(ctx, tx); err != nil {
+			return nil, err
+		}
+		var scheduled *time.Time
+		var occurrence *string
+		if err = tx.QueryRow(ctx, `SELECT scheduled_for, occurrence_id::text FROM background_jobs WHERE id=$1::uuid`, v.Envelope.JobID).Scan(&scheduled, &occurrence); err != nil {
+			return nil, err
+		}
+		if occurrence != nil {
+			if scheduled == nil {
+				return nil, digestworkflow.ErrInvalid
+			}
+			editionTime = scheduled.UTC()
+			wf.EditionDate = editionTime
+		}
+		if err = tx.Commit(ctx); err != nil {
+			return nil, err
+		}
+	}
 	switch v.Operation {
 	case "viber_digest_delivery":
 		return s.executeViberDelivery(ctx, v, f)
 	case "summary_status":
-		n, e := wf.Count(ctx, time.Now())
+		n, e := wf.Count(ctx, editionTime)
 		return map[string]any{"summaries_count": n}, e
 	case "summaries_generate":
 		var n int

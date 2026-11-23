@@ -1,0 +1,11 @@
+[Unit]
+Description=Check Evening News digest every five minutes
+
+[Timer]
+OnCalendar=*:0/5
+Persistent=true
+AccuracySec=1s
+Unit=news-digest-watchdog.service
+
+[Install]
+WantedBy=timers.target

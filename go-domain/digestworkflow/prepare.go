@@ -204,7 +204,11 @@ func (w Workflow) Publication(ctx context.Context, id Identity, now time.Time) (
 	if selection.EditionID != "" {
 		err = tx.QueryRow(ctx, `SELECT id::text,snapshot,edition FROM editorial_digest_editions WHERE id=$1::uuid AND locale='ru'`, selection.EditionID).Scan(&editionID, &snapshotRaw, &editionRaw)
 	} else {
-		err = tx.QueryRow(ctx, `SELECT id::text,snapshot,edition FROM editorial_digest_editions WHERE edition_date=$1::date AND locale='ru' ORDER BY created_at DESC,id DESC LIMIT 1`, now.UTC().Format("2006-01-02")).Scan(&editionID, &snapshotRaw, &editionRaw)
+		editionTime := now
+		if !w.EditionDate.IsZero() {
+			editionTime = w.EditionDate
+		}
+		err = tx.QueryRow(ctx, `SELECT id::text,snapshot,edition FROM editorial_digest_editions WHERE edition_date=$1::date AND locale='ru' ORDER BY created_at DESC,id DESC LIMIT 1`, editionTime.UTC().Format("2006-01-02")).Scan(&editionID, &snapshotRaw, &editionRaw)
 	}
 	if errors.Is(err, pgx.ErrNoRows) {
 		return Prepared{}, ErrNotReady

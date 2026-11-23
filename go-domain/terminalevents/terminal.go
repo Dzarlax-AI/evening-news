@@ -35,14 +35,15 @@ type InstanceReader interface {
 	Instance(context.Context) (string, error)
 }
 type Server struct {
-	Token     string
-	Pool      *pgxpool.Pool
-	Guard     Guard
-	Authority InstanceReader
-	Alerts    *Alerts
-	mu        sync.Mutex
-	active    map[string]int
-	locks     map[string]*eventLock
+	Token                    string
+	Pool                     *pgxpool.Pool
+	Guard                    Guard
+	Authority                InstanceReader
+	Alerts                   *Alerts
+	DigestWatchdogOwnsAlerts bool
+	mu                       sync.Mutex
+	active                   map[string]int
+	locks                    map[string]*eventLock
 }
 
 func New(token string, pool *pgxpool.Pool, guard Guard, authority InstanceReader, send AlertSender) *Server {
@@ -255,8 +256,8 @@ func (s *Server) process(ctx context.Context, e Event) (string, error) {
 	var notice *sourceNotice
 	var sourceEvents []sourceEvent
 	if identity != "" && job.Kind == "news_processing" {
-		// Savepoint isolates malformed or unavailable source policy, matching the
-		// legacy fallback to the ordinary scheduler warning.
+		// A savepoint isolates an unavailable source policy so a terminal
+		// event can still complete without a generic processing warning.
 		nested, er := tx.Begin(ctx)
 		if er == nil {
 			var obs *observation
@@ -277,6 +278,14 @@ func (s *Server) process(ctx context.Context, e Event) (string, error) {
 						if er == nil {
 							notice, validObservation = prepareSourceNotice(&ledger, job.QueuePosition, e.JobID, obs.Sources, prev, active)
 							healthyObservation = obs.Warning == nil
+							if notice != nil {
+								var reserved bool
+								reserved, er = reserveSourceNotice(ctx, nested)
+								if er == nil && !reserved {
+									deferSourceNotice(&ledger, notice.Events, e.JobID)
+									notice = nil
+								}
+							}
 						}
 					}
 					if er == nil {
@@ -308,6 +317,9 @@ func (s *Server) process(ctx context.Context, e Event) (string, error) {
 		} else if s.Alerts.Active(key) {
 			kind = "recovery"
 		}
+	}
+	if suppressGenericAlert(job.Kind, s.DigestWatchdogOwnsAlerts) {
+		kind = ""
 	}
 	if notice == nil && kind == "" {
 		if err = eventState(ctx, tx, e, "not_needed"); err != nil {
@@ -379,4 +391,8 @@ func (s *Server) process(ctx context.Context, e Event) (string, error) {
 		return "unknown", nil
 	}
 	return state, nil
+}
+
+func suppressGenericAlert(kind string, digestWatchdogOwnsAlerts bool) bool {
+	return kind == "news_processing" || (digestWatchdogOwnsAlerts && (kind == "news_digest" || kind == "telegram_digest"))
 }
