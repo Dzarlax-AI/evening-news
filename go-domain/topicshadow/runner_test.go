@@ -6,7 +6,6 @@ import (
 	"crypto/rand"
 	"encoding/hex"
 	"encoding/json"
-	"net"
 	"os"
 	"strings"
 	"testing"
@@ -37,6 +36,26 @@ func (f *testTopicTransport) Decide(_ context.Context, input string, questions [
 	return result, nil
 }
 
+func TestReplayDatabaseChecksEveryHost(t *testing.T) {
+	for _, tt := range []struct {
+		hosts   string
+		allowed bool
+	}{
+		{"127.0.0.1", true},
+		{"127.0.0.1,127.0.0.2", true},
+		{"127.0.0.1,192.0.2.10", false},
+		{"192.0.2.10,127.0.0.1", false},
+	} {
+		config, err := pgx.ParseConfig("host=" + tt.hosts + " sslmode=prefer")
+		if err != nil {
+			t.Fatal(err)
+		}
+		if got := isLoopbackReplayDatabase(config); got != tt.allowed {
+			t.Errorf("allowed for %s = %t, want %t", tt.hosts, got, tt.allowed)
+		}
+	}
+}
+
 func TestRunnerKeepsHistoryAndDeduplicatesPasses(t *testing.T) {
 	dsn := os.Getenv("TEST_DATABASE_URL")
 	if dsn == "" {
@@ -46,8 +65,7 @@ func TestRunnerKeepsHistoryAndDeduplicatesPasses(t *testing.T) {
 	if err != nil {
 		t.Fatal("invalid isolated PostgreSQL configuration")
 	}
-	ip := net.ParseIP(cfg.ConnConfig.Host)
-	if ip == nil || !ip.IsLoopback() || len(cfg.ConnConfig.Fallbacks) != 0 {
+	if !isLoopbackReplayDatabase(cfg.ConnConfig) {
 		t.Fatal("topic shadow test requires a loopback-only PostgreSQL database")
 	}
 	ctx, cancel := context.WithTimeout(context.Background(), 40*time.Second)

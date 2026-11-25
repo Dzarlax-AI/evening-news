@@ -6,6 +6,8 @@ import (
 	"net"
 	"strings"
 	"time"
+
+	"github.com/jackc/pgx/v5"
 )
 
 // Replay runs explicit release cutoffs against an isolated loopback fixture.
@@ -15,9 +17,7 @@ func (r Runner) Replay(ctx context.Context, cutoffs []time.Time) ([]PassReport, 
 	if r.Pool == nil || !strings.HasPrefix(r.Version, "replay-") || len(cutoffs) == 0 {
 		return nil, errors.New("topic shadow replay requires an isolated version and cutoffs")
 	}
-	config := r.Pool.Config().ConnConfig
-	host := net.ParseIP(config.Host)
-	if host == nil || !host.IsLoopback() || len(config.Fallbacks) != 0 {
+	if !isLoopbackReplayDatabase(r.Pool.Config().ConnConfig) {
 		return nil, errors.New("topic shadow replay requires an isolated loopback database")
 	}
 	for i, cutoff := range cutoffs {
@@ -48,4 +48,17 @@ func (r Runner) Replay(ctx context.Context, cutoffs []time.Time) ([]PassReport, 
 		reports = append(reports, aggregate)
 	}
 	return reports, nil
+}
+
+// pgx may add a non-TLS fallback on the same host under sslmode=prefer.
+func isLoopbackReplayDatabase(config *pgx.ConnConfig) bool {
+	if !net.ParseIP(config.Host).IsLoopback() {
+		return false
+	}
+	for _, fallback := range config.Fallbacks {
+		if fallback == nil || !net.ParseIP(fallback.Host).IsLoopback() {
+			return false
+		}
+	}
+	return true
 }

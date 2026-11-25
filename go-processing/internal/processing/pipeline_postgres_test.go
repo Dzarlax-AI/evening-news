@@ -643,7 +643,8 @@ func TestProcessorRunPostgresAttemptTimeoutPersistsMetadataAndDoesNotCancelSibli
 	defer ai.Close()
 	processor := newIntegrationProcessor(pg, ai.URL, extractor.URL)
 	processor.MaxWorkers = 2
-	processor.AttemptTimeout = 150 * time.Millisecond
+	// Leave time for both attempts to reach AI under the race detector.
+	processor.AttemptTimeout = time.Second
 	f := pg.newRunWithPayload(t, slowID, "news_processing", map[string]any{"article_ids": []int64{slowID, siblingID}})
 	if _, err := processor.Run(context.Background(), f); err != nil {
 		t.Fatalf("attempt timeout cancelled its batch: %v", err)
