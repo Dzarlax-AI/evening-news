@@ -122,7 +122,7 @@ func main() {
 	}
 	if len(os.Args) > 1 && os.Args[1] == "topic-shadow-report" {
 		if err := topicShadowReport(os.Args[2:], os.Stdout); err != nil {
-			log.Print("topic shadow report unavailable")
+			log.Print("topic shadow report unavailable: ", err)
 			os.Exit(1)
 		}
 		return

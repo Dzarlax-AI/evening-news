@@ -3,6 +3,7 @@ package topicshadow
 import (
 	"context"
 	"fmt"
+	"regexp"
 	"strings"
 	"time"
 	"unicode"
@@ -31,7 +32,8 @@ const (
 	maxCardTextBytes    = 512
 	maxFacts            = 40
 	maxFactBytes        = 2048
-	maxExcerpts         = 48
+	maxExcerpts         = maxChoices - 1
+	topicChoicePrefix   = "topic:"
 	maxExcerptBytes     = 1024
 )
 
@@ -78,6 +80,7 @@ type NoveltyResult struct {
 	Disagreement         string
 	ConcreteStatusChange bool
 	SubjectCandidate     bool
+	EventAt              time.Time
 	EvidenceExcerptID    string
 	EvidenceSpan         string
 	Confidence           float64
@@ -214,7 +217,7 @@ func matchEvidenceQuestion(excerpts []articleExcerpt) ChoiceQuestion {
 func matchDecisionQuestion(candidates []TopicCard) ChoiceQuestion {
 	choices := make([]ChoiceOption, 0, len(candidates)+2)
 	for _, card := range candidates {
-		choices = append(choices, ChoiceOption{Value: "topic:" + card.ID, Description: cardDescription(card)})
+		choices = append(choices, ChoiceOption{Value: topicChoicePrefix + card.ID, Description: cardDescription(card)})
 	}
 	choices = append(choices,
 		ChoiceOption{Value: MatchOutcomeNewCandidate, Description: "A distinct recurring subject merits a new topic candidate; the article itself is not an authoritative confirmation."},
@@ -235,7 +238,7 @@ func finishMatch(article ArticleInput, candidates []TopicCard, excerpts []articl
 		return MatchResult{}, &DecisionsError{Code: "invalid_response"}
 	}
 	out.EvidenceExcerptID, out.EvidenceSpan = excerpt.id, excerpt.text
-	if selected.Choice == MatchOutcomeReview || confidence < otherConfidenceThreshold {
+	if selected.Choice == MatchOutcomeReview || confidence < otherConfidenceThreshold || answerConfidence(evidence) < otherConfidenceThreshold {
 		return out, nil
 	}
 	if hasAmbiguousReferent(articleText(article)) {
@@ -245,10 +248,10 @@ func finishMatch(article ArticleInput, candidates []TopicCard, excerpts []articl
 		out.Outcome = MatchOutcomeNewCandidate
 		return out, nil
 	}
-	if !strings.HasPrefix(selected.Choice, "topic:") {
+	if !strings.HasPrefix(selected.Choice, topicChoicePrefix) {
 		return MatchResult{}, &DecisionsError{Code: "invalid_response"}
 	}
-	id := strings.TrimPrefix(selected.Choice, "topic:")
+	id := strings.TrimPrefix(selected.Choice, topicChoicePrefix)
 	for _, card := range candidates {
 		if card.ID == id {
 			out.Margin = choiceMargin(selected)
@@ -266,28 +269,28 @@ func isAnchoredMatch(article ArticleInput, evidence string, card TopicCard) bool
 	if containsExactAlias(evidence, card) {
 		return true
 	}
-	if hasCorrection(articleText(article)) {
+	if hasCorrection(article.Title) || hasCorrection(article.SerbianTitle) || hasCorrection(evidence) {
 		return false
 	}
 	return hasConservativePhraseOverlap(evidence, card)
 }
 
 func hasCorrection(text string) bool {
-	lower := strings.ToLower(text)
-	for _, phrase := range []string{"не подтвержден", "не одобрен", "не открыт", "не завершен", "не подписан", "не принят"} {
+	lower := strings.ReplaceAll(strings.ToLower(text), "ё", "е")
+	for _, phrase := range []string{
+		"не подтвержден", "не одобрен", "не открыт", "не завершен", "не подписан", "не принят",
+		"not confirmed", "not approved", "not opened", "not completed", "not signed", "not adopted",
+		"nije potvrđ", "nije potvrd", "nije odobren", "није потврђ", "није одобрен",
+	} {
 		if strings.Contains(lower, phrase) {
 			return true
 		}
 	}
 	words := strings.FieldsFunc(lower, func(r rune) bool { return !unicode.IsLetter(r) && !unicode.IsDigit(r) })
-	markers := map[string]bool{
-		"not": true, "no": true, "never": true, "false": true, "wrong": true, "incorrect": true,
-		"deny": true, "denies": true, "denied": true, "correction": true, "actually": true, "instead": true,
-		"нет": true, "неверно": true, "ошибка": true, "опроверг": true, "опровергает": true,
-		"опровергнута": true, "опровергнут": true, "опровергнуто": true,
-	}
 	for _, word := range words {
-		if markers[word] {
+		switch word {
+		case "deny", "denies", "denied", "correction", "неверно", "опроверг", "опровергает",
+			"опровергнута", "опровергнут", "опровергнуто", "demanti", "demantovao", "деманти":
 			return true
 		}
 	}
@@ -296,22 +299,19 @@ func hasCorrection(text string) bool {
 
 func hasConservativePhraseOverlap(evidence string, card TopicCard) bool {
 	evidenceTerms := tokenize(evidence)
-	cardTerms := make(map[string]struct{})
 	for _, phrase := range append([]string{card.Title}, card.Aliases...) {
-		for term := range tokenize(phrase) {
-			cardTerms[term] = struct{}{}
+		cardTerms := tokenize(phrase)
+		shared := 0
+		for term := range cardTerms {
+			if _, found := evidenceTerms[term]; found {
+				shared++
+			}
+		}
+		if shared >= 2 && shared*2 >= len(cardTerms) {
+			return true
 		}
 	}
-	if len(cardTerms) < 2 {
-		return false
-	}
-	shared := 0
-	for term := range cardTerms {
-		if _, found := evidenceTerms[term]; found {
-			shared++
-		}
-	}
-	return shared >= 2 && shared*2 >= len(cardTerms)
+	return false
 }
 
 func addUsage(left, right TokenUsage) TokenUsage {
@@ -393,12 +393,20 @@ func (c Classifier) Novelty(ctx context.Context, article ArticleInput, card Topi
 	}
 	evidenceChoices = append(evidenceChoices, ChoiceOption{Value: "review", Description: "No supplied excerpt supports the judgment."})
 	questions := []ChoiceQuestion{
-		{Name: "update", Instructions: "Classify whether this article adds a material update, useful context, repeats a known fact, or needs review. Do not equate a new publication with a new event or state.", Choices: updateChoices},
+		{Name: "update", Instructions: "Classify whether this article adds a material update, useful context, repeats a known fact, or needs review. A rewording, translation, or syndicated copy of a supplied fact is a repeat. A new publication alone does not change the topic state.", Choices: updateChoices},
 		{Name: "disagreement", Instructions: "Independently judge whether the article materially disagrees with any supplied fact. With no facts, choose no.", Choices: disagreementChoices},
 		{Name: "official_change", Instructions: "Independently mark yes only when a concrete official state change is explicitly stated as having occurred, not merely proposed, expected, alleged, or planned.", Choices: changeChoices},
 		{Name: "subject_kind", Instructions: "Classify whether the subject merits its own topic candidate or is an ordinary event/fact. A concrete event alone does not make a candidate.", Choices: subjectChoices},
 		{Name: "evidence", Instructions: "Choose the single numbered excerpt that most directly supports these judgments, or review if none does.", Choices: evidenceChoices},
 	}
+	dateChoices := eventDateChoices(excerpts)
+	if len(dateChoices) > 1 {
+		questions = append(questions, ChoiceQuestion{
+			Name: "event_date", Instructions: "Choose a listed date only when the evidence explicitly gives it as the date the main event occurred. Ignore publication dates and future plans. Otherwise choose unknown.",
+			Choices: dateChoices,
+		})
+	}
+
 	result, err := c.Client.Decide(ctx, input, questions)
 	if err != nil {
 		return NoveltyResult{}, err
@@ -438,8 +446,39 @@ func (c Classifier) Novelty(ctx context.Context, article ArticleInput, card Topi
 	if update.Choice == NoveltyOutcomeMaterialUpdate && (confidence < matchConfidenceThreshold || out.Margin < 0.5) {
 		return out, nil
 	}
+	if answer, ok := answerByName(result, "event_date"); ok {
+		out.ProbabilityJudgments["event_date"] = answer.Probabilities
+		if answerConfidence(answer) >= matchConfidenceThreshold {
+			for _, date := range isoEventDate.FindAllString(excerpt.text, -1) {
+				if date == answer.Choice {
+					out.EventAt, _ = time.Parse(time.DateOnly, date)
+					break
+				}
+			}
+		}
+	}
+
 	out.Outcome = update.Choice
 	return out, nil
+}
+
+var isoEventDate = regexp.MustCompile(`\b[0-9]{4}-[0-9]{2}-[0-9]{2}\b`)
+
+func eventDateChoices(excerpts []articleExcerpt) []ChoiceOption {
+	choices := []ChoiceOption{{Value: "unknown", Description: "No explicit date for the main event."}}
+	seen := make(map[string]bool)
+	for _, excerpt := range excerpts {
+		for _, date := range isoEventDate.FindAllString(excerpt.text, -1) {
+			if len(choices) == maxChoices {
+				return choices
+			}
+			if _, err := time.Parse(time.DateOnly, date); err == nil && !seen[date] {
+				choices = append(choices, ChoiceOption{Value: date, Description: date})
+				seen[date] = true
+			}
+		}
+	}
+	return choices
 }
 
 func validateArticle(a ArticleInput) error {
@@ -460,7 +499,7 @@ func validateCards(cards []TopicCard) error {
 	seen := map[string]bool{}
 	total := 0
 	for _, card := range cards {
-		if strings.TrimSpace(card.ID) == "" || len(card.ID) > 128 || strings.TrimSpace(card.Title) == "" || len(card.Title) > maxCardTextBytes || len(card.Aliases) > 24 || len(card.Context) > 400 || seen[card.ID] {
+		if strings.TrimSpace(card.ID) == "" || len(card.ID) > maxChoiceValueBytes-len(topicChoicePrefix) || strings.TrimSpace(card.Title) == "" || len(card.Title) > maxCardTextBytes || len(card.Aliases) > 24 || len(card.Context) > 400 || seen[card.ID] {
 			return &DecisionsError{Code: "invalid_request"}
 		}
 		seen[card.ID] = true
@@ -576,15 +615,22 @@ func cardDescription(card TopicCard) string {
 }
 
 func containsExactAlias(text string, card TopicCard) bool {
-	text = strings.ToLower(text)
+	text = " " + literalPhrase(text) + " "
 	values := append([]string{card.Title}, card.Aliases...)
 	for _, value := range values {
-		value = strings.ToLower(strings.TrimSpace(value))
-		if value != "" && strings.Contains(text, value) {
+		value = literalPhrase(value)
+		if value != "" && strings.Contains(text, " "+value+" ") {
 			return true
 		}
 	}
 	return false
+}
+
+func literalPhrase(text string) string {
+	words := strings.FieldsFunc(strings.ToLower(text), func(r rune) bool {
+		return !unicode.IsLetter(r) && !unicode.IsDigit(r) && !unicode.IsMark(r)
+	})
+	return strings.Join(words, " ")
 }
 
 func hasAmbiguousReferent(text string) bool {

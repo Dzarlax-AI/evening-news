@@ -97,3 +97,18 @@ func TestRankCandidatesStableTiesAndNoMutation(t *testing.T) {
 		t.Fatal("returned cards must not alias candidate alias storage")
 	}
 }
+
+func TestRankCandidatesDoesNotReserveIDForFutureCard(t *testing.T) {
+	asOf := time.Date(2026, 11, 25, 12, 0, 0, 0, time.UTC)
+	card := TopicCard{ID: "rail", Title: "Železnica"}
+	cards := []CandidateTopic{
+		{Card: card, LastMaterialAt: asOf.Add(time.Hour)},
+		{Card: card, LastMaterialAt: asOf},
+	}
+	for _, title := range []string{"Железница", "Zheleznica"} {
+		got := RankCandidates(ArticleInput{Title: title}, cards, asOf, 8)
+		if len(got) != 1 || got[0].ID != card.ID {
+			t.Fatalf("%s: eligible rail card missing", title)
+		}
+	}
+}

@@ -7,6 +7,7 @@ import (
 	"time"
 
 	"github.com/jackc/pgx/v5"
+	"github.com/jackc/pgx/v5/pgconn"
 	"github.com/jackc/pgx/v5/pgxpool"
 )
 
@@ -22,10 +23,11 @@ type Runner struct {
 }
 
 type PassReport struct {
-	Scanned   bool
-	Processed int
-	Reviewed  int
-	Deferred  bool
+	Scanned        bool
+	Processed      int
+	Reviewed       int
+	Deferred       bool
+	DeferredReason string
 }
 
 func (r Runner) RunPass(ctx context.Context, now time.Time, limit int) (PassReport, error) {
@@ -40,8 +42,13 @@ func (r Runner) RunPass(ctx context.Context, now time.Time, limit int) (PassRepo
 	ctx, cancel := context.WithTimeout(ctx, 12*time.Minute)
 	defer cancel()
 	acquired, err := r.acquire(ctx, now)
-	if err != nil || !acquired {
+	if err != nil {
 		return report, err
+	}
+	if !acquired {
+		report.Deferred = true
+		report.DeferredReason = "lease_busy"
+		return report, nil
 	}
 	defer func() {
 		cleanup, cancel := context.WithTimeout(context.WithoutCancel(ctx), 2*time.Second)
@@ -50,12 +57,33 @@ func (r Runner) RunPass(ctx context.Context, now time.Time, limit int) (PassRepo
 			WHERE policy_version=$1 AND lease_owner=$2`, r.Version, r.Owner)
 	}()
 
+	if r.replay {
+		saved, err := r.checkReplayCutoff(ctx, now)
+		if err != nil || saved {
+			report.Scanned = saved
+			return report, err
+		}
+	} else {
+		var exhausted bool
+		err = r.Pool.QueryRow(ctx, `SELECT api_day IS NOT DISTINCT FROM (clock_timestamp() AT TIME ZONE 'UTC')::date
+			AND api_requests >= $2 FROM topic_shadow_checkpoints WHERE policy_version=$1`,
+			r.Version, r.DailyRequestLimit).Scan(&exhausted)
+		if err != nil {
+			return report, err
+		}
+		if exhausted {
+			report.Deferred = true
+			report.DeferredReason = "daily_request_limit"
+			return report, r.freezeEditions(ctx, now)
+		}
+	}
+
 	report.Scanned, err = r.enqueue(ctx, now, limit)
 	if err != nil {
 		return report, err
 	}
 	for report.Processed < limit {
-		item, found, err := r.next(ctx, now)
+		item, found, err := r.next(ctx, now, r.retryTime(now))
 		if err != nil {
 			return report, err
 		}
@@ -65,10 +93,14 @@ func (r Runner) RunPass(ctx context.Context, now time.Time, limit int) (PassRepo
 		if err = r.expire(ctx, item.ReadyAt); err != nil {
 			return report, err
 		}
-		reviewed, err := r.evaluate(ctx, item)
+		reviewed, err := r.evaluate(ctx, item, now)
 		if err != nil {
-			if errors.Is(err, errDailyLimit) {
+			if errors.Is(err, errArticleBusy) || errors.Is(err, errDailyLimit) {
 				report.Deferred = true
+				report.DeferredReason = "article_busy"
+				if errors.Is(err, errDailyLimit) {
+					report.DeferredReason = "daily_request_limit"
+				}
 				break
 			}
 			var providerErr *DecisionsError
@@ -77,14 +109,16 @@ func (r Runner) RunPass(ctx context.Context, now time.Time, limit int) (PassRepo
 			}
 			if providerErr.StatusCode == 401 || providerErr.StatusCode == 403 {
 				report.Deferred = true
+				report.DeferredReason = "provider_authentication"
 				break
 			}
-			terminal, saveErr := r.deferArticle(ctx, item, now, providerErr)
+			terminal, saveErr := r.deferArticle(ctx, item, r.retryTime(now), providerErr)
 			if saveErr != nil {
 				return report, saveErr
 			}
 			if !terminal {
 				report.Deferred = true
+				report.DeferredReason = "provider_retry"
 				break
 			}
 			reviewed = true
@@ -101,6 +135,9 @@ func (r Runner) RunPass(ctx context.Context, now time.Time, limit int) (PassRepo
 		return report, err
 	}
 	report.Deferred = report.Deferred || pending || !report.Scanned
+	if report.Deferred && report.DeferredReason == "" {
+		report.DeferredReason = "pending_input"
+	}
 	if !report.Deferred {
 		if err = r.expire(ctx, now); err != nil {
 			return report, err
@@ -111,22 +148,43 @@ func (r Runner) RunPass(ctx context.Context, now time.Time, limit int) (PassRepo
 			return report, nil
 		}
 		return report, r.fenced(ctx, func(tx pgx.Tx) error {
-			return freezeCutoff(ctx, tx, r.Version, now)
+			if err := freezeCutoff(ctx, tx, r.Version, now); err != nil {
+				return err
+			}
+			_, err := tx.Exec(ctx, `UPDATE topic_shadow_checkpoints SET replay_in_progress_at=NULL WHERE policy_version=$1`, r.Version)
+			return err
 		})
 	}
 	return report, r.freezeEditions(ctx, now)
 }
 
-type budgetedDecisions struct{ runner Runner }
+func (r Runner) retryTime(cutoff time.Time) time.Time {
+	if r.replay {
+		return time.Now().UTC()
+	}
+	return cutoff
+}
+
+type budgetedDecisions struct {
+	runner Runner
+	cutoff time.Time
+}
 
 func (b budgetedDecisions) Decide(ctx context.Context, input string, questions []ChoiceQuestion) (DecisionsResult, error) {
+	if _, err := marshalDecisionsRequest(input, questions); err != nil {
+		return DecisionsResult{}, err
+	}
 	r := b.runner
+	var replayCutoff *time.Time
+	if r.replay {
+		replayCutoff = &b.cutoff
+	}
 	err := r.fenced(ctx, func(tx pgx.Tx) error {
-		tag, err := tx.Exec(ctx, `WITH daily AS (SELECT (clock_timestamp() AT TIME ZONE 'UTC')::date AS today)
+		tag, err := tx.Exec(ctx, `WITH daily AS (SELECT (coalesce($3::timestamptz,clock_timestamp()) AT TIME ZONE 'UTC')::date AS today)
 			UPDATE topic_shadow_checkpoints SET api_day=daily.today,
 			api_requests=CASE WHEN api_day=daily.today THEN api_requests+1 ELSE 1 END
 			FROM daily WHERE policy_version=$1 AND (api_day IS DISTINCT FROM daily.today OR api_requests < $2)`,
-			r.Version, r.DailyRequestLimit)
+			r.Version, r.DailyRequestLimit, replayCutoff)
 		if err == nil && tag.RowsAffected() == 0 {
 			return errDailyLimit
 		}
@@ -140,10 +198,13 @@ func (b budgetedDecisions) Decide(ctx context.Context, input string, questions [
 	return r.Client.Decide(requestCtx, input, questions)
 }
 
-func (r Runner) evaluate(ctx context.Context, item queuedArticle) (bool, error) {
+func (r Runner) evaluate(ctx context.Context, item queuedArticle, cutoff time.Time) (bool, error) {
 	var current bool
-	if err := r.Pool.QueryRow(ctx, `SELECT EXISTS (SELECT 1 FROM topic_shadow_inputs
-		WHERE article_id=$1 AND claim_token=$2)`, item.ArticleID, item.Claim).Scan(&current); err != nil {
+	if err := r.fenced(ctx, func(tx pgx.Tx) error {
+		var err error
+		current, err = r.current(ctx, tx, item)
+		return err
+	}); err != nil {
 		return false, err
 	}
 	if !current {
@@ -155,14 +216,10 @@ func (r Runner) evaluate(ctx context.Context, item queuedArticle) (bool, error) 
 	}
 	candidates := make([]CandidateTopic, 0, len(topics))
 	for _, t := range topics {
-		at := t.State.LastMaterialAvailableAt
-		if at.IsZero() {
-			at = t.State.FirstAvailableAt
-		}
-		candidates = append(candidates, CandidateTopic{Card: t.TopicCard, Status: t.State.Status, LastMaterialAt: at})
+		candidates = append(candidates, CandidateTopic{Card: t.TopicCard, Status: t.status, LastMaterialAt: t.activity})
 	}
 	ranked := RankCandidates(item.ArticleInput, candidates, item.ReadyAt, 8)
-	classifier := Classifier{Client: budgetedDecisions{runner: r}}
+	classifier := Classifier{Client: budgetedDecisions{runner: r, cutoff: cutoff}}
 	match, err := classifier.Match(ctx, item.ArticleInput, ranked)
 	if err != nil {
 		return false, err
@@ -174,7 +231,7 @@ func (r Runner) evaluate(ctx context.Context, item queuedArticle) (bool, error) 
 	if match.Outcome == MatchOutcomeMatch {
 		for _, known := range topics {
 			if known.ID == match.TopicID {
-				topic = known
+				topic = known.shadowTopic
 				break
 			}
 		}
@@ -186,9 +243,9 @@ func (r Runner) evaluate(ctx context.Context, item queuedArticle) (bool, error) 
 		if item.PublishedAt != nil && !item.PublishedAt.After(item.ReadyAt) {
 			sourceAt = *item.PublishedAt
 		}
-		card := TopicCard{ID: item.Claim, Title: item.Title, Context: truncateUTF8(item.Summary, 400)}
+		card := TopicCard{ID: item.Claim, Title: truncateUTF8(item.Title, maxCardTextBytes), Context: truncateUTF8(item.Summary, 400)}
 		if item.SerbianTitle != "" && item.SerbianTitle != item.Title {
-			card.Aliases = []string{item.SerbianTitle}
+			card.Aliases = []string{truncateUTF8(item.SerbianTitle, maxCardTextBytes)}
 		}
 		topic = shadowTopic{TopicCard: card,
 			FirstSourceAt: sourceAt,
@@ -232,7 +289,10 @@ func (r Runner) finish(ctx context.Context, item queuedArticle, topic shadowTopi
 			}
 		}
 		var topicID any
-		if status == "accepted" {
+		if status == "accepted" && topic.Revision == 0 &&
+			(!novelty.SubjectCandidate || novelty.Outcome != NoveltyOutcomeMaterialUpdate) {
+			report["topic_skipped"] = "no_material_topic"
+		} else if status == "accepted" {
 			topicID = topic.ID
 			fact := novelty.EvidenceSpan
 			if fact == "" {
@@ -244,7 +304,7 @@ func (r Runner) finish(ctx context.Context, item queuedArticle, topic shadowTopi
 			report["fact"] = fact
 			alreadyCounted := false
 			if err := tx.QueryRow(ctx, `SELECT EXISTS (SELECT 1 FROM topic_shadow_decisions WHERE policy_version=$1
-				AND topic_id=$2 AND article_id=$3 AND state='accepted' AND decision->>'novelty'='material_update')`,
+				AND topic_id=$2 AND article_id=$3 AND state='accepted' AND `+appliedMaterial+`)`,
 				r.Version, topic.ID, item.ArticleID).Scan(&alreadyCounted); err != nil {
 				return err
 			}
@@ -256,12 +316,32 @@ func (r Runner) finish(ctx context.Context, item queuedArticle, topic shadowTopi
 			if item.PublishedAt != nil && !item.PublishedAt.After(item.ReadyAt) && item.PublishedAt.Before(topic.FirstSourceAt) {
 				topic.FirstSourceAt = *item.PublishedAt
 			}
+			independent := 1
+			var sources []string
+			if item.SourceID != nil {
+				sources = []string{strconv.FormatInt(*item.SourceID, 10)}
+			}
+			if material {
+				repeat, distinctSource, err := r.compareMaterial(ctx, tx, topic.ID, item, fact)
+				if err != nil {
+					return err
+				}
+				material = !repeat
+				if distinctSource {
+					independent = 2
+				}
+			}
+			eventAt := novelty.EventAt
+			if eventAt.After(item.ReadyAt) {
+				eventAt = time.Time{}
+			}
 			next := ApplyLifecycle(topic.State, LifecycleDecision{
-				CandidateID: topic.ID, AvailableAt: item.ReadyAt, FactID: strconv.FormatInt(item.ArticleID, 10),
-				SourceIDs: []string{strconv.FormatInt(item.ArticleID, 10)}, MaterialUpdate: material,
+				CandidateID: topic.ID, AvailableAt: item.ReadyAt, EventAt: eventAt,
+				FactID: strconv.FormatInt(item.ArticleID, 10), SourceIDs: sources, MaterialUpdate: material,
 				Repeat: novelty.Outcome == NoveltyOutcomeRepeat, Context: novelty.Outcome == NoveltyOutcomeContext,
-				ConcreteStatusChange: novelty.ConcreteStatusChange, IndependentMaterialCount: topic.State.MaterialCount + 1,
+				ConcreteStatusChange: novelty.ConcreteStatusChange, IndependentMaterialCount: independent,
 			}, DefaultQuietAfter)
+			report["material_applied"] = next.State.MaterialCount > topic.State.MaterialCount
 			if err := r.persistTopic(ctx, tx, topic, next, &item, recordedAt); err != nil {
 				return err
 			}
@@ -300,7 +380,7 @@ func (r Runner) expire(ctx context.Context, at time.Time) error {
 }
 
 func (r Runner) deferArticle(ctx context.Context, item queuedArticle, now time.Time, failure *DecisionsError) (bool, error) {
-	retryable := failure.StatusCode == 0 || failure.StatusCode == 429 || failure.StatusCode >= 500
+	retryable := (failure.StatusCode == 0 && failure.Code == "transport") || failure.StatusCode == 429 || failure.StatusCode >= 500
 	if !retryable || (item.Attempts >= 2 && failure.StatusCode != 429) {
 		return true, r.finish(ctx, item, shadowTopic{}, MatchResult{}, NoveltyResult{}, "review")
 	}
@@ -326,4 +406,30 @@ func (r Runner) recordedAt(available time.Time) time.Time {
 		return available.UTC()
 	}
 	return time.Now().UTC()
+}
+
+// PassErrorCode describes a pass failure without exposing database diagnostics.
+func PassErrorCode(err error) string {
+	var pgErr *pgconn.PgError
+	switch {
+	case errors.Is(err, context.DeadlineExceeded):
+		return "deadline"
+	case errors.Is(err, context.Canceled):
+		return "cancelled"
+	case errors.Is(err, errLeaseLost):
+		return "lease_lost"
+	case errors.As(err, &pgErr):
+		switch pgErr.Code {
+		case "42501":
+			return "database_permission"
+		case "42P01", "42703":
+			return "database_schema"
+		case "40001", "40P01":
+			return "database_transaction"
+		default:
+			return "database_error"
+		}
+	default:
+		return "pass_error"
+	}
 }

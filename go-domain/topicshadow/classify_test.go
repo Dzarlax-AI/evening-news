@@ -197,3 +197,69 @@ func TestClassifierRejectsInvalidResponseAndOversizedInputs(t *testing.T) {
 		t.Fatalf("oversized article should be rejected: %v", err)
 	}
 }
+
+func TestManyExcerptChoicesValidateBeforeBudgetReservation(t *testing.T) {
+	a := ArticleInput{Title: "Belgrade bridge opened", Summary: strings.Repeat("One sentence. ", 64)}
+	excerpts := makeExcerpts(a)
+	options := matchEvidenceQuestion(excerpts)
+	if got := len(options.Choices); got != maxChoices {
+		t.Fatalf("evidence options = %d, want %d", got, maxChoices)
+	}
+	if _, err := marshalDecisionsRequest(formatArticle(a, excerpts), []ChoiceQuestion{options}); err != nil {
+		t.Fatal(err)
+	}
+	options.Choices = append(options.Choices, ChoiceOption{Value: "overflow", Description: "One extra option"})
+	// A nil database would panic if validation tried to reserve a request.
+	_, err := (budgetedDecisions{}).Decide(context.Background(), "input", []ChoiceQuestion{options})
+	if failure, ok := err.(*DecisionsError); !ok || failure.Code != "invalid_request" {
+		t.Fatalf("expected invalid request before using the budget: %v", err)
+	}
+}
+
+func TestMatchAnchorUsesOneLanguageAndTheSelectedExcerpt(t *testing.T) {
+	article := ArticleInput{ArticleID: 19, Title: "Белградский мост открылся для транспорта", Summary: "Пострадавших нет. No traffic restrictions apply."}
+	card := TopicCard{ID: "bridge-1", Title: "Белградский мост открылся для пешеходов",
+		Aliases: []string{"Beogradski most otvoren za pešake i bicikliste nakon duge obnove"}}
+	fake := &fakeDecisions{result: DecisionsResult{Model: DecisionsModel, Answers: []ChoiceAnswer{
+		ans("decision", "topic:bridge-1", .99), ans("evidence", "title_01", .98),
+	}}}
+	got, err := (Classifier{Client: fake}).Match(context.Background(), article, []TopicCard{card})
+	if err != nil || got.Outcome != MatchOutcomeMatch {
+		t.Fatalf("grounded update was rejected: %+v err=%v", got, err)
+	}
+	if normalizedPhrase("најавила железницу") != normalizedPhrase("najavila železnicu") {
+		t.Fatal("Serbian Cyrillic and Latin evidence normalized differently")
+	}
+}
+
+func TestCombinedMatchReviewsWeakEvidence(t *testing.T) {
+	article := ArticleInput{ArticleID: 81, Title: "Belgrade bridge opens"}
+	card := TopicCard{ID: "bridge", Title: article.Title}
+	client := &fakeDecisions{result: DecisionsResult{Answers: []ChoiceAnswer{
+		ans("decision", "topic:bridge", .99), ans("evidence", "title_01", .1),
+	}}}
+	got, err := (Classifier{Client: client}).Match(context.Background(), article, []TopicCard{card})
+	if err != nil || got.Outcome != MatchOutcomeReview {
+		t.Fatalf("weak evidence should go to review: outcome=%s err=%v", got.Outcome, err)
+	}
+}
+
+func TestExactAliasRequiresWholeWords(t *testing.T) {
+	card := TopicCard{Title: "Iran", Aliases: []string{"Старый мост"}}
+	if containsExactAlias("Tirana was not approved as the venue", card) ||
+		!containsExactAlias("Iran: venue rejected", card) ||
+		!containsExactAlias("Вариант: Старый мост.", card) {
+		t.Fatal("alias matching should use complete words and phrases")
+	}
+}
+
+func TestMatchRejectsOversizedEncodedTopicIDBeforeCalling(t *testing.T) {
+	article := ArticleInput{ArticleID: 82, Title: "Belgrade bridge opens"}
+	card := TopicCard{ID: strings.Repeat("x", 124), Title: article.Title}
+	client := &fakeDecisions{result: DecisionsResult{Answers: []ChoiceAnswer{ans("evidence", "title_01", .99)}}}
+	_, err := (Classifier{Client: client}).MatchSplit(context.Background(), article, []TopicCard{card})
+	var decisionErr *DecisionsError
+	if !asDecisionsError(err, &decisionErr) || decisionErr.Code != "invalid_request" || client.calls != 0 {
+		t.Fatalf("expected invalid request before any call: calls=%d err=%v", client.calls, err)
+	}
+}

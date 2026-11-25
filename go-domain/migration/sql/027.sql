@@ -33,6 +33,9 @@ CREATE TABLE IF NOT EXISTS __SCHEMA_Q__.topic_shadow_checkpoints (
     CHECK ((lease_owner IS NULL) = (lease_until IS NULL))
 );
 
+ALTER TABLE __SCHEMA_Q__.topic_shadow_checkpoints
+    ADD COLUMN IF NOT EXISTS replay_in_progress_at timestamptz;
+
 CREATE TABLE IF NOT EXISTS __SCHEMA_Q__.topic_shadow_topics (
     policy_version text NOT NULL REFERENCES __SCHEMA_Q__.topic_shadow_checkpoints(policy_version),
     topic_id uuid NOT NULL,
@@ -76,6 +79,10 @@ CREATE TABLE IF NOT EXISTS __SCHEMA_Q__.topic_shadow_decisions (
 CREATE INDEX IF NOT EXISTS idx_topic_shadow_decisions_pending
     ON __SCHEMA_Q__.topic_shadow_decisions (policy_version, ready_at, article_id, claim_token)
     WHERE state IN ('queued', 'retry');
+
+CREATE INDEX IF NOT EXISTS idx_topic_shadow_decisions_topic
+    ON __SCHEMA_Q__.topic_shadow_decisions (policy_version, topic_id, ready_at DESC, article_id DESC, claim_token)
+    WHERE state = 'accepted' AND topic_id IS NOT NULL;
 
 CREATE TABLE IF NOT EXISTS __SCHEMA_Q__.topic_shadow_events (
     policy_version text NOT NULL,

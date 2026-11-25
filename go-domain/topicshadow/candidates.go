@@ -41,7 +41,6 @@ func RankCandidates(article ArticleInput, candidates []CandidateTopic, asOf time
 		if _, duplicate := seen[id]; duplicate {
 			continue
 		}
-		seen[id] = struct{}{}
 		if !topic.LastMaterialAt.IsZero() && (topic.LastMaterialAt.Before(cutoff) || topic.LastMaterialAt.After(asOf)) {
 			continue
 		}
@@ -49,6 +48,7 @@ func RankCandidates(article ArticleInput, candidates []CandidateTopic, asOf time
 		if score == 0 {
 			continue
 		}
+		seen[id] = struct{}{}
 		items = append(items, ranked{topic: topic, score: score})
 	}
 	sort.Slice(items, func(i, j int) bool {
@@ -146,8 +146,7 @@ func candidateScore(card TopicCard, articleTerms map[string]struct{}, articleTex
 
 func tokenize(text string) map[string]struct{} {
 	result := make(map[string]struct{})
-	for _, raw := range strings.Fields(normalizedPhrase(text)) {
-		term := conservativeStem(raw)
+	for _, term := range strings.Fields(normalizedPhrase(text)) {
 		if len([]rune(term)) < 3 || candidateStopWords[term] {
 			continue
 		}
@@ -203,11 +202,11 @@ func sortedKeys(values map[string]struct{}) []string {
 
 var candidateTransliteration = map[rune]string{
 	'а': "a", 'б': "b", 'в': "v", 'г': "g", 'д': "d", 'ђ': "dj", 'е': "e", 'ё': "yo",
-	'ж': "zh", 'з': "z", 'и': "i", 'й': "j", 'к': "k", 'л': "l", 'љ': "lj", 'м': "m",
+	'ж': "zh", 'з': "z", 'и': "i", 'й': "j", 'ј': "j", 'к': "k", 'л': "l", 'љ': "lj", 'м': "m",
 	'н': "n", 'њ': "nj", 'о': "o", 'п': "p", 'р': "r", 'с': "s", 'т': "t", 'ћ': "c",
 	'у': "u", 'ф': "f", 'х': "h", 'ц': "c", 'ч': "c", 'џ': "dz", 'ш': "s", 'щ': "shh",
 	'ы': "y", 'э': "e", 'ю': "yu", 'я': "ya", 'ъ': "", 'ь': "",
-	'č': "c", 'ć': "c", 'đ': "dj", 'š': "s", 'ž': "z",
+	'č': "c", 'ć': "c", 'đ': "dj", 'š': "s", 'ž': "zh",
 }
 
 var candidateStopWords = map[string]bool{

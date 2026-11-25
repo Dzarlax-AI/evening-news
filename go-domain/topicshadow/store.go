@@ -7,11 +7,13 @@ import (
 	"time"
 
 	"github.com/jackc/pgx/v5"
+	"github.com/jackc/pgx/v5/pgconn"
 )
 
 var (
-	errLeaseLost  = errors.New("topic shadow lease lost")
-	errDailyLimit = errors.New("topic shadow daily request limit reached")
+	errLeaseLost   = errors.New("topic shadow lease lost")
+	errDailyLimit  = errors.New("topic shadow daily request limit reached")
+	errArticleBusy = errors.New("topic shadow article busy")
 )
 
 type queuedArticle struct {
@@ -31,11 +33,18 @@ type shadowTopic struct {
 func (r Runner) acquire(ctx context.Context, now time.Time) (bool, error) {
 	tag, err := r.Pool.Exec(ctx, `INSERT INTO topic_shadow_checkpoints
 		(policy_version, started_at, scan_after, lease_owner, lease_until)
-		VALUES ($1,$2::timestamptz,$2::timestamptz - interval '30 days',$3,clock_timestamp() + interval '13 minutes')
+		VALUES ($1,$2,$3,$4,clock_timestamp() + interval '13 minutes')
 		ON CONFLICT (policy_version) DO UPDATE SET lease_owner=EXCLUDED.lease_owner,lease_until=EXCLUDED.lease_until
 		WHERE topic_shadow_checkpoints.lease_until IS NULL OR topic_shadow_checkpoints.lease_until <= clock_timestamp()`,
-		r.Version, now, r.Owner)
+		r.Version, now, scanStart(now, r.replay), r.Owner)
 	return err == nil && tag.RowsAffected() == 1, err
+}
+
+func scanStart(now time.Time, replay bool) time.Time {
+	if replay {
+		return now.AddDate(0, 0, -30)
+	}
+	return now
 }
 
 func (r Runner) fenced(ctx context.Context, action func(pgx.Tx) error) error {
@@ -65,11 +74,11 @@ func (r Runner) fenced(ctx context.Context, action func(pgx.Tx) error) error {
 func (r Runner) enqueue(ctx context.Context, cutoff time.Time, limit int) (bool, error) {
 	complete := false
 	err := r.fenced(ctx, func(tx pgx.Tx) error {
-		var after time.Time
+		var after, started time.Time
 		var article int64
 		var claim string
-		if err := tx.QueryRow(ctx, `SELECT scan_after,scan_article_id,scan_claim::text
-			FROM topic_shadow_checkpoints WHERE policy_version=$1`, r.Version).Scan(&after, &article, &claim); err != nil {
+		if err := tx.QueryRow(ctx, `SELECT scan_after,scan_article_id,scan_claim::text,started_at
+			FROM topic_shadow_checkpoints WHERE policy_version=$1`, r.Version).Scan(&after, &article, &claim, &started); err != nil {
 			return err
 		}
 		const projection = `SELECT i.article_id,i.claim_token::text,i.ready_at,i.source_id,left(i.title,240),left(i.summary,650),
@@ -79,10 +88,10 @@ func (r Runner) enqueue(ctx context.Context, cutoff time.Time, limit int) (bool,
 			var rows pgx.Rows
 			var err error
 			if reconciliation {
-				rows, err = tx.Query(ctx, projection+` WHERE ready_at >= $1::timestamptz - interval '1 day'
+				rows, err = tx.Query(ctx, projection+` WHERE ready_at >= $6 AND ready_at <= $7
 					AND (ready_at,article_id,claim_token) <= ($1,$2,$3::uuid)
 					AND NOT EXISTS (SELECT 1 FROM topic_shadow_decisions d WHERE d.policy_version=$4 AND d.article_id=i.article_id AND d.claim_token=i.claim_token)
-					ORDER BY ready_at,article_id,claim_token LIMIT $5`, after, article, claim, r.Version, limit+1)
+					ORDER BY ready_at,article_id,claim_token LIMIT $5`, after, article, claim, r.Version, limit+1, scanStart(started, r.replay), cutoff)
 			} else {
 				rows, err = tx.Query(ctx, projection+` WHERE (ready_at,article_id,claim_token) > ($1,$2,$3::uuid)
 					AND ready_at <= $4 ORDER BY ready_at,article_id,claim_token LIMIT $5`, after, article, claim, cutoff, limit+1)
@@ -125,14 +134,14 @@ func scanInput(row pgx.CollectableRow) (queuedArticle, error) {
 	return item, err
 }
 
-func (r Runner) next(ctx context.Context, now time.Time) (queuedArticle, bool, error) {
+func (r Runner) next(ctx context.Context, cutoff, retryClock time.Time) (queuedArticle, bool, error) {
 	var item queuedArticle
 	var nextAttempt *time.Time
 	var input json.RawMessage
 	err := r.Pool.QueryRow(ctx, `SELECT article_id,claim_token::text,ready_at,input,attempts,next_attempt_at
 		FROM topic_shadow_decisions WHERE policy_version=$1 AND state IN ('queued','retry') AND ready_at <= $2
-		ORDER BY ready_at,article_id,claim_token LIMIT 1`, r.Version, now).Scan(&item.ArticleID, &item.Claim, &item.ReadyAt, &input, &item.Attempts, &nextAttempt)
-	if errors.Is(err, pgx.ErrNoRows) || (err == nil && nextAttempt != nil && nextAttempt.After(now)) {
+		ORDER BY ready_at,article_id,claim_token LIMIT 1`, r.Version, cutoff).Scan(&item.ArticleID, &item.Claim, &item.ReadyAt, &input, &item.Attempts, &nextAttempt)
+	if errors.Is(err, pgx.ErrNoRows) || (err == nil && nextAttempt != nil && nextAttempt.After(retryClock)) {
 		return item, false, nil
 	}
 	if err != nil {
@@ -142,24 +151,56 @@ func (r Runner) next(ctx context.Context, now time.Time) (queuedArticle, bool, e
 	return item, err == nil, err
 }
 
-func (r Runner) topics(ctx context.Context, at time.Time) ([]shadowTopic, error) {
-	rows, err := r.Pool.Query(ctx, `SELECT topic_id::text,revision,state,card,first_source_at,first_available_at,
-		opened_at,last_material_at,quieted_at,material_count
-		FROM topic_shadow_topics WHERE policy_version=$1 AND coalesce(last_material_at,first_available_at) >= $2::timestamptz - interval '30 days'
-		AND first_available_at <= $2 ORDER BY coalesce(last_material_at,first_available_at) DESC,topic_id LIMIT 3000`, r.Version, at)
+// rankedTopic keeps the activity visible at the article's cutoff alongside
+// the current revision, which finish uses for the write fence.
+type rankedTopic struct {
+	shadowTopic
+	activity time.Time
+	status   LifecycleStatus
+}
+
+func (r Runner) topics(ctx context.Context, at time.Time) ([]rankedTopic, error) {
+	rows, err := r.Pool.Query(ctx, `SELECT t.topic_id::text,t.revision,t.state,t.card,t.first_source_at,t.first_available_at,
+		t.opened_at,t.last_material_at,t.quieted_at,t.material_count, activity.at,
+		CASE WHEN t.opened_at IS NULL OR t.opened_at > $2 THEN 'candidate'
+		     WHEN activity.at <= $2 - interval '168 hours' THEN 'dormant'
+		     ELSE 'active' END
+		FROM topic_shadow_topics t
+		LEFT JOIN LATERAL (
+			SELECT max(e.available_at) AS at FROM topic_shadow_events e
+			WHERE e.policy_version=t.policy_version AND e.topic_id=t.topic_id
+			  AND e.kind IN ('opened','updated','returned') AND e.available_at <= $2
+		) history ON t.last_material_at > $2
+		CROSS JOIN LATERAL (SELECT coalesce(
+			CASE WHEN t.last_material_at <= $2 THEN t.last_material_at ELSE history.at END,
+			t.first_available_at) AS at) activity
+		WHERE t.policy_version=$1 AND t.first_available_at <= $2
+		  AND coalesce(t.last_material_at,t.first_available_at) >= $2 - interval '30 days'
+		  AND activity.at >= $2 - interval '30 days'
+		ORDER BY activity.at DESC,t.topic_id LIMIT 3000`, r.Version, at)
 	if err != nil {
 		return nil, err
 	}
-	return pgx.CollectRows(rows, scanTopic)
+	return pgx.CollectRows(rows, func(row pgx.CollectableRow) (rankedTopic, error) {
+		var topic rankedTopic
+		var err error
+		topic.shadowTopic, err = scanTopicFields(row, &topic.activity, &topic.status)
+		return topic, err
+	})
 }
 
 func scanTopic(row pgx.CollectableRow) (shadowTopic, error) {
+	return scanTopicFields(row)
+}
+
+func scanTopicFields(row pgx.CollectableRow, extra ...any) (shadowTopic, error) {
 	var t shadowTopic
 	var status string
 	var card json.RawMessage
 	var opened, last, quieted *time.Time
-	err := row.Scan(&t.State.CandidateID, &t.Revision, &status, &card, &t.FirstSourceAt, &t.State.FirstAvailableAt,
-		&opened, &last, &quieted, &t.State.MaterialCount)
+	fields := []any{&t.State.CandidateID, &t.Revision, &status, &card, &t.FirstSourceAt, &t.State.FirstAvailableAt,
+		&opened, &last, &quieted, &t.State.MaterialCount}
+	err := row.Scan(append(fields, extra...)...)
 	if err == nil {
 		err = json.Unmarshal(card, &t.TopicCard)
 	}
@@ -177,11 +218,16 @@ func scanTopic(row pgx.CollectableRow) (shadowTopic, error) {
 	return t, err
 }
 
+// Old decisions predate the applied flag. Recover only historical decisions
+// that were not explicitly excluded by the late-arrival guard.
+const appliedMaterial = `coalesce((decision->>'material_applied')::boolean,
+	decision->>'novelty'='material_update' AND NOT (decision ? 'late_historical'))`
+
 func (r Runner) facts(ctx context.Context, topic string, item queuedArticle) ([]string, error) {
 	rows, err := r.Pool.Query(ctx, `SELECT coalesce(decision->>'fact','') FROM topic_shadow_decisions
-		WHERE policy_version=$1 AND topic_id=$2 AND state='accepted' AND ready_at <= $3
-		AND decision->>'novelty' = 'material_update' AND coalesce(decision->>'fact','') <> ''
-		ORDER BY ready_at DESC,article_id DESC LIMIT 24`, r.Version, topic, item.ReadyAt)
+		WHERE policy_version=$1 AND topic_id=$2 AND state='accepted' AND (ready_at,article_id,claim_token) < ($3,$4,$5::uuid)
+		AND `+appliedMaterial+` AND coalesce(decision->>'fact','') <> ''
+		ORDER BY ready_at DESC,article_id DESC LIMIT 24`, r.Version, topic, item.ReadyAt, item.ArticleID, item.Claim)
 	if err != nil {
 		return nil, err
 	}
@@ -205,6 +251,33 @@ func (r Runner) facts(ctx context.Context, topic string, item queuedArticle) ([]
 	return append(facts[:5], facts[best]), nil
 }
 
+func (r Runner) compareMaterial(ctx context.Context, tx pgx.Tx, topic string, item queuedArticle, fact string) (repeat, distinctSource bool, err error) {
+	rows, err := tx.Query(ctx, `SELECT decision->>'fact', (input->>'SourceID')::bigint
+		FROM topic_shadow_decisions
+		WHERE policy_version=$1 AND topic_id=$2 AND state='accepted' AND `+appliedMaterial+`
+		  AND ready_at BETWEEN $3::timestamptz - interval '30 days' AND $3
+		  AND coalesce(decision->>'fact','') <> ''`, r.Version, topic, item.ReadyAt)
+	if err != nil {
+		return false, false, err
+	}
+	defer rows.Close()
+	fingerprint := normalizedPhrase(fact)
+	for rows.Next() {
+		var known string
+		var source *int64
+		if err := rows.Scan(&known, &source); err != nil {
+			return false, false, err
+		}
+		if fingerprint != "" && fingerprint == normalizedPhrase(known) {
+			return true, false, nil
+		}
+		if source != nil && item.SourceID != nil && *source != *item.SourceID {
+			distinctSource = true
+		}
+	}
+	return false, distinctSource, rows.Err()
+}
+
 func (r Runner) current(ctx context.Context, tx pgx.Tx, item queuedArticle) (bool, error) {
 	var current bool
 	err := tx.QueryRow(ctx, `SELECT true FROM articles a
@@ -213,6 +286,10 @@ func (r Runner) current(ctx context.Context, tx pgx.Tx, item queuedArticle) (boo
 		) FOR SHARE OF a NOWAIT`, item.ArticleID, item.Claim).Scan(&current)
 	if errors.Is(err, pgx.ErrNoRows) {
 		return false, nil
+	}
+	var pgErr *pgconn.PgError
+	if errors.As(err, &pgErr) && pgErr.Code == "55P03" {
+		return false, errArticleBusy
 	}
 	return current, err
 }

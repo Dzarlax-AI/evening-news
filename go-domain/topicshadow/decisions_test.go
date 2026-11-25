@@ -157,3 +157,37 @@ func TestParseRetryAfterHTTPDate(t *testing.T) {
 		t.Fatalf("negative retry after=%s", got)
 	}
 }
+
+func TestDecideParsesTypedQuestionRefusal(t *testing.T) {
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		io.WriteString(w, `{"model":"gpt-6-luna","answers":[{"type":"choice","name":"topic","choice":"tech"},{"type":"refusal","name":"evidence"}],"usage":{"total_tokens":17}}`)
+	}))
+	defer srv.Close()
+	client := NewDecisionsClient("test", &http.Client{Transport: rewriteTransport{base: srv.Client().Transport, target: srv.URL}})
+	question := testQuestion()[0]
+	question.Name = "evidence"
+	result, err := client.Decide(context.Background(), "Synthetic article", append(testQuestion(), question))
+	if err != nil || result.Refusal == "" || result.Model != "gpt-6-luna" || result.Usage.TotalTokens != 17 {
+		t.Fatalf("expected typed refusal with usage: %+v err=%v", result, err)
+	}
+}
+
+func TestDecideDoesNotFollowRedirects(t *testing.T) {
+	redirected := make(chan struct{}, 1)
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if r.URL.Path == "/redirected" {
+			redirected <- struct{}{}
+			return
+		}
+		http.Redirect(w, r, "/redirected", http.StatusTemporaryRedirect)
+	}))
+	defer srv.Close()
+	shared := &http.Client{Transport: rewriteTransport{base: srv.Client().Transport, target: srv.URL}}
+	client := NewDecisionsClient("test", shared)
+	_, err := client.Decide(context.Background(), "Synthetic article", testQuestion())
+	var decisionErr *DecisionsError
+	if !asDecisionsError(err, &decisionErr) || decisionErr.StatusCode != http.StatusTemporaryRedirect ||
+		len(redirected) != 0 || shared.CheckRedirect != nil {
+		t.Fatalf("expected one request and unmodified shared client: err=%v", err)
+	}
+}

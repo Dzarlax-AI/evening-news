@@ -84,10 +84,7 @@ func topicShadowReport(args []string, out io.Writer) error {
 	if err := pool.Ping(ctx); err != nil {
 		return errors.New("database unavailable")
 	}
-	if err := topicshadow.WriteReport(ctx, pool, topicshadow.DefaultPolicyVersion, cutoff, out); err != nil {
-		return errors.New("report export failed")
-	}
-	return nil
+	return topicshadow.WriteReport(ctx, pool, topicshadow.DefaultPolicyVersion, cutoff, out)
 }
 
 // runTopicShadowLoop is intentionally isolated from the request server and
@@ -133,10 +130,13 @@ func runTopicShadowLoop(ctx context.Context, pool *pgxpool.Pool, owner string, c
 				Client: client, DailyRequestLimit: settings.dailyRequestLimit,
 			}
 			passCtx, cancel := context.WithTimeout(ctx, topicShadowTimeout)
-			_, err := runner.RunPass(passCtx, time.Now().UTC(), topicShadowBatch)
+			report, err := runner.RunPass(passCtx, time.Now().UTC(), topicShadowBatch)
 			cancel()
 			if err != nil && ctx.Err() == nil {
-				log.Print("topic shadow pass unavailable")
+				log.Printf("topic shadow pass unavailable: reason=%s", topicshadow.PassErrorCode(err))
+			} else if report.Deferred && ctx.Err() == nil {
+				log.Printf("topic shadow pass deferred: reason=%s processed=%d reviewed=%d scanned=%t",
+					report.DeferredReason, report.Processed, report.Reviewed, report.Scanned)
 			}
 		}
 	}

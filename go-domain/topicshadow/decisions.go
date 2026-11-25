@@ -15,13 +15,14 @@ import (
 )
 
 const (
-	decisionsEndpoint = "https://api.openai.com/v1/decisions"
-	DecisionsModel    = "gpt-6-luna"
-	maxInputBytes     = 64 << 10
-	maxQuestions      = 20
-	maxChoices        = 32
-	maxResponseBytes  = 1 << 20
-	maxRequestBytes   = 128 << 10
+	decisionsEndpoint   = "https://api.openai.com/v1/decisions"
+	DecisionsModel      = "gpt-6-luna"
+	maxInputBytes       = 64 << 10
+	maxQuestions        = 20
+	maxChoices          = 32
+	maxChoiceValueBytes = 128
+	maxResponseBytes    = 1 << 20
+	maxRequestBytes     = 128 << 10
 )
 
 var questionNamePattern = regexp.MustCompile(`^[a-zA-Z][a-zA-Z0-9_-]{0,63}$`)
@@ -89,7 +90,9 @@ func NewDecisionsClient(apiKey string, client *http.Client) *DecisionsClient {
 	if client == nil {
 		client = http.DefaultClient
 	}
-	return &DecisionsClient{apiKey: apiKey, http: client}
+	isolated := *client
+	isolated.CheckRedirect = func(*http.Request, []*http.Request) error { return http.ErrUseLastResponse }
+	return &DecisionsClient{apiKey: apiKey, http: &isolated}
 }
 
 // Decide makes exactly one HTTP request. Retry policy belongs to the caller.
@@ -97,36 +100,9 @@ func (c *DecisionsClient) Decide(ctx context.Context, input string, questions []
 	if c == nil || strings.TrimSpace(c.apiKey) == "" {
 		return DecisionsResult{}, &DecisionsError{Code: "configuration"}
 	}
-	if len(input) == 0 || len(input) > maxInputBytes || !utf8Valid(input) {
-		return DecisionsResult{}, &DecisionsError{Code: "invalid_request"}
-	}
-	if err := validateQuestions(questions); err != nil {
-		return DecisionsResult{}, err
-	}
-	payload := struct {
-		Model     string `json:"model"`
-		Input     string `json:"input"`
-		Questions []struct {
-			Type         string         `json:"type"`
-			Name         string         `json:"name"`
-			Instructions string         `json:"instructions"`
-			Choices      []ChoiceOption `json:"choices"`
-		} `json:"questions"`
-	}{Model: DecisionsModel, Input: input}
-	for _, q := range questions {
-		payload.Questions = append(payload.Questions, struct {
-			Type         string         `json:"type"`
-			Name         string         `json:"name"`
-			Instructions string         `json:"instructions"`
-			Choices      []ChoiceOption `json:"choices"`
-		}{Type: "choice", Name: q.Name, Instructions: q.Instructions, Choices: q.Choices})
-	}
-	body, err := json.Marshal(payload)
+	body, err := marshalDecisionsRequest(input, questions)
 	if err != nil {
-		return DecisionsResult{}, &DecisionsError{Code: "invalid_request"}
-	}
-	if len(body) > maxRequestBytes {
-		return DecisionsResult{}, &DecisionsError{Code: "invalid_request"}
+		return DecisionsResult{}, err
 	}
 	req, err := http.NewRequestWithContext(ctx, http.MethodPost, decisionsEndpoint, bytes.NewReader(body))
 	if err != nil {
@@ -179,17 +155,20 @@ func (c *DecisionsClient) Decide(ctx context.Context, input string, questions []
 	}
 	seen := make(map[string]bool, len(questions))
 	for _, answer := range wire.Answers {
-		if answer.Refusal != "" {
-			result.Refusal = answer.Refusal
-			return result, nil
+		if known[answer.Name] == nil || seen[answer.Name] {
+			return DecisionsResult{}, &DecisionsError{Code: "invalid_response"}
 		}
-		if answer.Type != "choice" || known[answer.Name] == nil || seen[answer.Name] || !known[answer.Name][answer.Choice] {
+		seen[answer.Name] = true
+		if answer.Type == "refusal" || answer.Refusal != "" {
+			result.Refusal = "question_refused"
+			continue
+		}
+		if answer.Type != "choice" || !known[answer.Name][answer.Choice] {
 			return DecisionsResult{}, &DecisionsError{Code: "invalid_response"}
 		}
 		if answer.Confidence != nil && (*answer.Confidence < 0 || *answer.Confidence > 1) {
 			return DecisionsResult{}, &DecisionsError{Code: "invalid_response"}
 		}
-		seen[answer.Name] = true
 		probabilityValues := make(map[string]bool, len(answer.Probabilities))
 		for _, p := range answer.Probabilities {
 			if !known[answer.Name][p.Value] || probabilityValues[p.Value] || p.Probability < 0 || p.Probability > 1 {
@@ -205,6 +184,41 @@ func (c *DecisionsClient) Decide(ctx context.Context, input string, questions []
 	return result, nil
 }
 
+func marshalDecisionsRequest(input string, questions []ChoiceQuestion) ([]byte, error) {
+	if len(input) == 0 || len(input) > maxInputBytes || !utf8Valid(input) {
+		return nil, &DecisionsError{Code: "invalid_request"}
+	}
+	if err := validateQuestions(questions); err != nil {
+		return nil, err
+	}
+	payload := struct {
+		Model     string `json:"model"`
+		Input     string `json:"input"`
+		Questions []struct {
+			Type         string         `json:"type"`
+			Name         string         `json:"name"`
+			Instructions string         `json:"instructions"`
+			Choices      []ChoiceOption `json:"choices"`
+		} `json:"questions"`
+	}{Model: DecisionsModel, Input: input}
+	for _, q := range questions {
+		payload.Questions = append(payload.Questions, struct {
+			Type         string         `json:"type"`
+			Name         string         `json:"name"`
+			Instructions string         `json:"instructions"`
+			Choices      []ChoiceOption `json:"choices"`
+		}{Type: "choice", Name: q.Name, Instructions: q.Instructions, Choices: q.Choices})
+	}
+	body, err := json.Marshal(payload)
+	if err != nil {
+		return nil, &DecisionsError{Code: "invalid_request"}
+	}
+	if len(body) > maxRequestBytes {
+		return nil, &DecisionsError{Code: "invalid_request"}
+	}
+	return body, nil
+}
+
 func validateQuestions(questions []ChoiceQuestion) error {
 	if len(questions) == 0 || len(questions) > maxQuestions {
 		return &DecisionsError{Code: "invalid_request"}
@@ -217,7 +231,7 @@ func validateQuestions(questions []ChoiceQuestion) error {
 		seen[q.Name] = true
 		values := map[string]bool{}
 		for _, choice := range q.Choices {
-			if strings.TrimSpace(choice.Value) == "" || len(choice.Value) > 128 || strings.TrimSpace(choice.Description) == "" || len(choice.Description) > 2048 || values[choice.Value] {
+			if strings.TrimSpace(choice.Value) == "" || len(choice.Value) > maxChoiceValueBytes || strings.TrimSpace(choice.Description) == "" || len(choice.Description) > 2048 || values[choice.Value] {
 				return &DecisionsError{Code: "invalid_request"}
 			}
 			values[choice.Value] = true

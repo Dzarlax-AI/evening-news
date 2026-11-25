@@ -45,13 +45,14 @@ type LifecycleDecision struct {
 // LifecycleJournalEntry records one actual transition. EventAt is retained
 // independently from AvailableAt so late facts do not move historical timing.
 type LifecycleJournalEntry struct {
-	Kind        string
-	CandidateID string
-	AvailableAt time.Time
-	EventAt     time.Time
-	FactID      string
-	SourceIDs   []string
-	Reason      string
+	Kind          string
+	CandidateID   string
+	AvailableAt   time.Time
+	EventAt       time.Time
+	FactID        string
+	SourceIDs     []string
+	Reason        string
+	MaterialCount int `json:",omitempty"`
 }
 
 type LifecycleResult struct {
@@ -96,7 +97,9 @@ func ApplyLifecycle(state LifecycleState, d LifecycleDecision, quietAfter time.D
 			reason = "multiple_materials"
 		}
 		result.State = state
-		result.Journal = []LifecycleJournalEntry{journalEntry("opened", d, reason)}
+		opened := journalEntry("opened", d, reason)
+		opened.MaterialCount = state.MaterialCount
+		result.Journal = []LifecycleJournalEntry{opened}
 		return result
 	}
 
