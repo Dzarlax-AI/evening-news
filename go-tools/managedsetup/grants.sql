@@ -212,3 +212,9 @@ GRANT EXECUTE ON FUNCTION news.enqueue_serbian_digest_retry() TO news_worker_run
 -- Domain owns Viber receipts; only the worker can invoke admission.
 GRANT SELECT, INSERT, UPDATE ON news.viber_publication_requests, news.viber_test_receipts, news.viber_digest_deliveries, news.viber_digest_parts, news.viber_channel_leases TO news_domain_runtime;
 GRANT EXECUTE ON FUNCTION news.enqueue_viber_digest_delivery() TO news_worker_runtime;
+
+-- Topic shadow can read its input projection and append its own observations.
+GRANT SELECT ON news.topic_shadow_inputs TO news_domain_runtime;
+GRANT SELECT, INSERT, UPDATE ON news.topic_shadow_checkpoints, news.topic_shadow_topics,
+ news.topic_shadow_decisions TO news_domain_runtime;
+GRANT SELECT, INSERT ON news.topic_shadow_events, news.topic_shadow_editions TO news_domain_runtime;
