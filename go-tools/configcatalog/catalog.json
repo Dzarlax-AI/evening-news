@@ -175,7 +175,7 @@
     "migration": "preserve effective value and consuming role during adoption; verify managed parity before switching",
     "precedence": "selected role manifest takes precedence without environment fallback; legacy environment when no file is selected; component default if absent",
     "sources": [
-      "go-domain/cmd/news-domain/main.go:269",
+      "go-domain/cmd/news-domain/main.go:276",
       "go-domain/cmd/news-domain/runtime_config.go:25",
       "go-domain/cmd/news-migrate/main.go:26"
     ],
@@ -197,7 +197,7 @@
     "sources": [
       "go-background/cmd/news-background/runtime_config.go:13",
       "go-background/cmd/news-background/runtime_config.go:14",
-      "go-domain/cmd/news-domain/main.go:161",
+      "go-domain/cmd/news-domain/main.go:168",
       "go-domain/cmd/news-domain/runtime_config.go:25",
       "go-domain/cmd/news-domain/runtime_config.go:26",
       "go-processing/runner/runner.go:96"
@@ -529,7 +529,7 @@
     "migration": "preserve effective value and consuming role during adoption; verify managed parity before switching",
     "precedence": "selected role manifest takes precedence without environment fallback; legacy environment when no file is selected; component default if absent",
     "sources": [
-      "go-domain/cmd/news-domain/main.go:275",
+      "go-domain/cmd/news-domain/main.go:282",
       "go-domain/cmd/news-domain/runtime_config.go:25",
       "go-web/internal/config/config.go:146",
       "go-web/internal/config/config.go:52"
@@ -1340,7 +1340,7 @@
     "migration": "preserve effective value and consuming role during adoption; verify managed parity before switching",
     "precedence": "selected role manifest takes precedence without environment fallback; legacy environment when no file is selected; component default if absent",
     "sources": [
-      "go-domain/cmd/news-domain/main.go:165",
+      "go-domain/cmd/news-domain/main.go:172",
       "go-domain/cmd/news-domain/runtime_config.go:25"
     ],
     "class": "runtime",
@@ -1396,7 +1396,7 @@
     "precedence": "selected role manifest takes precedence without environment fallback; legacy environment when no file is selected; component default if absent",
     "sources": [
       "go-background/cmd/news-background/runtime_config.go:13",
-      "go-domain/cmd/news-domain/main.go:412",
+      "go-domain/cmd/news-domain/main.go:436",
       "go-domain/cmd/news-domain/runtime_config.go:25",
       "go-processing/runner/runner.go:122"
     ],
@@ -1499,7 +1499,7 @@
     "sources": [
       "go-background/cmd/news-background/runtime_config.go:13",
       "go-background/cmd/news-background/runtime_config.go:14",
-      "go-domain/cmd/news-domain/main.go:253",
+      "go-domain/cmd/news-domain/main.go:260",
       "go-domain/cmd/news-domain/runtime_config.go:25",
       "go-domain/cmd/news-domain/runtime_config.go:26",
       "go-ingestion/runner/runner.go:47",
@@ -1542,7 +1542,7 @@
     "precedence": "selected role manifest takes precedence without environment fallback; legacy environment when no file is selected; component default if absent",
     "sources": [
       "go-background/cmd/news-background/runtime_config.go:13",
-      "go-domain/cmd/news-domain/main.go:253",
+      "go-domain/cmd/news-domain/main.go:260",
       "go-domain/cmd/news-domain/runtime_config.go:25",
       "go-domain/cmd/news-domain/runtime_config.go:26",
       "go-ingestion/runner/runner.go:46",
@@ -1566,7 +1566,7 @@
     "precedence": "selected role manifest takes precedence without environment fallback; legacy environment when no file is selected; component default if absent",
     "sources": [
       "go-background/cmd/news-background/runtime_config.go:13",
-      "go-domain/cmd/news-domain/main.go:400",
+      "go-domain/cmd/news-domain/main.go:424",
       "go-domain/cmd/news-domain/runtime_config.go:25",
       "go-processing/runner/runner.go:121"
     ],
@@ -2070,7 +2070,7 @@
     "migration": "preserve effective value and consuming role during adoption; verify managed parity before switching",
     "precedence": "selected role manifest takes precedence without environment fallback; legacy environment when no file is selected; component default if absent",
     "sources": [
-      "go-domain/cmd/news-domain/main.go:329",
+      "go-domain/cmd/news-domain/main.go:346",
       "go-domain/cmd/news-domain/runtime_config.go:25"
     ],
     "class": "runtime",
@@ -2109,7 +2109,7 @@
     "precedence": "selected role manifest takes precedence without environment fallback; legacy environment when no file is selected; component default if absent",
     "sources": [
       "go-domain/cmd/news-domain/healthcheck.go:31",
-      "go-domain/cmd/news-domain/main.go:333",
+      "go-domain/cmd/news-domain/main.go:350",
       "go-domain/cmd/news-domain/runtime_config.go:25"
     ],
     "class": "runtime",
@@ -2151,7 +2151,7 @@
       "go-background/cmd/news-background/runtime_config.go:14",
       "go-background/internal/config/config.go:81",
       "go-domain/cmd/news-domain/healthcheck.go:27",
-      "go-domain/cmd/news-domain/main.go:161",
+      "go-domain/cmd/news-domain/main.go:168",
       "go-domain/cmd/news-domain/runtime_config.go:25",
       "go-domain/cmd/news-domain/runtime_config.go:26",
       "go-ingestion/runner/runner.go:49",
@@ -2959,6 +2959,44 @@
     ],
     "class": "fixture_only",
     "managed_roles": []
+  },
+  {
+    "key": "NEWS_TOPIC_SHADOW_DAILY_REQUEST_LIMIT",
+    "owner": "domain",
+    "type": "number",
+    "default": "minimum 2 required when NEWS_TOPIC_SHADOW_ENABLED=true",
+    "secret": false,
+    "store": "legacy domain environment; managed role manifest for domain",
+    "reload": "process startup; restart or recreate after changing environment",
+    "migration": "preserve the explicit daily request ceiling when enabled; leave unset while disabled",
+    "precedence": "selected role manifest takes precedence without environment fallback; legacy environment when no file is selected; minimum 2 required when enabled",
+    "sources": [
+      "go-domain/cmd/news-domain/topic_shadow_loop.go:42",
+      "go-domain/cmd/news-domain/runtime_config.go:25"
+    ],
+    "class": "runtime",
+    "managed_roles": [
+      "domain"
+    ]
+  },
+  {
+    "key": "NEWS_TOPIC_SHADOW_ENABLED",
+    "owner": "domain",
+    "type": "boolean",
+    "default": "false",
+    "secret": false,
+    "store": "legacy domain environment; managed role manifest for domain",
+    "reload": "process startup; restart or recreate after changing environment",
+    "migration": "preserve the disabled default; enabling requests an explicit daily request ceiling",
+    "precedence": "selected role manifest takes precedence without environment fallback; legacy environment when no file is selected; disabled when absent",
+    "sources": [
+      "go-domain/cmd/news-domain/topic_shadow_loop.go:31",
+      "go-domain/cmd/news-domain/runtime_config.go:25"
+    ],
+    "class": "runtime",
+    "managed_roles": [
+      "domain"
+    ]
   },
   {
     "key": "NEWS_WORKER_IP",
@@ -4173,7 +4211,7 @@
     "migration": "preserve effective value and consuming role during adoption; verify managed parity before switching",
     "precedence": "selected role manifest takes precedence without environment fallback; legacy environment when no file is selected; component default if absent",
     "sources": [
-      "go-domain/cmd/news-domain/main.go:303",
+      "go-domain/cmd/news-domain/main.go:288",
       "go-domain/cmd/news-domain/runtime_config.go:25",
       "go-domain/cmd/news-domain/runtime_config.go:26",
       "go-web/internal/backend/backend.go:113",

@@ -120,6 +120,13 @@ func main() {
 	if len(os.Args) > 1 && os.Args[1] == "incident-log-filter" {
 		os.Exit(incidentLogFilter(os.Args[2:], os.Stdin, os.Stdout))
 	}
+	if len(os.Args) > 1 && os.Args[1] == "topic-shadow-report" {
+		if err := topicShadowReport(os.Args[2:], os.Stdout); err != nil {
+			log.Print("topic shadow report unavailable: ", err)
+			os.Exit(1)
+		}
+		return
+	}
 	if len(os.Args) == 2 && os.Args[1] == "healthcheck" {
 		if err := healthcheck(); err != nil {
 			log.Print("healthcheck failed")
@@ -286,6 +293,16 @@ func run() error {
 	} else {
 		close(pushDone)
 	}
+	topicShadowDone := make(chan struct{})
+	topicShadowSettings := topicShadowSettingsFrom(source.get)
+	go func() {
+		defer close(topicShadowDone)
+		standaloneKey := ""
+		if !source.managed {
+			standaloneKey = source.get("OPENAI_API_KEY")
+		}
+		runTopicShadowLoop(appCtx, pool, instance, credentials, standaloneKey, guard, topicShadowSettings)
+	}()
 	mux.HandleFunc("GET /internal/v1/runtime-configuration", func(w http.ResponseWriter, r *http.Request) {
 		expected := "Bearer " + jobToken
 		given := r.Header.Get("Authorization")
@@ -376,6 +393,13 @@ loop:
 	case <-time.After(5 * time.Second):
 		abandoned = true
 		return errors.New("APNs delivery loop failed to drain")
+	}
+	select {
+	case <-topicShadowDone:
+	case <-time.After(15 * time.Second):
+		// Keep the singleton guard until a cancelled shadow pass has stopped.
+		abandoned = true
+		return errors.New("topic shadow loop failed to drain")
 	}
 	select {
 	case <-done:

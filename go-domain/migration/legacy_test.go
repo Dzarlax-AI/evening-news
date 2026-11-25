@@ -121,7 +121,7 @@ func TestBootstrapAndRerun(t *testing.T) {
 		id, _ := item["id"].(string)
 		migrationIDs[id] = true
 	}
-	requiredMigrations := []string{"009_background_jobs", "010_scheduled_job_metadata", "012_article_ingestion", "013_article_processing", "014_editorial_digest", "015_digest_delivery", "016_managed_configuration", "017_localizations", "018_editorial_localizations", "019_serbian_digest_retry", "020_viber_digest_delivery", "021_apns_digest_push", "022_article_dedup_trial", "023_telegram_source_context", "024_article_media_evidence", "025_feed_duplicate_predecessors", "026_scheduled_digest_retry"}
+	requiredMigrations := []string{"009_background_jobs", "010_scheduled_job_metadata", "012_article_ingestion", "013_article_processing", "014_editorial_digest", "015_digest_delivery", "016_managed_configuration", "017_localizations", "018_editorial_localizations", "019_serbian_digest_retry", "020_viber_digest_delivery", "021_apns_digest_push", "022_article_dedup_trial", "023_telegram_source_context", "024_article_media_evidence", "025_feed_duplicate_predecessors", "026_scheduled_digest_retry", "027_topic_shadow"}
 	for _, id := range requiredMigrations {
 		if !migrationIDs[id] {
 			t.Fatalf("required migration %s did not run", id)

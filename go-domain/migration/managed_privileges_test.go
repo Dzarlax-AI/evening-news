@@ -90,8 +90,8 @@ func TestManagedRolePrivileges(t *testing.T) {
 		}
 	}
 	for name, queries := range map[string][]string{
-		"news_web_runtime":        {"SELECT * FROM article_dedup_observations", "SELECT * FROM viber_test_receipts", "SELECT * FROM viber_digest_deliveries", "SELECT * FROM push_installations", "SELECT * FROM push_deliveries", "SELECT enqueue_viber_digest_delivery()", "SELECT * FROM integration_credentials", "UPDATE background_worker_status SET generation=99", "UPDATE articles SET content='changed'"},
-		"news_domain_runtime":     {"SELECT * FROM article_feed_duplicate_predecessors", "SELECT * FROM managed_admin", "SELECT * FROM setup_tokens", "UPDATE background_worker_status SET generation=99", "UPDATE background_jobs SET state='failed'", "DELETE FROM articles"},
+		"news_web_runtime":        {"SELECT * FROM topic_shadow_inputs", "SELECT * FROM topic_shadow_events", "SELECT * FROM article_dedup_observations", "SELECT * FROM viber_test_receipts", "SELECT * FROM viber_digest_deliveries", "SELECT * FROM push_installations", "SELECT * FROM push_deliveries", "SELECT enqueue_viber_digest_delivery()", "SELECT * FROM integration_credentials", "UPDATE background_worker_status SET generation=99", "UPDATE articles SET content='changed'"},
+		"news_domain_runtime":     {"UPDATE topic_shadow_editions SET complete=true", "DELETE FROM topic_shadow_events", "SELECT * FROM article_feed_duplicate_predecessors", "SELECT * FROM managed_admin", "SELECT * FROM setup_tokens", "UPDATE background_worker_status SET generation=99", "UPDATE background_jobs SET state='failed'", "DELETE FROM articles"},
 		"news_worker_runtime":     {"SELECT * FROM viber_test_receipts", "SELECT * FROM viber_digest_parts", "SELECT * FROM integration_credentials", "SELECT * FROM managed_admin", "UPDATE articles SET content='changed'"},
 		"news_execution_runtime":  {"SELECT * FROM viber_digest_parts", "SELECT enqueue_viber_digest_delivery()", "SELECT * FROM integration_credentials", "UPDATE background_worker_status SET generation=99", "INSERT INTO articles(title,url) VALUES('x','https://fixture.invalid')"},
 		"news_ingestion_runtime":  {"SELECT * FROM article_dedup_observations", "UPDATE articles SET completed_processing_claim=NULL", "SELECT * FROM integration_credentials", "UPDATE background_jobs SET state='failed'", "UPDATE articles SET summary='changed'"},
@@ -112,6 +112,63 @@ func TestManagedRolePrivileges(t *testing.T) {
 			})
 		}
 	}
+
+	t.Run("domain/topic shadow isolation", func(t *testing.T) {
+		tx, err := pool.Begin(ctx)
+		if err != nil {
+			t.Fatal(err)
+		}
+		defer tx.Rollback(ctx)
+		if _, err = tx.Exec(ctx, `INSERT INTO background_jobs(id,kind,payload,idempotency_key,state)
+			VALUES ('10000000-0000-4000-8000-000000000001','news_processing','{}','topic-shadow-fixture','succeeded');
+			INSERT INTO article_processing_runs(id,job_id,attempt_generation,envelope_sha256,owner_id,
+				worker_generation,backend_pid,executor_instance_id,deadline_at)
+			VALUES ('10000000-0000-4000-8000-000000000002','10000000-0000-4000-8000-000000000001',1,
+				repeat('a',64),'10000000-0000-4000-8000-000000000003',1,1,
+				'10000000-0000-4000-8000-000000000004','2026-11-26');
+			INSERT INTO articles(id,title,summary,url,summary_processed,processing_state,is_advertisement,
+				completed_processing_claim)
+			VALUES (21,'Eligible','A public summary','https://fixture.invalid/a',true,'completed',false,
+				'10000000-0000-4000-8000-000000000021'),
+				(22,'Advertisement','Example ad','https://fixture.invalid/b',true,'completed',true,
+				'10000000-0000-4000-8000-000000000022'),
+				(23,'Reprocessed','New version','https://fixture.invalid/c',true,'completed',false,
+				'10000000-0000-4000-8000-000000000023'),
+				(24,'Legacy','Missing receipt','https://fixture.invalid/d',true,'completed',false,NULL);
+			INSERT INTO article_processing_items(run_id,article_id,article_attempt,input_fingerprint,claim_token,state,updated_at)
+			VALUES ('10000000-0000-4000-8000-000000000002',21,1,repeat('a',64),
+				'10000000-0000-4000-8000-000000000021','completed','2026-11-25 10:11:12'),
+				('10000000-0000-4000-8000-000000000002',22,1,repeat('a',64),
+				'10000000-0000-4000-8000-000000000022','completed','2026-11-25 10:11:12'),
+				('10000000-0000-4000-8000-000000000002',23,1,repeat('a',64),
+				'10000000-0000-4000-8000-000000000099','completed','2026-11-25 10:11:12');
+			INSERT INTO article_localizations(article_id, locale, title, summary, input_fingerprint,
+				prompt_version, model, status, updated_at)
+			VALUES (21,'sr-Latn','Later','Later localization',repeat('a',64),'v1','fixture','completed',
+				'2026-11-25 11:00:00')`); err != nil {
+			t.Fatal("seed topic shadow fixture failed:", err)
+		}
+		if _, err = tx.Exec(ctx, "SET LOCAL ROLE "+ident(roles["news_domain_runtime"])); err != nil {
+			t.Fatal(err)
+		}
+		var id, total int
+		var correctTime, hiddenTranslation bool
+		err = tx.QueryRow(ctx, `SELECT article_id, count(*) OVER (),
+			ready_at = '2026-11-25 10:11:12Z'::timestamptz, serbian_summary IS NULL
+			FROM topic_shadow_inputs LIMIT 1`).Scan(&id, &total, &correctTime, &hiddenTranslation)
+		if err != nil || id != 21 || total != 1 || !correctTime || !hiddenTranslation {
+			t.Fatalf("unexpected topic shadow input: id=%d count=%d ready=%v hidden_translation=%v err=%v",
+				id, total, correctTime, hiddenTranslation, err)
+		}
+		if _, err = tx.Exec(ctx, `INSERT INTO topic_shadow_checkpoints(policy_version,scan_after)
+			VALUES ('test-v1','2026-11-25 10:00:00Z');
+			INSERT INTO topic_shadow_decisions(policy_version,article_id,claim_token,ready_at,input)
+			SELECT 'test-v1',article_id,claim_token,ready_at,'{}' FROM topic_shadow_inputs;
+			INSERT INTO topic_shadow_editions(policy_version,cutoff_at,revision,created_at,complete,snapshot)
+			VALUES ('test-v1','2026-11-25 12:00:00Z',1,now(),true,'{}')`); err != nil {
+			t.Fatal("domain role could not persist isolated observations:", err)
+		}
+	})
 
 	t.Run("processing/dedup", func(t *testing.T) {
 		tx, err := pool.Begin(ctx)
