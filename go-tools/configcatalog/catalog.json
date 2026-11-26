@@ -2971,7 +2971,7 @@
     "migration": "preserve the explicit daily request ceiling when enabled; leave unset while disabled",
     "precedence": "selected role manifest takes precedence without environment fallback; legacy environment when no file is selected; minimum 2 required when enabled",
     "sources": [
-      "go-domain/cmd/news-domain/topic_shadow_loop.go:43",
+      "go-domain/cmd/news-domain/topic_shadow_loop.go:44",
       "go-domain/cmd/news-domain/runtime_config.go:25"
     ],
     "class": "runtime",
@@ -2990,7 +2990,7 @@
     "migration": "preserve the disabled default; enabling requests an explicit daily request ceiling",
     "precedence": "selected role manifest takes precedence without environment fallback; legacy environment when no file is selected; disabled when absent",
     "sources": [
-      "go-domain/cmd/news-domain/topic_shadow_loop.go:32",
+      "go-domain/cmd/news-domain/topic_shadow_loop.go:33",
       "go-domain/cmd/news-domain/runtime_config.go:25"
     ],
     "class": "runtime",
@@ -3027,7 +3027,7 @@
     "migration": "opt in for the semantic shadow pilot",
     "precedence": "selected role manifest, or standalone environment",
     "sources": [
-      "go-domain/cmd/news-domain/topic_shadow_loop.go:49"
+      "go-domain/cmd/news-domain/topic_shadow_loop.go:50"
     ],
     "class": "runtime",
     "managed_roles": [
