@@ -3,6 +3,7 @@ package topicshadow
 import (
 	"context"
 	"errors"
+	"slices"
 	"time"
 
 	"github.com/jackc/pgx/v5"
@@ -22,12 +23,15 @@ type IndexProgress struct {
 
 var ErrEmbeddingBudget = errors.New("topic shadow embedding daily limit reached")
 
-func (c IndexCheckpoint) ReserveEmbedding(ctx context.Context) error {
+// ReserveEmbedding charges each input, so batching keeps the existing daily
+// allowance for article embeddings independent of the number of HTTP calls.
+func (c IndexCheckpoint) ReserveEmbedding(ctx context.Context, count int) error {
 	tag, err := c.Pool.Exec(ctx, `WITH current_day AS (SELECT (clock_timestamp() AT TIME ZONE 'UTC')::date AS d)
 		UPDATE topic_shadow_semantic_index SET embedding_day=d,
-		embedding_requests=CASE WHEN embedding_day=d THEN embedding_requests+1 ELSE 1 END
+		embedding_requests=CASE WHEN embedding_day=d THEN embedding_requests+$4::integer ELSE $4::integer END
 		FROM current_day WHERE policy_version=$1 AND collection=$2
-		AND (embedding_day IS DISTINCT FROM d OR embedding_requests < $3)`, c.Policy, c.Collection, c.EmbeddingLimit)
+		AND $4::integer BETWEEN 1 AND $3::integer
+		AND (embedding_day IS DISTINCT FROM d OR embedding_requests <= $3::integer-$4::integer)`, c.Policy, c.Collection, c.EmbeddingLimit, count)
 	if err == nil && tag.RowsAffected() != 1 {
 		return ErrEmbeddingBudget
 	}
@@ -44,7 +48,7 @@ func (c IndexCheckpoint) RecordEmbeddingTokens(ctx context.Context, tokens int) 
 // recording the cursor only after successful writes makes retries idempotent.
 func (c IndexCheckpoint) Advance(ctx context.Context, index *SemanticIndex, limit int) (IndexProgress, error) {
 	var progress IndexProgress
-	if c.Pool == nil || c.EmbeddingLimit < 1 || c.Owner == "" || limit < 1 || limit > 50 {
+	if c.Pool == nil || c.EmbeddingLimit < 1 || c.Owner == "" || limit < 1 || limit > 250 {
 		return progress, errors.New("invalid semantic checkpoint configuration")
 	}
 	if err := index.CheckCollection(ctx); err != nil {
@@ -102,30 +106,44 @@ func (c IndexCheckpoint) Advance(ctx context.Context, index *SemanticIndex, limi
 			return progress, err
 		}
 	}
-	for _, article := range articles {
-		available := progress.StartedAt
-		if article.ReadyAt != nil {
-			available = *article.ReadyAt
+	save := func(count int, complete bool) error {
+		tag, err := c.Pool.Exec(ctx, `UPDATE topic_shadow_semantic_index SET cursor_fetched_at=$4,cursor_article_id=$5,
+			scanned_articles=scanned_articles+$6,completed_at=CASE WHEN $7 THEN clock_timestamp() END
+			WHERE policy_version=$1 AND collection=$2 AND lease_owner=$3 AND lease_until>clock_timestamp()`,
+			c.Policy, c.Collection, c.Owner, after.FetchedAt, after.ArticleID, count, complete)
+		if err == nil && tag.RowsAffected() != 1 {
+			return errLeaseLost
 		}
-		claim := semanticSnapshotClaim
-		if article.Claim != nil && article.ReadyAt != nil {
-			claim = *article.Claim
+		return err
+	}
+	for chunk := range slices.Chunk(articles, min(semanticEmbeddingBatchSize, c.EmbeddingLimit)) {
+		batch := make([]IndexedArticle, 0, len(chunk))
+		for _, article := range chunk {
+			available := progress.StartedAt
+			claim := semanticSnapshotClaim
+			if article.ReadyAt != nil {
+				available = *article.ReadyAt
+				if article.Claim != nil {
+					claim = *article.Claim
+				}
+			}
+			batch = append(batch, IndexedArticle{ArticleID: article.ArticleID, Claim: claim,
+				Title: truncateUTF8(article.Title, 1024), Summary: truncateUTF8(article.Summary, 12000),
+				FetchedAt: article.FetchedAt, AvailableAt: available})
 		}
-		if _, err = index.Index(ctx, IndexedArticle{ArticleID: article.ArticleID, Claim: claim, Title: truncateUTF8(article.Title, 1024), Summary: truncateUTF8(article.Summary, 12000),
-			FetchedAt: article.FetchedAt, AvailableAt: available}); err != nil {
+		if _, err = index.indexBatch(ctx, batch); err != nil {
 			return progress, err
 		}
-		after = BackfillCursor{FetchedAt: article.FetchedAt, ArticleID: article.ArticleID}
+		last := chunk[len(chunk)-1]
+		after = BackfillCursor{FetchedAt: last.FetchedAt, ArticleID: last.ArticleID}
+		if err = save(len(chunk), false); err != nil {
+			return progress, err
+		}
 	}
-	complete := len(articles) < limit
-	tag, err = c.Pool.Exec(ctx, `UPDATE topic_shadow_semantic_index SET cursor_fetched_at=$4,cursor_article_id=$5,
-		scanned_articles=scanned_articles+$6,completed_at=CASE WHEN $7 THEN clock_timestamp() END
-		WHERE policy_version=$1 AND collection=$2 AND lease_owner=$3 AND lease_until>clock_timestamp()`,
-		c.Policy, c.Collection, c.Owner, after.FetchedAt, after.ArticleID, len(articles), complete)
-	if err == nil && tag.RowsAffected() != 1 {
-		err = errLeaseLost
+	if len(articles) < limit {
+		err = save(0, true)
+		progress.Complete = err == nil
 	}
-	progress.Complete = err == nil && complete
 	return progress, err
 }
 

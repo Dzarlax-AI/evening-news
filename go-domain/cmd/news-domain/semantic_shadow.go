@@ -16,6 +16,8 @@ import (
 	"github.com/jackc/pgx/v5/pgxpool"
 )
 
+const semanticArchivePassSize = 250
+
 type semanticShadowSettings struct {
 	url, collection, qdrantKeyFile string
 	embeddingDailyLimit            int
@@ -76,7 +78,7 @@ func (s semanticShadowSettings) run(ctx context.Context, runner topicshadow.Runn
 	if err != nil {
 		return err
 	}
-	progress, err := checkpoint.Advance(ctx, index, topicShadowBatch)
+	progress, err := checkpoint.Advance(ctx, index, semanticArchivePassSize)
 	if err != nil || !progress.Complete {
 		return err
 	}
@@ -135,7 +137,9 @@ func initializeSemanticCollection() error {
 	}
 	index, err := topicshadow.NewSemanticIndex(topicshadow.SemanticIndexConfig{QdrantURL: settings.url,
 		OpenAIURL: "https://api.openai.com/v1", Collection: settings.collection, QdrantKey: qdrantKey, OpenAIKey: key,
-		ReserveEmbedding: func(context.Context) error { return errors.New("embedding disabled during collection initialization") }})
+		ReserveEmbedding: func(context.Context, int) error {
+			return errors.New("embedding disabled during collection initialization")
+		}})
 	if err != nil {
 		return err
 	}

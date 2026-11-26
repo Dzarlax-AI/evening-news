@@ -19,13 +19,14 @@ import (
 
 const semanticModel = "text-embedding-3-small"
 const semanticDimensions = 1536
+const semanticEmbeddingBatchSize = 32
 
 var semanticCollectionName = regexp.MustCompile(`^news_topic_shadow_[a-z0-9_]{1,48}$`)
 
 type SemanticIndexConfig struct {
 	QdrantURL, OpenAIURL, Collection, QdrantKey, OpenAIKey string
 	HTTPClient                                             *http.Client
-	ReserveEmbedding                                       func(context.Context) error
+	ReserveEmbedding                                       func(context.Context, int) error
 	RecordEmbeddingTokens                                  func(context.Context, int) error
 }
 type IndexedArticle struct {
@@ -149,72 +150,121 @@ func semanticID(a IndexedArticle) string {
 
 // PointID identifies the exact article claim and indexed text version.
 func (a IndexedArticle) PointID() string { return semanticID(a) }
-func (s *SemanticIndex) embed(ctx context.Context, a IndexedArticle) ([]float64, error) {
-	if e := s.cfg.ReserveEmbedding(ctx); e != nil {
-		return nil, e
+func (s *SemanticIndex) embed(ctx context.Context, texts []string) ([][]float64, error) {
+	if err := s.cfg.ReserveEmbedding(ctx, len(texts)); err != nil {
+		return nil, err
 	}
-	var r struct {
+	var result struct {
 		Data []struct {
+			Index     *int      `json:"index"`
 			Embedding []float64 `json:"embedding"`
 		} `json:"data"`
 		Usage struct {
 			TotalTokens int `json:"total_tokens"`
 		} `json:"usage"`
 	}
-	e := s.call(ctx, http.MethodPost, s.cfg.OpenAIURL+"/embeddings", s.cfg.OpenAIKey, map[string]any{"model": semanticModel, "input": semanticText(a), "dimensions": semanticDimensions}, &r)
-	if e != nil {
-		return nil, e
+	var input any = texts
+	if len(texts) == 1 {
+		input = texts[0]
 	}
-	if len(r.Data) != 1 || len(r.Data[0].Embedding) != semanticDimensions {
-		return nil, errors.New("invalid embedding dimensions")
+	if err := s.call(ctx, http.MethodPost, s.cfg.OpenAIURL+"/embeddings", s.cfg.OpenAIKey,
+		map[string]any{"model": semanticModel, "input": input, "dimensions": semanticDimensions}, &result); err != nil {
+		return nil, err
 	}
-	if s.cfg.RecordEmbeddingTokens != nil && r.Usage.TotalTokens > 0 {
-		if err := s.cfg.RecordEmbeddingTokens(ctx, r.Usage.TotalTokens); err != nil {
+	if s.cfg.RecordEmbeddingTokens != nil && result.Usage.TotalTokens > 0 {
+		if err := s.cfg.RecordEmbeddingTokens(ctx, result.Usage.TotalTokens); err != nil {
 			return nil, err
 		}
 	}
-	return r.Data[0].Embedding, nil
+	if len(result.Data) != len(texts) {
+		return nil, errors.New("invalid embedding count")
+	}
+	vectors := make([][]float64, len(texts))
+	for _, entry := range result.Data {
+		if entry.Index == nil || *entry.Index < 0 || *entry.Index >= len(vectors) ||
+			vectors[*entry.Index] != nil || len(entry.Embedding) != semanticDimensions {
+			return nil, errors.New("invalid embedding position or dimensions")
+		}
+		vectors[*entry.Index] = entry.Embedding
+	}
+	return vectors, nil
+}
+
+type semanticPointPayload struct {
+	ArticleID   int64  `json:"article_id"`
+	Claim       string `json:"claim"`
+	Model       string `json:"model"`
+	Dimensions  int    `json:"dimensions"`
+	FetchedAt   string `json:"fetched_at"`
+	AvailableAt string `json:"available_at"`
+	TextHash    string `json:"text_sha256"`
+}
+
+type semanticPoint struct {
+	ID      string               `json:"id"`
+	Payload semanticPointPayload `json:"payload"`
+	Vector  []float64            `json:"vector,omitempty"`
 }
 
 // Index uses immutable version-specific IDs. The caller must filter candidates
 // against authoritative current News versions and remove obsolete points later.
-func (s *SemanticIndex) Index(ctx context.Context, a IndexedArticle) (bool, error) {
-	if e := validateSemantic(a); e != nil {
-		return false, e
+func (s *SemanticIndex) Index(ctx context.Context, article IndexedArticle) (bool, error) {
+	return s.indexBatch(ctx, []IndexedArticle{article})
+}
+
+func (s *SemanticIndex) indexBatch(ctx context.Context, articles []IndexedArticle) (bool, error) {
+	if len(articles) == 0 || len(articles) > semanticEmbeddingBatchSize {
+		return false, errors.New("invalid embedding batch size")
 	}
-	id := semanticID(a)
+	ids := make([]string, 0, len(articles))
+	points := make([]semanticPoint, 0, len(articles))
+	for _, article := range articles {
+		if err := validateSemantic(article); err != nil {
+			return false, err
+		}
+		id := article.PointID()
+		hash := sha256.Sum256([]byte(semanticText(article)))
+		ids = append(ids, id)
+		points = append(points, semanticPoint{ID: id, Payload: semanticPointPayload{
+			ArticleID: article.ArticleID, Claim: article.Claim, Model: semanticModel, Dimensions: semanticDimensions,
+			FetchedAt: article.FetchedAt.UTC().Format(time.RFC3339Nano), AvailableAt: article.AvailableAt.UTC().Format(time.RFC3339Nano),
+			TextHash: hex.EncodeToString(hash[:]),
+		}})
+	}
 	var found struct {
-		Result []struct {
-			Payload struct {
-				ArticleID   int64  `json:"article_id"`
-				Claim       string `json:"claim"`
-				Model       string `json:"model"`
-				Dimensions  int    `json:"dimensions"`
-				FetchedAt   string `json:"fetched_at"`
-				AvailableAt string `json:"available_at"`
-				TextHash    string `json:"text_sha256"`
-			} `json:"payload"`
-		} `json:"result"`
+		Result []semanticPoint `json:"result"`
 	}
-	e := s.call(ctx, http.MethodPost, s.collection()+"/points", s.cfg.QdrantKey, map[string]any{"ids": []string{id}, "with_payload": true}, &found)
-	if e != nil {
-		return false, e
+	if err := s.call(ctx, http.MethodPost, s.collection()+"/points", s.cfg.QdrantKey,
+		map[string]any{"ids": ids, "with_payload": true}, &found); err != nil {
+		return false, err
 	}
-	h := sha256.Sum256([]byte(semanticText(a)))
-	if len(found.Result) == 1 {
-		p := found.Result[0].Payload
-		if p.ArticleID == a.ArticleID && p.Claim == a.Claim && p.Model == semanticModel && p.Dimensions == semanticDimensions && p.TextHash == hex.EncodeToString(h[:]) && p.FetchedAt == a.FetchedAt.UTC().Format(time.RFC3339Nano) && p.AvailableAt == a.AvailableAt.UTC().Format(time.RFC3339Nano) {
-			return false, nil
+	existing := make(map[string]semanticPointPayload, len(found.Result))
+	for _, point := range found.Result {
+		existing[point.ID] = point.Payload
+	}
+	missing := make([]semanticPoint, 0, len(points))
+	texts := make([]string, 0, len(points))
+	for i, point := range points {
+		if existing[point.ID] != point.Payload {
+			missing = append(missing, point)
+			texts = append(texts, semanticText(articles[i]))
 		}
 	}
-	v, e := s.embed(ctx, a)
-	if e != nil {
-		return true, e
+	if len(missing) == 0 {
+		return false, nil
 	}
-	p := map[string]any{"article_id": a.ArticleID, "claim": a.Claim, "fetched_at": a.FetchedAt.UTC().Format(time.RFC3339Nano), "available_at": a.AvailableAt.UTC().Format(time.RFC3339Nano), "text_sha256": hex.EncodeToString(h[:]), "model": semanticModel, "dimensions": semanticDimensions}
-	e = s.call(ctx, http.MethodPut, s.collection()+"/points?wait=true", s.cfg.QdrantKey, map[string]any{"points": []any{map[string]any{"id": id, "vector": v, "payload": p}}}, nil)
-	return true, e
+	vectors, err := s.embed(ctx, texts)
+	if err != nil {
+		return true, err
+	}
+	for i := range missing {
+		missing[i].Vector = vectors[i]
+	}
+	err = s.call(ctx, http.MethodPut, s.collection()+"/points?wait=true", s.cfg.QdrantKey,
+		map[string]any{"points": missing}, nil)
+	return true, err
 }
+
 func (s *SemanticIndex) Neighbors(ctx context.Context, a IndexedArticle, limit int) ([]SemanticNeighbor, error) {
 	if e := validateSemantic(a); e != nil {
 		return nil, e
