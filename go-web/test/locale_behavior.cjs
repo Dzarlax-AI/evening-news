@@ -53,4 +53,37 @@ const path = require('node:path');
   assert.match(pairedDocument.cookie,/news_locale=sr-Latn/);
   pairedNavigation='';pairedDocument.cookie='';pairedHost.dataset.localeSr='';pairedButtons[1].events.click();
   assert.equal(missingAlerts,1);assert.equal(pairedNavigation,'');assert.equal(pairedDocument.cookie,'');
+  const settings = fs.readFileSync(path.join(__dirname, '../templates/admin/settings.html'), 'utf8');
+  const tabCode = settings.slice(settings.indexOf('function switchSettingsTab('), settings.indexOf('let operationalSettings'));
+  for (const readable of [true, false]) {
+    const tabs = ['telegram', 'ai'];
+    const panels = Object.fromEntries(tabs.map(name => ['settings-tab-' + name, { style: {} }]));
+    let init;
+    const called = [];
+    const settingsContext = vm.createContext({
+      document: {
+        addEventListener(name, fn) { if (name === 'DOMContentLoaded') init = fn; },
+        getElementById(id) { return panels[id]; },
+        querySelectorAll(selector) { return selector === '.settings-panel' ? Object.values(panels) : []; },
+      },
+      localStorage: {
+        getItem() {
+          if (!readable) throw new Error('Storage is disabled');
+          return 'ai';
+        },
+        setItem() { throw new Error('Storage quota exceeded'); },
+      },
+      managedSettings: true,
+      tgLoadSettings: () => called.push('telegram'),
+      schLoadAll: () => called.push('schedule'),
+      aiLoad: () => called.push('ai'),
+      operationalLoad: () => called.push('operational'),
+    });
+    vm.runInContext(tabCode, settingsContext);
+    init();
+    assert.deepEqual(called, ['telegram', 'schedule', 'ai', 'operational']);
+    assert.equal(panels[readable ? 'settings-tab-ai' : 'settings-tab-telegram'].style.display, 'block');
+    vm.runInContext("switchSettingsTab('ai')", settingsContext);
+    assert.equal(panels['settings-tab-ai'].style.display, 'block');
+  }
 })().catch(error=>{console.error(error);process.exit(1);});

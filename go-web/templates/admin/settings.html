@@ -307,7 +307,7 @@ select.settings-input { max-width:400px; }
 // ============================================================
 // Tab switching
 // ============================================================
-function switchSettingsTab(tab) {
+function switchSettingsTab(tab, persist = true) {
     document.querySelectorAll('.settings-panel').forEach(p => p.style.display = 'none');
     document.getElementById('settings-tab-' + tab).style.display = 'block';
     document.querySelectorAll('.settings-tab').forEach(button => {
@@ -315,13 +315,16 @@ function switchSettingsTab(tab) {
         button.classList.toggle('active', active);
         button.setAttribute('aria-pressed', String(active));
     });
-    localStorage.setItem('settings_tab', tab);
+    if (persist) {
+        try { localStorage.setItem('settings_tab', tab); } catch (_) { /* Preference storage is optional. */ }
+    }
 }
 
 document.addEventListener('DOMContentLoaded', () => {
-    const stored = localStorage.getItem('settings_tab');
+    let stored;
+    try { stored = localStorage.getItem('settings_tab'); } catch (_) { /* Use the default tab. */ }
     const saved = stored && document.getElementById('settings-tab-' + stored) ? stored : 'telegram';
-    switchSettingsTab(saved);
+    switchSettingsTab(saved, false);
 
     tgLoadSettings();
     schLoadAll();
