@@ -5,14 +5,14 @@
 {{define "content"}}
 <h1>Настройки</h1>
 
-<div class="settings-tabs">
-    <button class="settings-tab active" onclick="switchSettingsTab('telegram')">Telegram</button>
-    <button class="settings-tab" onclick="switchSettingsTab('viber')">Viber · Srpski</button>
+<div class="settings-tabs" role="group" aria-label="Разделы настроек">
+    <button class="settings-tab active" type="button" aria-pressed="true" aria-controls="settings-tab-telegram" onclick="switchSettingsTab('telegram')">Telegram</button>
+    <button class="settings-tab" type="button" aria-pressed="false" aria-controls="settings-tab-viber" onclick="switchSettingsTab('viber')">Viber · Srpski</button>
     {{if .Managed}}
-    <button class="settings-tab" onclick="switchSettingsTab('operational')">Рабочие настройки</button>
+    <button class="settings-tab" type="button" aria-pressed="false" aria-controls="settings-tab-operational" onclick="switchSettingsTab('operational')">Рабочие настройки</button>
     {{end}}
-    <button class="settings-tab" onclick="switchSettingsTab('schedule')">Расписание</button>
-    <button class="settings-tab" onclick="switchSettingsTab('ai')">AI</button>
+    <button class="settings-tab" type="button" aria-pressed="false" aria-controls="settings-tab-schedule" onclick="switchSettingsTab('schedule')">Расписание</button>
+    <button class="settings-tab" type="button" aria-pressed="false" aria-controls="settings-tab-ai" onclick="switchSettingsTab('ai')">AI</button>
 </div>
 
 <!-- Viber copy and interaction are owned by the TypeScript settings module. -->
@@ -88,7 +88,7 @@
                 <button class="btn btn--primary" onclick="tgSaveSettings()">Сохранить</button>
                 {{if not .Managed}}<button class="btn btn--secondary" onclick="tgResetToEnv()">Сбросить (использовать .env)</button>{{end}}
             </div>
-            <div id="tg-save-result" class="settings-result" style="display:none;"></div>
+            <div id="tg-save-result" class="settings-result" role="status" style="display:none;"></div>
         </div>
     </div>
 
@@ -107,7 +107,7 @@
                     <button class="btn btn--primary" onclick="tgSendDigest()">Отправить дайджест</button>
                 </div>
             </div>
-            <div id="tg-action-result" class="settings-result" style="display:none;"></div>
+            <div id="tg-action-result" class="settings-result" role="status" style="display:none;"></div>
         </div>
     </div>
 </div>
@@ -227,12 +227,14 @@
 
 <style>
 /* Settings tabs */
-.settings-tabs { display:flex; flex-wrap:wrap; gap:.5rem; margin-bottom:1.5rem; border-bottom:2px solid var(--border,#e0e0e0); padding-bottom:.5rem; }
-.settings-tab { background:none; border:none; padding:.5rem 1rem; cursor:pointer; color:var(--text-muted); font-size:1rem; border-radius:6px 6px 0 0; border-bottom:2px solid transparent; margin-bottom:-2px; }
-.settings-tab.active { color:var(--primary-color); border-bottom-color:var(--primary-color); font-weight:600; }
+.settings-tabs { display:flex; flex-wrap:wrap; gap:.5rem; margin-bottom:1.5rem; border-bottom:1px solid var(--border); padding-bottom:.75rem; }
+.settings-tab { background:var(--surface); border:1px solid var(--border); padding:.5rem .8rem; min-height:2.5rem; cursor:pointer; color:var(--text); font:inherit; font-size:var(--text-sm); border-radius:var(--radius-sm); }
+.settings-tab:hover { background:var(--surface-2); }
+.settings-tab.active { background:var(--surface-2); border-color:var(--accent); font-weight:600; }
+.settings-panel fieldset { min-width:0; }
 
 /* Cards */
-.settings-card { background:var(--surface,#fff); border:1px solid var(--border,#e1e5e9); border-radius:8px; margin-bottom:16px; }
+.settings-card { background:var(--surface); border:1px solid var(--border); border-radius:var(--radius); margin-bottom:1rem; }
 .settings-card-header { padding:12px 16px; font-weight:600; font-size:.9rem; border-bottom:1px solid var(--border,#e1e5e9); color:var(--text-color); }
 .settings-card-body { padding:16px; }
 
@@ -241,32 +243,31 @@
 .settings-form-group label { display:block; font-weight:500; font-size:.875rem; margin-bottom:4px; color:var(--text-color); }
 .settings-form-group small { display:block; margin-top:3px; color:var(--text-muted); font-size:.75rem; }
 .settings-form-row { display:grid; grid-template-columns:1fr 1fr 1fr; gap:12px; }
-.settings-input { width:100%; max-width:400px; padding:8px 12px; border:1px solid var(--border,#ddd); border-radius:5px; font-size:.875rem; background:var(--surface,#fff); color:var(--text-color); box-sizing:border-box; }
-.settings-input:focus { outline:none; border-color:var(--primary-color); }
+.settings-input { width:100%; max-width:400px; min-height:2.5rem; padding:.5rem .75rem; border:1px solid var(--admin-control-border); border-radius:var(--radius-sm); font:inherit; font-size:var(--text-sm); background:var(--surface); color:var(--text); box-sizing:border-box; }
 select.settings-input { max-width:400px; }
 
 .settings-hint { font-size:.8rem; color:var(--text-muted); margin-bottom:14px; padding:8px 12px; background:var(--surface-hover,#f8f9fa); border-radius:5px; border-left:3px solid var(--primary-color); }
 .settings-hint code { background:var(--border,#e9ecef); padding:1px 4px; border-radius:3px; font-size:.75rem; }
 
 /* Badges */
-.settings-badge-blue { font-size:.7rem; padding:2px 6px; border-radius:10px; background:#e7f0ff; color:#0056b3; margin-left:4px; }
+.settings-badge-blue { font-size:.7rem; padding:2px 6px; border-radius:10px; background:var(--surface-2); color:var(--text); margin-left:4px; }
 .settings-badge-gray { font-size:.7rem; padding:2px 6px; border-radius:10px; background:var(--surface-hover,#f0f0f0); color:var(--text-muted); margin-left:4px; }
 
 /* Status */
 .tg-status-badge { padding:5px 12px; border-radius:16px; font-size:.8rem; font-weight:500; }
-.tg-status-ok { background:#d4edda; color:#155724; }
-.tg-status-error { background:#f8d7da; color:#721c24; }
+.tg-status-ok { background:var(--good-bg); color:var(--text); }
+.tg-status-error { background:var(--danger-bg); color:var(--text); }
 .tg-status-unknown { background:var(--surface-hover,#f0f0f0); color:var(--text-muted); }
 
 /* Config grid */
 .tg-config-grid { display:grid; grid-template-columns:1fr 1fr; gap:12px; }
 .tg-config-row { display:flex; flex-direction:column; gap:2px; }
 .tg-config-label { font-size:.7rem; color:var(--text-muted); text-transform:uppercase; letter-spacing:.5px; }
-.tg-config-value { font-family:monospace; font-size:.875rem; color:var(--text-color); }
+.tg-config-value { font-family:var(--font-mono); font-size:var(--text-sm); color:var(--text); overflow-wrap:anywhere; }
 .tg-config-value .empty { color:var(--text-muted); font-style:italic; }
 .tg-source-tag { font-size:.65rem; padding:1px 5px; border-radius:8px; margin-left:4px; }
-.tg-source-db { background:#fff3cd; color:#856404; }
-.tg-source-env { background:#d4edda; color:#155724; }
+.tg-source-db { background:var(--warn-bg); color:var(--text); }
+.tg-source-env { background:var(--good-bg); color:var(--text); }
 
 /* Actions */
 .settings-actions-row { display:grid; grid-template-columns:1fr 1fr; gap:16px; }
@@ -275,8 +276,8 @@ select.settings-input { max-width:400px; }
 
 /* Result message */
 .settings-result { margin-top:12px; padding:8px 12px; border-radius:5px; font-size:.8rem; }
-.settings-result.ok { background:#d4edda; color:#155724; }
-.settings-result.err { background:#f8d7da; color:#721c24; }
+.settings-result.ok { background:var(--good-bg); color:var(--text); border:1px solid var(--good); }
+.settings-result.err { background:var(--danger-bg); color:var(--text); border:1px solid var(--danger); }
 
 /* Modal */
 .settings-modal { position:fixed; top:0; left:0; width:100%; height:100%; background:rgba(0,0,0,.5); display:flex; align-items:center; justify-content:center; z-index:1000; }
@@ -293,9 +294,13 @@ select.settings-input { max-width:400px; }
 .sch-card-toggle .slider:before { content:''; position:absolute; height:16px; width:16px; left:3px; bottom:3px; background:#fff; border-radius:50%; transition:.3s; }
 .sch-card-toggle input:checked + .slider { background:var(--success-color,#28a745); }
 .sch-card-toggle input:checked + .slider:before { transform:translateX(18px); }
+.sch-card-toggle input:focus-visible + .slider { outline:2px solid var(--accent); outline-offset:2px; }
 .sch-card-fields { display:grid; grid-template-columns:repeat(auto-fill, minmax(140px, 1fr)); gap:10px; margin-bottom:12px; }
 .sch-card-info { font-size:.75rem; color:var(--text-muted); margin-bottom:10px; }
-.sch-card-actions { display:flex; gap:8px; }
+.sch-card-actions { display:flex; gap:.5rem; flex-wrap:wrap; }
+@media (max-width:600px) {
+    .settings-form-row, .settings-actions-row, .tg-config-grid { grid-template-columns:minmax(0,1fr); }
+}
 </style>
 
 <script>
@@ -304,24 +309,19 @@ select.settings-input { max-width:400px; }
 // ============================================================
 function switchSettingsTab(tab) {
     document.querySelectorAll('.settings-panel').forEach(p => p.style.display = 'none');
-    document.querySelectorAll('.settings-tab').forEach(t => t.classList.remove('active'));
     document.getElementById('settings-tab-' + tab).style.display = 'block';
-    document.querySelectorAll('.settings-tab').forEach(t => t.classList.toggle('active', t.getAttribute('onclick') === "switchSettingsTab('" + tab + "')"));
+    document.querySelectorAll('.settings-tab').forEach(button => {
+        const active = button.getAttribute('aria-controls') === 'settings-tab-' + tab;
+        button.classList.toggle('active', active);
+        button.setAttribute('aria-pressed', String(active));
+    });
     localStorage.setItem('settings_tab', tab);
 }
 
 document.addEventListener('DOMContentLoaded', () => {
     const stored = localStorage.getItem('settings_tab');
     const saved = stored && document.getElementById('settings-tab-' + stored) ? stored : 'telegram';
-    const tabs = document.querySelectorAll('.settings-tab');
-    tabs.forEach(t => {
-        t.classList.remove('active');
-        if (t.getAttribute('onclick') === "switchSettingsTab('" + saved + "')") {
-            t.classList.add('active');
-        }
-    });
-    document.querySelectorAll('.settings-panel').forEach(p => p.style.display = 'none');
-    document.getElementById('settings-tab-' + saved).style.display = 'block';
+    switchSettingsTab(saved);
 
     tgLoadSettings();
     schLoadAll();

@@ -167,6 +167,23 @@ interface Window {
     if (!url.searchParams.has('locale')) { url.searchParams.set('locale', locale); link.href = url.toString(); }
   }, true);
   document.addEventListener('DOMContentLoaded', () => {
+    const themeToggle = document.querySelector<HTMLButtonElement>('#admin-theme-toggle');
+    if (themeToggle) {
+      const root = document.documentElement;
+      const system = window.matchMedia('(prefers-color-scheme: dark)');
+      const isDark = () => root.hasAttribute('dark-mode') || (!root.hasAttribute('light-mode') && system.matches);
+      const syncTheme = () => themeToggle.setAttribute('aria-pressed', String(isDark()));
+      themeToggle.addEventListener('click', () => {
+        const dark = !isDark();
+        root.toggleAttribute('dark-mode', dark);
+        root.toggleAttribute('light-mode', !dark);
+        try { localStorage.setItem('theme', dark ? 'dark' : 'light'); } catch (_) {}
+        syncTheme();
+      });
+      system.addEventListener('change', syncTheme);
+      syncTheme();
+    }
+
     const host = document.querySelector<HTMLElement>('[data-language-switch]');
     if (!host) return;
     host.classList.add('lang-switcher');

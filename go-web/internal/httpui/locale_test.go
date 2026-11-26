@@ -73,7 +73,7 @@ func TestLocalizedETagAndCanonical(t *testing.T) {
 
 func TestSerbianAdminCatalogInventory(t *testing.T) {
 	cyrillic := regexp.MustCompile(`[А-Яа-яЁё]+`)
-	for _, name := range []string{"admin_base.html", "categories.html", "sources.html", "summaries.html", "settings.html", "backup.html", "stats.html", "dashboard.html"} {
+	for _, name := range []string{"admin_base.html", "topics.html", "categories.html", "sources.html", "summaries.html", "settings.html", "backup.html", "stats.html", "dashboard.html"} {
 		path := "../../templates/admin/" + name
 		b, err := os.ReadFile(path)
 		if err != nil {

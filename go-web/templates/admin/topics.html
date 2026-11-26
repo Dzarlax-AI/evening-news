@@ -1,13 +1,37 @@
 {{define "page-title"}}Сюжеты{{end}}
-{{define "admin-extra-css"}}
-<style>
-.topics-layout{display:grid;grid-template-columns:minmax(15rem,1fr) minmax(20rem,2fr);gap:1.5rem}.topics-list button{display:block;text-align:left;width:100%;margin:.5rem 0;padding:.8rem}.topics-filter{display:flex;gap:.5rem;flex-wrap:wrap}.topics-filter input{flex:1;min-width:12rem}.topics-entry{border-bottom:1px solid var(--border-color,#ccc);padding:1rem 0}.topics-entry p{white-space:pre-wrap}.topics-status{margin:1rem 0}.topics-pagination{display:flex;gap:.5rem;margin:1rem 0}@media(max-width:700px){.topics-layout{grid-template-columns:1fr}}
-</style>
-{{end}}
 {{define "content"}}
-<header><h1>Сюжеты</h1><p>Теневой пилот · только просмотр</p></header>
-<div id="topics-status" class="topics-status" role="status">Загрузка…</div>
-<form id="topics-filter" class="topics-filter"><label for="topics-query">Поиск</label><input id="topics-query" maxlength="200" type="search"><label for="topics-state">Состояние</label><select id="topics-state"><option value="">Все сюжеты</option><option value="active">Активные</option><option value="dormant">Затихшие</option><option value="candidate">Кандидаты</option><option value="review">На проверке</option></select><button type="submit">Найти</button></form>
-<div class="topics-layout"><section aria-label="Список сюжетов"><div id="topics-list" class="topics-list"></div><div class="topics-pagination"><button id="topics-prev" type="button">Назад</button><button id="topics-next" type="button">Далее</button></div></section><section id="topics-detail" aria-live="polite"><p>Выберите сюжет.</p></section></div>
+<header class="admin-page-header">
+    <h1>Сюжеты</h1>
+    <div id="topics-status" class="topics-status" role="status">Загрузка…</div>
+</header>
+<form id="topics-filter" class="topics-filter">
+    <div class="topics-search">
+        <label for="topics-query">Поиск по сюжетам</label>
+        <input id="topics-query" maxlength="200" type="search" class="admin-input">
+    </div>
+    <div>
+        <label for="topics-state">Состояние сюжета</label>
+        <select id="topics-state" class="admin-input">
+            <option value="">Все сюжеты</option>
+            <option value="active">Активные</option>
+            <option value="dormant">Затихшие</option>
+            <option value="candidate">Кандидаты</option>
+            <option value="review">На проверке</option>
+        </select>
+    </div>
+    <button type="submit" class="btn btn--primary">Найти</button>
+</form>
+<div class="topics-layout">
+    <section aria-label="Список сюжетов">
+        <div id="topics-list" class="topics-list" aria-live="polite"></div>
+        <div class="topics-pagination">
+            <button id="topics-prev" class="btn btn--secondary" type="button" disabled>Назад</button>
+            <button id="topics-next" class="btn btn--secondary" type="button" disabled>Далее</button>
+        </div>
+    </section>
+    <section id="topics-detail" class="topics-detail card" aria-label="Детали сюжета" aria-live="polite">
+        <p class="topics-empty">Выберите сюжет.</p>
+    </section>
+</div>
 {{end}}
 {{define "admin-extra-js"}}<script src="/static/js/admin-topics.js" defer></script>{{end}}

@@ -11,7 +11,7 @@ const path = require('node:path');
   const document = {
     documentElement:{lang:'sr-Latn'}, cookie:'',
     addEventListener(name, fn){(listeners[name] ||= []).push(fn);},
-    querySelector(){return host;},
+    querySelector(selector){return selector === '[data-language-switch]' ? host : null;},
     createElement(tag){return {tag, style:{}, children:[], events:{}, setAttribute(name,value){(this.attrs ||= {})[name]=value;}, append(child){this.children.push(child);}, addEventListener(name,fn){this.events[name]=fn;}};},
   };
   const location = {href:'https://example.test/admin/settings?tab=telegram', origin:'https://example.test', protocol:'https:', assign(url){navigated=url;}};
@@ -42,7 +42,7 @@ const path = require('node:path');
   const pairedButtons=[]; let pairedNavigation = '', missingAlerts = 0;
   const pairedListeners = {};
   const pairedHost = {dataset:{editionSwitch:'true',localeRu:'/digest/2026-10-26?edition=ru-id&locale=ru',localeSr:'/digest/2026-10-26?edition=sr-id&locale=sr-Latn'},classList:{add(){}},setAttribute(){},append(el){pairedButtons.push(el);}};
-  const pairedDocument = {...document, cookie:'', documentElement:{lang:'ru'}, querySelector(){return pairedHost;},addEventListener(name,fn){(pairedListeners[name] ||= []).push(fn);}};
+  const pairedDocument = {...document, cookie:'', documentElement:{lang:'ru'}, querySelector(selector){return selector === '[data-language-switch]' ? pairedHost : null;},addEventListener(name,fn){(pairedListeners[name] ||= []).push(fn);}};
   const pairedLocation = {href:'https://example.test/digest/2026-10-26?edition=ru-id',origin:'https://example.test',protocol:'https:',assign(url){pairedNavigation=url;}};
   const pairedWindow = {location:pairedLocation,fetch:window.fetch};
   const pairedContext = vm.createContext({window:pairedWindow,document:pairedDocument,location:pairedLocation,Element,Request,Response,URL,console,confirm:()=>true,alert:()=>{missingAlerts++;}});
