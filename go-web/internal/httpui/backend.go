@@ -105,7 +105,7 @@ func (h *backendHandler) credential(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	provider := r.PathValue("provider")
-	if provider != "gemini" && provider != "openai" && provider != "telegram" && provider != "viber" && provider != "apns" {
+	if provider != "gemini" && provider != "openai" && provider != "telegram" && provider != "viber" && provider != "apns" && provider != "jev" {
 		writeProblem(w, 422, "Invalid provider")
 		return
 	}

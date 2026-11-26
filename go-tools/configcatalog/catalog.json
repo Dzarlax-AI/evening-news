@@ -3009,25 +3009,7 @@
     "migration": "opt in for the semantic shadow pilot",
     "precedence": "selected role manifest, or standalone environment",
     "sources": [
-      "go-domain/cmd/news-domain/semantic_shadow.go:31"
-    ],
-    "class": "runtime",
-    "managed_roles": [
-      "domain"
-    ]
-  },
-  {
-    "key": "NEWS_TOPIC_SHADOW_JEV_KEY_FILE",
-    "owner": "domain",
-    "type": "path",
-    "default": "unset; required in qdrant-jev mode",
-    "secret": false,
-    "store": "domain runtime manifest; credential files are mounted separately",
-    "reload": "process startup; restart or recreate after changing settings",
-    "migration": "opt in for the semantic shadow pilot",
-    "precedence": "selected role manifest, or standalone environment",
-    "sources": [
-      "go-domain/cmd/news-domain/semantic_shadow.go:28"
+      "go-domain/cmd/news-domain/semantic_shadow.go:30"
     ],
     "class": "runtime",
     "managed_roles": [
@@ -3081,7 +3063,7 @@
     "migration": "opt in for the semantic shadow pilot",
     "precedence": "selected role manifest, or standalone environment",
     "sources": [
-      "go-domain/cmd/news-domain/semantic_shadow.go:29"
+      "go-domain/cmd/news-domain/semantic_shadow.go:28"
     ],
     "class": "runtime",
     "managed_roles": [

@@ -143,7 +143,23 @@ func runTopicShadowLoop(ctx context.Context, pool *pgxpool.Pool, owner string, c
 			}
 			passCtx, cancel := context.WithTimeout(ctx, topicShadowTimeout)
 			if settings.semantic != nil {
-				if err := settings.semantic.run(passCtx, runner, apiKey); err != nil {
+				if credentials == nil {
+					log.Print("semantic topic shadow unavailable: managed credentials required")
+					cancel()
+					continue
+				}
+				resolveCtx, stop := context.WithTimeout(passCtx, 3*time.Second)
+				raw, meta, err := credentials.Resolve(resolveCtx, "jev")
+				stop()
+				if err != nil || !meta.Configured || len(raw) == 0 {
+					clear(raw)
+					log.Print("semantic topic shadow unavailable: Jev credential not configured")
+					cancel()
+					continue
+				}
+				jevKey := string(raw)
+				clear(raw)
+				if err := settings.semantic.run(passCtx, runner, apiKey, jevKey); err != nil {
 					log.Printf("semantic topic shadow pass paused: reason=%s", semanticShadowError(err))
 				}
 				cancel()

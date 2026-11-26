@@ -167,7 +167,7 @@ func (c *Client) Configuration(ctx context.Context, method, group string, body j
 }
 
 func (c *Client) Credential(ctx context.Context, method, provider string, body json.RawMessage) (json.RawMessage, error) {
-	if provider != "gemini" && provider != "openai" && provider != "telegram" && provider != "viber" && provider != "apns" {
+	if provider != "gemini" && provider != "openai" && provider != "telegram" && provider != "viber" && provider != "apns" && provider != "jev" {
 		return nil, &APIError{Status: 422, Detail: "Invalid provider"}
 	}
 	var reader io.Reader

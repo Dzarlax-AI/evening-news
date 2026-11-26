@@ -139,6 +139,20 @@
         </form>
         <button id="ai-retry" class="btn btn--secondary" type="button" onclick="aiLoad()" hidden>Повторить загрузку</button>
     </div></div>
+    {{if .Managed}}<div class="settings-card" id="jev-settings"><div class="settings-card-body">
+        <h3>TypeSafe Jev</h3>
+        <p>Ключ для теневого пилота сюжетов.</p>
+        <p><span id="jev-badge" class="tg-status-badge tg-status-unknown">Загрузка...</span></p>
+        <p id="jev-status" role="status" aria-live="polite"></p>
+        <form id="jev-form"><label for="jev-key">Новый API-ключ</label>
+            <input id="jev-key" class="settings-input" type="password" autocomplete="off" maxlength="8192">
+            <div style="display:flex;flex-wrap:wrap;gap:10px;margin-top:16px;">
+                <button id="jev-save" class="btn btn--primary" type="submit" disabled>Сохранить ключ</button>
+                <button id="jev-delete" class="btn btn--secondary" type="button" disabled>Удалить ключ</button>
+                <button id="jev-refresh" class="btn btn--secondary" type="button">Обновить статус</button>
+            </div>
+        </form>
+    </div></div>{{end}}
 </div>
 
 <!-- ==================== SCHEDULE TAB ==================== -->
@@ -673,6 +687,7 @@ async function schCreateSchedule() {
 }
 </script>
 <script src="/static/js/viber-settings.js" defer></script>
+{{if .Managed}}<script src="/static/js/jev-settings.js" defer></script>{{end}}
 {{end}}
 
 {{template "admin-base" .}}

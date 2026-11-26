@@ -464,3 +464,23 @@ func TestPushPreservesOnlyValidatedAuthorizedConflictState(t *testing.T) {
 		})
 	}
 }
+
+func TestJevCredentialUsesPrivateEndpoint(t *testing.T) {
+	client, err := NewClient(Config{BaseURL: "http://backend.internal", Token: "fixture"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	client.http.Transport = roundTripFunc(func(r *http.Request) (*http.Response, error) {
+		if r.Method != http.MethodPut || r.URL.Path != "/internal/web/v1/credentials/jev" || r.Header.Get("Authorization") != "Bearer fixture" {
+			t.Errorf("unexpected request %s %s", r.Method, r.URL.Path)
+		}
+		b, _ := io.ReadAll(r.Body)
+		if !strings.Contains(string(b), `"expected_revision":3`) {
+			t.Error("missing revision")
+		}
+		return response(http.StatusOK, `{"provider":"jev","revision":4,"configured":true}`), nil
+	})
+	if _, err := client.Credential(context.Background(), http.MethodPut, "jev", json.RawMessage(`{"expected_revision":3,"value":"fixture"}`)); err != nil {
+		t.Fatal(err)
+	}
+}

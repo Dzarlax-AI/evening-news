@@ -25,3 +25,6 @@ BEGIN
     END IF;
 END
 $semantic_grants$;
+
+ALTER TABLE __SCHEMA_Q__.integration_credentials DROP CONSTRAINT IF EXISTS integration_credentials_provider_check;
+ALTER TABLE __SCHEMA_Q__.integration_credentials ADD CONSTRAINT integration_credentials_provider_check CHECK (provider IN ('gemini','openai','telegram','viber','apns','jev'));

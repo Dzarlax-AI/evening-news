@@ -17,19 +17,18 @@ import (
 )
 
 type semanticShadowSettings struct {
-	url, collection, jevKeyFile, qdrantKeyFile string
-	embeddingDailyLimit                        int
+	url, collection, qdrantKeyFile string
+	embeddingDailyLimit            int
 }
 
 func readSemanticShadowSettings(get func(string) string) (semanticShadowSettings, error) {
 	s := semanticShadowSettings{
 		url:           strings.TrimSpace(get("NEWS_TOPIC_SHADOW_QDRANT_URL")),
 		collection:    strings.TrimSpace(get("NEWS_TOPIC_SHADOW_QDRANT_COLLECTION")),
-		jevKeyFile:    strings.TrimSpace(get("NEWS_TOPIC_SHADOW_JEV_KEY_FILE")),
 		qdrantKeyFile: strings.TrimSpace(get("NEWS_TOPIC_SHADOW_QDRANT_KEY_FILE")),
 	}
 	limit, err := strconv.Atoi(strings.TrimSpace(get("NEWS_TOPIC_SHADOW_EMBEDDING_DAILY_LIMIT")))
-	if err != nil || limit < 1 || s.url == "" || s.collection == "" || !filepath.IsAbs(s.jevKeyFile) ||
+	if err != nil || limit < 1 || s.url == "" || s.collection == "" ||
 		s.qdrantKeyFile != "" && !filepath.IsAbs(s.qdrantKeyFile) {
 		return semanticShadowSettings{}, errors.New("invalid semantic shadow configuration")
 	}
@@ -59,11 +58,8 @@ func readSemanticSecret(path string) (string, error) {
 	return key, nil
 }
 
-func (s semanticShadowSettings) run(ctx context.Context, runner topicshadow.Runner, openAIKey string) error {
-	jevKey, err := readSemanticSecret(s.jevKeyFile)
-	if err != nil {
-		return err
-	}
+func (s semanticShadowSettings) run(ctx context.Context, runner topicshadow.Runner, openAIKey, jevKey string) error {
+	var err error
 	qdrantKey := ""
 	if s.qdrantKeyFile != "" {
 		qdrantKey, err = readSemanticSecret(s.qdrantKeyFile)

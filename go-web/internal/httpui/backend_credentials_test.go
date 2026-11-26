@@ -1,6 +1,8 @@
 package httpui
 
 import (
+	"context"
+	"encoding/json"
 	"io"
 	"net/http"
 	"net/http/httptest"
@@ -50,5 +52,46 @@ func TestCredentialProxyNeverReturnsSecret(t *testing.T) {
 	mux.ServeHTTP(w, req)
 	if w.Code != 200 || calls != 1 || strings.Contains(w.Body.String(), "fixture-secret") {
 		t.Fatalf("unexpected response %d %s", w.Code, w.Body.String())
+	}
+}
+
+type jevCredentialOps struct {
+	*fakeBackendOps
+	method, provider string
+	body             json.RawMessage
+}
+
+func (f *jevCredentialOps) Credential(_ context.Context, method, provider string, body json.RawMessage) (json.RawMessage, error) {
+	f.method, f.provider, f.body = method, provider, body
+	return json.RawMessage(`{"provider":"jev","revision":2,"configured":true,"value":"must-not-escape"}`), nil
+}
+func TestJevCredentialProxyAuthCASAndMetadata(t *testing.T) {
+	ops := &jevCredentialOps{fakeBackendOps: &fakeBackendOps{}}
+	service := auth.New(auth.Config{Username: "admin", Password: "password", JWTSecret: "fixture"})
+	token, _ := service.Mint("admin", auth.LevelAdmin)
+	mux := http.NewServeMux()
+	RegisterBackend(mux, service, ops)
+	for _, method := range []string{"GET", "PUT", "DELETE"} {
+		body := `{"expected_revision":1}`
+		if method == "PUT" {
+			body = `{"expected_revision":1,"value":"fixture"}`
+		}
+		req := httptest.NewRequest(method, "/api/v1/credentials/jev", strings.NewReader(body))
+		w := httptest.NewRecorder()
+		mux.ServeHTTP(w, req)
+		if w.Code != http.StatusUnauthorized || ops.provider != "" {
+			t.Fatalf("unauthorized %s status=%d", method, w.Code)
+		}
+		req = httptest.NewRequest(method, "/api/v1/credentials/jev", strings.NewReader(body))
+		req.Header.Set("Authorization", "Bearer "+token)
+		w = httptest.NewRecorder()
+		mux.ServeHTTP(w, req)
+		if w.Code != http.StatusOK || ops.provider != "jev" || ops.method != method || strings.Contains(w.Body.String(), "must-not-escape") {
+			t.Fatalf("%s status=%d body=%s", method, w.Code, w.Body.String())
+		}
+		if method != "GET" && !strings.Contains(string(ops.body), `"expected_revision":1`) {
+			t.Fatal("missing revision")
+		}
+		ops.provider = ""
 	}
 }
