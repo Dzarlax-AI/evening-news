@@ -16,9 +16,10 @@ import (
 )
 
 const (
-	topicShadowInterval = 15 * time.Minute
-	topicShadowTimeout  = 12 * time.Minute
-	topicShadowBatch    = 50
+	topicShadowInterval        = 15 * time.Minute
+	topicShadowArchiveInterval = time.Minute
+	topicShadowTimeout         = 12 * time.Minute
+	topicShadowBatch           = 50
 )
 
 type topicShadowSettings struct {
@@ -109,8 +110,18 @@ func runTopicShadowLoop(ctx context.Context, pool *pgxpool.Pool, owner string, c
 		}
 		return
 	}
-	ticker := time.NewTicker(topicShadowInterval)
+	interval := topicShadowInterval
+	if settings.semantic != nil && settings.semantic.archivePending(ctx, pool) {
+		interval = topicShadowArchiveInterval
+	}
+	ticker := time.NewTicker(interval)
 	defer ticker.Stop()
+	setInterval := func(next time.Duration) {
+		if next != interval {
+			ticker.Reset(next)
+			interval = next
+		}
+	}
 	for {
 		select {
 		case <-ctx.Done():
@@ -126,6 +137,7 @@ func runTopicShadowLoop(ctx context.Context, pool *pgxpool.Pool, owner string, c
 				cancel()
 				if err != nil || !meta.Configured || len(raw) == 0 {
 					log.Print("topic shadow unavailable: OpenAI credential not configured")
+					setInterval(topicShadowInterval)
 					continue
 				}
 				apiKey = string(raw)
@@ -154,15 +166,23 @@ func runTopicShadowLoop(ctx context.Context, pool *pgxpool.Pool, owner string, c
 				if err != nil || !meta.Configured || len(raw) == 0 {
 					clear(raw)
 					log.Print("semantic topic shadow unavailable: Jev credential not configured")
+					setInterval(topicShadowInterval)
 					cancel()
 					continue
 				}
 				jevKey := string(raw)
 				clear(raw)
-				if err := settings.semantic.run(passCtx, runner, apiKey, jevKey); err != nil {
-					log.Printf("semantic topic shadow pass paused: reason=%s", semanticShadowError(err))
-				}
+				complete, err := settings.semantic.run(passCtx, runner, apiKey, jevKey)
 				cancel()
+				switch {
+				case err != nil:
+					log.Printf("semantic topic shadow pass paused: reason=%s", semanticShadowError(err))
+					setInterval(topicShadowInterval)
+				case complete:
+					setInterval(topicShadowInterval)
+				default:
+					setInterval(topicShadowArchiveInterval)
+				}
 				continue
 			}
 			report, err := runner.RunPass(passCtx, time.Now().UTC(), topicShadowBatch)
