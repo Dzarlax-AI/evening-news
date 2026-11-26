@@ -16,6 +16,8 @@ import (
 	"github.com/jackc/pgx/v5/pgxpool"
 )
 
+const semanticArchivePassSize = 250
+
 type semanticShadowSettings struct {
 	url, collection, qdrantKeyFile string
 	embeddingDailyLimit            int
@@ -58,13 +60,23 @@ func readSemanticSecret(path string) (string, error) {
 	return key, nil
 }
 
-func (s semanticShadowSettings) run(ctx context.Context, runner topicshadow.Runner, openAIKey, jevKey string) error {
+func (s semanticShadowSettings) archivePending(ctx context.Context, pool *pgxpool.Pool) bool {
+	ctx, cancel := context.WithTimeout(ctx, 3*time.Second)
+	defer cancel()
+	var complete bool
+	err := pool.QueryRow(ctx, `SELECT EXISTS (SELECT 1 FROM topic_shadow_semantic_index
+		WHERE policy_version=$1 AND collection=$2 AND completed_at IS NOT NULL)`,
+		topicshadow.SemanticPolicyVersion, s.collection).Scan(&complete)
+	return err == nil && !complete
+}
+
+func (s semanticShadowSettings) run(ctx context.Context, runner topicshadow.Runner, openAIKey, jevKey string) (bool, error) {
 	var err error
 	qdrantKey := ""
 	if s.qdrantKeyFile != "" {
 		qdrantKey, err = readSemanticSecret(s.qdrantKeyFile)
 		if err != nil {
-			return err
+			return false, err
 		}
 	}
 	runner.Version = topicshadow.SemanticPolicyVersion
@@ -74,21 +86,21 @@ func (s semanticShadowSettings) run(ctx context.Context, runner topicshadow.Runn
 		OpenAIURL: "https://api.openai.com/v1", Collection: s.collection, OpenAIKey: openAIKey, QdrantKey: qdrantKey,
 		ReserveEmbedding: checkpoint.ReserveEmbedding, RecordEmbeddingTokens: checkpoint.RecordEmbeddingTokens})
 	if err != nil {
-		return err
+		return false, err
 	}
-	progress, err := checkpoint.Advance(ctx, index, topicShadowBatch)
+	progress, err := checkpoint.Advance(ctx, index, semanticArchivePassSize)
 	if err != nil || !progress.Complete {
-		return err
+		return false, err
 	}
 	runner.Client = topicshadow.NewJevClient(jevKey, nil)
 	runner.Semantic = index
 	runner.WarmupFrom = progress.StartedAt.AddDate(0, 0, -30)
 	report, err := runner.RunPass(ctx, time.Now().UTC(), topicShadowBatch)
 	if err != nil {
-		return err
+		return true, err
 	}
 	log.Printf("semantic topic shadow pass: processed=%d reviewed=%d deferred=%t scanned=%t", report.Processed, report.Reviewed, report.Deferred, report.Scanned)
-	return checkpoint.Reconcile(ctx, index, 100)
+	return true, checkpoint.Reconcile(ctx, index, 100)
 }
 
 func semanticShadowError(err error) string {
@@ -135,7 +147,9 @@ func initializeSemanticCollection() error {
 	}
 	index, err := topicshadow.NewSemanticIndex(topicshadow.SemanticIndexConfig{QdrantURL: settings.url,
 		OpenAIURL: "https://api.openai.com/v1", Collection: settings.collection, QdrantKey: qdrantKey, OpenAIKey: key,
-		ReserveEmbedding: func(context.Context) error { return errors.New("embedding disabled during collection initialization") }})
+		ReserveEmbedding: func(context.Context, int) error {
+			return errors.New("embedding disabled during collection initialization")
+		}})
 	if err != nil {
 		return err
 	}

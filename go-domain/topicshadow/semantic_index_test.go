@@ -36,19 +36,20 @@ func TestSemanticIndexWireAndRepeat(t *testing.T) {
 			if b["model"] != semanticModel || b["input"] != "Title\n\nSummary" {
 				t.Fatal("incorrect embedding request")
 			}
-			response = map[string]any{"data": []any{map[string]any{"embedding": make([]float64, semanticDimensions)}}}
+			response = map[string]any{"data": []any{map[string]any{"index": 0, "embedding": make([]float64, semanticDimensions)}}}
 		case r.Method == http.MethodPut:
 			points := b["points"].([]any)
-			saved = points[0].(map[string]any)["payload"].(map[string]any)
+			saved = points[0].(map[string]any)
+			delete(saved, "vector")
 			present = true
 			response = map[string]any{"result": true}
 		case strings.HasSuffix(r.URL.Path, "/points") && present:
-			response = map[string]any{"result": []any{map[string]any{"payload": saved}}}
+			response = map[string]any{"result": []any{saved}}
 		}
 		data, _ := json.Marshal(response)
 		return &http.Response{StatusCode: 200, Body: io.NopCloser(strings.NewReader(string(data))), Header: make(http.Header)}, nil
 	})}
-	s, e := NewSemanticIndex(SemanticIndexConfig{QdrantURL: "http://127.0.0.1:6333", OpenAIURL: "https://api.openai.com/v1", Collection: "news_topic_shadow_v1", OpenAIKey: "test", HTTPClient: client, ReserveEmbedding: func(context.Context) error { return nil }})
+	s, e := NewSemanticIndex(SemanticIndexConfig{QdrantURL: "http://127.0.0.1:6333", OpenAIURL: "https://api.openai.com/v1", Collection: "news_topic_shadow_v1", OpenAIKey: "test", HTTPClient: client, ReserveEmbedding: func(context.Context, int) error { return nil }})
 	if e != nil {
 		t.Fatal(e)
 	}
