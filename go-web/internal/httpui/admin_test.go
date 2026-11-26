@@ -67,8 +67,13 @@ func TestAdminRoutesRenderExistingPagesAndSetCookie(t *testing.T) {
 					t.Fatalf("cookie missing %q: %s", attr, cookie)
 				}
 			}
-			if !strings.Contains(response.Body.String(), `href="`+tc.activeHref+`" class="sidenav-link active"`) {
-				t.Fatalf("active navigation missing for %s", tc.activeHref)
+			body := response.Body.String()
+			if !strings.Contains(body, `href="`+tc.activeHref+`" class="sidenav-link active" aria-current="page"`) ||
+				strings.Count(body, `aria-current="page"`) != 1 {
+				t.Fatalf("expected exactly one current admin link for %s", tc.activeHref)
+			}
+			if strings.Count(body, `id="admin-theme-toggle"`) != 1 {
+				t.Fatal("expected one shared theme control")
 			}
 		})
 	}

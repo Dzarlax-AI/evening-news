@@ -5,6 +5,14 @@
     <meta charset="UTF-8">
     <meta name="viewport" content="width=device-width, initial-scale=1.0">
     <title>{{template "page-title" .}} — Evening News</title>
+    <script>
+    (() => {
+        try {
+            const theme = localStorage.getItem('theme');
+            if (theme === 'dark' || theme === 'light') document.documentElement.setAttribute(theme + '-mode', '');
+        } catch (_) {}
+    })();
+    </script>
     <link href="/static/css/dzarlax.css" rel="stylesheet">
     <link href="/static/css/main.css" rel="stylesheet">
     <link href="/static/css/admin.css" rel="stylesheet">
@@ -22,45 +30,51 @@
             <span class="brand-icon">📰</span>
             <span class="brand-text">
                 Evening News
-                <span class="brand-sub">Admin</span>
             </span>
         </a>
 
-        <nav class="sidenav-nav">
-            <a href="/admin" class="sidenav-link {{if eq .ActiveMenu "dashboard"}}active{{end}}">
-                <span class="nav-icon">📊</span>
+        <nav class="sidenav-nav" aria-label="Разделы админки">
+            <a href="/admin" class="sidenav-link{{if eq .ActiveMenu "dashboard"}} active{{end}}"{{if eq .ActiveMenu "dashboard"}} aria-current="page"{{end}}>
+                <span class="nav-icon" aria-hidden="true">📊</span>
                 <span>Дашборд</span>
             </a>
-            <a href="/admin/topics" class="sidenav-link {{if eq .ActiveMenu "topics"}}active{{end}}"><span class="nav-icon">◌</span><span>Сюжеты</span></a>
-            <a href="/admin/sources" class="sidenav-link {{if eq .ActiveMenu "sources"}}active{{end}}">
-                <span class="nav-icon">📰</span>
+            <a href="/admin/topics" class="sidenav-link{{if eq .ActiveMenu "topics"}} active{{end}}"{{if eq .ActiveMenu "topics"}} aria-current="page"{{end}}><span class="nav-icon" aria-hidden="true">◌</span><span>Сюжеты</span></a>
+            <a href="/admin/sources" class="sidenav-link{{if eq .ActiveMenu "sources"}} active{{end}}"{{if eq .ActiveMenu "sources"}} aria-current="page"{{end}}>
+                <span class="nav-icon" aria-hidden="true">📰</span>
                 <span>Источники</span>
             </a>
-            <a href="/admin/summaries" class="sidenav-link {{if eq .ActiveMenu "summaries"}}active{{end}}">
-                <span class="nav-icon">📄</span>
+            <a href="/admin/summaries" class="sidenav-link{{if eq .ActiveMenu "summaries"}} active{{end}}"{{if eq .ActiveMenu "summaries"}} aria-current="page"{{end}}>
+                <span class="nav-icon" aria-hidden="true">📄</span>
                 <span>Сводки</span>
             </a>
-            <a href="/admin/categories" class="sidenav-link {{if eq .ActiveMenu "categories"}}active{{end}}">
-                <span class="nav-icon">🏷️</span>
+            <a href="/admin/categories" class="sidenav-link{{if eq .ActiveMenu "categories"}} active{{end}}"{{if eq .ActiveMenu "categories"}} aria-current="page"{{end}}>
+                <span class="nav-icon" aria-hidden="true">🏷️</span>
                 <span>Категории</span>
             </a>
-            <a href="/admin/stats" class="sidenav-link {{if eq .ActiveMenu "stats"}}active{{end}}">
-                <span class="nav-icon">📈</span>
+            <a href="/admin/stats" class="sidenav-link{{if eq .ActiveMenu "stats"}} active{{end}}"{{if eq .ActiveMenu "stats"}} aria-current="page"{{end}}>
+                <span class="nav-icon" aria-hidden="true">📈</span>
                 <span>Статистика</span>
             </a>
-            <a href="/admin/backup" class="sidenav-link {{if eq .ActiveMenu "backup"}}active{{end}}">
-                <span class="nav-icon">💾</span>
+            <a href="/admin/backup" class="sidenav-link{{if eq .ActiveMenu "backup"}} active{{end}}"{{if eq .ActiveMenu "backup"}} aria-current="page"{{end}}>
+                <span class="nav-icon" aria-hidden="true">💾</span>
                 <span>{{if .Managed}}Справка по бэкапу{{else}}Резервные копии{{end}}</span>
             </a>
-            <a href="/admin/settings" class="sidenav-link {{if eq .ActiveMenu "settings"}}active{{end}}">
-                <span class="nav-icon">&#9881;&#65039;</span>
+            <a href="/admin/settings" class="sidenav-link{{if eq .ActiveMenu "settings"}} active{{end}}"{{if eq .ActiveMenu "settings"}} aria-current="page"{{end}}>
+                <span class="nav-icon" aria-hidden="true">&#9881;&#65039;</span>
                 <span>Настройки</span>
             </a>
         </nav>
 
-        <div class="sidenav-bottom"><span data-language-switch></span>
-            <a href="/" target="_blank" class="sidenav-link muted">
-                <span class="nav-icon">↗</span>
+        <div class="sidenav-bottom">
+            <div class="sidenav-preferences">
+                <span data-language-switch></span>
+                <button id="admin-theme-toggle" class="admin-theme-toggle" type="button" aria-label="Тёмная тема">
+                    <span class="theme-light-icon" aria-hidden="true">☀</span>
+                    <span class="theme-dark-icon" aria-hidden="true">☾</span>
+                </button>
+            </div>
+            <a href="/" target="_blank" rel="noopener noreferrer" class="sidenav-link muted" aria-label="На сайт">
+                <span class="nav-icon" aria-hidden="true">↗</span>
                 <span>На сайт</span>
             </a>
         </div>

@@ -11,7 +11,7 @@ const path = require('node:path');
   const document = {
     documentElement:{lang:'sr-Latn'}, cookie:'',
     addEventListener(name, fn){(listeners[name] ||= []).push(fn);},
-    querySelector(){return host;},
+    querySelector(selector){return selector === '[data-language-switch]' ? host : null;},
     createElement(tag){return {tag, style:{}, children:[], events:{}, setAttribute(name,value){(this.attrs ||= {})[name]=value;}, append(child){this.children.push(child);}, addEventListener(name,fn){this.events[name]=fn;}};},
   };
   const location = {href:'https://example.test/admin/settings?tab=telegram', origin:'https://example.test', protocol:'https:', assign(url){navigated=url;}};
@@ -42,7 +42,7 @@ const path = require('node:path');
   const pairedButtons=[]; let pairedNavigation = '', missingAlerts = 0;
   const pairedListeners = {};
   const pairedHost = {dataset:{editionSwitch:'true',localeRu:'/digest/2026-10-26?edition=ru-id&locale=ru',localeSr:'/digest/2026-10-26?edition=sr-id&locale=sr-Latn'},classList:{add(){}},setAttribute(){},append(el){pairedButtons.push(el);}};
-  const pairedDocument = {...document, cookie:'', documentElement:{lang:'ru'}, querySelector(){return pairedHost;},addEventListener(name,fn){(pairedListeners[name] ||= []).push(fn);}};
+  const pairedDocument = {...document, cookie:'', documentElement:{lang:'ru'}, querySelector(selector){return selector === '[data-language-switch]' ? pairedHost : null;},addEventListener(name,fn){(pairedListeners[name] ||= []).push(fn);}};
   const pairedLocation = {href:'https://example.test/digest/2026-10-26?edition=ru-id',origin:'https://example.test',protocol:'https:',assign(url){pairedNavigation=url;}};
   const pairedWindow = {location:pairedLocation,fetch:window.fetch};
   const pairedContext = vm.createContext({window:pairedWindow,document:pairedDocument,location:pairedLocation,Element,Request,Response,URL,console,confirm:()=>true,alert:()=>{missingAlerts++;}});
@@ -53,4 +53,37 @@ const path = require('node:path');
   assert.match(pairedDocument.cookie,/news_locale=sr-Latn/);
   pairedNavigation='';pairedDocument.cookie='';pairedHost.dataset.localeSr='';pairedButtons[1].events.click();
   assert.equal(missingAlerts,1);assert.equal(pairedNavigation,'');assert.equal(pairedDocument.cookie,'');
+  const settings = fs.readFileSync(path.join(__dirname, '../templates/admin/settings.html'), 'utf8');
+  const tabCode = settings.slice(settings.indexOf('function switchSettingsTab('), settings.indexOf('let operationalSettings'));
+  for (const readable of [true, false]) {
+    const tabs = ['telegram', 'ai'];
+    const panels = Object.fromEntries(tabs.map(name => ['settings-tab-' + name, { style: {} }]));
+    let init;
+    const called = [];
+    const settingsContext = vm.createContext({
+      document: {
+        addEventListener(name, fn) { if (name === 'DOMContentLoaded') init = fn; },
+        getElementById(id) { return panels[id]; },
+        querySelectorAll(selector) { return selector === '.settings-panel' ? Object.values(panels) : []; },
+      },
+      localStorage: {
+        getItem() {
+          if (!readable) throw new Error('Storage is disabled');
+          return 'ai';
+        },
+        setItem() { throw new Error('Storage quota exceeded'); },
+      },
+      managedSettings: true,
+      tgLoadSettings: () => called.push('telegram'),
+      schLoadAll: () => called.push('schedule'),
+      aiLoad: () => called.push('ai'),
+      operationalLoad: () => called.push('operational'),
+    });
+    vm.runInContext(tabCode, settingsContext);
+    init();
+    assert.deepEqual(called, ['telegram', 'schedule', 'ai', 'operational']);
+    assert.equal(panels[readable ? 'settings-tab-ai' : 'settings-tab-telegram'].style.display, 'block');
+    vm.runInContext("switchSettingsTab('ai')", settingsContext);
+    assert.equal(panels['settings-tab-ai'].style.display, 'block');
+  }
 })().catch(error=>{console.error(error);process.exit(1);});
