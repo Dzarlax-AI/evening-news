@@ -591,3 +591,8 @@ func (b *boundedReadCloser) Read(p []byte) (int, error) {
 var _ Operations = (*Client)(nil)
 
 var _ AISettingsOperations = (*Client)(nil)
+
+// Topics reads the bounded shadow operator view.
+func (c *Client) Topics(ctx context.Context, query string) (json.RawMessage, error) {
+	return c.rawJSON(ctx, http.MethodGet, "/topics?"+query, nil, "")
+}

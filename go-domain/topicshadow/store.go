@@ -18,9 +18,10 @@ var (
 
 type queuedArticle struct {
 	ArticleInput
-	Claim    string
-	ReadyAt  time.Time
-	Attempts int
+	Claim          string
+	ReadyAt        time.Time
+	Attempts       int
+	SnapshotAnchor bool
 }
 
 type shadowTopic struct {
@@ -36,8 +37,15 @@ func (r Runner) acquire(ctx context.Context, now time.Time) (bool, error) {
 		VALUES ($1,$2,$3,$4,clock_timestamp() + interval '13 minutes')
 		ON CONFLICT (policy_version) DO UPDATE SET lease_owner=EXCLUDED.lease_owner,lease_until=EXCLUDED.lease_until
 		WHERE topic_shadow_checkpoints.lease_until IS NULL OR topic_shadow_checkpoints.lease_until <= clock_timestamp()`,
-		r.Version, now, scanStart(now, r.replay), r.Owner)
+		r.Version, now, r.scanStart(now), r.Owner)
 	return err == nil && tag.RowsAffected() == 1, err
+}
+
+func (r Runner) scanStart(now time.Time) time.Time {
+	if r.Semantic != nil && !r.WarmupFrom.IsZero() {
+		return r.WarmupFrom
+	}
+	return scanStart(now, r.replay)
 }
 
 func scanStart(now time.Time, replay bool) time.Time {
@@ -91,7 +99,7 @@ func (r Runner) enqueue(ctx context.Context, cutoff time.Time, limit int) (bool,
 				rows, err = tx.Query(ctx, projection+` WHERE ready_at >= $6 AND ready_at <= $7
 					AND (ready_at,article_id,claim_token) <= ($1,$2,$3::uuid)
 					AND NOT EXISTS (SELECT 1 FROM topic_shadow_decisions d WHERE d.policy_version=$4 AND d.article_id=i.article_id AND d.claim_token=i.claim_token)
-					ORDER BY ready_at,article_id,claim_token LIMIT $5`, after, article, claim, r.Version, limit+1, scanStart(started, r.replay), cutoff)
+					ORDER BY ready_at,article_id,claim_token LIMIT $5`, after, article, claim, r.Version, limit+1, r.scanStart(started), cutoff)
 			} else {
 				rows, err = tx.Query(ctx, projection+` WHERE (ready_at,article_id,claim_token) > ($1,$2,$3::uuid)
 					AND ready_at <= $4 ORDER BY ready_at,article_id,claim_token LIMIT $5`, after, article, claim, cutoff, limit+1)

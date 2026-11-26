@@ -36,6 +36,7 @@ func TestAdminRoutesRenderExistingPagesAndSetCookie(t *testing.T) {
 	}{
 		{"/admin/", "Evening News v2 - Admin", "Дашборд", "/admin"},
 		{"/admin/sources", "Источники - Evening News v2", "Источники", "/admin/sources"},
+		{"/admin/topics", "Сюжеты", "topics-list", "/admin/topics"},
 		{"/admin/summaries", "Дневные сводки - Evening News v2", "Сводки", "/admin/summaries"},
 		{"/admin/stats", "Статистика - Evening News v2", "stats-header", "/admin/stats"},
 		{"/admin/backup", "Резервные Копии", "backups-list", "/admin/backup"},
@@ -279,5 +280,21 @@ func TestSerbianAdminInlineScriptsParse(t *testing.T) {
 				t.Errorf("%s script %d: %s", path, i, out)
 			}
 		}
+	}
+}
+
+func TestTopicsRoutesRequireAdmin(t *testing.T) {
+	service := adminTestService()
+	page := httptest.NewRecorder()
+	adminMux(t, service).ServeHTTP(page, httptest.NewRequest(http.MethodGet, "/admin/topics", nil))
+	if page.Code != http.StatusUnauthorized {
+		t.Fatalf("page status=%d", page.Code)
+	}
+	api := http.NewServeMux()
+	RegisterBackend(api, service, &fakeBackendOps{})
+	response := httptest.NewRecorder()
+	api.ServeHTTP(response, httptest.NewRequest(http.MethodGet, "/api/v1/topics", nil))
+	if response.Code != http.StatusUnauthorized {
+		t.Fatalf("API status=%d", response.Code)
 	}
 }

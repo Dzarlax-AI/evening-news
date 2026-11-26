@@ -8,5 +8,5 @@
     "rootDir": "static/ts",
     "outDir": "static/js"
   },
-  "include": ["static/ts/article-reader.ts", "static/ts/locale.ts", "static/ts/viber-settings.ts"]
+  "include": ["static/ts/article-reader.ts", "static/ts/locale.ts", "static/ts/viber-settings.ts", "static/ts/admin-topics.ts"]
 }

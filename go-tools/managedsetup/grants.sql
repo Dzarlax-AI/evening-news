@@ -216,5 +216,5 @@ GRANT EXECUTE ON FUNCTION news.enqueue_viber_digest_delivery() TO news_worker_ru
 -- Topic shadow can read its input projection and append its own observations.
 GRANT SELECT ON news.topic_shadow_inputs TO news_domain_runtime;
 GRANT SELECT, INSERT, UPDATE ON news.topic_shadow_checkpoints, news.topic_shadow_topics,
- news.topic_shadow_decisions TO news_domain_runtime;
+ news.topic_shadow_decisions, news.topic_shadow_semantic_index TO news_domain_runtime;
 GRANT SELECT, INSERT ON news.topic_shadow_events, news.topic_shadow_editions TO news_domain_runtime;

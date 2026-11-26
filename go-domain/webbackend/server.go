@@ -36,6 +36,7 @@ type Server struct {
 
 func (s *Server) Handler() http.Handler {
 	mux := http.NewServeMux()
+	mux.HandleFunc("GET /internal/web/v1/topics", s.topicsRead)
 	mux.HandleFunc("GET /internal/web/v1/configuration/telegram", s.telegramConfiguration)
 	mux.HandleFunc("PUT /internal/web/v1/configuration/telegram", s.telegramConfiguration)
 	mux.HandleFunc("GET /internal/web/v1/configuration/viber", s.viberConfiguration)

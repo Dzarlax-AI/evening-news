@@ -25,6 +25,7 @@ type topicShadowSettings struct {
 	enabled           bool
 	dailyRequestLimit int
 	reason            string
+	semantic          *semanticShadowSettings
 }
 
 func topicShadowSettingsFrom(get func(string) string) topicShadowSettings {
@@ -44,7 +45,19 @@ func topicShadowSettingsFrom(get func(string) string) topicShadowSettings {
 	if err != nil || limit < 2 {
 		return topicShadowSettings{reason: "enabled without a valid daily request limit"}
 	}
-	return topicShadowSettings{enabled: true, dailyRequestLimit: limit}
+	settings := topicShadowSettings{enabled: true, dailyRequestLimit: limit}
+	switch strings.TrimSpace(get("NEWS_TOPIC_SHADOW_MODE")) {
+	case "", "luna":
+	case "qdrant-jev":
+		semantic, err := readSemanticShadowSettings(get)
+		if err != nil {
+			return topicShadowSettings{reason: "invalid Qdrant/Jev setting"}
+		}
+		settings.semantic = &semantic
+	default:
+		return topicShadowSettings{reason: "unknown topic shadow mode"}
+	}
+	return settings
 }
 
 // topicShadowReport emits a private operator report for the domain database.
@@ -124,12 +137,18 @@ func runTopicShadowLoop(ctx context.Context, pool *pgxpool.Pool, owner string, c
 				log.Print("topic shadow unavailable: OpenAI credential not configured")
 				continue
 			}
-			client := topicshadow.NewDecisionsClient(apiKey, nil)
 			runner := topicshadow.Runner{
 				Pool: pool, Version: topicshadow.DefaultPolicyVersion, Owner: owner,
-				Client: client, DailyRequestLimit: settings.dailyRequestLimit,
+				Client: topicshadow.NewDecisionsClient(apiKey, nil), DailyRequestLimit: settings.dailyRequestLimit,
 			}
 			passCtx, cancel := context.WithTimeout(ctx, topicShadowTimeout)
+			if settings.semantic != nil {
+				if err := settings.semantic.run(passCtx, runner, apiKey); err != nil {
+					log.Printf("semantic topic shadow pass paused: reason=%s", semanticShadowError(err))
+				}
+				cancel()
+				continue
+			}
 			report, err := runner.RunPass(passCtx, time.Now().UTC(), topicShadowBatch)
 			cancel()
 			if err != nil && ctx.Err() == nil {

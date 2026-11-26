@@ -29,6 +29,7 @@ COPY web/static/ /app/web/static/
 COPY --from=web-assets /src/web/static/js/article-reader.js /app/web/static/js/article-reader.js
 COPY --from=web-assets /src/web/static/js/locale.js /app/web/static/js/locale.js
 COPY --from=web-assets /src/web/static/js/viber-settings.js /app/web/static/js/viber-settings.js
+COPY --from=web-assets /src/web/static/js/admin-topics.js /app/web/static/js/admin-topics.js
 USER 65532:65532
 EXPOSE 8000
 ENTRYPOINT ["/news-web"]

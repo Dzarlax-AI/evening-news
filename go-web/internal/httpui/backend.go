@@ -33,6 +33,7 @@ func RegisterBackend(mux *http.ServeMux, service *auth.Service, ops backend.Oper
 	}
 	h := &backendHandler{ops: ops, trustedProxies: proxies}
 	admin := func(pattern string, fn http.HandlerFunc) { mux.Handle(pattern, RequireAPIAdmin(service, fn)) }
+	admin("GET /api/v1/topics", h.topicsRead)
 	admin("GET /api/v1/ai/settings", h.aiSettingsGet)
 	admin("PUT /api/v1/ai/settings", h.aiSettingsPut)
 	admin("GET /api/v1/credentials/{provider}", h.credential)
@@ -345,4 +346,30 @@ func writeBackendError(w http.ResponseWriter, err error) {
 		return
 	}
 	writeProblem(w, http.StatusBadGateway, "Private operation failed")
+}
+
+func (h *backendHandler) topicsRead(w http.ResponseWriter, r *http.Request) {
+	ops, ok := h.ops.(interface {
+		Topics(context.Context, string) (json.RawMessage, error)
+	})
+	if !ok {
+		writeProblem(w, 503, "Private operation unavailable")
+		return
+	}
+	q := r.URL.Query()
+	for key := range q {
+		if key != "state" && key != "q" && key != "id" && key != "limit" && key != "offset" {
+			writeProblem(w, 422, "Invalid query")
+			return
+		}
+		if len(q[key]) != 1 {
+			writeProblem(w, 422, "Invalid query")
+			return
+		}
+	}
+	if len(r.URL.RawQuery) > 1024 {
+		writeProblem(w, 422, "Invalid query")
+		return
+	}
+	h.call(w, r, func(ctx context.Context) (json.RawMessage, error) { return ops.Topics(ctx, q.Encode()) })
 }
