@@ -175,7 +175,7 @@
     "migration": "preserve effective value and consuming role during adoption; verify managed parity before switching",
     "precedence": "selected role manifest takes precedence without environment fallback; legacy environment when no file is selected; component default if absent",
     "sources": [
-      "go-domain/cmd/news-domain/main.go:276",
+      "go-domain/cmd/news-domain/main.go:283",
       "go-domain/cmd/news-domain/runtime_config.go:25",
       "go-domain/cmd/news-migrate/main.go:26"
     ],
@@ -197,7 +197,7 @@
     "sources": [
       "go-background/cmd/news-background/runtime_config.go:13",
       "go-background/cmd/news-background/runtime_config.go:14",
-      "go-domain/cmd/news-domain/main.go:168",
+      "go-domain/cmd/news-domain/main.go:175",
       "go-domain/cmd/news-domain/runtime_config.go:25",
       "go-domain/cmd/news-domain/runtime_config.go:26",
       "go-processing/runner/runner.go:96"
@@ -529,7 +529,7 @@
     "migration": "preserve effective value and consuming role during adoption; verify managed parity before switching",
     "precedence": "selected role manifest takes precedence without environment fallback; legacy environment when no file is selected; component default if absent",
     "sources": [
-      "go-domain/cmd/news-domain/main.go:282",
+      "go-domain/cmd/news-domain/main.go:289",
       "go-domain/cmd/news-domain/runtime_config.go:25",
       "go-web/internal/config/config.go:146",
       "go-web/internal/config/config.go:52"
@@ -1340,7 +1340,7 @@
     "migration": "preserve effective value and consuming role during adoption; verify managed parity before switching",
     "precedence": "selected role manifest takes precedence without environment fallback; legacy environment when no file is selected; component default if absent",
     "sources": [
-      "go-domain/cmd/news-domain/main.go:172",
+      "go-domain/cmd/news-domain/main.go:179",
       "go-domain/cmd/news-domain/runtime_config.go:25"
     ],
     "class": "runtime",
@@ -1396,7 +1396,7 @@
     "precedence": "selected role manifest takes precedence without environment fallback; legacy environment when no file is selected; component default if absent",
     "sources": [
       "go-background/cmd/news-background/runtime_config.go:13",
-      "go-domain/cmd/news-domain/main.go:436",
+      "go-domain/cmd/news-domain/main.go:443",
       "go-domain/cmd/news-domain/runtime_config.go:25",
       "go-processing/runner/runner.go:122"
     ],
@@ -1499,7 +1499,7 @@
     "sources": [
       "go-background/cmd/news-background/runtime_config.go:13",
       "go-background/cmd/news-background/runtime_config.go:14",
-      "go-domain/cmd/news-domain/main.go:260",
+      "go-domain/cmd/news-domain/main.go:267",
       "go-domain/cmd/news-domain/runtime_config.go:25",
       "go-domain/cmd/news-domain/runtime_config.go:26",
       "go-ingestion/runner/runner.go:47",
@@ -1542,7 +1542,7 @@
     "precedence": "selected role manifest takes precedence without environment fallback; legacy environment when no file is selected; component default if absent",
     "sources": [
       "go-background/cmd/news-background/runtime_config.go:13",
-      "go-domain/cmd/news-domain/main.go:260",
+      "go-domain/cmd/news-domain/main.go:267",
       "go-domain/cmd/news-domain/runtime_config.go:25",
       "go-domain/cmd/news-domain/runtime_config.go:26",
       "go-ingestion/runner/runner.go:46",
@@ -1566,7 +1566,7 @@
     "precedence": "selected role manifest takes precedence without environment fallback; legacy environment when no file is selected; component default if absent",
     "sources": [
       "go-background/cmd/news-background/runtime_config.go:13",
-      "go-domain/cmd/news-domain/main.go:424",
+      "go-domain/cmd/news-domain/main.go:431",
       "go-domain/cmd/news-domain/runtime_config.go:25",
       "go-processing/runner/runner.go:121"
     ],
@@ -2070,7 +2070,7 @@
     "migration": "preserve effective value and consuming role during adoption; verify managed parity before switching",
     "precedence": "selected role manifest takes precedence without environment fallback; legacy environment when no file is selected; component default if absent",
     "sources": [
-      "go-domain/cmd/news-domain/main.go:346",
+      "go-domain/cmd/news-domain/main.go:353",
       "go-domain/cmd/news-domain/runtime_config.go:25"
     ],
     "class": "runtime",
@@ -2109,7 +2109,7 @@
     "precedence": "selected role manifest takes precedence without environment fallback; legacy environment when no file is selected; component default if absent",
     "sources": [
       "go-domain/cmd/news-domain/healthcheck.go:31",
-      "go-domain/cmd/news-domain/main.go:350",
+      "go-domain/cmd/news-domain/main.go:357",
       "go-domain/cmd/news-domain/runtime_config.go:25"
     ],
     "class": "runtime",
@@ -2151,7 +2151,7 @@
       "go-background/cmd/news-background/runtime_config.go:14",
       "go-background/internal/config/config.go:81",
       "go-domain/cmd/news-domain/healthcheck.go:27",
-      "go-domain/cmd/news-domain/main.go:168",
+      "go-domain/cmd/news-domain/main.go:175",
       "go-domain/cmd/news-domain/runtime_config.go:25",
       "go-domain/cmd/news-domain/runtime_config.go:26",
       "go-ingestion/runner/runner.go:49",
@@ -2971,7 +2971,7 @@
     "migration": "preserve the explicit daily request ceiling when enabled; leave unset while disabled",
     "precedence": "selected role manifest takes precedence without environment fallback; legacy environment when no file is selected; minimum 2 required when enabled",
     "sources": [
-      "go-domain/cmd/news-domain/topic_shadow_loop.go:42",
+      "go-domain/cmd/news-domain/topic_shadow_loop.go:43",
       "go-domain/cmd/news-domain/runtime_config.go:25"
     ],
     "class": "runtime",
@@ -2990,8 +2990,98 @@
     "migration": "preserve the disabled default; enabling requests an explicit daily request ceiling",
     "precedence": "selected role manifest takes precedence without environment fallback; legacy environment when no file is selected; disabled when absent",
     "sources": [
-      "go-domain/cmd/news-domain/topic_shadow_loop.go:31",
+      "go-domain/cmd/news-domain/topic_shadow_loop.go:32",
       "go-domain/cmd/news-domain/runtime_config.go:25"
+    ],
+    "class": "runtime",
+    "managed_roles": [
+      "domain"
+    ]
+  },
+  {
+    "key": "NEWS_TOPIC_SHADOW_EMBEDDING_DAILY_LIMIT",
+    "owner": "domain",
+    "type": "number",
+    "default": "unset; required in qdrant-jev mode",
+    "secret": false,
+    "store": "domain runtime manifest; credential files are mounted separately",
+    "reload": "process startup; restart or recreate after changing settings",
+    "migration": "opt in for the semantic shadow pilot",
+    "precedence": "selected role manifest, or standalone environment",
+    "sources": [
+      "go-domain/cmd/news-domain/semantic_shadow.go:30"
+    ],
+    "class": "runtime",
+    "managed_roles": [
+      "domain"
+    ]
+  },
+  {
+    "key": "NEWS_TOPIC_SHADOW_MODE",
+    "owner": "domain",
+    "type": "string",
+    "default": "luna",
+    "secret": false,
+    "store": "domain runtime manifest; credential files are mounted separately",
+    "reload": "process startup; restart or recreate after changing settings",
+    "migration": "opt in for the semantic shadow pilot",
+    "precedence": "selected role manifest, or standalone environment",
+    "sources": [
+      "go-domain/cmd/news-domain/topic_shadow_loop.go:49"
+    ],
+    "class": "runtime",
+    "managed_roles": [
+      "domain"
+    ]
+  },
+  {
+    "key": "NEWS_TOPIC_SHADOW_QDRANT_COLLECTION",
+    "owner": "domain",
+    "type": "string",
+    "default": "unset; required in qdrant-jev mode",
+    "secret": false,
+    "store": "domain runtime manifest; credential files are mounted separately",
+    "reload": "process startup; restart or recreate after changing settings",
+    "migration": "opt in for the semantic shadow pilot",
+    "precedence": "selected role manifest, or standalone environment",
+    "sources": [
+      "go-domain/cmd/news-domain/semantic_shadow.go:27"
+    ],
+    "class": "runtime",
+    "managed_roles": [
+      "domain"
+    ]
+  },
+  {
+    "key": "NEWS_TOPIC_SHADOW_QDRANT_KEY_FILE",
+    "owner": "domain",
+    "type": "path",
+    "default": "unset",
+    "secret": false,
+    "store": "domain runtime manifest; credential files are mounted separately",
+    "reload": "process startup; restart or recreate after changing settings",
+    "migration": "opt in for the semantic shadow pilot",
+    "precedence": "selected role manifest, or standalone environment",
+    "sources": [
+      "go-domain/cmd/news-domain/semantic_shadow.go:28"
+    ],
+    "class": "runtime",
+    "managed_roles": [
+      "domain"
+    ]
+  },
+  {
+    "key": "NEWS_TOPIC_SHADOW_QDRANT_URL",
+    "owner": "domain",
+    "type": "URL",
+    "default": "unset; required in qdrant-jev mode",
+    "secret": false,
+    "store": "domain runtime manifest; credential files are mounted separately",
+    "reload": "process startup; restart or recreate after changing settings",
+    "migration": "opt in for the semantic shadow pilot",
+    "precedence": "selected role manifest, or standalone environment",
+    "sources": [
+      "go-domain/cmd/news-domain/semantic_shadow.go:26"
     ],
     "class": "runtime",
     "managed_roles": [
@@ -4211,7 +4301,7 @@
     "migration": "preserve effective value and consuming role during adoption; verify managed parity before switching",
     "precedence": "selected role manifest takes precedence without environment fallback; legacy environment when no file is selected; component default if absent",
     "sources": [
-      "go-domain/cmd/news-domain/main.go:288",
+      "go-domain/cmd/news-domain/main.go:295",
       "go-domain/cmd/news-domain/runtime_config.go:25",
       "go-domain/cmd/news-domain/runtime_config.go:26",
       "go-web/internal/backend/backend.go:113",

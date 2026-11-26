@@ -38,6 +38,7 @@ func (h *AdminHandler) Register(mux *http.ServeMux) {
 		http.Redirect(w, r, target, http.StatusTemporaryRedirect)
 	})
 	mux.HandleFunc("GET /admin/{$}", h.page("dashboard.html", "Evening News v2 - Admin", "dashboard"))
+	mux.HandleFunc("GET /admin/topics", h.page("topics.html", "Сюжеты", "topics"))
 	mux.HandleFunc("GET /admin/sources", h.page("sources.html", "Источники - Evening News v2", "sources"))
 	mux.HandleFunc("GET /admin/summaries", h.page("summaries.html", "Дневные сводки - Evening News v2", "summaries"))
 	mux.HandleFunc("GET /admin/stats", h.page("stats.html", "Статистика Системы", "stats"))

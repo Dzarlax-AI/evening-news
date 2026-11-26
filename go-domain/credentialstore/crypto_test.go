@@ -83,3 +83,21 @@ func TestViberProviderAllowed(t *testing.T) {
 		t.Fatal("provider allowlist")
 	}
 }
+
+func TestJevProviderAllowed(t *testing.T) {
+	if !validProvider("jev") || validProvider("jev-other") {
+		t.Fatal("provider allowlist")
+	}
+	key := bytes.Repeat([]byte{8}, 32)
+	envelope, err := Seal(key, "key-1", "install-1", "jev", []byte("synthetic"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	plain, err := Open(key, "key-1", "install-1", "jev", envelope)
+	if err != nil || string(plain) != "synthetic" {
+		t.Fatal("Jev encryption round trip failed")
+	}
+	if _, err := Open(key, "key-1", "install-1", "openai", envelope); err == nil {
+		t.Fatal("provider binding failed")
+	}
+}

@@ -167,7 +167,7 @@ func (c *Client) Configuration(ctx context.Context, method, group string, body j
 }
 
 func (c *Client) Credential(ctx context.Context, method, provider string, body json.RawMessage) (json.RawMessage, error) {
-	if provider != "gemini" && provider != "openai" && provider != "telegram" && provider != "viber" && provider != "apns" {
+	if provider != "gemini" && provider != "openai" && provider != "telegram" && provider != "viber" && provider != "apns" && provider != "jev" {
 		return nil, &APIError{Status: 422, Detail: "Invalid provider"}
 	}
 	var reader io.Reader
@@ -591,3 +591,8 @@ func (b *boundedReadCloser) Read(p []byte) (int, error) {
 var _ Operations = (*Client)(nil)
 
 var _ AISettingsOperations = (*Client)(nil)
+
+// Topics reads the bounded shadow operator view.
+func (c *Client) Topics(ctx context.Context, query string) (json.RawMessage, error) {
+	return c.rawJSON(ctx, http.MethodGet, "/topics?"+query, nil, "")
+}

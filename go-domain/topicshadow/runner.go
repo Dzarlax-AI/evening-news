@@ -19,6 +19,8 @@ type Runner struct {
 	Owner             string
 	Client            DecisionsTransport
 	DailyRequestLimit int
+	Semantic          SemanticSearch
+	WarmupFrom        time.Time
 	replay            bool
 }
 
@@ -199,6 +201,9 @@ func (b budgetedDecisions) Decide(ctx context.Context, input string, questions [
 }
 
 func (r Runner) evaluate(ctx context.Context, item queuedArticle, cutoff time.Time) (bool, error) {
+	if r.Semantic != nil {
+		return r.evaluateSemantic(ctx, item, cutoff)
+	}
 	var current bool
 	if err := r.fenced(ctx, func(tx pgx.Tx) error {
 		var err error
@@ -276,6 +281,22 @@ func (r Runner) finish(ctx context.Context, item queuedArticle, topic shadowTopi
 		}
 		recordedAt := r.recordedAt(item.ReadyAt)
 		report := map[string]any{"match": match, "assessment": novelty, "novelty": novelty.Outcome}
+		if metadata, ok := ctx.Value(semanticDecisionKey{}).(semanticDecision); ok {
+			report["candidates"] = metadata.CandidateIDs
+			if metadata.Trace.RequestSHA256 != "" {
+				report["jev_trace"] = map[string]any{
+					"request": string(metadata.Trace.RequestBody), "response": string(metadata.Trace.ResponseBody),
+					"request_sha256": metadata.Trace.RequestSHA256, "response_sha256": metadata.Trace.ResponseSHA256,
+					"http_status": metadata.Trace.StatusCode,
+				}
+			}
+			if status != "superseded" && metadata.Anchor != nil {
+				if err := r.persistSemanticAnchor(ctx, tx, *metadata.Anchor, topic, recordedAt); err != nil {
+					return err
+				}
+				topic.Revision = 1
+			}
+		}
 		if status == "review" {
 			switch {
 			case hasAmbiguousReferent(articleText(item.ArticleInput)):
@@ -289,10 +310,34 @@ func (r Runner) finish(ctx context.Context, item queuedArticle, topic shadowTopi
 			}
 		}
 		var topicID any
-		if status == "accepted" && topic.Revision == 0 &&
-			(!novelty.SubjectCandidate || novelty.Outcome != NoveltyOutcomeMaterialUpdate) {
+		switch {
+		case r.Semantic != nil && status == "review" && match.Outcome == MatchOutcomeMatch && topic.ID != "":
+			// A confirmed match does not depend on the novelty verdict. Reviewed
+			// articles stay linked without entering the topic's history of facts.
+			topicID = topic.ID
+		case r.Semantic == nil && status == "accepted" && topic.Revision == 0 &&
+			(!novelty.SubjectCandidate || novelty.Outcome != NoveltyOutcomeMaterialUpdate):
 			report["topic_skipped"] = "no_material_topic"
-		} else if status == "accepted" {
+		case r.Semantic != nil && status == "accepted" && topic.Revision == 0:
+			topicID = topic.ID
+			topic.State.MaterialCount = 1
+			report["candidate_seed"] = true
+			report["fact"] = match.EvidenceSpan
+			report["material_applied"] = true
+			seed := LifecycleResult{State: topic.State}
+			seed.State.MaterialCount = 0
+			report["material_applied"] = false
+			if novelty.Outcome == NoveltyOutcomeMaterialUpdate && novelty.ConcreteStatusChange {
+				seed = ApplyLifecycle(seed.State, LifecycleDecision{
+					CandidateID: topic.ID, AvailableAt: item.ReadyAt, FactID: strconv.FormatInt(item.ArticleID, 10),
+					SourceIDs: articleSourceIDs(item.SourceID), MaterialUpdate: true, ConcreteStatusChange: true,
+				}, DefaultQuietAfter)
+				report["material_applied"] = true
+			}
+			if err := r.persistTopic(ctx, tx, topic, seed, &item, recordedAt); err != nil {
+				return err
+			}
+		case status == "accepted":
 			topicID = topic.ID
 			fact := novelty.EvidenceSpan
 			if fact == "" {

@@ -127,6 +127,13 @@ func main() {
 		}
 		return
 	}
+	if len(os.Args) == 2 && os.Args[1] == "topic-shadow-index-init" {
+		if err := initializeSemanticCollection(); err != nil {
+			log.Print("semantic topic shadow collection initialization failed")
+			os.Exit(1)
+		}
+		return
+	}
 	if len(os.Args) == 2 && os.Args[1] == "healthcheck" {
 		if err := healthcheck(); err != nil {
 			log.Print("healthcheck failed")
