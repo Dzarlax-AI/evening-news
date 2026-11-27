@@ -700,9 +700,10 @@ func (w *NativeBrowser) openCDP(ctx context.Context) (res *nativeResources, err 
 	res = &nativeResources{client: client, generation: ws, diagnostic: func(stage string, err error) { w.reportRequestDiagnostic(ctx, stage, err) }}
 	owned := res
 	stage := "create_context"
+	reason := "ownership_loss"
 	defer func() {
 		if err != nil {
-			w.taint(stage, nativeDiagnosticReason(err))
+			w.taint(stage, reason)
 			err = errors.Join(err, owned.cleanup())
 		}
 	}()
@@ -713,7 +714,8 @@ func (w *NativeBrowser) openCDP(ctx context.Context) (res *nativeResources, err 
 		ID string `json:"browserContextId"`
 	}
 	if err = client.callAllocation(setup, "", "Target.createBrowserContext", map[string]any{"disposeOnDetach": true, "proxyServer": w.cfg.ProxyURL, "proxyBypassList": "<-loopback>"}, &created); err != nil {
-		w.reportRequestDiagnostic(ctx, "create_context", err)
+		reason = nativeDiagnosticReason(err)
+		w.reportRequestDiagnostic(ctx, stage, err)
 		return nil, errors.Join(ErrNativeOwnershipLost, err)
 	}
 	res.contextID = created.ID
@@ -726,7 +728,8 @@ func (w *NativeBrowser) openCDP(ctx context.Context) (res *nativeResources, err 
 		ID string `json:"targetId"`
 	}
 	if err = client.callAllocation(setup, "", "Target.createTarget", map[string]any{"url": "about:blank", "browserContextId": res.contextID, "background": true}, &target); err != nil {
-		w.reportRequestDiagnostic(ctx, "create_target", err)
+		reason = nativeDiagnosticReason(err)
+		w.reportRequestDiagnostic(ctx, stage, err)
 		return nil, errors.Join(ErrNativeOwnershipLost, err)
 	}
 	res.targetID = target.ID
@@ -739,7 +742,8 @@ func (w *NativeBrowser) openCDP(ctx context.Context) (res *nativeResources, err 
 		ID string `json:"sessionId"`
 	}
 	if err = client.callAllocation(setup, "", "Target.attachToTarget", map[string]any{"targetId": res.targetID, "flatten": true}, &attached); err != nil {
-		w.reportRequestDiagnostic(ctx, "attach_target", err)
+		reason = nativeDiagnosticReason(err)
+		w.reportRequestDiagnostic(ctx, stage, err)
 		return nil, errors.Join(ErrNativeOwnershipLost, err)
 	}
 	res.sessionID = attached.ID
@@ -1573,7 +1577,7 @@ func (w *NativeBrowser) Fetch(ctx context.Context, raw string, opts NativeBrowse
 				case "Inspector.targetCrashed":
 					if eventSession != session {
 						stop(ErrNativeOwnershipLost)
-						w.taint("events", "dialog_owner_mismatch")
+						w.taint("events", "target_crash_owner_mismatch")
 						return
 					}
 					targetCrashed.Store(true)

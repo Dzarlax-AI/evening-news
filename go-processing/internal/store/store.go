@@ -637,18 +637,21 @@ func (s *Store) RecordCategoryMappingFailure(ctx context.Context, f Fence, a Art
 		return articleOperation("category_failure_lock_article", "category failure article unavailable", err)
 	}
 	if sourceSnapshotFingerprint(current) != receipt["snapshot_fingerprint"] {
-		return errors.New("article changed during category failure handling")
+		return articleOperation("category_failure_check_snapshot", "article changed during category failure handling", nil)
 	}
 	if _, err = tx.Exec(ctx, `UPDATE articles SET last_processing_error='category_mapping_failed' WHERE id=$1 AND processing_attempts=$2`, a.ID, attempt); err != nil {
-		return errors.New("category failure article update unavailable")
+		return articleOperation("category_failure_update_article", "category failure article update unavailable", err)
 	}
 	errorCode := "category_mapping_failed"
 	result := articleProcessingItemResult(Persisted{State: "retry_wait", Error: &errorCode, Fields: fields})
 	tag, err := tx.Exec(ctx, `UPDATE article_processing_items SET state='retry_wait',result=$4::jsonb,updated_at=now() WHERE run_id=$1::uuid AND article_id=$2 AND article_attempt=$3 AND claim_token=$5::uuid AND input_fingerprint=$6 AND state='running'`, f.RunID, a.ID, attempt, result, claimToken, inputFP)
 	if err != nil || tag.RowsAffected() != 1 {
-		return errors.New("category failure item update unavailable")
+		return articleOperation("category_failure_update_receipt", "category failure item update unavailable", err)
 	}
-	return tx.Commit(ctx)
+	if err := tx.Commit(ctx); err != nil {
+		return articleOperation("category_failure_commit", "article processing commit failed", err)
+	}
+	return nil
 }
 
 func sourceSnapshotFingerprint(a Article) string {
