@@ -136,7 +136,7 @@ func (w *NativeBrowser) open(ctx context.Context, limit int64) (*nativeResources
 	budget, err := nativeAcquireBudget(ctx, w.cfg, limit)
 	if err != nil {
 		if errors.Is(err, ErrNativeOwnershipLost) {
-			w.taint()
+			w.taint("render_budget", nativeDiagnosticReason(err))
 		} else if errors.Is(err, ErrNativeNotReady) {
 			w.unavailable()
 		}

@@ -196,9 +196,9 @@ func run() error {
 			return nil
 		}
 		return err
-	case <-fatal:
+	case err := <-fatal:
 		_ = shutdownExtractionServer(httpServer, handler.Drain)
-		return transport.ErrNativeWorkerFatal
+		return err
 	case <-signals.Done():
 		if err = shutdownExtractionServer(httpServer, handler.Drain); err != nil {
 			return err

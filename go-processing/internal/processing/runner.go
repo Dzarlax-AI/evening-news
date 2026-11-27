@@ -196,7 +196,7 @@ func (p *Processor) Run(ctx context.Context, f store.Fence) (map[string]any, err
 				mu.Lock()
 				if e != nil {
 					if firstErr == nil {
-						firstErr = e
+						firstErr = &articleError{id: a.ID, err: e}
 					}
 					cancelBatch()
 					mu.Unlock()
@@ -378,7 +378,7 @@ func (p *Processor) processOne(ctx context.Context, f store.Fence, a store.Artic
 	}
 	attempt, fp, token, err := p.DB.ClaimArticle(ctx, f, a, force, p.timeout(), retryDelay)
 	if err != nil {
-		return Outcome{}, 0, err
+		return Outcome{}, 0, withPhase("claim_article", err)
 	}
 	a.ClaimToken = token
 	workCtx, cancel := context.WithTimeout(ctx, p.timeout())
@@ -451,13 +451,13 @@ func (p *Processor) processOne(ctx context.Context, f store.Fence, a store.Artic
 			if attemptTimedOut(workCtx, ctx) {
 				return p.finish(ctx, f, a, attempt, fp, Outcome{State: StateRetryWait, Fields: fields, Error: "timeout"})
 			}
-			return Outcome{}, attempt, err
+			return Outcome{}, attempt, withPhase("update_extraction_fingerprint", err)
 		}
 		fp = contextFP
 		fresh, extractErr := p.extract(workCtx, f, a, attempt, contextFP, contextContent)
 		if extractErr != nil {
 			if isFatal(extractErr) {
-				return Outcome{}, attempt, extractErr
+				return Outcome{}, attempt, withPhase("extract_article", extractErr)
 			}
 			if attemptTimedOut(workCtx, ctx) {
 				return p.finish(ctx, f, a, attempt, fp, Outcome{State: StateRetryWait, Fields: fields, Error: "timeout"})
@@ -574,13 +574,13 @@ func (p *Processor) processOne(ctx context.Context, f store.Fence, a store.Artic
 		if attemptTimedOut(workCtx, ctx) {
 			return p.finish(ctx, f, a, attempt, fp, Outcome{State: StateRetryWait, Fields: fields, Error: "timeout"})
 		}
-		return Outcome{}, attempt, err
+		return Outcome{}, attempt, withPhase("update_analysis_fingerprint", err)
 	}
 	fp = inputFP
 	analysis, err := p.AI.Call(workCtx, f, a, attempt, fp, "analyze", input)
 	if err != nil {
 		if isFatal(err) {
-			return Outcome{}, attempt, err
+			return Outcome{}, attempt, withPhase("analyze_article", err)
 		}
 		if errors.Is(err, ErrResourceLimit) {
 			return p.finish(ctx, f, a, attempt, fp, Outcome{State: StateRejected, Fields: fields, Error: "resource_limit"})
@@ -603,13 +603,13 @@ func (p *Processor) processOne(ctx context.Context, f store.Fence, a store.Artic
 			if attemptTimedOut(workCtx, ctx) {
 				return p.finish(ctx, f, a, attempt, fp, Outcome{State: StateRetryWait, Fields: fields, Error: "timeout"})
 			}
-			return Outcome{}, attempt, err
+			return Outcome{}, attempt, withPhase("update_fallback_fingerprint", err)
 		}
 		fp = fallbackFP
 		fallback, fallbackErr := p.AI.Call(workCtx, f, a, attempt, fp, "analyze", fallbackInput)
 		if fallbackErr != nil {
 			if isFatal(fallbackErr) {
-				return Outcome{}, attempt, fallbackErr
+				return Outcome{}, attempt, withPhase("analyze_fallback", fallbackErr)
 			}
 			if errors.Is(fallbackErr, ErrResourceLimit) {
 				return p.finish(ctx, f, a, attempt, fp, Outcome{State: StateRejected, Fields: fields, Error: "resource_limit"})
@@ -796,11 +796,11 @@ func (p *Processor) finish(ctx context.Context, f store.Fence, a store.Article, 
 	if err := p.DB.SaveOutcome(cleanupCtx, f, a, attempt, a.ClaimToken, fp, dbOutcome); err != nil {
 		if errors.Is(err, store.ErrCategoryMapping) {
 			if recordErr := p.DB.RecordCategoryMappingFailure(cleanupCtx, f, a, attempt, a.ClaimToken, fp, persisted.Fields); recordErr != nil {
-				return o, attempt, recordErr
+				return o, attempt, withPhase("record_category_mapping_failure", recordErr)
 			}
 			return Outcome{State: StateRetryWait, Fields: map[string]any{}, Error: "category_mapping_failed"}, attempt, nil
 		}
-		return o, attempt, err
+		return o, attempt, withPhase("save_article_outcome", err)
 	}
 	o.State = persisted.State
 	return o, attempt, nil

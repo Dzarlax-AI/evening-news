@@ -458,7 +458,7 @@ func TestNativeWorkerFatalExitsAndFreshProcessReusesBrowser(t *testing.T) {
 			t.Fatalf("fatal worker exit = %v, want exit 1; output=%s", err, first.output.String())
 		}
 	}
-	if !strings.Contains(first.output.String(), "native_browser_worker_fatal") || strings.Contains(first.output.String(), fixture.server.URL) {
+	if !strings.Contains(first.output.String(), "native_browser_worker_fatal stage=discovery reason=browser_generation_changed") || strings.Contains(first.output.String(), fixture.server.URL) {
 		t.Fatalf("fatal exit was not sanitized: %s", first.output.String())
 	}
 	fixture.mu.Lock()

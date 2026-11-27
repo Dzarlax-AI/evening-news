@@ -2011,7 +2011,7 @@ func TestNativeBrowserGenerationTaintCancelsEveryActiveOperation(t *testing.T) {
 	f.mu.Lock()
 	f.contextsDelay = time.Second
 	f.mu.Unlock()
-	w.taint()
+	w.taint("events", "client_disconnected")
 	select {
 	case err := <-results:
 		if !errors.Is(err, ErrNativeOwnershipLost) {
@@ -2260,14 +2260,15 @@ func TestNativePageMonitorDiagnosticsClassifyNavigationAndPreservePrimaryFailure
 func TestNativePageMonitorDiagnosticsIncludeEvaluationAndEarlySetupFailures(t *testing.T) {
 	cases := []struct {
 		name, stage, reason string
+		fatal               bool
 		configure           func(*nativeFixture)
 	}{
 		{name: "evaluation exception", stage: "dom", reason: "evaluation_failed", configure: func(f *nativeFixture) { f.evaluationException = true }},
 		{name: "navigation protocol error", stage: "navigate", reason: "protocol_error", configure: func(f *nativeFixture) { f.failNavigate = true }},
 		{name: "evaluation protocol error", stage: "dom", reason: "protocol_error", configure: func(f *nativeFixture) { f.failEvaluate = true }},
-		{name: "context setup", stage: "create_context", reason: "protocol_error", configure: func(f *nativeFixture) { f.failCreateContext = true }},
-		{name: "target setup", stage: "create_target", reason: "protocol_error", configure: func(f *nativeFixture) { f.failCreateTarget = true }},
-		{name: "attach setup", stage: "attach_target", reason: "protocol_error", configure: func(f *nativeFixture) { f.failAttach = true }},
+		{name: "context setup", stage: "create_context", reason: "protocol_error", fatal: true, configure: func(f *nativeFixture) { f.failCreateContext = true }},
+		{name: "target setup", stage: "create_target", reason: "protocol_error", fatal: true, configure: func(f *nativeFixture) { f.failCreateTarget = true }},
+		{name: "attach setup", stage: "attach_target", reason: "protocol_error", fatal: true, configure: func(f *nativeFixture) { f.failAttach = true }},
 	}
 	for _, test := range cases {
 		t.Run(test.name, func(t *testing.T) {
@@ -2291,6 +2292,17 @@ func TestNativePageMonitorDiagnosticsIncludeEvaluationAndEarlySetupFailures(t *t
 			stage, reason := diagnostic.Details()
 			if stage != test.stage || reason != test.reason {
 				t.Fatalf("scoped diagnostic = %s/%s, want %s/%s", stage, reason, test.stage, test.reason)
+			}
+			if test.fatal {
+				select {
+				case failure := <-w.Fatal():
+					want := "native_browser_worker_fatal stage=" + test.stage + " reason=protocol_error_-32000"
+					if !errors.Is(failure, ErrNativeWorkerFatal) || failure.Error() != want {
+						t.Fatalf("fatal diagnostic = %v, want %s", failure, want)
+					}
+				default:
+					t.Fatal("allocation failure did not taint worker")
+				}
 			}
 		})
 	}
@@ -2390,18 +2402,19 @@ func TestNativeFatalSignalIsOneShotAndConcurrentTaintIsIdempotent(t *testing.T) 
 	f := newNativeFixture(t)
 	w := f.worker(t)
 	fatal := w.Fatal()
+	w.taint("events", "owned_detach")
 	var wg sync.WaitGroup
 	for range 32 {
 		wg.Add(1)
 		go func() {
 			defer wg.Done()
-			w.taint()
+			w.taint("events", "client_disconnected")
 		}()
 	}
 	wg.Wait()
 	select {
 	case err, ok := <-fatal:
-		if !ok || !errors.Is(err, ErrNativeWorkerFatal) {
+		if !ok || !errors.Is(err, ErrNativeWorkerFatal) || err.Error() != "native_browser_worker_fatal stage=events reason=owned_detach" {
 			t.Fatalf("fatal notification = %v, open=%v", err, ok)
 		}
 	case <-time.After(time.Second):

@@ -23,6 +23,21 @@ var ErrRunConflict = errors.New("processing run envelope conflicts with its rece
 var ErrCancelled = errors.New("processing run is cancelled")
 var ErrCategoryMapping = errors.New("article category mapping target unavailable")
 
+// ArticleOperationError carries the exact store operation without exposing SQL
+// or driver details in its error message.
+type ArticleOperationError struct {
+	Operation string
+	message   string
+	cause     error
+}
+
+func (e *ArticleOperationError) Error() string { return e.message }
+func (e *ArticleOperationError) Unwrap() error { return e.cause }
+
+func articleOperation(operation, message string, cause error) error {
+	return &ArticleOperationError{Operation: operation, message: message, cause: cause}
+}
+
 type Envelope struct {
 	Version            int       `json:"version"`
 	JobID              string    `json:"job_id"`
@@ -175,7 +190,7 @@ func (s *Store) FenceTx(ctx context.Context, tx pgx.Tx, f Fence) (string, string
 		if pgCode(err) == "P0001" {
 			return "", "", ErrStaleFence
 		}
-		return "", "", errors.New("processing fence check failed")
+		return "", "", articleOperation("check_fence", "processing fence check failed", err)
 	}
 	if id != f.RunID {
 		return "", "", ErrRunConflict
@@ -372,7 +387,7 @@ func fingerprint(title, content, url, sourceType string, original *string) strin
 func (s *Store) ClaimArticle(ctx context.Context, f Fence, a Article, force bool, timeout, retryDelay time.Duration) (int, string, string, error) {
 	tx, err := s.Pool.Begin(ctx)
 	if err != nil {
-		return 0, "", "", errors.New("article claim transaction unavailable")
+		return 0, "", "", articleOperation("claim_begin", "article claim transaction unavailable", err)
 	}
 	defer rollback(tx)
 	if _, state, e := s.FenceTx(ctx, tx, f); e != nil {
@@ -387,13 +402,13 @@ func (s *Store) ClaimArticle(ctx context.Context, f Fence, a Article, force bool
 	var advertisement *bool
 	err = tx.QueryRow(ctx, `SELECT COALESCE(processing_attempts,0),COALESCE(processing_state,'pending'),COALESCE(title,''),COALESCE(url,''),COALESCE(content,''),COALESCE(summary,''),COALESCE(summary_processed,false),COALESCE(category_processed,false),COALESCE(ad_processed,false),is_advertisement FROM articles WHERE id=$1 FOR UPDATE`, a.ID).Scan(&currentAttempt, &state, &title, &url, &content, &summary, &summaryProcessed, &categoryProcessed, &adProcessed, &advertisement)
 	if err != nil {
-		return 0, "", "", errors.New("article claim target unavailable")
+		return 0, "", "", articleOperation("claim_lock_article", "article claim target unavailable", err)
 	}
 	if currentAttempt != a.ProcessingAttempts || !(state == "pending" || state == "retry_wait") {
-		return 0, "", "", errors.New("article claim no longer eligible")
+		return 0, "", "", articleOperation("claim_check_eligibility", "article claim no longer eligible", nil)
 	}
 	if title != a.Title || url != a.URL || content != a.Content || summary != a.Summary || summaryProcessed != a.SummaryProcessed || categoryProcessed != a.CategoryProcessed || adProcessed != a.AdProcessed || !sameBool(advertisement, a.IsAdvertisement) {
-		return 0, "", "", errors.New("article changed before processing claim")
+		return 0, "", "", articleOperation("claim_check_snapshot", "article changed before processing claim", nil)
 	}
 	attempt := currentAttempt + 1
 	delay := max(timeout+60*time.Second, retryDelay)
@@ -403,12 +418,12 @@ func (s *Store) ClaimArticle(ctx context.Context, f Fence, a Article, force bool
 	claimDeadline := time.Now().UTC().Add(delay)
 	tag, err := tx.Exec(ctx, `UPDATE articles SET processing_attempts=$2,processing_state='retry_wait',next_attempt_at=$3,last_processing_error='Attempt interrupted before outcome was saved' WHERE id=$1 AND processing_attempts=$4`, a.ID, attempt, claimDeadline, currentAttempt)
 	if err != nil || tag.RowsAffected() != 1 {
-		return 0, "", "", errors.New("article claim lost")
+		return 0, "", "", articleOperation("claim_update_article", "article claim lost", err)
 	}
 	srcfp := sourceSnapshotFingerprint(a)
 	var raw [16]byte
 	if _, err = rand.Read(raw[:]); err != nil {
-		return 0, "", "", errors.New("article claim token unavailable")
+		return 0, "", "", articleOperation("claim_create_token", "article claim token unavailable", err)
 	}
 	token := fmt.Sprintf("%08x-%04x-%04x-%04x-%012x", raw[0:4], raw[4:6], raw[6:8], raw[8:10], raw[10:16])
 	var currentInput string
@@ -425,17 +440,17 @@ func (s *Store) ClaimArticle(ctx context.Context, f Fence, a Article, force bool
 	initial, _ := json.Marshal(map[string]string{"snapshot_fingerprint": srcfp})
 	_, err = tx.Exec(ctx, `INSERT INTO article_processing_items(run_id,article_id,article_attempt,input_fingerprint,claim_token,state,result) VALUES($1::uuid,$2,$3,$4,$5::uuid,'running',$6::jsonb)`, f.RunID, a.ID, attempt, currentInput, token, initial)
 	if err != nil {
-		return 0, "", "", errors.New("article claim receipt unavailable")
+		return 0, "", "", articleOperation("claim_insert_receipt", "article claim receipt unavailable", err)
 	}
 	if err = tx.Commit(ctx); err != nil {
-		return 0, "", "", errors.New("article claim commit failed")
+		return 0, "", "", articleOperation("claim_commit", "article claim commit failed", err)
 	}
 	return attempt, currentInput, token, nil
 }
 func (s *Store) UpdateItemFingerprint(ctx context.Context, f Fence, articleID int64, attempt int, claimToken, fingerprint string) error {
 	tx, err := s.Pool.Begin(ctx)
 	if err != nil {
-		return errors.New("article claim update unavailable")
+		return articleOperation("fingerprint_begin", "article claim update unavailable", err)
 	}
 	defer rollback(tx)
 	if _, state, e := s.FenceTx(ctx, tx, f); e != nil {
@@ -445,14 +460,17 @@ func (s *Store) UpdateItemFingerprint(ctx context.Context, f Fence, articleID in
 	}
 	tag, err := tx.Exec(ctx, `UPDATE article_processing_items SET input_fingerprint=$5,updated_at=now() WHERE run_id=$1::uuid AND article_id=$2 AND article_attempt=$3 AND claim_token=$4::uuid AND state='running'`, f.RunID, articleID, attempt, claimToken, fingerprint)
 	if err != nil || tag.RowsAffected() != 1 {
-		return errors.New("article claim changed")
+		return articleOperation("fingerprint_update_receipt", "article claim changed", err)
 	}
-	return tx.Commit(ctx)
+	if err := tx.Commit(ctx); err != nil {
+		return articleOperation("fingerprint_commit", "article processing commit failed", err)
+	}
+	return nil
 }
 func (s *Store) SaveOutcome(ctx context.Context, f Fence, a Article, attempt int, claimToken, inputFP string, p Persisted) error {
 	tx, err := s.Pool.Begin(ctx)
 	if err != nil {
-		return errors.New("article outcome transaction unavailable")
+		return articleOperation("outcome_begin", "article outcome transaction unavailable", err)
 	}
 	defer rollback(tx)
 	if _, state, e := s.FenceTx(ctx, tx, f); e != nil {
@@ -465,7 +483,7 @@ func (s *Store) SaveOutcome(ctx context.Context, f Fence, a Article, attempt int
 	var raw []byte
 	err = tx.QueryRow(ctx, `SELECT input_fingerprint,claim_token::text,state,result FROM article_processing_items WHERE run_id=$1::uuid AND article_id=$2 AND article_attempt=$3 FOR UPDATE`, f.RunID, a.ID, attempt).Scan(&claimFP, &storedToken, &claimState, &raw)
 	if err != nil || claimFP != inputFP || storedToken != claimToken || claimState != "running" {
-		return errors.New("article outcome claim changed")
+		return articleOperation("outcome_lock_receipt", "article outcome claim changed", err)
 	}
 	var receipt map[string]string
 	_ = json.Unmarshal(raw, &receipt)
@@ -480,7 +498,7 @@ func (s *Store) SaveOutcome(ctx context.Context, f Fence, a Article, attempt int
 	dbArticle.TelegramContext = dbTelegramContext
 	dbArticle.SummaryProcessed, dbArticle.CategoryProcessed, dbArticle.AdProcessed, dbArticle.IsAdvertisement = dbSummaryProcessed, dbCategoryProcessed, dbAdProcessed, dbAdvertisement
 	if err != nil || articleAttempt != attempt || sourceSnapshotFingerprint(dbArticle) != receipt["snapshot_fingerprint"] {
-		return errors.New("article changed during processing")
+		return articleOperation("outcome_check_snapshot", "article changed during processing", err)
 	}
 	fields := p.Fields
 	sets := []string{"processing_attempts=$2", "processing_state=$3", "next_attempt_at=$4", "last_processing_error=$5", "processed=$6"}
@@ -504,7 +522,7 @@ func (s *Store) SaveOutcome(ctx context.Context, f Fence, a Article, attempt int
 		sets = append(sets, fmt.Sprintf("%s=$%d", key, len(args)))
 	}
 	if _, err = tx.Exec(ctx, `UPDATE articles SET `+strings.Join(sets, ",")+` WHERE id=$1`, args...); err != nil {
-		return errors.New("article update failed")
+		return articleOperation("outcome_update_article", "article update failed", err)
 	}
 	if locales, ok := fields["localizations"].(map[string]any); ok {
 		prompt, _ := fields["localization_prompt_version"].(string)
@@ -524,13 +542,13 @@ func (s *Store) SaveOutcome(ctx context.Context, f Fence, a Article, attempt int
 			}
 			_, err = tx.Exec(ctx, `INSERT INTO article_localizations(article_id,locale,title,summary,input_fingerprint,prompt_version,model,status,attempts,next_retry_at,last_error) VALUES($1,$2,$3,$4,$5,$6,$7,$8,1,CASE WHEN $8='retry_wait' THEN (CURRENT_TIMESTAMP AT TIME ZONE 'UTC') + INTERVAL '30 minutes' ELSE NULL END,$9) ON CONFLICT(article_id,locale) DO UPDATE SET title=EXCLUDED.title,summary=EXCLUDED.summary,input_fingerprint=EXCLUDED.input_fingerprint,prompt_version=EXCLUDED.prompt_version,model=EXCLUDED.model,status=EXCLUDED.status,attempts=CASE WHEN article_localizations.input_fingerprint=EXCLUDED.input_fingerprint THEN article_localizations.attempts+1 ELSE 1 END,next_retry_at=EXCLUDED.next_retry_at,last_error=EXCLUDED.last_error,updated_at=(CURRENT_TIMESTAMP AT TIME ZONE 'UTC') WHERE EXCLUDED.status='completed' OR article_localizations.status<>'completed' OR article_localizations.input_fingerprint<>EXCLUDED.input_fingerprint`, a.ID, locale, title, summary, inputFP, prompt, model, status, lastError)
 			if err != nil {
-				return errors.New("localization update failed")
+				return articleOperation("outcome_update_localization", "localization update failed", err)
 			}
 		}
 	}
 	if cats, ok := fields["categories"].([]Category); ok {
 		if _, err = tx.Exec(ctx, `DELETE FROM article_categories WHERE article_id=$1`, a.ID); err != nil {
-			return errors.New("category replacement failed")
+			return articleOperation("outcome_replace_categories", "category replacement failed", err)
 		}
 		for _, cat := range cats {
 			var categoryID int
@@ -540,7 +558,7 @@ func (s *Store) SaveOutcome(ctx context.Context, f Fence, a Article, attempt int
 			if errors.Is(err, pgx.ErrNoRows) {
 				fixed, found, lookupErr := lookupFixedCategory(ctx, tx, cat.Name)
 				if lookupErr != nil {
-					return errors.New("category mapping lookup failed")
+					return articleOperation("outcome_lookup_category_mapping", "category mapping lookup failed", lookupErr)
 				}
 				if !found {
 					fixed = cat.DisplayCategory
@@ -557,20 +575,23 @@ func (s *Store) SaveOutcome(ctx context.Context, f Fence, a Article, attempt int
 				if errors.Is(err, pgx.ErrNoRows) {
 					return ErrCategoryMapping
 				}
-				return errors.New("category target lookup failed")
+				return articleOperation("outcome_lookup_category", "category target lookup failed", err)
 			}
 			_, err = tx.Exec(ctx, `INSERT INTO article_categories(article_id,category_id,confidence,ai_category,created_at) VALUES($1,$2,$3,$4,now()) ON CONFLICT(article_id,category_id) DO NOTHING`, a.ID, categoryID, cat.Confidence, cat.AICategory)
 			if err != nil {
-				return errors.New("category insert failed")
+				return articleOperation("outcome_insert_category", "category insert failed", err)
 			}
 		}
 	}
 	result := articleProcessingItemResult(p)
 	tag, err := tx.Exec(ctx, `UPDATE article_processing_items SET state=$4,result=$5::jsonb,updated_at=now() WHERE run_id=$1::uuid AND article_id=$2 AND article_attempt=$3 AND claim_token=$6::uuid AND input_fingerprint=$7 AND state='running'`, f.RunID, a.ID, attempt, p.State, result, claimToken, inputFP)
 	if err != nil || tag.RowsAffected() != 1 {
-		return errors.New("article item update failed")
+		return articleOperation("outcome_update_receipt", "article item update failed", err)
 	}
-	return tx.Commit(ctx)
+	if err := tx.Commit(ctx); err != nil {
+		return articleOperation("outcome_commit", "article processing commit failed", err)
+	}
+	return nil
 }
 
 func lookupFixedCategory(ctx context.Context, tx pgx.Tx, name string) (string, bool, error) {
@@ -596,7 +617,7 @@ func lookupFixedCategory(ctx context.Context, tx pgx.Tx, name string) (string, b
 func (s *Store) RecordCategoryMappingFailure(ctx context.Context, f Fence, a Article, attempt int, claimToken, inputFP string, fields map[string]any) error {
 	tx, err := s.Pool.Begin(ctx)
 	if err != nil {
-		return errors.New("category failure receipt unavailable")
+		return articleOperation("category_failure_begin", "category failure receipt unavailable", err)
 	}
 	defer rollback(tx)
 	if _, state, e := s.FenceTx(ctx, tx, f); e != nil {
@@ -607,27 +628,30 @@ func (s *Store) RecordCategoryMappingFailure(ctx context.Context, f Fence, a Art
 	var storedToken, claimFP, itemState string
 	var raw []byte
 	if err = tx.QueryRow(ctx, `SELECT claim_token::text,input_fingerprint,state,result FROM article_processing_items WHERE run_id=$1::uuid AND article_id=$2 AND article_attempt=$3 FOR UPDATE`, f.RunID, a.ID, attempt).Scan(&storedToken, &claimFP, &itemState, &raw); err != nil || storedToken != claimToken || claimFP != inputFP || itemState != "running" {
-		return errors.New("category failure claim changed")
+		return articleOperation("category_failure_lock_receipt", "category failure claim changed", err)
 	}
 	var receipt map[string]string
 	_ = json.Unmarshal(raw, &receipt)
 	var current Article
 	if err = tx.QueryRow(ctx, `SELECT id,COALESCE(title,''),COALESCE(url,''),COALESCE(content,''),COALESCE(summary,''),COALESCE(summary_processed,false),COALESCE(category_processed,false),COALESCE(ad_processed,false),is_advertisement,telegram_context FROM articles WHERE id=$1 FOR UPDATE`, a.ID).Scan(&current.ID, &current.Title, &current.URL, &current.Content, &current.Summary, &current.SummaryProcessed, &current.CategoryProcessed, &current.AdProcessed, &current.IsAdvertisement, &current.TelegramContext); err != nil {
-		return errors.New("category failure article unavailable")
+		return articleOperation("category_failure_lock_article", "category failure article unavailable", err)
 	}
 	if sourceSnapshotFingerprint(current) != receipt["snapshot_fingerprint"] {
-		return errors.New("article changed during category failure handling")
+		return articleOperation("category_failure_check_snapshot", "article changed during category failure handling", nil)
 	}
 	if _, err = tx.Exec(ctx, `UPDATE articles SET last_processing_error='category_mapping_failed' WHERE id=$1 AND processing_attempts=$2`, a.ID, attempt); err != nil {
-		return errors.New("category failure article update unavailable")
+		return articleOperation("category_failure_update_article", "category failure article update unavailable", err)
 	}
 	errorCode := "category_mapping_failed"
 	result := articleProcessingItemResult(Persisted{State: "retry_wait", Error: &errorCode, Fields: fields})
 	tag, err := tx.Exec(ctx, `UPDATE article_processing_items SET state='retry_wait',result=$4::jsonb,updated_at=now() WHERE run_id=$1::uuid AND article_id=$2 AND article_attempt=$3 AND claim_token=$5::uuid AND input_fingerprint=$6 AND state='running'`, f.RunID, a.ID, attempt, result, claimToken, inputFP)
 	if err != nil || tag.RowsAffected() != 1 {
-		return errors.New("category failure item update unavailable")
+		return articleOperation("category_failure_update_receipt", "category failure item update unavailable", err)
 	}
-	return tx.Commit(ctx)
+	if err := tx.Commit(ctx); err != nil {
+		return articleOperation("category_failure_commit", "article processing commit failed", err)
+	}
+	return nil
 }
 
 func sourceSnapshotFingerprint(a Article) string {
