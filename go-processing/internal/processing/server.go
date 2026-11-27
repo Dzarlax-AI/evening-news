@@ -190,7 +190,9 @@ func (h *Handler) launch(f store.Fence) bool {
 		defer release()
 		receipt, runErr := h.Runner.Run(ctx, f)
 		if runErr != nil {
-			log.Printf("article processing failed phase=%s error_code=processing_failed", diagnosticPhase(runErr))
+			articleID, operation, reason := articleFailureDetails(runErr)
+			log.Printf("article processing failed phase=%s error_code=processing_failed run_id=%s article_id=%d operation=%s reason=%s",
+				diagnosticPhase(runErr), f.RunID, articleID, operation, reason)
 			h.failBounded(f, "processing_failed")
 			return
 		}

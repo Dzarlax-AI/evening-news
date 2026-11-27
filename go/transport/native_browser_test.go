@@ -2011,7 +2011,7 @@ func TestNativeBrowserGenerationTaintCancelsEveryActiveOperation(t *testing.T) {
 	f.mu.Lock()
 	f.contextsDelay = time.Second
 	f.mu.Unlock()
-	w.taint()
+	w.taint("events", "client_disconnected")
 	select {
 	case err := <-results:
 		if !errors.Is(err, ErrNativeOwnershipLost) {
@@ -2390,18 +2390,19 @@ func TestNativeFatalSignalIsOneShotAndConcurrentTaintIsIdempotent(t *testing.T) 
 	f := newNativeFixture(t)
 	w := f.worker(t)
 	fatal := w.Fatal()
+	w.taint("events", "owned_detach")
 	var wg sync.WaitGroup
 	for range 32 {
 		wg.Add(1)
 		go func() {
 			defer wg.Done()
-			w.taint()
+			w.taint("events", "client_disconnected")
 		}()
 	}
 	wg.Wait()
 	select {
 	case err, ok := <-fatal:
-		if !ok || !errors.Is(err, ErrNativeWorkerFatal) {
+		if !ok || !errors.Is(err, ErrNativeWorkerFatal) || err.Error() != "native_browser_worker_fatal stage=events reason=owned_detach" {
 			t.Fatalf("fatal notification = %v, open=%v", err, ok)
 		}
 	case <-time.After(time.Second):

@@ -31,6 +31,18 @@ var (
 	errNativeOwnedDetach              = errors.New("native_browser_owned_detach")
 )
 
+// nativeWorkerFatal carries only the first fatal transition's bounded diagnostic.
+type nativeWorkerFatal struct {
+	stage  string
+	reason string
+}
+
+func (e nativeWorkerFatal) Error() string {
+	return fmt.Sprintf("%s stage=%s reason=%s", ErrNativeWorkerFatal, e.stage, e.reason)
+}
+
+func (e nativeWorkerFatal) Unwrap() error { return ErrNativeWorkerFatal }
+
 // NativeResourceLimitError keeps a finite diagnostic reason while retaining
 // compatibility with callers that classify the existing extractor limits.
 type NativeResourceLimitError struct {
@@ -427,7 +439,7 @@ func (w *NativeBrowser) CheckReady(ctx context.Context) bool {
 	}
 	w.mu.Lock()
 	if generation == "" || ws != generation {
-		w.taintLocked()
+		w.taintLocked("discovery", "browser_generation_changed")
 		w.mu.Unlock()
 		w.reportDiagnostic("discovery", ErrNativeOwnershipLost)
 		return false
@@ -569,7 +581,7 @@ func (w *NativeBrowser) admissionErrorLocked(probe bool) error {
 	return nil
 }
 
-func (w *NativeBrowser) taintLocked() {
+func (w *NativeBrowser) taintLocked(stage, reason string) {
 	w.ready = false
 	if w.closed || w.tainted {
 		return
@@ -579,13 +591,13 @@ func (w *NativeBrowser) taintLocked() {
 	for _, cancel := range w.operations {
 		cancel(ErrNativeOwnershipLost)
 	}
-	w.fatal <- ErrNativeWorkerFatal
+	w.fatal <- nativeWorkerFatal{stage: stage, reason: reason}
 	close(w.fatal)
 }
 
-func (w *NativeBrowser) taint() {
+func (w *NativeBrowser) taint(stage, reason string) {
 	w.mu.Lock()
-	w.taintLocked()
+	w.taintLocked(stage, reason)
 	w.mu.Unlock()
 }
 
@@ -607,11 +619,11 @@ func (w *NativeBrowser) Probe(ctx context.Context) error {
 	}
 	capabilityErr := resources.configure(ctx)
 	if err = resources.cleanup(); err != nil {
-		w.taint()
+		w.taint("readiness_cleanup", nativeDiagnosticReason(err))
 		return errors.Join(ErrNativeOwnershipLost, err)
 	}
 	if capabilityErr != nil {
-		w.taint()
+		w.taint("readiness_configure", nativeDiagnosticReason(capabilityErr))
 		return errors.Join(ErrNativeNotReady, capabilityErr)
 	}
 	w.mu.Lock()
@@ -675,7 +687,7 @@ func (w *NativeBrowser) openCDP(ctx context.Context) (res *nativeResources, err 
 	changed := w.generation != "" && w.generation != ws
 	w.mu.Unlock()
 	if changed {
-		w.taint()
+		w.taint("discovery", "browser_generation_changed")
 		w.reportRequestDiagnostic(ctx, "discovery", ErrNativeOwnershipLost)
 		return nil, ErrNativeOwnershipLost
 	}
@@ -687,9 +699,10 @@ func (w *NativeBrowser) openCDP(ctx context.Context) (res *nativeResources, err 
 	}
 	res = &nativeResources{client: client, generation: ws, diagnostic: func(stage string, err error) { w.reportRequestDiagnostic(ctx, stage, err) }}
 	owned := res
+	stage := "create_context"
 	defer func() {
 		if err != nil {
-			w.taint()
+			w.taint(stage, nativeDiagnosticReason(err))
 			err = errors.Join(err, owned.cleanup())
 		}
 	}()
@@ -708,6 +721,7 @@ func (w *NativeBrowser) openCDP(ctx context.Context) (res *nativeResources, err 
 		w.reportRequestDiagnostic(ctx, "create_context", ErrNativeOwnershipLost)
 		return nil, ErrNativeOwnershipLost
 	}
+	stage = "create_target"
 	var target struct {
 		ID string `json:"targetId"`
 	}
@@ -720,6 +734,7 @@ func (w *NativeBrowser) openCDP(ctx context.Context) (res *nativeResources, err 
 		w.reportRequestDiagnostic(ctx, "create_target", ErrNativeOwnershipLost)
 		return nil, ErrNativeOwnershipLost
 	}
+	stage = "attach_target"
 	var attached struct {
 		ID string `json:"sessionId"`
 	}
@@ -1033,7 +1048,7 @@ func (w *NativeBrowser) Fetch(ctx context.Context, raw string, opts NativeBrowse
 			return
 		}
 		if cleanupErr != nil {
-			w.taint()
+			w.taint("cleanup", nativeDiagnosticReason(cleanupErr))
 			doc = RenderedDocument{}
 			err = errors.Join(err, ErrNativeOwnershipLost, cleanupErr)
 			if _, scoped := ctx.Value(pageMonitorDiagnosticKey{}).(*PageMonitorDiagnostic); scoped {
@@ -1044,12 +1059,12 @@ func (w *NativeBrowser) Fetch(ctx context.Context, raw string, opts NativeBrowse
 		if targetCrashed.Load() {
 			doc = RenderedDocument{}
 			if !nativeCrashRecoveryAllowed(true, err, connected, cleanupErr) {
-				w.taint()
+				w.taint("crash_recovery", "target_crash_unrecoverable")
 				err = errors.Join(err, ErrNativeOwnershipLost)
 				return
 			}
 			if recoveryErr := w.verifyCrashRecovery(res.generation); recoveryErr != nil {
-				w.taint()
+				w.taint("crash_recovery", nativeDiagnosticReason(recoveryErr))
 				err = errors.Join(err, ErrNativeOwnershipLost, recoveryErr)
 			}
 		}
@@ -1057,7 +1072,7 @@ func (w *NativeBrowser) Fetch(ctx context.Context, raw string, opts NativeBrowse
 	client, session := res.client, res.sessionID
 	res.pausedTargets = newNativePausedTargets(res.contextID, res.targetID, session)
 	if err = res.configure(ctx); err != nil {
-		w.taint()
+		w.taint("configure", nativeDiagnosticReason(err))
 		return doc, errors.Join(ErrNativeNotReady, err)
 	}
 	diagnosticStage = "navigate"
@@ -1113,7 +1128,7 @@ func (w *NativeBrowser) Fetch(ctx context.Context, raw string, opts NativeBrowse
 			if result.err != nil && !result.ignoreRPCError {
 				stop(result.err)
 				if errors.Is(result.err, ErrNativeOwnershipLost) {
-					w.taint()
+					w.taint("event_rpc", nativeDiagnosticReason(result.err))
 				}
 				eventRPCs.complete()
 				return true
@@ -1158,11 +1173,11 @@ func (w *NativeBrowser) Fetch(ctx context.Context, raw string, opts NativeBrowse
 			case <-client.eventFailure:
 				cause := client.eventError()
 				stop(cause)
-				w.taint()
+				w.taint("events", nativeDiagnosticReason(cause))
 				return
 			case <-client.done:
 				stop(errors.Join(ErrNativeOwnershipLost, errNativeClientDisconnected))
-				w.taint()
+				w.taint("events", "client_disconnected")
 				return
 			case message := <-client.events:
 				if value, ok := fences.LoadAndDelete(message); ok {
@@ -1174,11 +1189,11 @@ func (w *NativeBrowser) Fetch(ctx context.Context, raw string, opts NativeBrowse
 				method := string(message.Method)
 				if detached, malformed := detachedOwnedSession(message, session); malformed {
 					stop(errors.Join(ErrNativeOwnershipLost, ErrNativePolicy, errNativeMalformedDetach))
-					w.taint()
+					w.taint("events", "malformed_detach")
 					return
 				} else if detached {
 					stop(errors.Join(ErrNativeOwnershipLost, errNativeOwnedDetach))
-					w.taint()
+					w.taint("events", "owned_detach")
 					return
 				}
 				if terminalPending && (method == "Fetch.authRequired" || method == "Fetch.requestPaused") {
@@ -1204,13 +1219,13 @@ func (w *NativeBrowser) Fetch(ctx context.Context, raw string, opts NativeBrowse
 					}
 					if json.Unmarshal(message.Params, &detached) != nil || detached.Session == "" {
 						stop(errors.Join(ErrNativePolicy, ErrNativeOwnershipLost, errNativeMalformedDetach))
-						w.taint()
+						w.taint("events", "malformed_child_detach")
 						return
 					}
 					if child := res.pausedTargets.sessions[detached.Session]; child != nil {
 						if eventSession != child.parent && eventSession != "" {
 							stop(ErrNativeOwnershipLost)
-							w.taint()
+							w.taint("events", "child_detach_wrong_parent")
 							return
 						}
 						if child.detaching || child.gone {
@@ -1240,7 +1255,7 @@ func (w *NativeBrowser) Fetch(ctx context.Context, raw string, opts NativeBrowse
 					switch method {
 					case "Network.requestWillBeSent", "Network.dataReceived", "Network.loadingFinished", "Network.loadingFailed", "Network.responseReceived", "Fetch.authRequired", "Fetch.requestPaused", "Network.webSocketCreated", "Page.windowOpen", "Target.attachedToTarget":
 						stop(&nativeEventFailure{"child_target_activity", errors.Join(ErrNativePolicy, ErrNativeOwnershipLost)})
-						w.taint()
+						w.taint("events", "child_target_activity")
 						return
 					}
 					continue
@@ -1369,7 +1384,7 @@ func (w *NativeBrowser) Fetch(ctx context.Context, raw string, opts NativeBrowse
 						params, policyErr := nativeWorkerPolicyParams(event)
 						if policyErr != nil {
 							stop(policyErr)
-							w.taint()
+							w.taint("events", nativeDiagnosticReason(policyErr))
 							return
 						}
 						if event.NetworkID == "" || len(event.NetworkID) > 256 {
@@ -1418,7 +1433,7 @@ func (w *NativeBrowser) Fetch(ctx context.Context, raw string, opts NativeBrowse
 						}
 						if previous := requestFrames[event.ID]; requests[event.ID] && previous != "" && event.FrameID != "" && previous != event.FrameID {
 							stop(ErrNativeOwnershipLost)
-							w.taint()
+							w.taint("events", "request_frame_changed")
 							return
 						}
 						if !requests[event.ID] {
@@ -1451,7 +1466,7 @@ func (w *NativeBrowser) Fetch(ctx context.Context, raw string, opts NativeBrowse
 						owns := requestOwners[event.ID][eventSession]
 						if !owns && !(childSession != nil && childSession.kind == "iframe" && childSession.frameID() != "" && requestFrames[event.ID] == childSession.frameID()) {
 							stop(ErrNativeOwnershipLost)
-							w.taint()
+							w.taint("events", "request_owner_mismatch")
 							return
 						}
 						if method == "Network.loadingFailed" && documentFrames[event.ID] != "" && documentFrames[event.ID] == mainFrame.Load().(string) {
@@ -1527,7 +1542,7 @@ func (w *NativeBrowser) Fetch(ctx context.Context, raw string, opts NativeBrowse
 					if childErr != nil {
 						stop(childErr)
 						if errors.Is(childErr, ErrNativeOwnershipLost) {
-							w.taint()
+							w.taint("events", nativeDiagnosticReason(childErr))
 						}
 						return
 					}
@@ -1558,7 +1573,7 @@ func (w *NativeBrowser) Fetch(ctx context.Context, raw string, opts NativeBrowse
 				case "Inspector.targetCrashed":
 					if eventSession != session {
 						stop(ErrNativeOwnershipLost)
-						w.taint()
+						w.taint("events", "dialog_owner_mismatch")
 						return
 					}
 					targetCrashed.Store(true)
@@ -1575,7 +1590,7 @@ func (w *NativeBrowser) Fetch(ctx context.Context, raw string, opts NativeBrowse
 		for _, result := range eventRPCs.join() {
 			if result.err != nil && !result.ignoreRPCError {
 				if errors.Is(result.err, ErrNativeOwnershipLost) {
-					w.taint()
+					w.taint("event_rpc", nativeDiagnosticReason(result.err))
 				}
 				if targetCrashed.Load() {
 					if !nativeCrashCancellation(result.err, context.Cause(work), true) {
@@ -1699,7 +1714,7 @@ func (w *NativeBrowser) Fetch(ctx context.Context, raw string, opts NativeBrowse
 		if value.Ready {
 			if cause := client.eventError(); cause != nil {
 				stop(cause)
-				w.taint()
+				w.taint("events", nativeDiagnosticReason(cause))
 				return doc, cause
 			}
 			if value.TooLarge || int64(len(value.HTML)) > domLimit || int64(value.Bytes) > domLimit {
